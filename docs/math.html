@@ -77,6 +77,8 @@
 <li><a href="#tier-setting">Choosing the tier: math.simdTier</a></li>
 <li><a href="#tier-bit-differences">Which operations differ bit-wise across tiers</a></li>
 <li><a href="#strict-fp">Strict floating-point build</a></li>
+<li><a href="#engine-trig">Engine-owned transcendental functions</a></li>
+<li><a href="#fp-environment">Floating-point environment guard</a></li>
 <li><a href="#correctness">Correctness relative to scalar</a></li>
 <li><a href="#vector3">Vector3</a></li>
 <li><a href="#batch">Batch operations</a></li>
@@ -245,9 +247,81 @@ SIMDLevel InitializeSIMD(SIMDTierRequest); // Auto, or a named tier (lowered if 
 </ul>
 <div class="callout note" id="design-strict-fp">
 <p class="callout-title">Design decision: a build profile, not a determinism guarantee <span class="badge">PR #162</span></p>
-<p>The profile removes one source of difference (contraction and fast-math reordering) but does not make results equal across compilers or architectures: the libm functions (<code>sin</code>, <code>cos</code>, <code>atan2</code>, ...) still differ between C libraries, the SIMD tiers still differ as listed <a href="#tier-bit-differences">above</a>, Debug and Release can still differ, and PhysX is a prebuilt binary with its own flags. It applies to all targets (not only <code>math</code> or aarch64) because the inline math in the headers is compiled into every target that includes them, and they must all be the same code. It is OFF by default so existing builds are unchanged.</p>
+<p>The profile removes one source of difference (contraction and fast-math reordering) but does not make results equal across compilers or architectures: the C library's <code>sin</code>, <code>cos</code>, <code>atan2</code>, ... differ between C libraries (the engine's own math no longer calls them: <a href="#engine-trig">engine-owned transcendental functions</a>), the SIMD tiers still differ as listed <a href="#tier-bit-differences">above</a>, Debug and Release can still differ, and PhysX is a prebuilt binary with its own flags. It applies to all targets (not only <code>math</code> or aarch64) because the inline math in the headers is compiled into every target that includes them, and they must all be the same code. It is OFF by default so existing builds are unchanged.</p>
 </div>
 <p class="src">Source: <code>CMakeLists.txt</code> — <code>N2ENGINE_STRICT_FP</code>; <code>math/src/math/MathRegistrar.cpp</code> — <code>IsStrictFp</code>; <code>.github/workflows/tests.yml</code> — the GCC 14 Configure step</p>
+
+<h2 id="engine-trig">Engine-owned transcendental functions <span class="badge">PR #200</span></h2>
+<p>The C library's <code>sin</code>, <code>cos</code>, <code>atan2</code>, <code>exp</code> and <code>log</code> differ in the last bit between the MSVC CRT, glibc and Emscripten's musl, so a simulation that calls them gives different results on different platforms. <code>math/DeterministicMath.hpp</code> replaces them with functions that call no C library transcendental at all. They are the same code on every platform, so the results are the same bits on MSVC, GCC, Clang, arm64 and wasm.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Function (<code>N2Engine::Math::</code>)</th><th>Method</th><th>Max error measured (double)</th><th>Documented bound</th></tr></thead>
+<tbody>
+<tr><td><code>Sin</code>, <code>Cos</code></td><td>three-part Cody-Waite reduction by the nearest multiple of pi/2, then a Taylor series to r<sup>23</sup> (sin) or r<sup>24</sup> (cos) in Horner form</td><td>1.8, 1.6 ulp</td><td>2 ulp</td></tr>
+<tr><td><code>Tan</code></td><td>the same reduction, then sin/cos of the reduced angle (negated reciprocal for odd quadrants)</td><td>2.8 ulp</td><td>3 ulp</td></tr>
+<tr><td><code>Atan</code></td><td>two argument halvings (<code>atan a = 2 atan(a / (1 + sqrt(1 + a<sup>2</sup>)))</code>), then a series to t<sup>27</sup>; <code>pi/2 - atan(1/a)</code> above 1</td><td>3.5 ulp</td><td>4 ulp</td></tr>
+<tr><td><code>Atan2</code>, <code>Asin</code>, <code>Acos</code></td><td><code>Atan2</code> from <code>Atan</code> with pi as a double plus its remainder; <code>Asin(x) = Atan2(x, sqrt((1-x)(1+x)))</code>, <code>Acos</code> likewise</td><td>3.2, 3.9, 3.5 ulp</td><td>4 ulp</td></tr>
+<tr><td><code>Exp</code></td><td>x = k ln2 + r with ln2 in two pieces, a Taylor series to r<sup>14</sup>, scaled by 2<sup>k</sup> built from the exponent bits (two steps into the denormals)</td><td>1.2 ulp</td><td>2 ulp</td></tr>
+<tr><td><code>Log</code>, <code>Log2</code></td><td>split into mantissa in [1/sqrt2, sqrt2] and exponent, then 2 atanh((m-1)/(m+1)) as its series to s<sup>25</sup></td><td>1.3, 1.0 ulp</td><td>2 ulp</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li><strong>Two precisions.</strong> The double functions are the definition (Lua numbers are doubles). The float overloads compute the double result and round it once to float, so they are not a second algorithm. Every one of the sampled float results (about 33,000) was the correctly rounded float (0.5 ulp); the documented bound is 1 ulp.</li>
+<li><strong>How the accuracy was measured.</strong> Against a 90-digit decimal reference over about 72,000 arguments: float and double sweeps of every function over its useful range, arguments within 1e-18 of a multiple of pi/2 (reduction stays accurate there, 0.46 ulp at worst), and the edge values. The unit tests assert the bounds against the C library as the reference (<code>DeterministicMathTest.FloatResultsAreWithinOneUlpOfTheReference</code>, <code>DoubleResultsAreWithinTheDocumentedUlpOfTheReference</code>); the C library is the yardstick there and never the implementation.</li>
+<li><strong>Large arguments.</strong> <code>Sin</code>, <code>Cos</code> and <code>Tan</code> reduce exactly up to |x| = 2<sup>20</sup> (1048576). Beyond that the argument is first reduced with <code>fmod(x, 2*pi)</code> using the double nearest 2*pi (<code>fmod</code> is exact on every platform): the result is the same everywhere but is only accurate to about |x| &times; 4e-17 in absolute terms, and is not the sine of the exact argument. Game angles never get there. The result is finite for every finite argument.</li>
+<li><strong>Special values.</strong> A NaN in (any sign or payload) gives one canonical quiet NaN out (<code>0x7FF8000000000000</code>, float <code>0x7FC00000</code>), because x86 and arm hardware make different NaNs. <code>Sin</code>, <code>Cos</code>, <code>Tan</code> of an infinity, <code>Asin</code>/<code>Acos</code> outside [-1, 1] and <code>Log</code> of a negative are that NaN. <code>Sin(&plusmn;0)</code> and <code>Tan(&plusmn;0)</code> keep the sign of zero, <code>Cos(0)</code> is 1, <code>Atan2</code> follows the C table (zeros and infinities), <code>Exp</code> overflows to +inf above about 709.78 and underflows through the denormals to 0, <code>Log(0)</code> is -inf, and <code>Log2(2<sup>k</sup>)</code> is exactly k.</li>
+<li><strong>No contraction, in every build.</strong> The functions live in one source file, <code>math/src/math/DeterministicMath.cpp</code>, which <code>math/CMakeLists.txt</code> compiles with <code>-ffp-contract=off</code> (<code>/fp:precise</code> on MSVC, plus <code>-ffp-contract=off</code> on clang-cl) whether or not <a href="#strict-fp"><code>N2ENGINE_STRICT_FP</code></a> is on, so a fused multiply-add can never change their last bit. This is checked, not assumed: <code>Math::IsContractionFree()</code> runs, inside that file, a multiply-add whose fused and separately rounded results differ and reports whether it came out unfused (<code>DeterministicMathTest.TheFunctionsRunWithoutFloatingPointContraction</code>). Built with <code>-ffp-contract=fast -mfma</code> instead, the same source changed 815 of 72,000 results and the probe reported false.</li>
+<li><strong>Exact-value tests.</strong> <code>DeterministicMathTest.FloatResultsAreTheExactBitsOnEveryPlatform</code> and <code>DoubleResultsAreTheExactBitsOnEveryPlatform</code> check tables of inputs against exact result bit patterns, computed once and the same on every CI leg: that identical result everywhere is what the tests are for. Run on the author's machine under gcc 14 and under Emscripten (wasm, node), the same source gave the same bits for all 72,000 sampled arguments.</li>
+<li><strong>Not provided.</strong> No <code>Pow</code>: stock Lua 5.4 has no <code>math.pow</code>, and no engine code needs one.</li>
+</ul>
+<div class="callout note" id="design-engine-trig">
+<p class="callout-title">Design decision: our own series, not a port, and one precision <span class="badge">PR #200</span></p>
+<p>The functions are truncated Taylor series on a small reduced argument (Horner order, constants stored as exact bit patterns) with Cody-Waite reduction, so the whole algorithm is a few dozen lines that can be reviewed against the maths, has no third-party licence, and keeps the <code>math</code> library free of a Jolt dependency. Minimax polynomials would need fewer terms but have to be generated by a tool; the extra multiply-adds are irrelevant at game rates. The float functions round the double result once instead of having their own algorithm, which makes a float result and a Lua number agree and halves the surface the exact-value tests have to cover. There is no fast path that depends on the target.</p>
+</div>
+<h3 id="engine-trig-sites">Where the C library calls were, and what became of them</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Call site</th><th>Now</th></tr></thead>
+<tbody>
+<tr><td><code>Matrix.hpp</code>: <code>RotationX</code>/<code>Y</code>/<code>Z</code> of the 4x4 and 3x3, <code>Rotation</code> of the 2x2</td><td>changed: <code>Math::Cos</code>, <code>Math::Sin</code></td></tr>
+<tr><td><code>Vector2.hpp</code>: <code>Angle</code>, <code>AngleTo</code>, <code>FromAngle</code>, <code>Rotate</code>, <code>Slerp</code>; <code>Vector3.hpp</code>: <code>AngleTo</code>, <code>Slerp</code>; <code>Vector4.hpp</code> and <code>VectorN.hpp</code>: <code>Slerp</code></td><td>changed</td></tr>
+<tr><td><code>Quaternion.cpp</code>: axis-angle and Euler constructors, <code>Slerp</code>, <code>Angle</code>, <code>ToEulerAngles</code></td><td>changed</td></tr>
+<tr><td><code>Random.cpp</code>: the unseeded unit-circle samples</td><td>changed (the seeded ones never used trig)</td></tr>
+<tr><td>Lua <code>math.sin</code>, <code>cos</code>, <code>tan</code>, <code>asin</code>, <code>acos</code>, <code>atan</code>, <code>exp</code>, <code>log</code></td><td>changed when <code>determinism.luaSeed</code> is set, see <a href="scripting-lua.html#deterministic-lua">Lua scripting</a></td></tr>
+<tr><td><code>Camera.cpp</code> (<code>tan</code> of the field of view)</td><td>kept: the projection matrix and the picking rays, drawing and input only</td></tr>
+<tr><td><code>rendering/Mesh.cpp</code> (<code>sin</code>, <code>cos</code>)</td><td>kept: the vertices of the built-in sphere</td></tr>
+<tr><td><code>particles/ParticleEmitter.cpp</code> (<code>sin</code>, <code>cos</code>, <code>cbrt</code>)</td><td>kept: cosmetic particles, outside the simulation state</td></tr>
+<tr><td><code>softbody/Tetrahedraliser.cpp</code> (<code>cbrt</code>)</td><td>kept: scales the voxel grid when meshing a soft body, a one-off authoring step</td></tr>
+<tr><td><code>renderer/</code> (spot cone cosines, sRGB <code>pow</code>, specular <code>pow</code>, <code>exp2</code>)</td><td>kept: lighting, drawing only</td></tr>
+</tbody>
+</table>
+</div>
+<p>The audit is enforced: <code>DeterministicMathSourceScanTest</code> reads the sources of <code>engine/</code> and <code>math/</code> as text and fails on any C library transcendental call outside the four kept engine files, and fails again if one of those files stops needing its entry. A last-bit change in an existing result (a rotation matrix element, a quaternion component) is expected where the C library was not correctly rounded; none of the existing math tests needed a changed expected value.</p>
+<p class="src">Source: <code>math/include/math/DeterministicMath.hpp</code>, <code>math/src/math/DeterministicMath.cpp</code>, <code>math/CMakeLists.txt</code>; tests: <code>tests/math/math_types/DeterministicMathTests.cpp</code>, <code>tests/engine/DeterministicMathSourceScanTests.cpp</code></p>
+
+<h2 id="fp-environment">Floating-point environment guard <span class="badge">PR #200</span></h2>
+<p>Two machines only compute the same floats when both round the same way and treat denormals the same way, and a library called between ticks (audio, a graphics driver) can change those settings in the calling thread. <code>Math::FloatEnvironmentGuard</code> (<code>math/FloatEnvironment.hpp</code>) sets the policy for its lifetime and puts back what it found. <code>Application::RunFixedTick</code> constructs one at the start of every fixed tick in the Authoritative and Deterministic simulation modes; the None mode constructs none, so it does nothing there.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Target</th><th>Control register</th><th>Policy (the same everywhere)</th></tr></thead>
+<tbody>
+<tr><td>x86-64 (MSVC, GCC, Clang)</td><td>MXCSR (<code>_mm_getcsr</code>/<code>_mm_setcsr</code>); x87 is not used on x86-64</td><td>round to nearest even, flush-to-zero off, denormals-are-zero off, every exception masked (value <code>0x1F80</code> in bits 6-15)</td></tr>
+<tr><td>aarch64 (GCC, Clang)</td><td>FPCR (<code>mrs</code>/<code>msr</code>)</td><td>RMode 0 (nearest), FZ and FZ16 off, no trap enables, no alternate-behaviour bits</td></tr>
+<tr><td>WebAssembly, and a target this code does not know (32-bit x86, MSVC on arm64)</td><td>none</td><td>wasm always rounds to nearest, never flushes and never traps; the guard does nothing and reports verified</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li><strong>Set and verify.</strong> The constructor writes the policy into the governed bits (every other bit is kept) and reads the register back: <code>Verified()</code> is false if it does not read back as the policy. <code>RunFixedTick</code> then logs one error ("could not be set to the deterministic policy") instead of simulating under unknown settings.</li>
+<li><strong>Restore on every path.</strong> The destructor puts the governed bits back as they were at construction, on a normal exit and when an exception leaves the scope. The status flags (which exceptions happened) are left as the tick made them. Guards nest.</li>
+<li><strong>Tests.</strong> The tests perturb the register on purpose (round toward zero, flush on), prove the perturbation is real by what the arithmetic does (1/3 rounds to <code>0x3EAAAAAA</code>, a denormal times one is 0), then prove the guard undoes it and restores it, with an exception and nested (<code>tests/math/math_types/FloatEnvironmentTests.cpp</code>); and through the application: a probe component sees the policy in every tick of a network mode over a perturbed register, the register is back afterwards, and in None mode the ticks run in the perturbed one (<code>SimulationClockTest.ANetworkModeRunsEveryTickUnderTheFloatingPointPolicyAndRestoresTheRegister</code>, <code>NoneModeLeavesTheFloatingPointEnvironmentAlone</code>). Skipped, with a message, on a target with no control register.</li>
+</ul>
+<div class="callout note" id="design-fp-guard">
+<p class="callout-title">Design decision: flush-to-zero off everywhere, a guard per tick <span class="badge">PR #200</span></p>
+<p>Flush-to-zero and denormals-are-zero are off because WebAssembly cannot turn them on, so any other choice would make the platform that cannot flush a different game. The guard is per tick (not once at startup) because the settings are per thread and a library may change them at any time, and it only runs in the network modes so a project that does not use the netcode pays nothing and changes nothing. The cost is two register accesses per tick.</p>
+</div>
+<p class="src">Source: <code>math/include/math/FloatEnvironment.hpp</code>, <code>math/src/math/FloatEnvironment.cpp</code>; <code>engine/src/Application.cpp</code> â€” <code>RunFixedTick</code></p>
 
 <h2 id="correctness">Correctness relative to scalar <span class="badge">PR #27</span></h2>
 <p>Before PR #27, the SIMD paths a running game used gave wrong results (for example <code>(1,2,3)&middot;(4,5,6)</code> returned 44), while CI ran only scalar code. <code>tests/math/math_types/SimdDispatchTests.cpp</code> now runs every dispatched operation under SSE2, SSE41 and AVX (NEON on aarch64 <span class="badge">PR #128</span>) and compares it with the scalar result, resetting to Scalar around every test. The NEON results meet the same tolerances as the x86 tiers; no tolerance was loosened.</p>
@@ -433,7 +507,7 @@ positionable-&gt;SetRotation(Quaternion::LookRotation(target - position, Vector3
 <li>Until <code>Random::Seed(n)</code> is called (never, by default), one process-wide <code>std::mt19937</code>, seeded once from <code>std::random_device</code> (<code>GetRandomEngine()</code>): sequences are not reproducible, and <code>std::uniform_*_distribution</code> is implementation-defined. This path is unchanged. <span class="badge">PR #172</span></li>
 <li><code>Random::Seed(n)</code> (Lua: <code>Random.Seed(n)</code>) switches every function below to one global <code>Math::DeterministicRandom</code> stream: the same seed gives the same sequence on every platform. Calling it again restarts the sequence; <code>Random::Unseed()</code> (C++ only, for tests and tools) goes back to <code>random_device</code>; <code>Random::IsSeeded()</code> says which is active. Seeded, <code>RandomFloat()</code> is in [0, 1) (24 random bits, exactly representable). The stream is one global: a script that seeds it restarts it for everything that draws from it.</li>
 <li><code>RandomFloat()</code> uses <code>uniform_real_distribution&lt;float&gt;(0, 1)</code>. That is nominally [0, 1), but the float distribution can round up and return exactly 1.0f (a known <code>std::generate_canonical</code> issue in common standard libraries), so treat the range as [0, 1], as the header comment says. <code>RandomRange(min, max)</code> scales it. <code>RandomInt(min, max)</code> is inclusive on both ends.</li>
-<li><code>RandomOnUnitCircle()</code> returns a unit <code>Vector2</code>; <code>RandomInUnitCircle()</code> is uniform over the disc (unseeded: radius is <code>sqrt</code> of a uniform value and the angle goes through <code>std::cos</code>/<code>std::sin</code>; seeded: see below, no libm).</li>
+<li><code>RandomOnUnitCircle()</code> returns a unit <code>Vector2</code>; <code>RandomInUnitCircle()</code> is uniform over the disc (unseeded: radius is <code>sqrt</code> of a uniform value and the angle goes through <code>Math::Cos</code>/<code>Math::Sin</code>, the <a href="#engine-trig">engine-owned functions</a>; seeded: see below, rejection sampling with no trig at all).</li>
 <li>The shared engine and the static distribution are not synchronised; do not call these from several threads at once.</li>
 </ul>
 <h3 id="deterministic-random">DeterministicRandom <span class="badge">PR #172</span></h3>
