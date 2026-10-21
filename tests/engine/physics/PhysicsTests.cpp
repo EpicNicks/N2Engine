@@ -620,8 +620,8 @@ TEST_F(PhysicsTest, QueriesReportTheColliderThatWasHit)
 }
 
 // ============================================================================
-// Collider shapes (PhysX only: the live shape is read back with a raycast, and Jolt has no queries yet. The shape
-// counts of the same scenarios run on every backend in PhysicsCoreTests.cpp)
+// Collider shapes (PhysX only: the live shape is read back with a raycast in the PhysX fixture. The shape counts of
+// the same scenarios run on every backend in PhysicsCoreTests.cpp, and the queries in PhysicsQueryTests.cpp)
 // ============================================================================
 
 TEST_F(PhysicsTest, ResizingAColliderReachesTheLiveShape)

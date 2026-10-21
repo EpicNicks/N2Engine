@@ -26,7 +26,8 @@ namespace N2Engine::Physics
      * gravity, forces, impulses and velocities, enable and disable, kinematic and static moves, transform sync, and the
      * set-state calls. NOT implemented yet (each logs ONE warning when first used and otherwise does nothing or
      * answers "nothing found"): layers and the collision matrix (J4), triggers (J4: a trigger collider has no shape
-     * and no effect for now), contact and trigger events (J4), scene queries (J5), snapshot (J6).
+     * and no effect for now, so no query hits one), contact and trigger events (J4), snapshot (J6). Scene queries (J5)
+     * are implemented: raycast, raycast-all, sphere and capsule casts, and overlaps.
      *
      * Determinism: body ids are the engine's deterministic handles, index and generation (CreateBodyWithID), transforms are synced in
      * handle order (never in Jolt's active-body order), and the job system is single-threaded on the web and whenever
@@ -154,13 +155,21 @@ namespace N2Engine::Physics
         void SetGravity(const Math::Vector3 &gravity) override;
         [[nodiscard]] Math::Vector3 GetGravity() const override;
 
-        /// J5: not implemented. Answer "nothing hit" (false, 0) with one warning.
+        /// Scene queries (J5), through Jolt's NarrowPhaseQuery only, all following QueryRules (Raycast.hpp): hits are
+        /// ordered by distance, body handle and collider order, never by Jolt's own order. The layer mask is read from
+        /// each collider's GameObject layer when the query runs. Trigger colliders have no Jolt shape until J4, so no
+        /// query hits one for now (QueryTriggers::Ignore therefore changes nothing here yet).
         bool Raycast(const Math::Vector3 &origin, const Math::Vector3 &direction, RaycastHit &hit, float maxDistance,
                      std::uint32_t layerMask, QueryTriggers triggers) override;
         int RaycastAll(const Math::Vector3 &origin, const Math::Vector3 &direction, std::vector<RaycastHit> &hits,
                        float maxDistance, std::uint32_t layerMask, QueryTriggers triggers) override;
         bool SphereCast(const Math::Vector3 &origin, float radius, const Math::Vector3 &direction, RaycastHit &hit,
                         float maxDistance, std::uint32_t layerMask) override;
+        bool CapsuleCast(const Math::Vector3 &point0, const Math::Vector3 &point1, float radius,
+                         const Math::Vector3 &direction, RaycastHit &hit, float maxDistance, std::uint32_t layerMask,
+                         QueryTriggers triggers) override;
+        int Overlap(const OverlapShape &shape, std::vector<OverlapHit> &hits, std::uint32_t layerMask,
+                    QueryTriggers triggers) override;
 
         /// J6: not implemented. Refused (false, nullopt) with one warning; SupportsSnapshot is false.
         bool SaveState(std::vector<std::byte> &out) const override;

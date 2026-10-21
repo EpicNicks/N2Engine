@@ -1,4 +1,5 @@
-// The Jolt backend (stage J3, the core). Jolt's headers are included here and nowhere else in the engine.
+// The Jolt backend (stage J3, the core; J5, the scene queries). Jolt's headers are included here and nowhere else in the
+// engine.
 // Everything that touches Jolt state lives in JoltBackend::Impl so the public header holds no Jolt type.
 
 #include "engine/physics/jolt/JoltBackend.hpp"
@@ -12,9 +13,17 @@
 #include <Jolt/Core/JobSystemSingleThreaded.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Body/BodyFilter.h>
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Body/MassProperties.h>
 #include <Jolt/Physics/Body/MotionProperties.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
+#include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/ShapeCast.h>
+#include <Jolt/Physics/Collision/ShapeFilter.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/EmptyShape.h>
@@ -28,7 +37,9 @@
 #include <Jolt/Core/JobSystemThreadPool.h>
 #endif
 
+#include "../QueryUtil.hpp"
 #include "engine/GameObject.hpp"
+#include "engine/Layers.hpp"
 #include "engine/Logger.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/physics/ICollider.hpp"
@@ -40,6 +51,7 @@
 #include <cmath>
 #include <cstdio>
 #include <format>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -283,8 +295,7 @@ namespace N2Engine::Physics
             kLayers = 1u << 0,
             kTriggers = 1u << 1,
             kEvents = 1u << 2,
-            kQueries = 1u << 3,
-            kSnapshot = 1u << 4
+            kSnapshot = 1u << 3
         };
     }
 
@@ -675,6 +686,268 @@ namespace N2Engine::Physics
             *existing = changed;
             existing->isTrigger = isTrigger;
             RebuildBody(*data);
+        }
+
+        // ===== Queries (J5) =====
+        // Scene queries go through NarrowPhaseQuery only (never the broad-phase query, whose order is not
+        // deterministic). Every hit is collected, resolved to the collider it hit, filtered (layer mask, triggers) and
+        // ordered by QueryRules in QueryUtil: nothing depends on the order Jolt reports hits in.
+
+        /// A hit sub-shape resolved to the engine's side: the body, the collider and where it sits in the order
+        struct ResolvedHit
+        {
+            const BodyData *data = nullptr;
+            PhysicsBodyHandle handle;
+            ICollider *collider = nullptr;
+            std::size_t colliderOrder = 0;
+        };
+
+        /// What one query hit is until it is turned into a RaycastHit
+        struct RawHit
+        {
+            ResolvedHit resolved;
+            float distance = 0.0f;
+            JPH::BodyID body;
+            JPH::SubShapeID subShape;
+            JPH::Vec3 normal = JPH::Vec3::sZero(); // sweeps: the surface normal at the hit (unit, or zero)
+            JPH::Vec3 point = JPH::Vec3::sZero();  // sweeps: the contact point on the hit shape
+        };
+
+        static int LayerOf(const ICollider *collider)
+        {
+            return collider ? collider->GetGameObject().GetLayer() : Layers::Default;
+        }
+
+        /// The collider that owns sub-shape `subShape` of body `id`, or false: not a body of this backend, a collider
+        /// the mask leaves out, or a trigger collider while triggers are ignored. (Trigger colliders have no Jolt
+        /// shape until J4, so no query can hit one before then.)
+        bool Resolve(const JPH::BodyID id, const JPH::SubShapeID &subShape, const std::uint32_t layerMask,
+                     const QueryTriggers triggers, ResolvedHit &out) const
+        {
+            if (id.GetIndex() >= bodies.size())
+            {
+                return false;
+            }
+            const BodyData &data = bodies[id.GetIndex()];
+            if (!data.active || !data.shape || data.id != id)
+            {
+                return false;
+            }
+            const std::uint64_t index = data.shape->GetSubShapeUserData(subShape);
+            if (index >= data.specs.size())
+            {
+                return false;
+            }
+            const ColliderSpec &spec = data.specs[static_cast<std::size_t>(index)];
+            if (!spec.collider || (spec.isTrigger && triggers == QueryTriggers::Ignore))
+            {
+                return false;
+            }
+            if ((layerMask & Layers::MaskOf(LayerOf(spec.collider))) == 0)
+            {
+                return false;
+            }
+            out.data = &data;
+            out.handle = PhysicsBodyHandle{id.GetIndex(), data.generation};
+            out.collider = spec.collider;
+            out.colliderOrder = QueryUtil::ColliderOrder(data.colliders, spec.collider);
+            return true;
+        }
+
+        /// Calls `accept(result)` for every hit of a query. The collector keeps nothing and never lowers the early-out
+        /// fraction, so Jolt reports every hit along the whole ray or sweep.
+        template <typename Base, typename Result, typename Accept>
+        class FunctionCollector final : public Base
+        {
+        public:
+            explicit FunctionCollector(Accept accept) : _accept(std::move(accept)) {}
+            void AddHit(const Result &result) override { _accept(result); }
+
+        private:
+            Accept _accept;
+        };
+
+        static QueryUtil::HitKey KeyOfRaw(const RawHit &raw)
+        {
+            return QueryUtil::KeyOf(raw.distance, raw.resolved.handle, raw.resolved.colliderOrder);
+        }
+
+        /// Every collider a ray hits within `sweep.distance`
+        std::vector<RawHit> CollectRay(const Math::Vector3 &origin, const QueryUtil::Sweep &sweep,
+                                       const std::uint32_t layerMask, const QueryTriggers triggers) const
+        {
+            std::vector<RawHit> raws;
+            // The defaults: a ray that starts inside a convex shape hits it at fraction 0 (mTreatConvexAsSolid), one
+            // that leaves it reports nothing (back faces ignored)
+            JPH::RayCastSettings settings;
+            const JPH::RRayCast ray(ToJolt(origin), ToJolt(sweep.direction) * sweep.distance);
+            const auto accept = [&](const JPH::RayCastResult &result)
+            {
+                RawHit raw;
+                if (!Resolve(result.mBodyID, result.mSubShapeID2, layerMask, triggers, raw.resolved))
+                {
+                    return;
+                }
+                raw.distance = result.mFraction * sweep.distance;
+                raw.body = result.mBodyID;
+                raw.subShape = result.mSubShapeID2;
+                raws.push_back(raw);
+            };
+            FunctionCollector<JPH::CastRayCollector, JPH::RayCastResult, decltype(accept)> collector(accept);
+            system->GetNarrowPhaseQuery().CastRay(ray, settings, collector);
+            return raws;
+        }
+
+        /// Every collider `shape` (placed at `position` with `rotation`, its centre of mass at the origin of the
+        /// shape) hits when swept along `sweep` (a start inside a shape is a hit at distance 0)
+        std::vector<RawHit> CollectCast(const JPH::Shape &shape, const Math::Vector3 &position,
+                                        const JPH::Quat &rotation, const QueryUtil::Sweep &sweep,
+                                        const std::uint32_t layerMask, const QueryTriggers triggers) const
+        {
+            std::vector<RawHit> raws;
+            JPH::ShapeCastSettings settings;
+            settings.mBackFaceModeTriangles = JPH::EBackFaceMode::CollideWithBackFaces;
+            settings.mBackFaceModeConvex = JPH::EBackFaceMode::CollideWithBackFaces; // report a start inside a shape
+            settings.mReturnDeepestPoint = false;
+            const JPH::Vec3 toward = ToJolt(sweep.direction);
+            const JPH::RShapeCast cast = JPH::RShapeCast::sFromWorldTransform(
+                &shape, JPH::Vec3::sReplicate(1.0f), JPH::RMat44::sRotationTranslation(rotation, ToJolt(position)),
+                toward * sweep.distance);
+            const auto accept = [&](const JPH::ShapeCastResult &result)
+            {
+                RawHit raw;
+                if (!Resolve(result.mBodyID2, result.mSubShapeID2, layerMask, triggers, raw.resolved))
+                {
+                    return;
+                }
+                raw.distance = result.mFraction * sweep.distance;
+                raw.body = result.mBodyID2;
+                raw.subShape = result.mSubShapeID2;
+                raw.point = result.mContactPointOn2;
+                // mPenetrationAxis points from the cast shape to the hit one: the surface normal is its opposite
+                raw.normal = (-result.mPenetrationAxis).NormalizedOr(-toward);
+                raws.push_back(raw);
+            };
+            FunctionCollector<JPH::CastShapeCollector, JPH::ShapeCastResult, decltype(accept)> collector(accept);
+            system->GetNarrowPhaseQuery().CastShape(cast, settings, JPH::RVec3::sZero(), collector);
+            return raws;
+        }
+
+        /// Every collider `shape` (at `position` and `rotation`) overlaps, each once, in QueryRules' order
+        int CollectOverlap(const JPH::Shape &shape, const Math::Vector3 &position, const JPH::Quat &rotation,
+                           const std::uint32_t layerMask, const QueryTriggers triggers,
+                           std::vector<OverlapHit> &hits) const
+        {
+            std::vector<RawHit> raws;
+            JPH::CollideShapeSettings settings;
+            const auto accept = [&](const JPH::CollideShapeResult &result)
+            {
+                RawHit raw;
+                if (Resolve(result.mBodyID2, result.mSubShapeID2, layerMask, triggers, raw.resolved))
+                {
+                    raws.push_back(raw);
+                }
+            };
+            FunctionCollector<JPH::CollideShapeCollector, JPH::CollideShapeResult, decltype(accept)> collector(accept);
+            system->GetNarrowPhaseQuery().CollideShape(
+                &shape, JPH::Vec3::sReplicate(1.0f), JPH::RMat44::sRotationTranslation(rotation, ToJolt(position)),
+                settings, JPH::RVec3::sZero(), collector);
+
+            std::vector<QueryUtil::HitKey> keys;
+            keys.reserve(raws.size());
+            for (const RawHit &raw : raws)
+            {
+                keys.push_back(KeyOfRaw(raw));
+            }
+            QueryUtil::SortByKeys(raws, keys, QueryUtil::HandleThenDistanceLess);
+            for (std::size_t i = 0; i < raws.size(); ++i)
+            {
+                // A collider is one Jolt sub-shape, but report it once whatever Jolt does
+                if (i > 0 && keys[i].index == keys[i - 1].index && keys[i].generation == keys[i - 1].generation &&
+                    keys[i].colliderOrder == keys[i - 1].colliderOrder)
+                {
+                    continue;
+                }
+                OverlapHit hit;
+                hit.gameObject = OwnerOf(*raws[i].resolved.data);
+                hit.rigidbody = raws[i].resolved.data->rigidbody;
+                hit.collider = raws[i].resolved.collider;
+                hit.bodyHandle = raws[i].resolved.handle;
+                hits.push_back(hit);
+            }
+            return static_cast<int>(hits.size());
+        }
+
+        /// Fills `hit` from a raw hit of a ray (`isRay`: point and normal are computed here, from the hit sub-shape)
+        /// or a sweep (they came from Jolt); a hit at distance 0 follows QueryRules' started-inside answer
+        void FillHit(RaycastHit &hit, const RawHit &raw, const Math::Vector3 &origin, const QueryUtil::Sweep &sweep,
+                     const bool isRay) const
+        {
+            hit = RaycastHit{};
+            hit.hit = true;
+            hit.distance = raw.distance;
+            hit.bodyHandle = raw.resolved.handle;
+            hit.gameObject = OwnerOf(*raw.resolved.data);
+            hit.rigidbody = raw.resolved.data->rigidbody;
+            hit.collider = raw.resolved.collider;
+            if (raw.distance <= 0.0f)
+            {
+                QueryUtil::MarkStartedInside(hit, origin, sweep.direction);
+                return;
+            }
+            if (isRay)
+            {
+                hit.point = Math::Vector3(origin.x + sweep.direction.x * raw.distance,
+                                          origin.y + sweep.direction.y * raw.distance,
+                                          origin.z + sweep.direction.z * raw.distance);
+                const JPH::BodyLockRead lock(system->GetBodyLockInterface(), raw.body);
+                JPH::Vec3 normal = JPH::Vec3::sZero();
+                if (lock.Succeeded())
+                {
+                    normal = lock.GetBody().GetWorldSpaceSurfaceNormal(raw.subShape, ToJolt(hit.point));
+                }
+                hit.normal = ToEngine(normal);
+            }
+            else
+            {
+                hit.point = ToEngine(raw.point);
+                hit.normal = ToEngine(raw.normal);
+            }
+        }
+
+        /// The single-hit queries' answer: the nearest of `raws`, ties broken by handle (QueryRules)
+        bool PickNearest(const std::vector<RawHit> &raws, RaycastHit &hit, const Math::Vector3 &origin,
+                         const QueryUtil::Sweep &sweep, const bool isRay) const
+        {
+            std::vector<QueryUtil::HitKey> keys;
+            keys.reserve(raws.size());
+            for (const RawHit &raw : raws)
+            {
+                keys.push_back(KeyOfRaw(raw));
+            }
+            const std::size_t best = QueryUtil::PickClosest(keys);
+            if (best == SIZE_MAX)
+            {
+                return false;
+            }
+            FillHit(hit, raws[best], origin, sweep, isRay);
+            return true;
+        }
+
+        /// A capsule's Jolt shape: standing along Y at the origin, and the rotation that lays it along the segment
+        /// (coincident end points: a sphere)
+        static JPH::RefConst<JPH::Shape> MakeCapsuleQueryShape(const QueryUtil::CapsuleFrame &frame,
+                                                               const float radius, JPH::Quat &rotation)
+        {
+            if (!(frame.halfLength > 1e-5f))
+            {
+                rotation = JPH::Quat::sIdentity();
+                return new JPH::SphereShape(radius);
+            }
+            const QueryUtil::ShortestRotation turn =
+                QueryUtil::RotationBetween(Math::Vector3(0.0f, 1.0f, 0.0f), frame.axis);
+            rotation = JPH::Quat(turn.x, turn.y, turn.z, turn.w);
+            return new JPH::CapsuleShape(frame.halfLength, radius);
         }
     };
 
@@ -1194,12 +1467,15 @@ namespace N2Engine::Physics
 
     void JoltBackend::SetColliderLayer(PhysicsBodyHandle, ICollider *, int)
     {
-        _impl->WarnOnce(kLayers, "layers and the collision matrix are ignored (every body is static or moving)");
+        // The queries read the collider's layer when they run (J5); the simulation has no layers yet
+        _impl->WarnOnce(kLayers, "the simulation ignores layers and the collision matrix (every body is static or "
+                                 "moving; queries do honour layer masks)");
     }
 
     void JoltBackend::RefreshCollisionMatrix()
     {
-        _impl->WarnOnce(kLayers, "layers and the collision matrix are ignored (every body is static or moving)");
+        _impl->WarnOnce(kLayers, "the simulation ignores layers and the collision matrix (every body is static or "
+                                 "moving; queries do honour layer masks)");
     }
 
     // ===== Forces and motion =====
@@ -1346,26 +1622,119 @@ namespace N2Engine::Physics
 
     // ===== Queries (J5) =====
 
-    bool JoltBackend::Raycast(const Math::Vector3 &, const Math::Vector3 &, RaycastHit &, float, std::uint32_t,
-                              QueryTriggers)
+    bool JoltBackend::Raycast(const Math::Vector3 &origin, const Math::Vector3 &direction, RaycastHit &hit,
+                              const float maxDistance, const std::uint32_t layerMask, const QueryTriggers triggers)
     {
-        _impl->WarnOnce(kQueries, "scene queries (Raycast, RaycastAll, SphereCast) find nothing");
-        return false;
+        hit = RaycastHit{};
+        Impl &s = *_impl;
+        const auto sweep = QueryUtil::ReadSweep(origin, direction, maxDistance);
+        if (!s.initialized || !sweep || layerMask == 0)
+        {
+            return false;
+        }
+        const std::vector<Impl::RawHit> raws = s.CollectRay(origin, *sweep, layerMask, triggers);
+        return s.PickNearest(raws, hit, origin, *sweep, true);
     }
 
-    int JoltBackend::RaycastAll(const Math::Vector3 &, const Math::Vector3 &, std::vector<RaycastHit> &hits, float,
-                                std::uint32_t, QueryTriggers)
+    int JoltBackend::RaycastAll(const Math::Vector3 &origin, const Math::Vector3 &direction,
+                                std::vector<RaycastHit> &hits, const float maxDistance, const std::uint32_t layerMask,
+                                const QueryTriggers triggers)
     {
-        _impl->WarnOnce(kQueries, "scene queries (Raycast, RaycastAll, SphereCast) find nothing");
         hits.clear();
-        return 0;
+        Impl &s = *_impl;
+        const auto sweep = QueryUtil::ReadSweep(origin, direction, maxDistance);
+        if (!s.initialized || !sweep || layerMask == 0)
+        {
+            return 0;
+        }
+        std::vector<Impl::RawHit> raws = s.CollectRay(origin, *sweep, layerMask, triggers);
+        std::vector<QueryUtil::HitKey> keys;
+        keys.reserve(raws.size());
+        for (const Impl::RawHit &raw : raws)
+        {
+            keys.push_back(Impl::KeyOfRaw(raw));
+        }
+        QueryUtil::SortByKeys(raws, keys, QueryUtil::DistanceThenHandleLess);
+        hits.reserve(raws.size());
+        for (const Impl::RawHit &raw : raws)
+        {
+            RaycastHit hit;
+            s.FillHit(hit, raw, origin, *sweep, true);
+            hits.push_back(hit);
+        }
+        return static_cast<int>(hits.size());
     }
 
-    bool JoltBackend::SphereCast(const Math::Vector3 &, float, const Math::Vector3 &, RaycastHit &, float,
-                                 std::uint32_t)
+    bool JoltBackend::SphereCast(const Math::Vector3 &origin, const float radius, const Math::Vector3 &direction,
+                                 RaycastHit &hit, const float maxDistance, const std::uint32_t layerMask)
     {
-        _impl->WarnOnce(kQueries, "scene queries (Raycast, RaycastAll, SphereCast) find nothing");
-        return false;
+        hit = RaycastHit{};
+        Impl &s = *_impl;
+        const auto sweep = QueryUtil::ReadSweep(origin, direction, maxDistance, QueryRules::kMaxSweepDistance);
+        if (!s.initialized || !sweep || layerMask == 0 || !QueryUtil::IsValidRadius(radius))
+        {
+            return false;
+        }
+        const JPH::RefConst<JPH::Shape> shape = new JPH::SphereShape(radius);
+        const std::vector<Impl::RawHit> raws =
+            s.CollectCast(*shape, origin, JPH::Quat::sIdentity(), *sweep, layerMask, QueryTriggers::Collide);
+        return s.PickNearest(raws, hit, origin, *sweep, false);
+    }
+
+    bool JoltBackend::CapsuleCast(const Math::Vector3 &point0, const Math::Vector3 &point1, const float radius,
+                                  const Math::Vector3 &direction, RaycastHit &hit, const float maxDistance,
+                                  const std::uint32_t layerMask, const QueryTriggers triggers)
+    {
+        hit = RaycastHit{};
+        Impl &s = *_impl;
+        if (!QueryUtil::IsFinite(point0) || !QueryUtil::IsFinite(point1) || !QueryUtil::IsValidRadius(radius))
+        {
+            return false;
+        }
+        const QueryUtil::CapsuleFrame frame = QueryUtil::CapsuleFrameOf(point0, point1);
+        const auto sweep = QueryUtil::ReadSweep(frame.center, direction, maxDistance, QueryRules::kMaxSweepDistance);
+        if (!s.initialized || !sweep || layerMask == 0)
+        {
+            return false;
+        }
+        JPH::Quat rotation = JPH::Quat::sIdentity();
+        const JPH::RefConst<JPH::Shape> shape = Impl::MakeCapsuleQueryShape(frame, radius, rotation);
+        const std::vector<Impl::RawHit> raws =
+            s.CollectCast(*shape, frame.center, rotation, *sweep, layerMask, triggers);
+        return s.PickNearest(raws, hit, frame.center, *sweep, false);
+    }
+
+    int JoltBackend::Overlap(const OverlapShape &query, std::vector<OverlapHit> &hits, const std::uint32_t layerMask,
+                             const QueryTriggers triggers)
+    {
+        hits.clear();
+        Impl &s = *_impl;
+        if (!s.initialized || layerMask == 0 || !QueryUtil::IsValidOverlapShape(query))
+        {
+            return 0;
+        }
+        JPH::Quat rotation = JPH::Quat::sIdentity();
+        Math::Vector3 position = query.center;
+        JPH::RefConst<JPH::Shape> shape;
+        switch (query.kind)
+        {
+        case OverlapShape::Kind::Sphere:
+            shape = new JPH::SphereShape(query.radius);
+            break;
+        case OverlapShape::Kind::Box:
+            // No convex radius: the query box is exactly the size asked for
+            shape = new JPH::BoxShape(ToJolt(query.halfExtents), 0.0f);
+            rotation = ToJolt(query.rotation);
+            break;
+        case OverlapShape::Kind::Capsule:
+        {
+            const QueryUtil::CapsuleFrame frame = QueryUtil::CapsuleFrameOf(query.point0, query.point1);
+            position = frame.center;
+            shape = Impl::MakeCapsuleQueryShape(frame, query.radius, rotation);
+            break;
+        }
+        }
+        return s.CollectOverlap(*shape, position, rotation, layerMask, triggers, hits);
     }
 
     // ===== Snapshot (J6) =====

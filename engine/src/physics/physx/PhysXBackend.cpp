@@ -11,6 +11,7 @@
 #include "engine/Logger.hpp"
 #include "engine/physics/Raycast.hpp"
 #include "engine/Layers.hpp"
+#include "../QueryUtil.hpp"
 
 #ifdef N2ENGINE_PHYSX_ENABLED
 #include <PxPhysicsAPI.h>
@@ -27,6 +28,7 @@
 #include <functional>
 #include <map>
 #include <set>
+#include <tuple>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -151,6 +153,207 @@ namespace N2Engine::Physics
 
             Logger::Warn(std::format("Invalid Rigidbody mass {}, using 1", mass));
             return 1.0f;
+        }
+
+        // ===== Scene queries (J5) =====
+        // The most hits one RaycastAll, sweep or overlap collects (PhysX needs a buffer of a fixed size)
+        constexpr PxU32 kMaxQueryHits = 1024;
+
+        // A hit together with where it sits in QueryRules' order
+        template <typename HitType>
+        struct LocatedHit
+        {
+            HitType px;
+            PhysicsBodyHandle handle;
+            std::size_t colliderOrder = 0;
+        };
+
+        template <typename HitType>
+        QueryUtil::HitKey KeyOfLocated(const LocatedHit<HitType> &located)
+        {
+            return QueryUtil::KeyOf(located.px.distance, located.handle, located.colliderOrder);
+        }
+
+        // Runs a query into a touch buffer and returns every hit it reported, block included
+        template <typename HitType, typename Buffer, typename Run>
+        std::vector<HitType> CollectHits(Run &&run)
+        {
+            std::vector<HitType> storage(kMaxQueryHits);
+            Buffer result(storage.data(), kMaxQueryHits);
+            run(result);
+            std::vector<HitType> hits;
+            hits.reserve(static_cast<std::size_t>(result.nbTouches) + 1);
+            for (PxU32 i = 0; i < result.nbTouches; ++i)
+            {
+                hits.push_back(result.touches[i]);
+            }
+            if (result.hasBlock)
+            {
+                hits.push_back(result.block);
+            }
+            return hits;
+        }
+
+        // The hits that belong to a live collider of the backend, with their place in the order
+        template <typename HitType, typename Locate>
+        std::vector<LocatedHit<HitType>> LocateHits(const std::vector<HitType> &hits, Locate &&locate)
+        {
+            std::vector<LocatedHit<HitType>> located;
+            located.reserve(hits.size());
+            for (const HitType &hit : hits)
+            {
+                LocatedHit<HitType> entry;
+                entry.px = hit;
+                if (locate(hit, entry.handle, entry.colliderOrder))
+                {
+                    located.push_back(entry);
+                }
+            }
+            return located;
+        }
+
+        // The nearest hit of a query, ties broken by handle (QueryRules). `blocking(nearest)` runs the query for its
+        // single nearest hit; `touching(maxDistance)` runs it again for every hit up to maxDistance, which gathers the
+        // hits that tie with the nearest (a touch buffer alone is not promised to hold the nearest one when it fills).
+        template <typename HitType, typename Blocking, typename Touching, typename Locate>
+        bool FindNearest(Blocking &&blocking, Touching &&touching, Locate &&locate, const float limit,
+                         LocatedHit<HitType> &best)
+        {
+            HitType nearest;
+            if (!blocking(nearest))
+            {
+                return false;
+            }
+            std::vector<HitType> candidates =
+                touching((std::min)(nearest.distance + QueryRules::kQueryTieTolerance, limit));
+            candidates.push_back(nearest);
+            std::vector<LocatedHit<HitType>> located = LocateHits(candidates, locate);
+            std::vector<QueryUtil::HitKey> keys;
+            keys.reserve(located.size());
+            for (const LocatedHit<HitType> &entry : located)
+            {
+                keys.push_back(KeyOfLocated(entry));
+            }
+            const std::size_t index = QueryUtil::PickClosest(keys);
+            if (index == SIZE_MAX)
+            {
+                return false;
+            }
+            best = located[index];
+            return true;
+        }
+
+        PxVec3 ToPx(const Math::Vector3 &v)
+        {
+            return PxVec3(v.x, v.y, v.z);
+        }
+
+        // A query shape for PhysX: its geometry (a sphere for a capsule of no length) and pose. A capsule lies along
+        // the local X axis in PhysX.
+        struct PxQueryShape
+        {
+            PxSphereGeometry sphere;
+            PxBoxGeometry box;
+            PxCapsuleGeometry capsule;
+            enum class Kind : std::uint8_t
+            {
+                Sphere,
+                Box,
+                Capsule
+            } kind = Kind::Sphere;
+            PxTransform pose;
+
+            [[nodiscard]] const PxGeometry &Geometry() const
+            {
+                switch (kind)
+                {
+                case Kind::Box:
+                    return box;
+                case Kind::Capsule:
+                    return capsule;
+                case Kind::Sphere:
+                    break;
+                }
+                return sphere;
+            }
+        };
+
+        PxQueryShape MakeSphereQueryShape(const Math::Vector3 &center, const float radius)
+        {
+            PxQueryShape shape;
+            shape.sphere = PxSphereGeometry(radius);
+            shape.pose = PxTransform(ToPx(center));
+            return shape;
+        }
+
+        PxQueryShape MakeCapsuleQueryShape(const QueryUtil::CapsuleFrame &frame, const float radius)
+        {
+            if (!(frame.halfLength > 1e-5f))
+            {
+                return MakeSphereQueryShape(frame.center, radius);
+            }
+            PxQueryShape shape;
+            shape.kind = PxQueryShape::Kind::Capsule;
+            shape.capsule = PxCapsuleGeometry(radius, frame.halfLength);
+            const QueryUtil::ShortestRotation turn =
+                QueryUtil::RotationBetween(Math::Vector3(1.0f, 0.0f, 0.0f), frame.axis);
+            shape.pose = PxTransform(ToPx(frame.center), PxQuat(turn.x, turn.y, turn.z, turn.w));
+            return shape;
+        }
+
+        PxQueryShape MakeBoxQueryShape(const Math::Vector3 &center, const Math::Vector3 &halfExtents,
+                                       const Math::Quaternion &rotation)
+        {
+            PxQueryShape shape;
+            shape.kind = PxQueryShape::Kind::Box;
+            shape.box = PxBoxGeometry(ToPx(halfExtents));
+            PxQuat turn(rotation.GetX(), rotation.GetY(), rotation.GetZ(), rotation.GetW());
+            turn.normalize();
+            shape.pose = PxTransform(ToPx(center), turn);
+            return shape;
+        }
+
+        // A sweep of `shape` along `sweep`: the nearest hit, ties broken by handle
+        template <typename Locate>
+        bool SweepNearest(PxScene &scene, const PxQueryShape &shape, const QueryUtil::Sweep &sweep,
+                          const uint32_t layerMask, const bool ignoreTriggers, Locate &&locate,
+                          LocatedHit<PxSweepHit> &best)
+        {
+            const PxVec3 pxDir = ToPx(sweep.direction);
+            const auto blocking = [&](PxSweepHit &nearest)
+            {
+                PxSweepBuffer buffer;
+                PxQueryFilterData filterData;
+                filterData.data.word0 = layerMask;
+                IgnoreTriggersFilter skipTriggers;
+                PxQueryFilterCallback *callback = nullptr;
+                if (ignoreTriggers)
+                {
+                    filterData.flags |= PxQueryFlag::ePREFILTER;
+                    callback = &skipTriggers;
+                }
+                if (scene.sweep(shape.Geometry(), shape.pose, pxDir, sweep.distance, buffer, PxHitFlag::eDEFAULT,
+                                filterData, callback) &&
+                    buffer.hasBlock)
+                {
+                    nearest = buffer.block;
+                    return true;
+                }
+                return false;
+            };
+            const auto touching = [&](const float upTo)
+            {
+                return CollectHits<PxSweepHit, PxSweepBuffer>([&](PxSweepBuffer &buffer)
+                {
+                    PxQueryFilterData filterData;
+                    filterData.data.word0 = layerMask;
+                    filterData.flags |= PxQueryFlag::ePREFILTER;
+                    TouchAllHitsFilter touchAll(ignoreTriggers);
+                    scene.sweep(shape.Geometry(), shape.pose, pxDir, upTo, buffer, PxHitFlag::eDEFAULT, filterData,
+                                &touchAll);
+                });
+            };
+            return FindNearest<PxSweepHit>(blocking, touching, locate, sweep.distance, best);
         }
     }
 
@@ -2372,99 +2575,151 @@ namespace N2Engine::Physics
         }
     }
 
+    bool PhysXBackend::LocateQueryHit(const PxActorShape &actorShape, PhysicsBodyHandle &handle,
+                                      std::size_t &colliderOrder) const
+    {
+        if (!actorShape.actor || !actorShape.actor->userData)
+        {
+            return false;
+        }
+        const PhysicsBodyHandle bodyHandle = *static_cast<const PhysicsBodyHandle *>(actorShape.actor->userData);
+        const BodyData *data = GetBodyData(bodyHandle);
+        const ICollider *collider = ColliderOf(actorShape.shape);
+        if (!data || !collider)
+        {
+            return false;
+        }
+        const auto it = std::ranges::find(data->colliders, collider);
+        if (it == data->colliders.end())
+        {
+            return false;
+        }
+        handle = bodyHandle;
+        colliderOrder = static_cast<std::size_t>(it - data->colliders.begin());
+        return true;
+    }
+
     bool PhysXBackend::Raycast(
         const Math::Vector3 &origin,
         const Math::Vector3 &direction,
         RaycastHit &hit,
-        float maxDistance,
-        uint32_t layerMask,
+        const float maxDistance,
+        const uint32_t layerMask,
         const QueryTriggers triggers)
     {
         hit = RaycastHit{};
+        const auto sweep = QueryUtil::ReadSweep(origin, direction, maxDistance);
         // An all-zero query filter turns PhysX's layer test off (it would hit everything); no layers, no hit
-        if (!_scene || layerMask == 0)
+        if (!_scene || !sweep || layerMask == 0)
         {
             return false;
         }
 
-        Math::Vector3 dir = direction.Normalized();
-        PxVec3 pxOrigin(origin.x, origin.y, origin.z);
-        PxVec3 pxDir(dir.x, dir.y, dir.z);
+        const PxVec3 pxOrigin = ToPx(origin);
+        const PxVec3 pxDir = ToPx(sweep->direction);
+        const bool ignoreTriggers = triggers == QueryTriggers::Ignore;
 
-        PxRaycastBuffer hitBuffer;
-        PxQueryFilterData filterData;
-        filterData.data.word0 = layerMask;
-
-        IgnoreTriggersFilter ignoreTriggers;
-        PxQueryFilterCallback *callback = nullptr;
-        if (triggers == QueryTriggers::Ignore)
+        const auto blocking = [&](PxRaycastHit &nearest)
         {
-            filterData.flags |= PxQueryFlag::ePREFILTER;
-            callback = &ignoreTriggers;
-        }
-
-        bool status =
-            _scene->raycast(pxOrigin, pxDir, maxDistance, hitBuffer, PxHitFlag::eDEFAULT, filterData, callback);
-
-        if (status && hitBuffer.hasBlock)
+            PxRaycastBuffer buffer;
+            PxQueryFilterData filterData;
+            filterData.data.word0 = layerMask;
+            IgnoreTriggersFilter skipTriggers;
+            PxQueryFilterCallback *callback = nullptr;
+            if (ignoreTriggers)
+            {
+                filterData.flags |= PxQueryFlag::ePREFILTER;
+                callback = &skipTriggers;
+            }
+            if (_scene->raycast(pxOrigin, pxDir, sweep->distance, buffer, PxHitFlag::eDEFAULT, filterData, callback) &&
+                buffer.hasBlock)
+            {
+                nearest = buffer.block;
+                return true;
+            }
+            return false;
+        };
+        const auto touching = [&](const float upTo)
         {
-            FillRaycastHit(hit, hitBuffer.block, hitBuffer.block);
-            return true;
-        }
+            return CollectHits<PxRaycastHit, PxRaycastBuffer>([&](PxRaycastBuffer &buffer)
+            {
+                PxQueryFilterData filterData;
+                filterData.data.word0 = layerMask;
+                filterData.flags |= PxQueryFlag::ePREFILTER;
+                TouchAllHitsFilter touchAll(ignoreTriggers);
+                _scene->raycast(pxOrigin, pxDir, upTo, buffer, PxHitFlag::eDEFAULT, filterData, &touchAll);
+            });
+        };
+        const auto locate = [this](const PxRaycastHit &px, PhysicsBodyHandle &handle, std::size_t &order)
+        {
+            return LocateQueryHit(px, handle, order);
+        };
 
-        return false;
+        LocatedHit<PxRaycastHit> best;
+        if (!FindNearest<PxRaycastHit>(blocking, touching, locate, sweep->distance, best))
+        {
+            return false;
+        }
+        FillRaycastHit(hit, best.px, best.px);
+        if (hit.distance <= 0.0f)
+        {
+            QueryUtil::MarkStartedInside(hit, origin, sweep->direction);
+        }
+        return true;
     }
 
     int PhysXBackend::RaycastAll(
         const Math::Vector3 &origin,
         const Math::Vector3 &direction,
         std::vector<RaycastHit> &hits,
-        float maxDistance,
-        uint32_t layerMask,
+        const float maxDistance,
+        const uint32_t layerMask,
         const QueryTriggers triggers)
     {
         hits.clear();
 
-        if (!_scene || layerMask == 0) // as in Raycast
-            return 0;
-
-        Math::Vector3 dir = direction.Normalized();
-        PxVec3 pxOrigin(origin.x, origin.y, origin.z);
-        PxVec3 pxDir(dir.x, dir.y, dir.z);
-
-        constexpr PxU32 maxHits = 256;
-        PxRaycastHit hitBuffer[maxHits];
-        PxQueryFilterData filterData;
-        filterData.data.word0 = layerMask;
-
-        PxRaycastBuffer raycastBuffer(hitBuffer, maxHits);
-
-        // Report every hit as touching; otherwise PhysX keeps only the closest blocking one
-        TouchAllHitsFilter touchAll(triggers == QueryTriggers::Ignore);
-        filterData.flags |= PxQueryFlag::ePREFILTER;
-
-        if (_scene->raycast(pxOrigin, pxDir, maxDistance, raycastBuffer, PxHitFlag::eDEFAULT, filterData, &touchAll))
+        const auto sweep = QueryUtil::ReadSweep(origin, direction, maxDistance);
+        if (!_scene || !sweep || layerMask == 0) // as in Raycast
         {
-            for (PxU32 i = 0; i < raycastBuffer.nbTouches; i++)
-            {
-                RaycastHit hit;
-                FillRaycastHit(hit, raycastBuffer.touches[i], raycastBuffer.touches[i]);
-                hits.push_back(hit);
-            }
-
-            if (raycastBuffer.hasBlock)
-            {
-                RaycastHit hit;
-                FillRaycastHit(hit, raycastBuffer.block, raycastBuffer.block);
-                hits.push_back(hit);
-            }
+            return 0;
         }
 
-        std::ranges::sort(hits, [](const RaycastHit &a, const RaycastHit &b)
-        {
-            return a.distance < b.distance;
-        });
+        const PxVec3 pxOrigin = ToPx(origin);
+        const PxVec3 pxDir = ToPx(sweep->direction);
+        const bool ignoreTriggers = triggers == QueryTriggers::Ignore;
 
+        // Report every hit as touching; otherwise PhysX keeps only the closest blocking one
+        const std::vector<PxRaycastHit> raw = CollectHits<PxRaycastHit, PxRaycastBuffer>([&](PxRaycastBuffer &buffer)
+        {
+            PxQueryFilterData filterData;
+            filterData.data.word0 = layerMask;
+            filterData.flags |= PxQueryFlag::ePREFILTER;
+            TouchAllHitsFilter touchAll(ignoreTriggers);
+            _scene->raycast(pxOrigin, pxDir, sweep->distance, buffer, PxHitFlag::eDEFAULT, filterData, &touchAll);
+        });
+        std::vector<LocatedHit<PxRaycastHit>> located = LocateHits(
+            raw, [this](const PxRaycastHit &px, PhysicsBodyHandle &handle, std::size_t &order)
+            { return LocateQueryHit(px, handle, order); });
+
+        std::vector<QueryUtil::HitKey> keys;
+        keys.reserve(located.size());
+        for (const LocatedHit<PxRaycastHit> &entry : located)
+        {
+            keys.push_back(KeyOfLocated(entry));
+        }
+        QueryUtil::SortByKeys(located, keys, QueryUtil::DistanceThenHandleLess);
+
+        hits.reserve(located.size());
+        for (const LocatedHit<PxRaycastHit> &entry : located)
+        {
+            RaycastHit hit;
+            FillRaycastHit(hit, entry.px, entry.px);
+            if (hit.distance <= 0.0f)
+            {
+                QueryUtil::MarkStartedInside(hit, origin, sweep->direction);
+            }
+            hits.push_back(hit);
+        }
         return static_cast<int>(hits.size());
     }
 
@@ -2477,30 +2732,128 @@ namespace N2Engine::Physics
         const uint32_t layerMask)
     {
         hit = RaycastHit{};
-        if (!_scene || layerMask == 0) // as in Raycast
+        const auto sweep = QueryUtil::ReadSweep(origin, direction, maxDistance, QueryRules::kMaxSweepDistance);
+        if (!_scene || !sweep || layerMask == 0 || !QueryUtil::IsValidRadius(radius)) // as in Raycast
         {
             return false;
         }
 
-        const Math::Vector3 dir = direction.Normalized();
-        const PxVec3 pxOrigin(origin.x, origin.y, origin.z);
-        const PxVec3 pxDir(dir.x, dir.y, dir.z);
-
-        const PxSphereGeometry sphere(radius);
-        const PxTransform pose(pxOrigin);
-
-        PxSweepBuffer hitBuffer;
-        PxQueryFilterData filterData;
-        filterData.data.word0 = layerMask;
-
-        const bool status = _scene->sweep(sphere, pose, pxDir, maxDistance, hitBuffer, PxHitFlag::eDEFAULT, filterData);
-        if (status && hitBuffer.hasBlock)
+        const PxQueryShape shape = MakeSphereQueryShape(origin, radius);
+        LocatedHit<PxSweepHit> best;
+        const auto locate = [this](const PxSweepHit &px, PhysicsBodyHandle &handle, std::size_t &order)
         {
-            FillRaycastHit(hit, hitBuffer.block, hitBuffer.block);
-            return true;
+            return LocateQueryHit(px, handle, order);
+        };
+        if (!SweepNearest(*_scene, shape, *sweep, layerMask, false, locate, best))
+        {
+            return false;
+        }
+        FillRaycastHit(hit, best.px, best.px);
+        if (hit.distance <= 0.0f)
+        {
+            QueryUtil::MarkStartedInside(hit, origin, sweep->direction);
+        }
+        return true;
+    }
+
+    bool PhysXBackend::CapsuleCast(
+        const Math::Vector3 &point0,
+        const Math::Vector3 &point1,
+        const float radius,
+        const Math::Vector3 &direction,
+        RaycastHit &hit,
+        const float maxDistance,
+        const uint32_t layerMask,
+        const QueryTriggers triggers)
+    {
+        hit = RaycastHit{};
+        if (!QueryUtil::IsFinite(point0) || !QueryUtil::IsFinite(point1) || !QueryUtil::IsValidRadius(radius))
+        {
+            return false;
+        }
+        const QueryUtil::CapsuleFrame frame = QueryUtil::CapsuleFrameOf(point0, point1);
+        const auto sweep = QueryUtil::ReadSweep(frame.center, direction, maxDistance, QueryRules::kMaxSweepDistance);
+        if (!_scene || !sweep || layerMask == 0)
+        {
+            return false;
         }
 
-        return false;
+        const PxQueryShape shape = MakeCapsuleQueryShape(frame, radius);
+        LocatedHit<PxSweepHit> best;
+        const auto locate = [this](const PxSweepHit &px, PhysicsBodyHandle &handle, std::size_t &order)
+        {
+            return LocateQueryHit(px, handle, order);
+        };
+        if (!SweepNearest(*_scene, shape, *sweep, layerMask, triggers == QueryTriggers::Ignore, locate, best))
+        {
+            return false;
+        }
+        FillRaycastHit(hit, best.px, best.px);
+        if (hit.distance <= 0.0f)
+        {
+            QueryUtil::MarkStartedInside(hit, frame.center, sweep->direction);
+        }
+        return true;
+    }
+
+    int PhysXBackend::Overlap(
+        const OverlapShape &query,
+        std::vector<OverlapHit> &hits,
+        const uint32_t layerMask,
+        const QueryTriggers triggers)
+    {
+        hits.clear();
+        if (!_scene || layerMask == 0 || !QueryUtil::IsValidOverlapShape(query))
+        {
+            return 0;
+        }
+
+        PxQueryShape shape;
+        switch (query.kind)
+        {
+        case OverlapShape::Kind::Sphere:
+            shape = MakeSphereQueryShape(query.center, query.radius);
+            break;
+        case OverlapShape::Kind::Box:
+            shape = MakeBoxQueryShape(query.center, query.halfExtents, query.rotation);
+            break;
+        case OverlapShape::Kind::Capsule:
+            shape = MakeCapsuleQueryShape(QueryUtil::CapsuleFrameOf(query.point0, query.point1), query.radius);
+            break;
+        }
+
+        const std::vector<PxOverlapHit> raw = CollectHits<PxOverlapHit, PxOverlapBuffer>([&](PxOverlapBuffer &buffer)
+        {
+            PxQueryFilterData filterData;
+            filterData.data.word0 = layerMask;
+            filterData.flags |= PxQueryFlag::ePREFILTER;
+            TouchAllHitsFilter touchAll(triggers == QueryTriggers::Ignore);
+            _scene->overlap(shape.Geometry(), shape.pose, buffer, filterData, &touchAll);
+        });
+        std::vector<LocatedHit<PxOverlapHit>> located = LocateHits(
+            raw, [this](const PxOverlapHit &px, PhysicsBodyHandle &handle, std::size_t &order)
+            { return LocateQueryHit(px, handle, order); });
+
+        // Handle, then collider; a collider is reported once (it can own several PhysX shapes)
+        std::ranges::sort(located, [](const LocatedHit<PxOverlapHit> &a, const LocatedHit<PxOverlapHit> &b)
+        {
+            return std::tie(a.handle.index, a.handle.generation, a.colliderOrder) <
+                   std::tie(b.handle.index, b.handle.generation, b.colliderOrder);
+        });
+        for (std::size_t i = 0; i < located.size(); ++i)
+        {
+            if (i > 0 && located[i].handle == located[i - 1].handle &&
+                located[i].colliderOrder == located[i - 1].colliderOrder)
+            {
+                continue;
+            }
+            OverlapHit hit;
+            hit.bodyHandle = located[i].handle;
+            DescribeSide(hit.bodyHandle, {}, hit.gameObject, hit.rigidbody);
+            hit.collider = LiveCollider(hit.bodyHandle, ColliderOf(located[i].px.shape));
+            hits.push_back(hit);
+        }
+        return static_cast<int>(hits.size());
     }
 
     // Stub implementations for unused callbacks
