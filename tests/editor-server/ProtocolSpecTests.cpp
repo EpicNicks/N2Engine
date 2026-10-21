@@ -102,6 +102,7 @@ namespace
             {"ListEditorExtensions", CommandType::ListEditorExtensions},
             {"GetEditorUi", CommandType::GetEditorUi},
             {"InvokeMenuItem", CommandType::InvokeMenuItem},
+            {"InvokeInspectorAction", CommandType::InvokeInspectorAction},
             {"ReloadEditorExtensions", CommandType::ReloadEditorExtensions},
             {"Undo", CommandType::Undo},
             {"Redo", CommandType::Redo},
@@ -213,6 +214,7 @@ namespace
             {"SetStartupScene", [](BufferReader &r) { (void)SetStartupSceneCmd::Deserialize(r); }},
             {"BeginEditGroup", [](BufferReader &r) { (void)BeginEditGroupCmd::Deserialize(r); }},
             {"InvokeMenuItem", [](BufferReader &r) { (void)InvokeMenuItemCmd::Deserialize(r); }},
+            {"InvokeInspectorAction", [](BufferReader &r) { (void)InvokeInspectorActionCmd::Deserialize(r); }},
         };
         return deserializers;
     }
@@ -637,7 +639,7 @@ TEST(ProtocolSpecTest, EveryCommandIsClassifiedForAPlayHost)
         // A play host runs no editor extension: the lists answer (nothing is loaded there), the reload and the invocation
         // are refused
         {"ListEditorExtensions", false}, {"GetEditorUi", false}, {"ReloadEditorExtensions", true},
-        {"InvokeMenuItem", true},
+        {"InvokeMenuItem", true}, {"InvokeInspectorAction", true},
     };
 
     const spec_json spec = LoadSpec();

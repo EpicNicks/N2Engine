@@ -608,9 +608,12 @@ namespace N2Engine::N2Net
             const int v6Only = options.dualStack ? 0 : 1;
             const bool applied = setsockopt(impl->socket, IPPROTO_IPV6, IPV6_V6ONLY,
                                             reinterpret_cast<const char *>(&v6Only), sizeof v6Only) == 0;
-            // Dual stack is on only if it was asked for and the system took the option (some refuse it: then the
-            // socket keeps the system default, which DualStack() reports as unknown-off)
-            impl->dualStack = options.dualStack && applied;
+            // Dual stack is on only if it was asked for, the system took the option (some refuse it: then the socket
+            // keeps the system default, which DualStack() reports as unknown-off) and the bind is the wildcard "::". A
+            // socket bound to one IPv6 address (::1, say) can never exchange IPv4 traffic, whatever IPV6_V6ONLY says.
+            const bool wildcard = std::all_of(bindAddr.bytes.begin(), bindAddr.bytes.end(),
+                                              [](std::uint8_t b) { return b == 0; });
+            impl->dualStack = options.dualStack && applied && wildcard;
         }
 
         const int receiveBuffer = static_cast<int>(std::min<std::uint32_t>(options.receiveBufferBytes, 64u << 20));
@@ -697,7 +700,10 @@ namespace N2Engine::N2Net
         }
         if (state.ipv6 && !target.v6 && !state.dualStack)
         {
-            return fail(UdpError::FamilyMismatch, "this IPv6 socket is not dual-stack: it cannot reach an IPv4 address");
+            return fail(UdpError::FamilyMismatch,
+                        "this IPv6 socket (bound to " + state.localAddress +
+                            ") is not dual-stack: it cannot reach an IPv4 address. Only a socket bound to the wildcard "
+                            "'::' with dualStack reaches IPv4 peers");
         }
         if (!IsLoopback(target) && !state.encryptionAvailable && !state.options.insecureBind)
         {
@@ -828,30 +834,6 @@ namespace N2Engine::N2Net
             }
         }
 
-        // Peers that went quiet. Removed before the event, so a Send from the handler to one fails cleanly.
-        if (state.options.peerIdleTimeoutMs != 0)
-        {
-            std::vector<PeerId> expired;
-            for (const auto &entry : state.peers)
-            {
-                if (now - entry.second.lastReceiveMs >= state.options.peerIdleTimeoutMs)
-                {
-                    expired.push_back(entry.first);
-                }
-            }
-            // Ascending ids: a deterministic order whatever the hash map's
-            std::sort(expired.begin(), expired.end());
-            for (const PeerId id : expired)
-            {
-                state.RemovePeer(id);
-                ++state.stats.peersTimedOut;
-                TransportEvent event;
-                event.type = TransportEventType::PeerDisconnected;
-                event.peer = id;
-                handler(event);
-            }
-        }
-
         // One byte more than the largest datagram, to tell a datagram of exactly that size from a longer one
         std::array<std::uint8_t, kMaxPacketSize + 1> buffer;
         int interrupted = 0;
@@ -949,6 +931,35 @@ namespace N2Engine::N2Net
             event.peer = id;
             event.data = std::span<const std::uint8_t>(buffer.data(), size);
             handler(event);
+        }
+
+        // Peers that went quiet, judged only after the socket is drained: a stall between Polls longer than the
+        // timeout must not drop a peer whose datagrams are waiting in the receive buffer. `now` is the time this Poll
+        // began; a peer heard from during the drain has lastReceiveMs at or after it and is never expired here. The
+        // drain is bounded by maxDatagramsPerPoll, so a peer whose datagram is still queued behind that bound can
+        // expire. Removed before the event, so a Send from the handler to one fails cleanly.
+        if (state.options.peerIdleTimeoutMs != 0)
+        {
+            std::vector<PeerId> expired;
+            for (const auto &entry : state.peers)
+            {
+                const std::uint64_t last = entry.second.lastReceiveMs;
+                if (last <= now && now - last >= state.options.peerIdleTimeoutMs)
+                {
+                    expired.push_back(entry.first);
+                }
+            }
+            // Ascending ids: a deterministic order whatever the hash map's
+            std::sort(expired.begin(), expired.end());
+            for (const PeerId id : expired)
+            {
+                state.RemovePeer(id);
+                ++state.stats.peersTimedOut;
+                TransportEvent event;
+                event.type = TransportEventType::PeerDisconnected;
+                event.peer = id;
+                handler(event);
+            }
         }
     }
 
