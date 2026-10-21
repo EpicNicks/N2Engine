@@ -20,7 +20,7 @@ The pages describe `master`. PRs #26–#34 have all merged; their `PR #nn` badge
 | `transforms.html` | `Positionable` local/world transforms, dirty propagation, physics notification |
 | `scenes.html` | `Scene` and `SceneManager`: storage, loading, switching, teardown |
 | `coroutines.html` | Coroutine scheduling, waits, stop rules, re-entrancy |
-| `physics.html` | Backends, bodies, colliders, events, raycasts, mass properties |
+| `physics.html` | Backends, bodies, colliders, events, raycasts, mass properties, the vendored Jolt Physics (option, build flags, no backend yet) |
 | `input.html` | Input system, action maps, bindings, value combination |
 | `audio.html` | Audio system, sources, one-shots, mixer groups, shutdown |
 | `text.html` | Font backends, SDF atlas, UTF-8 and text layout, the `Font` asset and default font, the `TextRenderer` component, the OpenGL and software text shaders, golden-image tests, the drawing code shared with UI text |
@@ -38,7 +38,7 @@ The pages describe `master`. PRs #26–#34 have all merged; their `PR #nn` badge
 | `netcode.html` | n2net, the netcode packet layer: the `ITransport` interface, the packet byte layout, acks, the reliable-ordered and unreliable-sequenced channels, fragmentation and its limits, bounded parsing of untrusted input, the deterministic network simulator and how to use it in tests, what is not built yet (sockets, encryption, engine integration) |
 | `web-build.html` | The WebAssembly build (stages 0 to 2 of #155): Emscripten toolchain and pinned version, `N2ENGINE_PLATFORM_WEB`, the dev/size/speed profiles, building locally, the reduced target set and exclusions, the web player (canvas, loop, input, assets, page), building and hosting the static package, the output contract, the size report, what is not done yet |
 | `web-checklist.html` | What to check by hand in a real browser for the web player (loading, canvas, input, resize, hosting from a subdirectory, MIME fallback, performance), which CI cannot do |
-| `testing.html` | Test layout, CI, conventions, pixel tests with the headless software renderer |
+| `testing.html` | Test layout, CI, conventions, pixel tests with the headless software renderer, the Jolt smoke test and its cross-leg state hash |
 
 ## Adding or changing a page
 
