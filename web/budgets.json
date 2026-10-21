@@ -1,24 +1,24 @@
 {
-  "comment": "Web package size budgets in bytes, upper limits, one set per profile (docs/web-build.html explains each number: measured in the web CI job of PR #174, plus about 15 percent headroom, rounded; re-measured in PR #181 with WebAudio linked: wasm +0.4 percent, initial brotli +0.8 percent, so none was changed). PR #184 links PhysX for WebAssembly and RAISED every limit on purpose: in the web CI job the size profile wasm grew from 3,946,067 to 6,687,032 bytes raw and from 765,466 to 1,537,129 brotli, the speed profile wasm from 9,351,938 to 12,310,792 raw and from 991,892 to 1,771,548 brotli, and the dev profile wasm from 226,038,712 to 232,622,594 raw; each new limit is the new measurement plus about 15 percent, rounded up. Read by scripts/web-budget-check.mjs in the web CI job. Keys: <kind>.<size>, kind = wasm|js|data|initial (initial = every file of the package), size = raw|gzip|brotli.",
+  "comment": "Web package size budgets in bytes, upper limits, one set per profile (docs/web-build.html explains each number: measured in the web CI job of PR #174, plus about 15 percent headroom, rounded; re-measured in PR #181 with WebAudio linked: wasm +0.4 percent, initial brotli +0.8 percent, so none was changed). PR #184 links PhysX for WebAssembly and RAISED every limit on purpose: in the web CI job the size profile wasm grew from 3,946,067 to 6,687,032 bytes raw and from 765,466 to 1,537,129 brotli, the speed profile wasm from 9,351,938 to 12,310,792 raw and from 991,892 to 1,771,548 brotli, and the dev profile wasm from 226,038,712 to 232,622,594 raw; each new limit is the new measurement plus about 15 percent, rounded up. PR #205 links the Jolt physics backend into the player and RAISED every limit again on purpose: in the web CI job the size profile wasm grew from 6,689,878 to 7,667,982 bytes raw and from 1,537,916 to 1,810,241 brotli, the speed profile wasm from 12,317,644 to 13,515,295 raw and from 1,772,128 to 2,084,769 brotli, and the dev profile wasm from 232,622,594 to 255,550,596 raw (gzip 52,092,757, over the old 52,000,000), about the 920,054 and 1,020,477 bytes the Jolt probe measured plus what the backend uses beyond that probe; each new limit is that measurement plus about 15 percent, rounded up. Read by scripts/web-budget-check.mjs in the web CI job. Keys: <kind>.<size>, kind = wasm|js|data|initial (initial = every file of the package), size = raw|gzip|brotli.",
   "profiles": {
     "dev": {
-      "wasm.raw": 268000000,
-      "wasm.gzip": 52000000,
-      "initial.gzip": 52100000
+      "wasm.raw": 294000000,
+      "wasm.gzip": 60000000,
+      "initial.gzip": 60100000
     },
     "size": {
-      "wasm.raw": 7700000,
-      "wasm.brotli": 1770000,
-      "wasm.gzip": 2520000,
-      "initial.brotli": 1830000,
-      "initial.gzip": 2590000
+      "wasm.raw": 8900000,
+      "wasm.brotli": 2090000,
+      "wasm.gzip": 2970000,
+      "initial.brotli": 2150000,
+      "initial.gzip": 3040000
     },
     "speed": {
-      "wasm.raw": 14200000,
-      "wasm.brotli": 2040000,
-      "wasm.gzip": 3280000,
-      "initial.brotli": 2110000,
-      "initial.gzip": 3350000
+      "wasm.raw": 15600000,
+      "wasm.brotli": 2400000,
+      "wasm.gzip": 3790000,
+      "initial.brotli": 2460000,
+      "initial.gzip": 3860000
     }
   }
 }

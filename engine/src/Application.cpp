@@ -22,6 +22,7 @@
 #include "engine/particles/ParticleBackendSelection.hpp"
 #include "engine/physics/GpuStatus.hpp"
 #include "engine/physics/PhysicsBackendKind.hpp"
+#include "engine/physics/jolt/JoltBackend.hpp"
 #include "engine/physics/physx/PhysXBackend.hpp"
 #include "engine/softbody/SoftBodyBackendSelection.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
@@ -190,6 +191,16 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         networkEnv.backendSupportsSetState = Physics::PhysXBackend::kSupportsSetState;
     }
 #endif
+#ifdef N2ENGINE_JOLT_ENABLED
+    else if (backendKind == Physics::PhysicsBackendKind::Jolt)
+    {
+        networkEnv.hasBackend = true;
+        networkEnv.backendLevel = Physics::JoltBackend::DeclaredDeterminism(
+            project && ReadPhysicsDeterministic(project->settings));
+        networkEnv.backendSupportsSnapshot = Physics::JoltBackend::kSupportsSnapshot;
+        networkEnv.backendSupportsSetState = Physics::JoltBackend::kSupportsSetState;
+    }
+#endif
     Network::NetworkValidation networkValidation = Network::ValidateNetwork(networkSettings, networkEnv);
     if (networkValidation.Refused())
     {
@@ -323,6 +334,30 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         deterministicPhysics = ReadPhysicsDeterministic(project->settings);
     }
 
+#ifdef N2ENGINE_JOLT_ENABLED
+    if (backendKind == Physics::PhysicsBackendKind::Jolt)
+    {
+        _3DphysicsBackend = std::make_unique<Physics::JoltBackend>();
+        // Before Initialize: it picks the job system (single-threaded when deterministic). physics.gpu does not apply: Jolt
+        // runs on the CPU only.
+        _3DphysicsBackend->SetDeterministic(deterministicPhysics);
+        if (!_3DphysicsBackend->Initialize())
+        {
+            Logger::Error("Failed to initialize Jolt backend!");
+            Logger::Warn("Physics will be disabled. Game will continue without physics simulation.");
+            _3DphysicsBackend.reset();
+            physicsStatus.state = SubsystemState::Failed;
+            physicsStatus.detail = "Jolt failed to initialize (see log)";
+        }
+        else
+        {
+            Logger::Info("3D Physics backend initialized successfully");
+            physicsStatus.state = SubsystemState::Running;
+            physicsStatus.detail = "Jolt (CPU)";
+        }
+    }
+    else
+#endif
 #ifdef N2ENGINE_PHYSX_ENABLED
     if (backendKind == Physics::PhysicsBackendKind::PhysX)
     {
@@ -355,9 +390,11 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         physicsStatus.detail = "Selected physics backend is not supported";
     }
 #else
-    Logger::Info("Built without PhysX (N2ENGINE_USE_PHYSX=OFF); physics is disabled");
-    physicsStatus.state = SubsystemState::Disabled;
-    physicsStatus.detail = "Built without PhysX";
+    {
+        Logger::Info("Built without PhysX (N2ENGINE_USE_PHYSX=OFF); physics is disabled");
+        physicsStatus.state = SubsystemState::Disabled;
+        physicsStatus.detail = "Built without PhysX";
+    }
 #endif
 
 #ifdef N2ENGINE_PLATFORM_WEB
@@ -672,7 +709,7 @@ void Application::Shutdown()
     // released (left to SceneManager's static, they'd be freed after those subsystems were gone).
     SceneManager::UnloadScenes();
     Audio::AudioSystem::Instance().Shutdown();
-    _3DphysicsBackend.reset(); // ~PhysXBackend releases the PhysX SDK
+    _3DphysicsBackend.reset(); // ~PhysXBackend releases the PhysX SDK, ~JoltBackend Jolt's bodies
     _window.Shutdown();
     // A network preset's simulation mode ends with the project that selected it: the next Init (a project with no
     // network preset does not touch the mode) must start in the offline loop
