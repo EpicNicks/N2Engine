@@ -82,6 +82,55 @@ TEST_F(WindowlessWindowTest, OnlyAHeadlessSoftwareApplicationHasNoWindow)
     EXPECT_FALSE(Window::UsesNoWindow(Options(RenderBackend::OPENGL, false)));
 }
 
+// Stage G4 of #155: WebGPU has no window path, so a headless WebGPU application takes the no-window path too
+TEST_F(WindowlessWindowTest, AHeadlessWebGpuApplicationHasNoWindow)
+{
+    EXPECT_TRUE(Window::UsesNoWindow(Options(RenderBackend::WEBGPU, true)));
+    EXPECT_FALSE(Window::UsesNoWindow(Options(RenderBackend::WEBGPU, false)));
+}
+
+TEST_F(WindowlessWindowTest, WebGpuWithAWindowIsRefusedWithoutTouchingGlfw)
+{
+    Window window;
+    EXPECT_FALSE(window.InitWindow(Options(RenderBackend::WEBGPU, false)));
+    EXPECT_FALSE(window.IsValid());
+    EXPECT_FALSE(window.IsWindowless());
+    EXPECT_FALSE(window.RendererFailed()) << "a refused configuration, not a renderer that failed";
+    EXPECT_NE(window.GetInitError().find("only without a window"), std::string::npos) << window.GetInitError();
+    EXPECT_EQ(window.GetRenderer(), nullptr);
+    EXPECT_FALSE(Window::HasGlfw());
+    window.Shutdown();
+}
+
+// Natively the WebGPU backend is the CI harness only (design decision W8): the engine refuses it. In the web build it is
+// made, but it cannot start until the page hands its device in (stage G5): node, where the web tests run, has no WebGPU
+// either. Either way InitWindow fails cleanly, with no window, no renderer and no GLFW call
+TEST_F(WindowlessWindowTest, HeadlessWebGpuFailsCleanlyInThisBuild)
+{
+    Window window;
+    EXPECT_FALSE(window.InitWindow(Options(RenderBackend::WEBGPU, true)));
+    EXPECT_FALSE(window.IsValid());
+    EXPECT_FALSE(window.IsWindowless());
+    EXPECT_EQ(window.GetRenderer(), nullptr);
+    EXPECT_EQ(window.GetInputSystem(), nullptr);
+    EXPECT_FALSE(Window::HasGlfw());
+#if defined(N2ENGINE_PLATFORM_WEB)
+    EXPECT_TRUE(window.RendererFailed());
+    EXPECT_NE(window.GetInitError().find("Failed to initialize the WebGPU renderer"), std::string::npos)
+        << window.GetInitError();
+#else
+    EXPECT_FALSE(window.RendererFailed()) << "refused before any renderer was made";
+    EXPECT_NE(window.GetInitError().find("only be chosen in the web build"), std::string::npos) << window.GetInitError();
+#endif
+    window.Shutdown();
+
+    // The window is still usable for a backend that works here
+    ASSERT_TRUE(window.InitWindow(Options(RenderBackend::SOFTWARE, true))) << window.GetInitError();
+    EXPECT_TRUE(window.IsValid());
+    EXPECT_TRUE(window.GetInitError().empty());
+    window.Shutdown();
+}
+
 TEST_F(WindowlessWindowTest, InitCreatesARendererAndInputButNoWindow)
 {
     Window window;

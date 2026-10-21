@@ -1,7 +1,8 @@
-# The web player's input translation (web/player/WebInputMap.*) and the audio system's no-device path (WebAudioTests.cpp:
+# The web player's input translation (web/player/WebInputMap.*), its --renderer argument (RendererOptionTests.cpp,
+# web/player/WebRendererOption.*) and the audio system's no-device path (WebAudioTests.cpp:
 # node has no WebAudio) and what is specific to PhysX on WebAssembly (PhysXWebTests.cpp: the Logger error callback, the
 # scalar single-threaded build), run under node like the other web tests
-add_executable(web_tests InputMapTests.cpp WebAudioTests.cpp PhysXWebTests.cpp)
+add_executable(web_tests InputMapTests.cpp RendererOptionTests.cpp WebAudioTests.cpp PhysXWebTests.cpp)
 
 target_link_libraries(web_tests
         PRIVATE

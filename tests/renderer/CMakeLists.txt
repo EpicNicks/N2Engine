@@ -58,8 +58,10 @@ add_test(NAME renderer_tests COMMAND renderer_tests)
 # The WebGPU backend's tests (stages G2, G3a and G3b of #155): a program of their own, so the CI job for them builds the renderer,
 # the engine (the G3b golden scenes draw through Scene::Render, MeshRenderer, the UI, particles and text, like the Vulkan goldens
 # of renderer_tests) and these tests and no more. They need Dawn (n2_dawn, from cmake/DawnPrebuilt.cmake) and a Vulkan driver at
-# run time; where there is no adapter they skip, unless N2_REQUIRE_WEBGPU=1 (tests/renderer/webgpu/WebGpuTestFixture.hpp)
-if(N2ENGINE_RENDERER_WEBGPU)
+# run time; where there is no adapter they skip, unless N2_REQUIRE_WEBGPU=1 (tests/renderer/webgpu/WebGpuTestFixture.hpp). Not in
+# the web build (stage G4 compiles the backend there too): it cannot read back synchronously in a browser or under node, and node
+# has no WebGPU
+if(N2ENGINE_RENDERER_WEBGPU AND NOT N2ENGINE_PLATFORM_WEB)
     file(GLOB WEBGPU_TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/webgpu/WebGpuRenderer*Tests.cpp")
     add_executable(webgpu_tests ${WEBGPU_TEST_SOURCES})
     target_link_libraries(webgpu_tests

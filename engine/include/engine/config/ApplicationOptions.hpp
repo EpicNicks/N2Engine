@@ -19,7 +19,11 @@ namespace N2Engine::Config
         {
             OPENGL,
             VULKAN,
-            SOFTWARE
+            SOFTWARE,
+            /// The WebGPU backend (#155): only in the web build, and only windowless (isHeadless), as the web player's
+            /// --renderer webgpu. Natively the backend is a CI test harness and Window refuses it (design decision W8). Until
+            /// stage G5 hands the page's device in, the browser build cannot start it either (Window::InitWindow fails)
+            WEBGPU
         };
 
         std::string projectPath;

@@ -68,6 +68,8 @@ namespace
             return "Vulkan";
         case Config::ApplicationOptions::RenderBackend::SOFTWARE:
             return "Software";
+        case Config::ApplicationOptions::RenderBackend::WEBGPU:
+            return "WebGPU";
         }
         return "Unknown";
     }
@@ -274,7 +276,9 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
     {
         // Deliberately no window (Window::UsesNoWindow): healthy, and frames are read back instead
         windowStatus.state = SubsystemState::Disabled;
-        windowStatus.detail = "No window: the headless software renderer draws offscreen";
+        windowStatus.detail = options.renderBackend == Config::ApplicationOptions::RenderBackend::WEBGPU
+                                  ? "No window: the headless WebGPU renderer draws offscreen"
+                                  : "No window: the headless software renderer draws offscreen";
         rendererStatus.state = SubsystemState::Running;
         rendererStatus.detail = rendererName + " (headless)";
     }

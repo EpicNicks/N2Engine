@@ -820,7 +820,8 @@ jobs:
           docker logs n2tokens
           exit 1
 
-  # The web (WebAssembly) build, stages 0 to 4 of issue #155: the math, text and asset-import libraries, the engine
+  # The web (WebAssembly) build, stages 0 to 5 of issue #155 and stage G4 of its WebGPU backend (compiled in with emdawnwebgpu;
+  # the player still starts on the software renderer): the math, text and asset-import libraries, the engine
   # core (single-threaded; audio is Emscripten's OpenAL on WebAudio, which node lacks, so the tests see no audio device) and the software renderer, and their unit tests (math, text, assetimport,
   # engine, renderer and web input tests, the software-renderer goldens among them), built with Emscripten and run under
   # node; and the web player package (index.html, js, wasm, the asset pack, the loader and manifest.json), checked and run
@@ -1000,6 +1001,21 @@ jobs:
           cmake --build build-web-speed --target jolt_size_baseline jolt_size_probe -- -k 0
           node build-web-speed/bin/jolt_size_probe.js
           node scripts/web-jolt-size-report.mjs build-web-speed speed
+
+      # WebGPU stage G4 (#155): the WebGPU backend is linked into the player of every profile (built against Emscripten's
+      # emdawnwebgpu port, cmake/EmdawnwebgpuPort.cmake, which emcc fetches at the first compile), while the player still starts
+      # on the software renderer (the smokes above run that path). The proof that it is linked is the port's JavaScript in
+      # index.js: the call that makes a render pipeline on the browser's GPUDevice, which only the backend's draws reach
+      - name: Check that the WebGPU backend is linked into the player (all profiles)
+        run: |
+          set -e
+          for dir in build-web build-web-size build-web-speed; do
+            if ! grep -q 'createRenderPipeline(' "$dir/web-package/index.js"; then
+              echo "$dir/web-package/index.js has no WebGPU backend (no createRenderPipeline call)"
+              exit 1
+            fi
+            echo "$dir: the WebGPU backend is linked into the player"
+          done
 
   # WebGPU backend, stage G1 (#155): the hand-written WGSL shaders (renderer/shaders/webgpu/*.wgsl) are validated by Tint (the
   # WGSL compiler of Chrome and Edge) and by naga (Firefox's; Safari's WebKit compiler has no CI path), the pinned versions in scripts/install-wgsl-validators.sh

@@ -12,7 +12,8 @@
 #include "renderer/common/GpuShaderInterface.hpp"
 
 // The C API only (webgpu.h, as Dawn ships it): no Dawn C++ header (webgpu_cpp.h, dawn/native/*) may be included from
-// here or from renderer/src/webgpu/, because stage G4 compiles the same files with Emscripten's emdawnwebgpu port.
+// here or from renderer/src/webgpu/, because the web build (stage G4) compiles the same files with Emscripten's emdawnwebgpu
+// port. Code outside the renderer makes the backend through renderer/webgpu/WebGpuFactory.hpp and never sees this header.
 #include <webgpu/webgpu.h>
 
 namespace Renderer
@@ -88,10 +89,13 @@ namespace Renderer
          * SetWireframe is ignored with one log line, design decision W9) and compute. Stage G4 compiles the backend for the
          * browser.
          *
-         * Written against the C API (webgpu.h) alone, so the same file compiles with Emscripten's emdawnwebgpu in stage G4.
-         * The pieces that exist only natively (the Vulkan backend request, the blocking waits) are marked in the source.
-         * Only built with N2ENGINE_RENDERER_WEBGPU=ON (CI-only: never selectable from the editor host, lua_project or a
-         * project's settings, design decision W8). All public methods may be called from any thread (one mutex).
+         * Written against the C API (webgpu.h) alone, so the same files compile with Emscripten's emdawnwebgpu port (stage G4:
+         * the web player links the backend but still starts on the software renderer). The pieces that exist only natively
+         * (the Vulkan backend request, the blocking waits) are marked in the source and compiled only natively: in the browser
+         * build Initialize fails after creating the instance (the page will hand the device in, stage G5) and ReadFramebuffer
+         * is asynchronous. Built with N2ENGINE_RENDERER_WEBGPU=ON: natively CI-only (never selectable from the editor host,
+         * lua_project or a project's settings, design decision W8); always in the web build, where --renderer webgpu of the
+         * web player names it. All public methods may be called from any thread (one mutex).
          */
         class WebGpuRenderer : public Renderer::Common::IRenderer
         {
@@ -201,11 +205,14 @@ namespace Renderer
             [[nodiscard]] Common::IShader* GetStandardLitShader() const override;
             [[nodiscard]] Common::IShader* GetStandardTextShader() const override;
 
-            /// RGBA8, bottom row first, of the last frame (all zero bytes before the first), read SYNCHRONOUSLY: the colour
-            /// target is copied into a buffer whose rows are padded to 256 bytes, mapped (this call waits for the map for up
-            /// to 10 seconds) and unpadded. A size other than the target's is resampled, nearest, as the software and Vulkan
+            /// RGBA8, bottom row first, of the last frame (all zero bytes before the first), read SYNCHRONOUSLY natively: the
+            /// colour target is copied into a buffer whose rows are padded to 256 bytes, mapped (this call waits for the map for
+            /// up to 10 seconds) and unpadded. A size other than the target's is resampled, nearest, as the software and Vulkan
             /// renderers do. Writes nothing when not initialized, when the device is lost, when there is no target, or when
-            /// the copy or the wait fails (a message on stderr).
+            /// the copy or the wait fails (a message on stderr). In the BROWSER build (stage G4) nothing can wait for a map:
+            /// the call writes the last frame whose copy has COMPLETED (an earlier frame than the last one drawn; nothing
+            /// before the first copy completes) and starts a copy of the target as it is now when none is in flight. The test
+            /// readbacks below (ReadDepthForTest, ReadMeshForTest, ReadTextureForTest) are native only: false in the browser.
             void ReadFramebuffer(std::uint8_t* buffer, int width, int height) const override;
             /// Recreates the offscreen colour and depth targets at width x height and keeps them at that size (Resize and
             /// OnResize then do nothing). False for a zero dimension (nothing changes), a size over the device's texture or

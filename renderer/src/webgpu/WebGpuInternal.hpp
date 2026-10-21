@@ -145,6 +145,15 @@ namespace Renderer::WebGpu
         std::atomic<bool> expectedLoss{false}; // the renderer is destroying its device: the loss is not an error
     };
 
+    /// What a buffer map's callback (wgpuBufferMapAsync) reports. Natively a readback waits for it; in the browser (stage G4) the
+    /// asynchronous ReadFramebuffer keeps it with the copy in flight and looks at it on its next call
+    struct MapResult
+    {
+        bool done = false;
+        WGPUMapAsyncStatus status = WGPUMapAsyncStatus_Error;
+        std::string message;
+    };
+
     // -----------------------------------------------------------------------------------------------------------------
     // Resources (G3a)
     // -----------------------------------------------------------------------------------------------------------------
@@ -344,6 +353,17 @@ namespace Renderer::WebGpu
         float view[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
         float projection[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
         std::uint64_t frameSerial = 0; // BeginFrame counts it up: the in-frame UpdateMesh rule compares against it
+
+        // ---- G4: the browser's asynchronous ReadFramebuffer (WebGpuRenderer.cpp, AdvanceAsyncReadback); unused natively,
+        // where the readback is synchronous. One copy of the colour target is in flight at a time; once its map completes the
+        // next call keeps its pixels as the last completed frame
+        BufferRef pendingReadback;                     // the buffer of the copy in flight (rows padded to 256 bytes), or null
+        std::shared_ptr<MapResult> pendingReadbackMap; // its map's outcome, written by the map callback
+        std::uint32_t pendingReadbackWidth = 0;
+        std::uint32_t pendingReadbackHeight = 0;
+        std::vector<std::uint8_t> lastReadback; // the last completed copy: RGBA8, tightly packed, row 0 the top of the image
+        std::uint32_t lastReadbackWidth = 0;
+        std::uint32_t lastReadbackHeight = 0;
     };
 
     /// WebGpuResources.cpp: the texture-making part of CreateTexture, without registering it (CreateTexture registers it; the
