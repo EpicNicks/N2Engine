@@ -414,6 +414,46 @@ namespace N2Engine::Server
         g_running = true;
         g_reloadTokens = false;
         g_stopped = false;
+        // The engine's orderly shutdown (the scene's OnApplicationQuit, then Application::Shutdown), run at most once on
+        // every path that has started the engine, the exception path included. It never throws: whatever goes wrong in
+        // it is logged and the rest still runs.
+        bool engineRunning = false;
+        const auto stopEngine = [&engineRunning]
+        {
+            if (!engineRunning)
+            {
+                return;
+            }
+            engineRunning = false;
+            try
+            {
+                if (SceneManager::GetCurScene() != nullptr)
+                {
+                    SceneManager::GetCurSceneRef().OnApplicationQuit();
+                }
+            }
+            catch (const std::exception &e)
+            {
+                Logger::Error(std::string("OnApplicationQuit failed while shutting down: ") + e.what());
+            }
+            catch (...)
+            {
+                Logger::Error("OnApplicationQuit failed while shutting down");
+            }
+            try
+            {
+                Application::GetInstance().Shutdown();
+                Logger::Info("Engine shut down");
+            }
+            catch (const std::exception &e)
+            {
+                Logger::Error(std::string("Application::Shutdown failed: ") + e.what());
+            }
+            catch (...)
+            {
+                Logger::Error("Application::Shutdown failed");
+            }
+        };
         // Restored on every return below, the exception path included
         const SignalHandlersScope signalHandlers(!options.tokensFile.empty());
 
@@ -423,6 +463,8 @@ namespace N2Engine::Server
             Scripting::LuaRuntime::SetExecutionPolicy(Scripting::LuaExecutionPolicy::Run);
 
             auto &app = Application::GetInstance();
+            // Before Init, which may have started part of the engine before it throws
+            engineRunning = true;
             const EngineHealth health = app.Init({
                 .projectPath = projectDir.string(),
                 .physicsBackend = Config::ApplicationOptions::PhysicsBackend::AUTO,
@@ -463,7 +505,7 @@ namespace N2Engine::Server
             {
                 std::println(stderr, "N2Server --scene: {}", scene.error());
                 Logger::Error("Couldn't load the scene: " + scene.error());
-                app.Shutdown();
+                stopEngine();
                 return 1;
             }
             Logger::Info("Loaded scene " + *scene);
@@ -489,7 +531,7 @@ namespace N2Engine::Server
                              FormatAddress(options.bindAddress, static_cast<std::uint16_t>(options.port)),
                              opened.transport == nullptr ? opened.message : std::string("the secure layer could not start"));
                 Logger::Error("Couldn't listen: " + opened.message);
-                app.Shutdown();
+                stopEngine();
                 return 1;
             }
             N2Net::SecureTransport &secure = *opened.transport;
@@ -541,6 +583,8 @@ namespace N2Engine::Server
             }
 
             std::map<N2Net::PeerId, ClientInfo> clients;
+            // Sessions to disconnect once Poll has returned (SecureTransport::Disconnect does nothing inside Poll's handler)
+            std::vector<N2Net::PeerId> dropAfterPoll;
             std::uint64_t ignoredDatagrams = 0;
             std::uint64_t clientsEverConnected = 0;
             const auto onEvent = [&](const N2Net::TransportEvent &event)
@@ -550,9 +594,10 @@ namespace N2Engine::Server
                     N2Net::SecurePeerIdentity identity;
                     if (!secure.GetPeerIdentity(event.peer, identity))
                     {
-                        // Cannot happen (PeerConnected comes after the handshake proved an entry); never keep a client
-                        // that has none
-                        Logger::Warn("A session came up without an identity; it is dropped");
+                        // Cannot happen (a session is made from the token entry that matched, and carries its user and
+                        // role); never keep a client that has none: the session is disconnected after this Poll
+                        Logger::Warn("A session came up without an identity; it is disconnected after this poll");
+                        dropAfterPoll.push_back(event.peer);
                         return;
                     }
                     ClientInfo info;
@@ -618,6 +663,11 @@ namespace N2Engine::Server
                 }
 
                 secure.Poll(onEvent);
+                for (const N2Net::PeerId peer : dropAfterPoll)
+                {
+                    secure.Disconnect(peer);
+                }
+                dropAfterPoll.clear();
                 app.Tick(tick);
 
                 const auto now = std::chrono::steady_clock::now();
@@ -663,16 +713,13 @@ namespace N2Engine::Server
             Logger::Info("Server stopped");
 
             // As Application::Run does, however the loop ended
-            if (SceneManager::GetCurScene() != nullptr)
-            {
-                SceneManager::GetCurSceneRef().OnApplicationQuit();
-            }
-            app.Shutdown();
-            Logger::Info("Engine shut down");
+            stopEngine();
         }
         catch (const std::exception &e)
         {
             Logger::Error(std::string("Fatal error: ") + e.what());
+            // The locals of the try block (the transport) are already gone; now the engine, in order, as on a normal exit
+            stopEngine();
             g_stopped = true;
             return 1;
         }

@@ -23,7 +23,9 @@ namespace N2Engine::Server
      *     and sleeps a moment. On POSIX SIGHUP re-reads the tokens file.
      *     Then the sessions are told (a sealed Disconnect), the transport closes and the engine shuts down.
      * Returns 0 after a clean stop, 1 when the tokens file, the project, the scene, the bind or the engine could not be
-     * set up (one line on stderr, before the ready line), or a std::exception escaped.
+     * set up (one line on stderr, before the ready line), or a std::exception escaped. On that last path the engine is
+     * still shut down in order (the scene's OnApplicationQuit, then Application::Shutdown, each guarded so neither throws),
+     * and the exit code stays 1.
      *
      * At this stage the server authenticates and counts clients and logs when they connect and disconnect; it replicates
      * nothing and runs no gameplay networking (track B). Call it at most once at a time: it installs signal handlers and
