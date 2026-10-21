@@ -307,16 +307,16 @@ TEST_F(NetworkPresetInitTest, TheRefusalListsEveryRequirementTheProjectCouldNotM
 }
 
 #ifdef N2ENGINE_JOLT_ENABLED
-TEST_F(NetworkPresetInitTest, JoltIsRefusedForItsMissingFeatureGroupsWhetherTheProjectOrTheHostAskedForIt)
+TEST_F(NetworkPresetInitTest, JoltMeetsTheFeatureRequirementWhetherTheProjectOrTheHostAskedForIt)
 {
-    // Every setting a Deterministic project can make, on Jolt: the project's physics.backend, or no setting and the
-    // host's option. Jolt has layers, triggers and events (J4) but no scene queries yet (J5), so the start is refused
-    // either way.
+    // A Deterministic project on Jolt: the project's physics.backend, or no setting and the host's option. Jolt has
+    // every feature group (layers, triggers and events from J4, scene queries from J5), so the feature requirement is
+    // met either way. determinism.luaSeed is left unset on purpose so that the start is still refused: on the strict-FP
+    // Jolt leg everything else is met, and a start that goes ahead must not run in this process (see InitWith).
     auto &app = Application::GetInstance();
     const nlohmann::json common = {
         {"network", {{"preset", "deterministic"}}},
         {"math", {{"simdTier", "scalar"}}},
-        {"determinism", {{"luaSeed", 12345}}},
     };
     nlohmann::json byProject = common;
     byProject["physics"] = {{"gpu", "off"}, {"deterministic", true}, {"backend", "jolt"}};
@@ -333,10 +333,12 @@ TEST_F(NetworkPresetInitTest, JoltIsRefusedForItsMissingFeatureGroupsWhetherTheP
         const SubsystemStatus *network = health.Find("Network");
         ASSERT_NE(network, nullptr);
         EXPECT_EQ(network->state, SubsystemState::Failed);
-        EXPECT_TRUE(Mentions(health, "the physics backend implements layers and the collision matrix"))
+        EXPECT_TRUE(Mentions(health, "determinism.luaSeed is set")) << network->detail;
+        EXPECT_FALSE(Mentions(health, "the physics backend implements layers and the collision matrix"))
             << network->detail;
-        EXPECT_TRUE(Mentions(health, "the selected backend (jolt) does not implement scene queries yet"))
-            << network->detail;
+        EXPECT_FALSE(Mentions(health, "does not implement")) << network->detail;
+        // Jolt was selected (the project's or the host's request was honoured, not refused as unavailable)
+        EXPECT_FALSE(Mentions(health, "no such backend")) << network->detail;
         EXPECT_EQ(app.Get3DPhysicsBackend(), nullptr);
         EXPECT_FALSE(app.GetWindow().IsValid());
     }

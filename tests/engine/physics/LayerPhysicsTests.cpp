@@ -1,10 +1,7 @@
 // Layers in a real physics scene, as TYPED tests over every backend this build has (PhysX and Jolt): the collision
 // matrix for contacts and triggers, runtime layer and matrix changes (also next to a sleeping body and while a body is
-// disabled), and, on PhysX only until stage J5, the query masks. A difference between the backends that a test has to
-// allow for is written next to the assertion and listed in docs/physics.html ("Jolt backend", differences).
-//
-// Query tests: the Jolt backend has no scene queries before stage J5 (its Raycast answers "nothing found"), so those
-// tests end in GTEST_SKIP on Jolt with the reason, and show as skipped in the output. J5 removes the skips.
+// disabled), and the query masks (on Jolt since stage J5). A difference between the backends that a test has to allow
+// for is written next to the assertion and listed in docs/physics.html ("Jolt backend", differences).
 
 #include "PhysicsTestFixture.hpp"
 
@@ -119,20 +116,12 @@ namespace N2PhysicsTests
 
     TYPED_TEST_SUITE(LayerPhysicsTest, AllBackends, BackendNames);
 
-// The Jolt backend has no scene queries before stage J5: say so, visibly, and stop
-#define N2_SKIP_QUERIES_ON_JOLT()                                                                                    \
-    if constexpr (TypeParam::kIsJolt)                                                                                \
-    {                                                                                                                \
-        GTEST_SKIP() << "scene queries on Jolt arrive in stage J5 (JoltBackend::Raycast answers 'nothing found')"; \
-    }
-
     // ============================================================================
     // Queries
     // ============================================================================
 
     TYPED_TEST(LayerPhysicsTest, QueryMaskIncludesAndExcludesLayers)
     {
-        N2_SKIP_QUERIES_ON_JOLT();
         const auto nearBox = this->SpawnBox("Near", Vector3(0.0f, 0.0f, 5.0f), LayerA);
         const auto farBox = this->SpawnBox("Far", Vector3(0.0f, 0.0f, 10.0f), LayerB);
         this->Step(1);
@@ -155,7 +144,6 @@ namespace N2PhysicsTests
 
     TYPED_TEST(LayerPhysicsTest, IgnoreRaycastIsSkippedByDefault)
     {
-        N2_SKIP_QUERIES_ON_JOLT();
         const auto ignored = this->SpawnBox("Ignored", Vector3(0.0f, 0.0f, 5.0f), Layers::IgnoreRaycast);
         const auto target = this->SpawnBox("Target", Vector3(0.0f, 0.0f, 10.0f), Layers::Default);
         this->Step(1);
@@ -175,7 +163,6 @@ namespace N2PhysicsTests
 
     TYPED_TEST(LayerPhysicsTest, MaskZeroHitsNothing)
     {
-        N2_SKIP_QUERIES_ON_JOLT();
         this->SpawnBox("Target", Vector3(0.0f, 0.0f, 5.0f), Layers::Default);
         this->Step(1);
 
@@ -191,7 +178,6 @@ namespace N2PhysicsTests
 
     TYPED_TEST(LayerPhysicsTest, ChangingAnObjectsLayerMovesItsQueryLayerAtOnce)
     {
-        N2_SKIP_QUERIES_ON_JOLT();
         const auto box = this->SpawnBox("Box", Vector3(0.0f, 0.0f, 5.0f), Layers::Default);
         this->Step(1);
         ASSERT_TRUE(Raycast::Any(Vector3::Zero, AlongZ, 100.0f));
@@ -207,7 +193,6 @@ namespace N2PhysicsTests
 
     TYPED_TEST(LayerPhysicsTest, ChildColliderUsesItsOwnLayer)
     {
-        N2_SKIP_QUERIES_ON_JOLT();
         const auto parent = GameObject::Create("Parent");
         parent->CreatePositionable();
         parent->SetLayer(LayerA);
@@ -435,15 +420,7 @@ namespace N2PhysicsTests
         body->SetActive(true);
         this->Step(5);
         EXPECT_EQ(zoneEvents->triggerEnter, 1) << "the re-enabled body kept its old filter data";
-        if constexpr (!TypeParam::kIsJolt) // a query: Jolt has none before J5
-        {
-            EXPECT_FALSE(Raycast::Any(Vector3(0.0f, 5.0f, 0.0f), Downward, 100.0f, Layers::MaskOf(LayerC)));
-        }
-        bool queryCheckSkipped = false;
-        if constexpr (TypeParam::kIsJolt)
-        {
-            queryCheckSkipped = true; // reported at the end of the test, once the rest has run
-        }
+        EXPECT_FALSE(Raycast::Any(Vector3(0.0f, 5.0f, 0.0f), Downward, 100.0f, Layers::MaskOf(LayerC)));
 
         // And the same through the object: its collider's shapes are re-created on the new layer
         visitor->SetActive(false);
@@ -452,11 +429,6 @@ namespace N2PhysicsTests
         visitor->SetActive(true);
         this->Step(5);
         EXPECT_EQ(zoneEvents->triggerEnter, 2);
-
-        if (queryCheckSkipped)
-        {
-            GTEST_SKIP() << "the Raycast mask check of this test arrives with J5; the rest of the test passed on Jolt";
-        }
     }
 
     TYPED_TEST(LayerPhysicsTest, CollidersAttachedAfterAMatrixChangeUseTheNewMatrix)
@@ -472,8 +444,6 @@ namespace N2PhysicsTests
         EXPECT_EQ(ballEvents->collisionEnter, 0);
         EXPECT_LT(ball->GetPositionable()->GetPosition().y, -1.0f);
     }
-
-#undef N2_SKIP_QUERIES_ON_JOLT
 }
 
 #endif // a physics backend is in this build

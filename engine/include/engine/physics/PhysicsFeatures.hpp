@@ -16,7 +16,7 @@ namespace N2Engine::Physics
         Layers = 1u << 0,   // collider layers and the collision matrix (SetColliderLayer, RefreshCollisionMatrix)
         Triggers = 1u << 1, // trigger colliders (SetIsTrigger)
         Events = 1u << 2,   // contact and trigger events (ProcessCollisionCallbacks: Enter, Stay, Exit)
-        Queries = 1u << 3   // scene queries (Raycast, RaycastAll, SphereCast)
+        Queries = 1u << 3   // scene queries (Raycast, RaycastAll, SphereCast, CapsuleCast, Overlap)
     };
 
     /// Every group, in the order the messages list them

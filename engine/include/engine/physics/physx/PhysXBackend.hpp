@@ -274,6 +274,22 @@ namespace N2Engine::Physics
             float maxDistance,
             uint32_t layerMask) override;
 
+        bool CapsuleCast(
+            const Math::Vector3& point0,
+            const Math::Vector3& point1,
+            float radius,
+            const Math::Vector3& direction,
+            RaycastHit& hit,
+            float maxDistance,
+            uint32_t layerMask,
+            QueryTriggers triggers) override;
+
+        int Overlap(
+            const OverlapShape& shape,
+            std::vector<OverlapHit>& hits,
+            uint32_t layerMask,
+            QueryTriggers triggers) override;
+
     private:
         // Outside the PhysX guard so the inline GetGpuStatus compiles without PhysX too
         GpuMode _gpuMode = GpuMode::Off;
@@ -496,6 +512,12 @@ namespace N2Engine::Physics
             RaycastHit& hit,
             const physx::PxLocationHit& location,
             const physx::PxActorShape& actorShape) const;
+        /// The body handle and the collider's place on the body (registration order) of a hit shape: what the order of
+        /// QueryRules is made of. False for a shape that is not a live collider of this backend (it is left out).
+        bool LocateQueryHit(
+            const physx::PxActorShape& actorShape,
+            PhysicsBodyHandle& handle,
+            std::size_t& colliderOrder) const;
 #endif
     };
 }

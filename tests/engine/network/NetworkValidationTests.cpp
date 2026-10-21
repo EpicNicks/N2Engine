@@ -328,26 +328,32 @@ TEST(NetworkValidationTest, ABackendMissingAnyFeatureGroupIsRefusedAndTheGroupsA
     }
 }
 
-TEST(NetworkValidationTest, TheJoltBackendOfTodayIsRefusedForItsMissingGroupsEvenWithEverythingElseMet)
+TEST(NetworkValidationTest, TheJoltBackendOfTodayMeetsTheFeatureRequirementWithEverythingElseMet)
 {
     // What Application::Init fills in for physics.backend jolt (or the host option JOLT) once the build is strict-FP
-    // and physics.deterministic is on: CrossPlatform, with layers, triggers and events (J4), but queries are J5
+    // and physics.deterministic is on: CrossPlatform, with every group (layers, triggers and events from J4, scene
+    // queries from J5) and no snapshot (J6). Lockstep starts; rollback is refused for the snapshot alone.
     NetworkEnvironment env = EverythingMet();
     env.backendName = "jolt";
     env.backendSupportsSnapshot = false;
     env.backendFeatures = PhysicsFeatureSet::None()
                               .With(PhysicsFeature::Layers)
                               .With(PhysicsFeature::Triggers)
-                              .With(PhysicsFeature::Events);
-    const NetworkValidation validation = ValidateNetwork(Preset(NetworkPreset::Deterministic), env);
-    EXPECT_TRUE(validation.Refused());
-    EXPECT_EQ(UnmetIds(validation), (std::vector<std::string>{"physics-features"}));
-    const std::string &detail = validation.Unmet()[0]->detail;
-    EXPECT_EQ(detail, "the selected backend (jolt) does not implement scene queries yet");
-    const SubsystemStatus row = MakeNetworkStatus(Preset(NetworkPreset::Deterministic), validation);
-    EXPECT_EQ(row.state, SubsystemState::Failed);
-    EXPECT_NE(row.detail.find("1 unmet requirement:"), std::string::npos) << row.detail;
-    EXPECT_NE(row.detail.find(detail), std::string::npos) << row.detail;
+                              .With(PhysicsFeature::Events)
+                              .With(PhysicsFeature::Queries);
+    const NetworkValidation lockstep = ValidateNetwork(Preset(NetworkPreset::Deterministic), env);
+    EXPECT_FALSE(lockstep.Refused());
+    EXPECT_TRUE(lockstep.Unmet().empty());
+    const auto features = std::ranges::find_if(lockstep.requirements, [](const NetworkRequirement &r)
+                                               { return r.id == "physics-features"; });
+    ASSERT_NE(features, lockstep.requirements.end());
+    EXPECT_TRUE(features->met);
+    EXPECT_TRUE(features->detail.empty());
+
+    const NetworkValidation rollback =
+        ValidateNetwork(Preset(NetworkPreset::Deterministic, DeterministicMode::Rollback), env);
+    EXPECT_TRUE(rollback.Refused());
+    EXPECT_EQ(UnmetIds(rollback), (std::vector<std::string>{"snapshot"}));
 }
 
 TEST(NetworkValidationTest, ABackendDeclaringEveryFeatureGroupIsAccepted)
@@ -544,15 +550,17 @@ TEST(PhysicsBackendDeclarationTest, FeatureGroupsDefaultToNoneAndPhysXDeclaresTh
 }
 
 #ifdef N2ENGINE_JOLT_ENABLED
-TEST(PhysicsBackendDeclarationTest, JoltDeclaresOnlyTheFeatureGroupsItHas)
+TEST(PhysicsBackendDeclarationTest, JoltDeclaresEveryFeatureGroup)
 {
-    // J4: layers, triggers and events; scene queries are J5
+    // J4: layers, triggers and events; J5: scene queries
     EXPECT_EQ(Physics::JoltBackend::kImplementedFeatures, PhysicsFeatureSet::None()
                                                               .With(PhysicsFeature::Layers)
                                                               .With(PhysicsFeature::Triggers)
-                                                              .With(PhysicsFeature::Events));
-    EXPECT_FALSE(Physics::JoltBackend::kImplementedFeatures.Has(PhysicsFeature::Queries));
-    EXPECT_EQ(Physics::JoltBackend::kImplementedFeatures.MissingText(), "scene queries");
+                                                              .With(PhysicsFeature::Events)
+                                                              .With(PhysicsFeature::Queries));
+    EXPECT_TRUE(Physics::JoltBackend::kImplementedFeatures.Has(PhysicsFeature::Queries));
+    EXPECT_TRUE(Physics::JoltBackend::kImplementedFeatures.IsComplete());
+    EXPECT_EQ(Physics::JoltBackend::kImplementedFeatures.MissingText(), "");
 }
 #endif
 
