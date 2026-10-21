@@ -77,8 +77,8 @@ namespace Renderer
          * depth target, a frame that clears them, a synchronous ReadFramebuffer, SetRenderTargetSize and Shutdown, plus
          * counting of every error the device reports (stage G2); meshes (with the in-frame UpdateMesh rule), textures
          * (RGBA8 or R8/RG8, sRGB, samplers, CPU-generated mipmaps), materials, a pipeline cache, a bind-group cache, a
-         * per-draw uniform ring and the unlit shader with DrawMesh, IndexRange and DrawObjects (stage G3a). There is no window
-         * and no swapchain: Present only warns.
+         * per-draw uniform ring and the unlit shader with DrawMesh, IndexRange and DrawObjects (stage G3a); the lit and text
+         * shaders, the scene lighting and blending (stage G3b). There is no window and no swapchain: Present only warns.
          *
          * What draws (stage G3b completed it): everything the software renderer draws, through the three built-in shaders: UNLIT, LIT
          * (aux textures, Blinn-Phong or PBR, the scene lighting of UpdateSceneLighting) and TEXT (the SDF shader with outline,

@@ -15,7 +15,7 @@
 // Stage G2 of the WebGPU backend (#155): headless initialisation, an offscreen colour and depth target, a frame that clears
 // it, a synchronous readback, resizing, shutdown and the counting of every error the device reports. Meshes, textures and
 // the samplers are in WebGpuResources.cpp and the shaders, materials, pipelines, uniform ring and draws in WebGpuDraw.cpp
-// (stage G3a); the IRenderer calls that stay unimplemented until stage G3b (lit and text shaders) are at the end of this file.
+// (stages G3a and G3b).
 //
 // Written against webgpu.h (the C API) only, so that stage G4 can compile this file with Emscripten's emdawnwebgpu port. What
 // exists only natively is marked "NATIVE ONLY": asking for the Vulkan backend by type, and the blocking waits
