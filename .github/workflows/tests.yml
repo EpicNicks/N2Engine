@@ -347,7 +347,7 @@ jobs:
       # The physics determinism corpus (stage J7), on the strict Release leg only: the same steps as the Linux legs. The hashes
       # go to the `determinism` job as an artifact.
       - name: Physics determinism corpus
-        if: needs.changes.outputs.docs_only != 'true' && matrix.config == 'Release' && matrix.physx == 'ON'
+        if: needs.changes.outputs.docs_only != 'true' && matrix.config == 'Release' && matrix.physx == 'ON' && !cancelled()
         shell: pwsh
         env:
           ALSOFT_DRIVERS: "null"
@@ -363,7 +363,7 @@ jobs:
         with:
           name: determinism-hashes-windows-release
           path: determinism-hashes.json
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
 
       # Runs after a failed build or test too (not when cancelled): the hit rate of this run, from zeroed statistics
@@ -526,6 +526,7 @@ jobs:
       # with tests/golden/physics-determinism.json. ctest ran the same tests above (what they assert concerns this binary
       # alone); this run is the one that writes the file. A failed corpus test fails this leg, and the file is uploaded anyway.
       - name: Physics determinism corpus
+        if: ${{ !cancelled() }}
         run: ./build/bin/engine_tests --gtest_filter='PhysicsDeterminismCorpusTest.*'
         env:
           ALSOFT_DRIVERS: "null"
@@ -538,7 +539,7 @@ jobs:
         with:
           name: determinism-hashes-linux-x86_64-clang
           path: determinism-hashes.json
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
 
       # Runs after a failed build or test too (not when cancelled): the hit rate of this run, from zeroed statistics
@@ -686,6 +687,7 @@ jobs:
       # with tests/golden/physics-determinism.json. ctest ran the same tests above (what they assert concerns this binary
       # alone); this run is the one that writes the file. A failed corpus test fails this leg, and the file is uploaded anyway.
       - name: Physics determinism corpus
+        if: ${{ !cancelled() }}
         run: ./build/bin/engine_tests --gtest_filter='PhysicsDeterminismCorpusTest.*'
         env:
           ALSOFT_DRIVERS: "null"
@@ -698,7 +700,7 @@ jobs:
         with:
           name: determinism-hashes-linux-arm64-clang
           path: determinism-hashes.json
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
 
       # Runs after a failed build or test too (not when cancelled): the hit rate of this run, from zeroed statistics
@@ -822,6 +824,7 @@ jobs:
       # with tests/golden/physics-determinism.json. ctest ran the same tests above (what they assert concerns this binary
       # alone); this run is the one that writes the file. A failed corpus test fails this leg, and the file is uploaded anyway.
       - name: Physics determinism corpus
+        if: ${{ !cancelled() }}
         run: ./build/bin/engine_tests --gtest_filter='PhysicsDeterminismCorpusTest.*'
         env:
           ALSOFT_DRIVERS: "null"
@@ -834,7 +837,7 @@ jobs:
         with:
           name: determinism-hashes-linux-x86_64-gcc
           path: determinism-hashes.json
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
 
       # Runs after a failed build or test too (not when cancelled): the hit rate of this run, from zeroed statistics
@@ -1063,6 +1066,7 @@ jobs:
       # The physics determinism corpus (stage J7) under node (single-threaded; the dev profile, strict floating point): the same
       # file and artifact as the native legs, compared by the `determinism` job. NODERAWFS makes the file a real one.
       - name: Physics determinism corpus
+        if: ${{ !cancelled() }}
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
@@ -1077,7 +1081,7 @@ jobs:
         with:
           name: determinism-hashes-web-node
           path: determinism-hashes.json
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
 
       # Only reports (raw and gzip sizes in the job summary); the budgets are checked on the package below

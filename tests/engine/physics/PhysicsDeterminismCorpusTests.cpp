@@ -963,9 +963,15 @@ namespace N2PhysicsTests
     {
         Mixed straight;
         std::vector<std::uint64_t> straightHashes(kTicks / kInterval + 1, 0);
+        // Tick 400 is not on the 60-tick hash grid, so the straight world's hash there is taken on its own
+        std::uint64_t straightAt400 = 0;
         for (int tick = 1; tick <= kTicks; ++tick)
         {
             straight.Run(tick, 0);
+            if (tick == 400)
+            {
+                straightAt400 = straight.Hash();
+            }
             if (tick % kInterval == 0)
             {
                 const std::uint64_t hash = straight.Hash();
@@ -998,7 +1004,7 @@ namespace N2PhysicsTests
         Add(JoltRecords(), "snapshot_roundtrip", "snapshot_h1", 400, h1);
         Add(JoltRecords(), "snapshot_roundtrip", "snapshot_h2", 400, h2);
         EXPECT_EQ(h1, h2) << "the second run of ticks 201 to 400 differs from the first";
-        EXPECT_EQ(h1, straightHashes[400 / kInterval]) << "the snapshot world differs from the straight run at tick 400";
+        EXPECT_EQ(h1, straightAt400) << "the snapshot world differs from the straight run at tick 400";
         for (int tick = 401; tick <= kTicks; ++tick)
         {
             world.Run(tick, 0);
