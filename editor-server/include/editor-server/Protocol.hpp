@@ -11,7 +11,7 @@ namespace N2Engine::Editor
 {
     /// The version of protocol.json this server implements (ProtocolSpecTest pins the two equal). Hello compares the
     /// client's with it: the same major version is compatible, whatever the minor and patch versions.
-    inline constexpr std::string_view ProtocolVersion = "1.15.0";
+    inline constexpr std::string_view ProtocolVersion = "1.16.0";
 
     struct ProtocolVersionNumber
     {
@@ -106,12 +106,11 @@ namespace N2Engine::Editor
         GetProjectInfo = 0x70,
         SetProjectSettings = 0x71,
         SetStartupScene = 0x72,
-        // Lua editor extensions (since 1.14.0; InvokeMenuItem since 1.15.0). 0x83 is reserved for
-        // InvokeInspectorAction (a later PR of the extensions work): no command uses it yet, and the host treats it as
-        // an unknown id.
+        // Lua editor extensions (since 1.14.0; InvokeMenuItem since 1.15.0, InvokeInspectorAction since 1.16.0)
         ListEditorExtensions = 0x80,
         GetEditorUi = 0x81,
         InvokeMenuItem = 0x82,
+        InvokeInspectorAction = 0x83,
         ReloadEditorExtensions = 0x84,
         Undo = 0x90,
         Redo = 0x91,

@@ -385,8 +385,8 @@ TEST(ExtensionNestedPolicyTest, EveryCommandOfTheSpecIsDecidedAndOnlyWhatEditorS
     EXPECT_GT(commands, 60u);
     EXPECT_EQ(allowed, AllowedNested());
 
-    // An id nobody listed (the reserved 0x83, an event id, an unused one) is undecided, which the dispatch refuses
-    for (const uint8_t id : {uint8_t{0x83}, uint8_t{0xC0}, uint8_t{0x7F}})
+    // An id nobody listed (a free extension id, an event id, an unused one) is undecided, which the dispatch refuses
+    for (const uint8_t id : {uint8_t{0x85}, uint8_t{0xC0}, uint8_t{0x7F}})
         EXPECT_FALSE(EditorServer::NestedCommandPolicy(id).has_value()) << int{id};
 
     // Each allowed one is a Write or a Read the editor role may run, never an Admin command
