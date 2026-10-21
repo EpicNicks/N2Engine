@@ -15,6 +15,8 @@
 #include "engine/Time.hpp"
 #include "engine/Window.hpp"
 #include "engine/config/ApplicationOptions.hpp"
+#include <math/FloatEnvironment.hpp>
+
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/SphereCollider.hpp"
 #include "engine/physics/physx/PhysXBackend.hpp"
@@ -59,6 +61,19 @@ namespace
         static inline int updates = 0;
         static inline std::vector<std::uint64_t> fixedTicks;
         static inline std::vector<float> fixedDeltas;
+    };
+
+    /// Records, at every fixed tick, whether the floating-point environment is the deterministic policy
+    class FloatEnvironmentProbe final : public Component
+    {
+    public:
+        explicit FloatEnvironmentProbe(GameObject &gameObject) : Component(gameObject) {}
+
+        [[nodiscard]] std::string GetTypeName() const override { return "SimulationClockTest_FloatEnvironmentProbe"; }
+
+        void OnFixedUpdate() override { deterministicAtTick.push_back(Math::FloatEnvironment::IsDeterministic()); }
+
+        static inline std::vector<bool> deterministicAtTick;
     };
 
     /// The object the spawner creates: records the ticks of its OnAttach and its FixedUpdates
@@ -789,6 +804,96 @@ TEST(SimulationClockUnitTest, ModesAreNamedAndOnlyTheNetworkOnesAreNetworked)
     clock.SetMode(SimulationMode::Deterministic);
     EXPECT_TRUE(clock.IsNetworked());
     clock.SetMode(SimulationMode::None);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The floating-point environment guard (netcode C1): a network mode runs every tick under the deterministic policy and puts
+// the register back; None mode never touches it
+// ---------------------------------------------------------------------------------------------------------------------
+
+namespace
+{
+    using Math::FloatEnvironment;
+
+    // Whatever the test did, the register goes back as it was
+    struct FloatEnvironmentRestorer
+    {
+        FloatEnvironment::Word saved = FloatEnvironment::Read();
+        ~FloatEnvironmentRestorer() { FloatEnvironment::Write(saved); }
+    };
+
+    void AddFloatEnvironmentProbe()
+    {
+        const auto object = GameObject::Create("FloatEnvironmentProbe");
+        object->CreatePositionable();
+        SceneManager::GetCurSceneRef().AddRootGameObject(object);
+        object->AddComponent<FloatEnvironmentProbe>();
+        FloatEnvironmentProbe::deterministicAtTick.clear();
+    }
+}
+
+TEST_F(SimulationClockTest, ANetworkModeRunsEveryTickUnderTheFloatingPointPolicyAndRestoresTheRegister)
+{
+    if (!FloatEnvironment::kHasControlState)
+    {
+        GTEST_SKIP() << "this target has no floating-point control register";
+    }
+    const FloatEnvironmentRestorer restorer;
+    for (const SimulationMode mode : {SimulationMode::Deterministic, SimulationMode::Authoritative})
+    {
+        Application &app = Application::GetInstance();
+        app.SetSimulationMode(mode);
+        AddFloatEnvironmentProbe();
+        const FloatEnvironment::Word perturbed =
+            restorer.saved | FloatEnvironment::kRoundingMask | FloatEnvironment::kFlushMask;
+        FloatEnvironment::Write(perturbed);
+        ASSERT_FALSE(FloatEnvironment::IsDeterministic());
+
+        EXPECT_EQ(app.StepTicks(4), 4u);
+        ASSERT_EQ(FloatEnvironmentProbe::deterministicAtTick.size(), 4u);
+        for (const bool deterministic : FloatEnvironmentProbe::deterministicAtTick)
+        {
+            EXPECT_TRUE(deterministic) << "a tick ran under the perturbed register in mode " << ToString(mode);
+        }
+        EXPECT_EQ(FloatEnvironment::Read() & FloatEnvironment::kGovernedMask, perturbed & FloatEnvironment::kGovernedMask)
+            << "the perturbed register was not put back after the ticks";
+
+        // A whole frame, through the clock, does the same
+        FloatEnvironmentProbe::deterministicAtTick.clear();
+        TickFor(3 * 0.02);
+        ASSERT_FALSE(FloatEnvironmentProbe::deterministicAtTick.empty());
+        for (const bool deterministic : FloatEnvironmentProbe::deterministicAtTick)
+        {
+            EXPECT_TRUE(deterministic);
+        }
+        EXPECT_EQ(FloatEnvironment::Read() & FloatEnvironment::kGovernedMask, perturbed & FloatEnvironment::kGovernedMask);
+
+        SceneManager::AddScene(Scene::Create("SimulationClockTest_Fp_" + std::to_string(++sceneCounter)), true);
+        SceneManager::ProcessAnyPendingSceneChange();
+    }
+}
+
+TEST_F(SimulationClockTest, NoneModeLeavesTheFloatingPointEnvironmentAlone)
+{
+    if (!FloatEnvironment::kHasControlState)
+    {
+        GTEST_SKIP() << "this target has no floating-point control register";
+    }
+    const FloatEnvironmentRestorer restorer;
+    Application &app = Application::GetInstance();
+    app.SetSimulationMode(SimulationMode::None);
+    AddFloatEnvironmentProbe();
+    const FloatEnvironment::Word perturbed =
+        restorer.saved | FloatEnvironment::kRoundingMask | FloatEnvironment::kFlushMask;
+    FloatEnvironment::Write(perturbed);
+
+    EXPECT_EQ(app.StepTicks(3), 3u);
+    ASSERT_EQ(FloatEnvironmentProbe::deterministicAtTick.size(), 3u);
+    for (const bool deterministic : FloatEnvironmentProbe::deterministicAtTick)
+    {
+        EXPECT_FALSE(deterministic) << "None mode must run the ticks in the environment it found";
+    }
+    EXPECT_EQ(FloatEnvironment::Read() & FloatEnvironment::kGovernedMask, perturbed & FloatEnvironment::kGovernedMask);
 }
 
 TEST(SimulationClockUnitTest, TicksOwedRoundsDownAndToleratesABadStep)

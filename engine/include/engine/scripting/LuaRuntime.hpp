@@ -51,6 +51,7 @@ namespace N2Engine::Scripting
         // Declared before _lua: the allocator and the hook use it until the state is closed
         std::unique_ptr<Detail::LuaGuardState> _guard;
         sol::state _lua;
+        bool _deterministicMath = false; // the engine-owned math functions are installed (see HasDeterministicMath)
         std::unordered_set<std::string> _limitLogged; // chunk names whose limit error was already logged
         std::unordered_map<std::string, sol::table> _loadedModules;
         struct ReloadCallback
@@ -95,6 +96,10 @@ namespace N2Engine::Scripting
         [[nodiscard]] static std::optional<std::uint64_t> GetLuaSeed();
         /// The seed this runtime's state was created with (empty: it seeded itself from the clock)
         [[nodiscard]] std::optional<std::uint64_t> StateLuaSeed() const { return _stateLuaSeed; }
+        /// Whether this runtime's state has the engine-owned math.sin, cos, tan, asin, acos, atan, exp and log
+        /// (InstallDeterministicMath): exactly when it was created with a Lua seed, the same gate as the seeds. Unset:
+        /// Lua's own (the C library's), unchanged. Ordered.pairs is in every state.
+        [[nodiscard]] bool HasDeterministicMath() const { return _deterministicMath; }
 
         /// Registers all engine bindings. Safe to call more than once: later calls return the first result,
         /// because re-registering a usertype in the same state breaks the metatables of existing values.

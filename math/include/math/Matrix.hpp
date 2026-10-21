@@ -3,6 +3,7 @@
 #include <array>
 #include <span>
 #include "math/CpuInfo.hpp"
+#include "math/DeterministicMath.hpp"
 #include <stdexcept>
 #include <initializer_list>
 #include <format>
@@ -306,8 +307,8 @@ namespace N2Engine::Math
 
         static Matrix RotationX(float angle)
         {
-            float c = std::cos(angle);
-            float s = std::sin(angle);
+            float c = Math::Cos(angle);
+            float s = Math::Sin(angle);
             Matrix result = identity();
             result(1, 1) = c;
             result(1, 2) = -s;
@@ -318,8 +319,8 @@ namespace N2Engine::Math
 
         static Matrix RotationY(float angle)
         {
-            float c = std::cos(angle);
-            float s = std::sin(angle);
+            float c = Math::Cos(angle);
+            float s = Math::Sin(angle);
             Matrix result = identity();
             result(0, 0) = c;
             result(0, 2) = s;
@@ -330,8 +331,8 @@ namespace N2Engine::Math
 
         static Matrix RotationZ(float angle)
         {
-            float c = std::cos(angle);
-            float s = std::sin(angle);
+            float c = Math::Cos(angle);
+            float s = Math::Sin(angle);
             Matrix result = identity();
             result(0, 0) = c;
             result(0, 1) = -s;
@@ -844,8 +845,8 @@ namespace N2Engine::Math
 
         static Matrix RotationX(float angle)
         {
-            float c = std::cos(angle);
-            float s = std::sin(angle);
+            float c = Math::Cos(angle);
+            float s = Math::Sin(angle);
             Matrix result = identity();
             result(1, 1) = c;
             result(1, 2) = -s;
@@ -856,8 +857,8 @@ namespace N2Engine::Math
 
         static Matrix RotationY(float angle)
         {
-            float c = std::cos(angle);
-            float s = std::sin(angle);
+            float c = Math::Cos(angle);
+            float s = Math::Sin(angle);
             Matrix result = identity();
             result(0, 0) = c;
             result(0, 2) = s;
@@ -868,8 +869,8 @@ namespace N2Engine::Math
 
         static Matrix RotationZ(float angle)
         {
-            float c = std::cos(angle);
-            float s = std::sin(angle);
+            float c = Math::Cos(angle);
+            float s = Math::Sin(angle);
             Matrix result = identity();
             result(0, 0) = c;
             result(0, 1) = -s;
@@ -1161,8 +1162,8 @@ namespace N2Engine::Math
 
         static Matrix Rotation(float angle)
         {
-            float c = std::cos(angle);
-            float s = std::sin(angle);
+            float c = Math::Cos(angle);
+            float s = Math::Sin(angle);
             Matrix result;
             result.data = {c, -s, s, c};
             return result;

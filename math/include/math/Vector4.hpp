@@ -22,6 +22,7 @@
 #include "math/CpuInfo.hpp"
 #include "math/VectorN.hpp"
 #include "math/Constants.hpp"
+#include "math/DeterministicMath.hpp"
 #include "math/CpuInfo.hpp"
 
 namespace N2Engine::Math
@@ -364,10 +365,10 @@ namespace N2Engine::Math
             float dot = a.Dot(b);
             dot = std::clamp(dot, -1.0f, 1.0f);
 
-            const float theta = std::acos(dot) * t;
+            const float theta = Math::Acos(dot) * t;
             const Vector4 relativeVec = (b - a * dot).Normalized();
 
-            return a * std::cos(theta) + relativeVec * std::sin(theta);
+            return a * Math::Cos(theta) + relativeVec * Math::Sin(theta);
         }
 
         [[nodiscard]] Vector4 Slerp(const Vector4 &other, float t) const

@@ -28,7 +28,8 @@ namespace N2Engine::Network
         Math::SIMDTierRequest simdTier = Math::SIMDTierRequest::Auto;
         /// determinism.luaSeed is set
         bool luaSeedSet = false;
-        /// Engine-owned Sin/Cos/Atan2/Acos exist (they do not yet: planned as netcode item C1)
+        /// The engine-owned Sin/Cos/Atan2/... (Math::Sin, math/DeterministicMath.hpp; netcode item C1) run without
+        /// floating-point contraction in this build: Math::IsContractionFree(), which Application::Init sets
         bool engineOwnedTrig = false;
         /// The fixed-step loop runs as the netcode's tick loop (SimulationClock in a network SimulationMode: whole ticks
         /// owed, never dropped, and a fixed dt independent of timeScale). Application::Init sets it when network.preset

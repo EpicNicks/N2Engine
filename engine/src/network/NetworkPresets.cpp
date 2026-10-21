@@ -112,7 +112,8 @@ namespace N2Engine::Network
                 Any("std"),
                 Any("std"),
                 Cell(L | S, {}, nullptr,
-                     "engine-owned Sin/Cos/Atan2/Acos used by math, Lua and physics (not built yet)",
+                     "engine-owned Sin/Cos/Tan/Asin/Acos/Atan/Atan2/Exp/Log used by math and, with determinism.luaSeed, "
+                     "by Lua's math functions",
                      "libm differs between platforms in the last ulp: peers desync")));
             rows.push_back(Row(
                 "physics.snapshot", "Simulation state snapshot/restore",

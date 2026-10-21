@@ -214,7 +214,8 @@ TEST_F(NetworkPresetInitTest, ADeterministicProjectIsRefusedAndNothingStarts)
     EXPECT_TRUE(Mentions(health, "the physics backend declares CrossPlatform determinism"));
     EXPECT_TRUE(Mentions(health, "math.simdTier is scalar"));
     EXPECT_TRUE(Mentions(health, "determinism.luaSeed is set"));
-    EXPECT_TRUE(Mentions(health, "engine-owned trig (C1)"));
+    // C1 landed: the engine-owned Sin/Cos/Atan2/... exist in every build, so that requirement is met
+    EXPECT_FALSE(Mentions(health, "engine-owned trig (C1)"));
     EXPECT_TRUE(Mentions(health, "physics results do not depend on the thread count"));
     // The preset selects the tick loop (SimulationMode::Deterministic), so that requirement is met
     EXPECT_FALSE(Mentions(health, "the netcode tick loop"));
@@ -258,7 +259,7 @@ TEST_F(NetworkPresetInitTest, ADeterministicProjectIsRefusedAndNothingStarts)
 TEST_F(NetworkPresetInitTest, TheRefusalListsEveryRequirementTheProjectCouldNotMeet)
 {
     // Every project setting a Deterministic project can make is made: the refusal still stands, for what no setting
-    // can provide (a cross-platform backend, engine-owned trig, and a strict-FP build)
+    // can provide (a cross-platform backend and a strict-FP build; engine-owned trig is met since C1)
     const EngineHealth health = InitWith({
         {"network", {{"preset", "deterministic"}}},
         {"physics", {{"gpu", "off"}, {"deterministic", true}}},
@@ -269,7 +270,7 @@ TEST_F(NetworkPresetInitTest, TheRefusalListsEveryRequirementTheProjectCouldNotM
     ASSERT_NE(network, nullptr);
     EXPECT_EQ(network->state, SubsystemState::Failed);
     EXPECT_TRUE(Mentions(health, "the physics backend declares CrossPlatform determinism"));
-    EXPECT_TRUE(Mentions(health, "engine-owned trig (C1)"));
+    EXPECT_FALSE(Mentions(health, "engine-owned trig (C1)"));
     EXPECT_EQ(Mentions(health, "strict floating-point profile"), !Math::IsStrictFp());
     // Met by those settings (and the tick loop by the preset), so not named
     EXPECT_FALSE(Mentions(health, "the netcode tick loop"));

@@ -2,6 +2,7 @@
 #include "math/Vector3.hpp"
 #include "math/Matrix.hpp"
 #include "math/CpuInfo.hpp"
+#include "math/DeterministicMath.hpp"
 
 #include <cmath>
 #include <algorithm>
@@ -18,9 +19,9 @@ const Quaternion Quaternion::Identity = {1.0f, 0.0f, 0.0f, 0.0f};
 Quaternion::Quaternion(const Vector3 &axis, float angle)
 {
     float halfAngle = angle * 0.5f;
-    float sinHalfAngle = std::sin(halfAngle);
+    float sinHalfAngle = N2Engine::Math::Sin(halfAngle);
 
-    w = std::cos(halfAngle);
+    w = N2Engine::Math::Cos(halfAngle);
     x = axis.x * sinHalfAngle;
     y = axis.y * sinHalfAngle;
     z = axis.z * sinHalfAngle;
@@ -28,12 +29,12 @@ Quaternion::Quaternion(const Vector3 &axis, float angle)
 
 Quaternion::Quaternion(float pitch, float yaw, float roll)
 {
-    float cp = std::cos(pitch * 0.5f);
-    float sp = std::sin(pitch * 0.5f);
-    float cy = std::cos(yaw * 0.5f);
-    float sy = std::sin(yaw * 0.5f);
-    float cr = std::cos(roll * 0.5f);
-    float sr = std::sin(roll * 0.5f);
+    float cp = N2Engine::Math::Cos(pitch * 0.5f);
+    float sp = N2Engine::Math::Sin(pitch * 0.5f);
+    float cy = N2Engine::Math::Cos(yaw * 0.5f);
+    float sy = N2Engine::Math::Sin(yaw * 0.5f);
+    float cr = N2Engine::Math::Cos(roll * 0.5f);
+    float sr = N2Engine::Math::Sin(roll * 0.5f);
 
     w = cp * cy * cr + sp * sy * sr;
     x = sp * cy * cr - cp * sy * sr;
@@ -103,12 +104,12 @@ Quaternion Quaternion::Slerp(const Quaternion &a, const Quaternion &b, float t)
         return Lerp(a, b_copy, t);
     }
 
-    float theta0 = std::acos(std::abs(dot));
+    float theta0 = N2Engine::Math::Acos(std::abs(dot));
     float theta = theta0 * t;
-    float sinTheta = std::sin(theta);
-    float sinTheta0 = std::sin(theta0);
+    float sinTheta = N2Engine::Math::Sin(theta);
+    float sinTheta0 = N2Engine::Math::Sin(theta0);
 
-    float s0 = std::cos(theta) - dot * sinTheta / sinTheta0;
+    float s0 = N2Engine::Math::Cos(theta) - dot * sinTheta / sinTheta0;
     float s1 = sinTheta / sinTheta0;
 
     return (s0 * a) + (s1 * b_copy);
@@ -162,7 +163,7 @@ Quaternion Quaternion::Inverse() const
 float Quaternion::Angle(const Quaternion &other) const
 {
     float dot = std::abs(Dot(other));
-    return std::acos(std::min(dot, 1.0f)) * 2.0f;
+    return N2Engine::Math::Acos(std::min(dot, 1.0f)) * 2.0f;
 }
 
 Vector3 Quaternion::Rotate(const Vector3 &vector) const
@@ -182,19 +183,19 @@ Vector3 Quaternion::ToEulerAngles() const
     // Pitch (x-axis rotation)
     float sinp = 2.0f * (w * x + y * z);
     float cosp = 1.0f - 2.0f * (x * x + y * y);
-    euler.x = std::atan2(sinp, cosp);
+    euler.x = N2Engine::Math::Atan2(sinp, cosp);
 
     // Yaw (y-axis rotation)
     float siny = 2.0f * (w * y - z * x);
     if (std::abs(siny) >= 1.0f)
         euler.y = std::copysign(std::numbers::pi_v<float> / 2.0f, siny);
     else
-        euler.y = std::asin(siny);
+        euler.y = N2Engine::Math::Asin(siny);
 
     // Roll (z-axis rotation)
     float sinr = 2.0f * (w * z + x * y);
     float cosr = 1.0f - 2.0f * (y * y + z * z);
-    euler.z = std::atan2(sinr, cosr);
+    euler.z = N2Engine::Math::Atan2(sinr, cosr);
 
     return euler;
 }
