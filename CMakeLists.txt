@@ -24,9 +24,10 @@ endif()
 option(N2ENGINE_BUILD_TESTS "Build unit tests" ON)
 option(N2ENGINE_USE_PHYSX "Use PhysX physics backend" ON)
 # ON builds the vendored Jolt Physics (external/JoltPhysics) as the static library Jolt::Jolt, always cross-platform
-# deterministic (cmake/jolt/CMakeLists.txt), and, with the tests, its smoke test (tests/jolt). Nothing links it into the
-# engine, the player or the editor host yet: there is no Jolt backend. OFF (the default) builds none of it.
-option(N2ENGINE_USE_JOLT "Build the vendored Jolt Physics library and its smoke test (no engine target uses it yet)" OFF)
+# deterministic (cmake/jolt/CMakeLists.txt), links it into the engine (the Jolt physics backend, selected by the project
+# setting physics.backend) and, with the tests, builds its smoke test (tests/jolt). OFF (the default) builds none of it
+# and the engine has no Jolt backend.
+option(N2ENGINE_USE_JOLT "Build the vendored Jolt Physics library and the engine's Jolt physics backend" OFF)
 # OFF compiles the Vulkan renderer out: the build then needs no Vulkan headers or loader, and --renderer vulkan / the
 # VULKAN render backend fail with a clear message. ON (the default) needs the Vulkan SDK (Windows) or libvulkan-dev (Linux).
 option(N2ENGINE_RENDERER_VULKAN "Build the Vulkan renderer backend" ON)
@@ -309,7 +310,7 @@ else()
     message(STATUS "PhysX disabled - no physics backend active")
 endif()
 
-# == Jolt Physics (vendored; no backend uses it yet) ==
+# == Jolt Physics (vendored; linked into the engine by engine/CMakeLists.txt) ==
 if(N2ENGINE_USE_JOLT)
     add_subdirectory(cmake/jolt)
 endif()

@@ -76,6 +76,15 @@ if (N2ENGINE_PHYSX_AVAILABLE)
     endif ()
 endif ()
 
+# Jolt Physics is optional (N2ENGINE_USE_JOLT): the second 3D backend (engine/src/physics/jolt/JoltBackend.cpp). PUBLIC so a
+# target that includes the engine headers sees N2ENGINE_JOLT_ENABLED (the engine's tests, the hosts) and every target
+# that holds Jolt's inline math is compiled with the floating-point and instruction-set flags Jolt::Jolt carries
+# (cmake/jolt/CMakeLists.txt). Without it the backend's sources compile to nothing.
+if (N2ENGINE_USE_JOLT)
+    target_compile_definitions(engine PUBLIC N2ENGINE_JOLT_ENABLED=1)
+    target_link_libraries(engine PUBLIC Jolt::Jolt)
+endif ()
+
 if (WIN32)
     set_target_properties(engine PROPERTIES
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"

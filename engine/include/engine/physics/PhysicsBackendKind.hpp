@@ -13,7 +13,7 @@ namespace N2Engine::Physics
     enum class PhysicsBackendKind
     {
         PhysX, // the default
-        Jolt   // the deterministic backend (not built yet: the setting is accepted, the backend is not there)
+        Jolt   // the deterministic backend (JoltBackend, in a build with N2ENGINE_USE_JOLT)
     };
 
     /// The value of the physics.backend setting: "physx" or "jolt" (also IPhysicsBackend::BackendId's prefix)
@@ -62,8 +62,8 @@ namespace N2Engine::Physics
         return std::nullopt;
     }
 
-    /// Whether this build contains the backend: PhysX with N2ENGINE_USE_PHYSX, Jolt never yet (its backend is a later
-    /// stage of the physics plan, so a project that asks for it gets the refusal or fallback of ChooseBackend)
+    /// Whether this build contains the backend: PhysX with N2ENGINE_USE_PHYSX, Jolt with N2ENGINE_USE_JOLT (a project
+    /// that asks for one the build lacks gets the refusal or fallback of ChooseBackend)
     [[nodiscard]] constexpr bool IsBackendCompiledIn(const PhysicsBackendKind kind)
     {
         switch (kind)
@@ -75,7 +75,11 @@ namespace N2Engine::Physics
             return false;
 #endif
         case PhysicsBackendKind::Jolt:
+#ifdef N2ENGINE_JOLT_ENABLED
+            return true;
+#else
             return false;
+#endif
         }
         return false;
     }
