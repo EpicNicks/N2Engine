@@ -49,8 +49,9 @@ namespace N2Engine::N2Net
 
     /// The seam between the packet layer and a network: datagram-oriented, non-blocking and polled on one thread (the
     /// web build has no threads, so nothing here may block or need one). An implementation never throws across this
-    /// interface. This library has no sockets: SimTransport is the in-memory implementation; the native UDP and the
-    /// browser WebSocket transports are later work that implement this same interface.
+    /// interface. Two implementations exist: SimTransport, the in-memory simulator, and UdpTransport, one non-blocking
+    /// UDP socket, which is native only (it is compiled out of the web build, where N2NET_HAS_UDP is 0). The browser
+    /// WebSocket transport is later work that implements this same interface.
     class ITransport
     {
     public:
@@ -72,7 +73,9 @@ namespace N2Engine::N2Net
         /// Poll or Disconnect on this transport.
         virtual void Poll(EventHandler handler) = 0;
 
-        /// Drops the link to `peer` (no-op if there is none). The other side sees PeerDisconnected.
+        /// Drops the link to `peer` (no-op if there is none); Send to it then returns UnknownPeer. Whether the other
+        /// side is told depends on the transport: SimTransport gives it PeerDisconnected; UdpTransport only forgets the
+        /// peer locally and sends no packet, so the other side finds out by its own idle timeout.
         virtual void Disconnect(PeerId peer) = 0;
     };
 } // namespace N2Engine::N2Net
