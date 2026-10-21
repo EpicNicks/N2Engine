@@ -1,6 +1,6 @@
 # Jolt Physics, vendored at external/JoltPhysics (see VENDORED.md there), as the static library target Jolt (alias
-# Jolt::Jolt). Added by the root CMakeLists.txt when N2ENGINE_USE_JOLT is ON. Nothing links it yet: no engine, player or
-# editor target depends on it (docs/physics.html, "Jolt Physics (vendored)").
+# Jolt::Jolt). Added by the root CMakeLists.txt when N2ENGINE_USE_JOLT is ON. The engine links it (engine/CMakeLists.txt:
+# the Jolt physics backend, engine/src/physics/jolt/JoltBackend.cpp) and so does the smoke test (tests/jolt).
 #
 # Jolt's own Jolt/Jolt.cmake builds the target; the options it reads are set here, always to the same values, because
 # the library is built ONE way: cross-platform deterministic (JPH_CROSS_PLATFORM_DETERMINISTIC), single precision,
@@ -121,7 +121,7 @@ else()
     target_compile_options(Jolt PRIVATE -fno-rtti -fno-exceptions -w)
 endif()
 
-message(STATUS "Jolt Physics (vendored, external/JoltPhysics): static library, cross-platform deterministic, single precision, not linked into the engine")
+message(STATUS "Jolt Physics (vendored, external/JoltPhysics): static library, cross-platform deterministic, single precision")
 
 # == Web: what Jolt costs in a wasm module (docs/web-build.html, "Jolt Physics: measured size") ==
 # Two tiny programs, neither part of the player package: a baseline that does nothing and a probe that runs the same

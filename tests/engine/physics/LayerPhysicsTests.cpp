@@ -18,7 +18,9 @@
 #include "engine/physics/physx/PhysXBackend.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 
-// Layers in a real PhysX scene: query masks, the collision matrix (contacts and triggers) and runtime changes
+// Layers in a real PhysX scene: query masks, the collision matrix (contacts and triggers) and runtime changes.
+// PhysX-ONLY until the Jolt backend has layers, triggers and queries (stages J4 and J5 of the physics plan), when this
+// suite becomes typed like PhysicsCoreTests.cpp.
 #ifdef N2ENGINE_PHYSX_ENABLED
 
 using namespace N2Engine;
