@@ -483,6 +483,8 @@ TEST_F(ExtensionHookTest, AHookHasNoFunctionOfACapabilityItDidNotDeclare)
 
 TEST_F(ExtensionHookTest, AHookIsCappedAtAThousandRequests)
 {
+    // The time of a thousand round trips is not what this test is about: the wall budget is made generous
+    ExtensionHost::SetHookBudgetForTest(20'000'000, 60000);
     TempProject project;
     project.Write("a.lua", HookExtension("Chatty", "\"scene.read\"",
                                          "    OnSceneSaved = function(info)\n"
@@ -496,6 +498,31 @@ TEST_F(ExtensionHookTest, AHookIsCappedAtAThousandRequests)
     ASSERT_TRUE(server.EnableEditorExtensions(project.Root()));
     EXPECT_EQ(server.RunExtensionHookForTest("OnSceneSaved", SavedInfo), 0u);
     EXPECT_EQ(Messages(server), (std::vector<std::string>{"stopped at " + std::to_string(ExtensionHost::MaxHookNestedCommands + 1)}));
+}
+
+TEST_F(ExtensionHookTest, TheRequestCapOfAnInvocationAlsoLimitsAHook)
+{
+    // The smaller of the two caps applies: with the invocation's cap at 5, a hook stops at its sixth request
+    ExtensionHost::SetMaxNestedCommandsForTest(5);
+    TempProject project;
+    project.Write("a.lua", HookExtension("Chatty", "\"scene.read\"",
+                                         "    OnSceneSaved = function(info)
+"
+                                         "      for i = 1, 20 do
+"
+                                         "        local ok = pcall(Editor.Scene.GetComponentTypes)
+"
+                                         "        if not ok then Editor.Log.Info('stopped at ' .. i) return end
+"
+                                         "      end
+"
+                                         "      Editor.Log.Info('never stopped')
+"
+                                         "    end,"));
+    EditorServer server;
+    ASSERT_TRUE(server.EnableEditorExtensions(project.Root()));
+    EXPECT_EQ(server.RunExtensionHookForTest("OnSceneSaved", SavedInfo), 0u);
+    EXPECT_EQ(Messages(server), (std::vector<std::string>{"stopped at 6"}));
 }
 
 // ==================== Isolation, the fault flag, the budget ====================
