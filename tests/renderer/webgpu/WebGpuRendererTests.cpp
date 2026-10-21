@@ -450,12 +450,12 @@ TEST_F(WebGpuTest, FrameCallsOutOfOrderAreHarmless)
     EXPECT_EQ(R().GetValidationErrorCount(), 0u);
 }
 
-TEST_F(WebGpuTest, WhatStaysUnimplementedFailsCleanlyAndWarnsOncePerCall)
+TEST_F(WebGpuTest, WhatIsNotSupportedFailsCleanlyAndWarnsOncePerCall)
 {
-    // Stage G3a made meshes, textures, materials, the unlit shader and draws real (WebGpuRendererResourceTests.cpp and
-    // WebGpuRendererUnlitDrawTests.cpp). What is left: the lit and text built-in shaders (stage G3b), custom shaders (not
-    // supported on any GPU backend), wireframe (not in core WebGPU). Each returns null or does nothing, says so on stderr ONCE
-    // per renderer and call name, and a frame still renders (it clears). Calls with null arguments are harmless
+    // Stages G3a and G3b made meshes, textures, materials, the three built-in shaders and draws real (the other
+    // WebGpuRenderer*Tests.cpp files). What is left: custom shaders (not supported on any GPU backend) and wireframe (not in core
+    // WebGPU). Each returns null or does nothing, says so on stderr ONCE per renderer and call name, and a frame still renders
+    // (it clears). Calls with null arguments are harmless
     Renderer::Common::MeshData empty;
     const float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 
@@ -467,8 +467,8 @@ TEST_F(WebGpuTest, WhatStaysUnimplementedFailsCleanlyAndWarnsOncePerCall)
         EXPECT_FALSE(R().DestroyShaderProgram(nullptr));
         R().UseShaderProgram(nullptr);
         EXPECT_NE(R().GetStandardUnlitShader(), nullptr);
-        EXPECT_EQ(R().GetStandardLitShader(), nullptr);
-        EXPECT_EQ(R().GetStandardTextShader(), nullptr);
+        EXPECT_NE(R().GetStandardLitShader(), nullptr);
+        EXPECT_NE(R().GetStandardTextShader(), nullptr);
 
         EXPECT_EQ(R().CreateMesh(empty), nullptr);
         EXPECT_FALSE(R().UpdateMesh(nullptr, empty));
@@ -502,10 +502,7 @@ TEST_F(WebGpuTest, WhatStaysUnimplementedFailsCleanlyAndWarnsOncePerCall)
         }
         return found;
     };
-    for (const char* name : {"GetStandardLitShader", "GetStandardTextShader"})
-    {
-        EXPECT_EQ(count(std::string("WebGPU renderer: ") + name + " is not implemented yet"), 1) << name;
-    }
+    EXPECT_EQ(count("is not implemented yet"), 0) << output;
     EXPECT_EQ(count("WebGPU renderer: CreateShaderProgram: custom shaders are not supported"), 1);
     EXPECT_EQ(count("WebGPU renderer: SetWireframe: wireframe is not supported"), 1);
 }

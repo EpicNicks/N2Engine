@@ -15,7 +15,7 @@
 // Stage G2 of the WebGPU backend (#155): headless initialisation, an offscreen colour and depth target, a frame that clears
 // it, a synchronous readback, resizing, shutdown and the counting of every error the device reports. Meshes, textures and
 // the samplers are in WebGpuResources.cpp and the shaders, materials, pipelines, uniform ring and draws in WebGpuDraw.cpp
-// (stage G3a); the IRenderer calls that stay unimplemented until stage G3b (lit and text shaders) are at the end of this file.
+// (stages G3a and G3b).
 //
 // Written against webgpu.h (the C API) only, so that stage G4 can compile this file with Emscripten's emdawnwebgpu port. What
 // exists only natively is marked "NATIVE ONLY": asking for the Vulkan backend by type, and the blocking waits
@@ -362,19 +362,6 @@ namespace Renderer::WebGpu
         return g_liveObjects.load();
     }
 
-    void WebGpuRenderer::LogUnsupportedOnce(const char* what) const
-    {
-        {
-            std::lock_guard lock(_logMutex);
-            if (!_logged.insert(what).second)
-            {
-                return;
-            }
-        }
-        std::cerr << "WebGPU renderer: " << what
-                  << " is not implemented yet (#155, stage G3b); it does nothing and returns null/false" << std::endl;
-    }
-
     void WebGpuRenderer::LogOnce(const std::string& message) const
     {
         {
@@ -595,18 +582,22 @@ namespace Renderer::WebGpu
             const bool alignmentKnown =
                 limits.minUniformBufferOffsetAlignment != 0 && limits.minUniformBufferOffsetAlignment != WGPU_LIMIT_U32_UNDEFINED;
             _state->uniformAlignment = alignmentKnown ? limits.minUniformBufferOffsetAlignment : DefaultUniformAlignment;
-            // What the draws need (WebGpuDraw.cpp): a 192-byte block bound at a dynamic offset in group 0, a material block at a
-            // dynamic offset and five textures with five samplers in group 1. Every WebGPU device offers at least the core
-            // defaults, which are more than this; the check says so rather than assume it
+            // What the draws need (WebGpuDraw.cpp): in group 0 a 192-byte per-draw block and a 752-byte lighting block, each bound
+            // at a dynamic offset (stage G3b added the lighting block: it raised the uniform binding size and the dynamic buffer
+            // count from 2 to 3 and the uniform buffers per stage to 3), in group 1 a material block at a dynamic offset and five
+            // textures with five samplers. Every WebGPU device offers at least the core defaults (65536 bytes, 8 dynamic
+            // buffers, 12 uniform buffers per stage, 16 sampled textures and samplers), which are more than this; the check says
+            // so rather than assume it
             const std::uint32_t slots = ShaderInterface::kSamplerCount;
-            if (limits.maxUniformBufferBindingSize < ShaderInterface::kPerDrawBlockSize ||
-                limits.maxDynamicUniformBuffersPerPipelineLayout < 2 || limits.maxBindGroups < 2 ||
+            const std::uint32_t largestBlock = std::max(ShaderInterface::kPerDrawBlockSize, ShaderInterface::kLightingBlockSize);
+            if (limits.maxUniformBufferBindingSize < largestBlock || limits.maxDynamicUniformBuffersPerPipelineLayout < 3 ||
+                limits.maxUniformBuffersPerShaderStage < 3 || limits.maxBindGroups < 2 ||
                 limits.maxBindingsPerBindGroup < 1 + 2 * slots || limits.maxSampledTexturesPerShaderStage < slots ||
                 limits.maxSamplersPerShaderStage < slots)
             {
                 return Fail(InitStatus::Failed, "the device's limits are below what the draws need (a uniform binding of " +
-                                                    std::to_string(ShaderInterface::kPerDrawBlockSize) +
-                                                    " bytes, 2 dynamic uniform buffers, 2 bind groups, " +
+                                                    std::to_string(largestBlock) +
+                                                    " bytes, 3 dynamic uniform buffers and 3 uniform buffers per stage, 2 bind groups, " +
                                                     std::to_string(1 + 2 * slots) + " bindings and " + std::to_string(slots) +
                                                     " textures and samplers per stage)");
             }
@@ -1212,22 +1203,5 @@ namespace Renderer::WebGpu
             return false;
         }
         return true;
-    }
-
-    // -----------------------------------------------------------------------------------------------------------------
-    // Not implemented yet: stage G3b (the lit and text shaders). Each fails loudly (a log, once per renderer) and cleanly
-    // (null), never crashes.
-    // -----------------------------------------------------------------------------------------------------------------
-
-    Common::IShader* WebGpuRenderer::GetStandardLitShader() const
-    {
-        LogUnsupportedOnce("GetStandardLitShader");
-        return nullptr;
-    }
-
-    Common::IShader* WebGpuRenderer::GetStandardTextShader() const
-    {
-        LogUnsupportedOnce("GetStandardTextShader");
-        return nullptr;
     }
 }

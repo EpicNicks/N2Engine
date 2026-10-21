@@ -59,7 +59,6 @@ using Renderer::Common::TextureFilter;
 using Renderer::Common::TextureOptions;
 using Renderer::Common::TextureWrap;
 using Renderer::Software::SoftwareRenderer;
-namespace Diff = VulkanTesting::Diff;
 
 namespace
 {

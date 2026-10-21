@@ -56,6 +56,16 @@ namespace WebGpuTesting::Draw
     inline constexpr Rgb kYellow{255, 255, 0};
     inline constexpr Rgb kWhite{255, 255, 255};
 
+    inline ::testing::AssertionResult SameColour(const Rgb& a, const Rgb& b)
+    {
+        if (a == b)
+        {
+            return ::testing::AssertionSuccess();
+        }
+        return ::testing::AssertionFailure() << "(" << int(a.r) << "," << int(a.g) << "," << int(a.b) << ") is not ("
+                                             << int(b.r) << "," << int(b.g) << "," << int(b.b) << ")";
+    }
+
     /// A frame read back with ReadFramebuffer: RGBA8, row 0 at the bottom
     struct Frame
     {
@@ -228,6 +238,13 @@ namespace WebGpuTesting::Draw
             draws();
             R().EndFrame();
             return ReadFrame();
+        }
+
+        /// RenderFrameOf under the name the Vulkan tests use (the G3b tests are ports of them)
+        template <typename Draws>
+        Frame RenderFrame(const Draws& draws)
+        {
+            return RenderFrameOf(draws);
         }
 
         Renderer::Common::IShader* _unlit = nullptr;

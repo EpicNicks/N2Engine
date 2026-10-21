@@ -72,20 +72,21 @@ namespace Renderer
         };
 
         /**
-         * The WebGPU backend, stages G2 and G3a of #155: a renderer that runs on Dawn (natively, for the CI harness only).
+         * The WebGPU backend, stages G2, G3a and G3b of #155: a renderer that runs on Dawn (natively, for the CI harness only).
          * Headless initialisation (instance, adapter, device, queue), an offscreen RGBA8 colour target and a Depth32Float
          * depth target, a frame that clears them, a synchronous ReadFramebuffer, SetRenderTargetSize and Shutdown, plus
          * counting of every error the device reports (stage G2); meshes (with the in-frame UpdateMesh rule), textures
          * (RGBA8 or R8/RG8, sRGB, samplers, CPU-generated mipmaps), materials, a pipeline cache, a bind-group cache, a
-         * per-draw uniform ring and the unlit shader with DrawMesh, IndexRange and DrawObjects (stage G3a). There is no window
-         * and no swapchain: Present only warns.
+         * per-draw uniform ring and the unlit shader with DrawMesh, IndexRange and DrawObjects (stage G3a); the lit and text
+         * shaders, the scene lighting and blending (stage G3b). There is no window and no swapchain: Present only warns.
          *
-         * What draws: the UNLIT built-in shader (GetStandardUnlitShader) with the depth, depth write and cull state of every
-         * RenderState. NOT here yet (stage G3b): the lit and text shaders (GetStandardLitShader and GetStandardTextShader
-         * return nullptr, logged once), blending (RenderState::blend and additive are part of the pipeline cache key but every
-         * pipeline is opaque; logged once) and the scene lighting (UpdateSceneLighting is ignored). Custom shaders are not
-         * supported (CreateShaderProgram returns nullptr, as on the other GPU backends) and wireframe is not in core WebGPU
-         * (SetWireframe is ignored with one log line). Stage G4 compiles the backend for the browser.
+         * What draws (stage G3b completed it): everything the software renderer draws, through the three built-in shaders: UNLIT, LIT
+         * (aux textures, Blinn-Phong or PBR, the scene lighting of UpdateSceneLighting) and TEXT (the SDF shader with outline,
+         * shadow and softness effects), with the depth, depth write, cull and blend state of every RenderState (blend and
+         * additive blending as OpenGL), and a SetViewProjection that may change between draws of one frame. NOT supported:
+         * custom shaders (CreateShaderProgram returns nullptr, as on the other GPU backends), wireframe (not in core WebGPU:
+         * SetWireframe is ignored with one log line, design decision W9) and compute. Stage G4 compiles the backend for the
+         * browser.
          *
          * Written against the C API (webgpu.h) alone, so the same file compiles with Emscripten's emdawnwebgpu in stage G4.
          * The pieces that exist only natively (the Vulkan backend request, the blocking waits) are marked in the source.
@@ -129,7 +130,7 @@ namespace Renderer
             void UseShaderProgram(Common::IShader* shader) override;
             /// Always false: the built-in shaders belong to the renderer and are never destroyed by a caller
             bool DestroyShaderProgram(Common::IShader* shader) override;
-            /// True only for this renderer's built-in shaders that exist (the unlit one in G3a)
+            /// True only for this renderer's built-in shaders (unlit, lit, text) once initialized
             bool IsValidShader(Common::IShader* shader) const override;
 
             // Meshes and textures. Uploads are queue writes (they work inside or outside a frame). Destroying a mesh or a
@@ -152,7 +153,7 @@ namespace Renderer
                                             const Common::TextureOptions& options) override;
             /// Ignores nullptr and pointers this renderer did not make, like DestroyMesh
             void DestroyTexture(Common::ITexture* texture) override;
-            /// A material of a built-in shader that exists (the unlit one in G3a): the OpenGL defaults (uAlbedo white,
+            /// A material of a built-in shader (unlit, lit or text): the OpenGL defaults (uAlbedo white,
             /// uHasTexture 1 with a texture, uAlphaCutoff 0), values set by name (the names of the shader's material block; any
             /// other name, or the wrong type, is logged once and ignored), the base texture. DrawMesh takes a snapshot of its
             /// values and textures, so a change after a draw does not affect that draw. nullptr for a null shader or one this
@@ -171,12 +172,14 @@ namespace Renderer
             /// The row-major view and projection of the draws that follow (until the next call): each draw copies the values
             /// current when it is made. Null arguments are ignored. Identity until set
             void SetViewProjection(const float* view, const float* projection) override;
-            /// Ignored until stage G3b (the lit shader reads the lighting)
+            /// Builds the lit shader's lighting block (GpuLighting.hpp) into a CPU copy; the first lit draw after this copies it
+            /// into the frame's ring, so a draw uses the lighting set by the last call BEFORE it (an update after a draw does not
+            /// change that draw), as on OpenGL and Vulkan
             void UpdateSceneLighting(const Common::SceneLightingData& lighting,
                                      const N2Engine::Math::Vector3& cameraPosition) override;
             using Common::IRenderer::DrawMesh; // the default-state overload
-            /// Draws the whole index buffer with the material's shader and this draw's depth test, depth write and cull state
-            /// (blend and additive are not drawn in G3a: opaque, logged once). Recorded into the open frame, in submission
+            /// Draws the whole index buffer with the material's shader and this draw's depth test, depth write, cull and blend
+            /// state (blend: SRC_ALPHA / ONE_MINUS_SRC_ALPHA, additive: SRC_ALPHA / ONE, for colour and alpha, as OpenGL). Recorded into the open frame, in submission
             /// order, taking a snapshot of the material's values and of the view and projection. Ignored (nothing drawn, no
             /// error) outside BeginFrame..EndFrame, for a null or foreign mesh, material or model matrix, and for a mesh
             /// without indices
@@ -193,7 +196,7 @@ namespace Renderer
             /// Not in core WebGPU (no polygon mode): ignored, one log line
             void SetWireframe(bool enabled) override;
             [[nodiscard]] const char* GetRendererName() const override { return "WebGPU Renderer"; }
-            /// The unlit built-in; nullptr before Initialize. The lit and text built-ins are stage G3b: nullptr, logged once
+            /// The three built-ins; nullptr before Initialize
             [[nodiscard]] Common::IShader* GetStandardUnlitShader() const override;
             [[nodiscard]] Common::IShader* GetStandardLitShader() const override;
             [[nodiscard]] Common::IShader* GetStandardTextShader() const override;
@@ -295,6 +298,9 @@ namespace Renderer
             [[nodiscard]] uint32_t GetRingChunkCountForTest() const;
             /// The size a NEW ring chunk gets (at least what one draw needs), so a test can reach the chunk-growth path
             void SetRingChunkBytesForTest(uint64_t bytes);
+            /// The CPU copy of the lighting block (kLightingBlockSize bytes) as the next lit draw would copy it into the ring:
+            /// what the last UpdateSceneLighting built, or SceneLightingData{} seen from the origin before the first
+            [[nodiscard]] std::vector<uint8_t> GetLightingBlockForTest() const;
             /// The device's minUniformBufferOffsetAlignment, which every per-draw offset is a multiple of
             [[nodiscard]] uint32_t GetUniformAlignmentForTest() const;
             /// A copy of the material's std140 block (kMaterialBlockRange bytes: the shader's block, then zeros) as a draw would
@@ -324,6 +330,7 @@ namespace Renderer
             void DestroyAllResources();
             void BeginDrawFrame();
             void EndDrawFrame();
+            Common::IShader* GetStandardShader(ShaderInterface::BuiltInShader kind) const;
             WGPURenderPipeline GetPipelineLocked(ShaderInterface::BuiltInShader shader, const Common::RenderState& state);
             bool AddRingChunk(uint64_t minimumSize);
             bool AllocateRing(uint64_t bytes, std::size_t& chunkIndex, uint64_t& offset);
@@ -338,7 +345,6 @@ namespace Renderer
                                          uint32_t mipLevel = 0) const;
             /// Copies `size` bytes of `buffer` (which needs CopySrc) into `bytes`. False on any failure (logged)
             bool CopyBufferToHostLocked(WGPUBuffer buffer, uint64_t size, std::vector<std::uint8_t>& bytes) const;
-            void LogUnsupportedOnce(const char* what) const;
             void LogOnce(const std::string& message) const;
 
             mutable std::mutex _mutex;
