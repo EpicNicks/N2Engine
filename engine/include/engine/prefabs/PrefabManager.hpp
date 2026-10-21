@@ -2,7 +2,9 @@
 
 #include <nlohmann/json.hpp>
 #include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace N2Engine
 {
@@ -40,5 +42,9 @@ namespace N2Engine
         bool UnregisterPrefab(const std::string &prefabName);
         /// InstantiatePrefab on the registered prefab's data; nullptr (logged) if no prefab has this name
         std::shared_ptr<GameObject> InstantiateRegisteredPrefab(const std::string &prefabName);
+        /// The names of the registered prefabs, sorted
+        std::vector<std::string> GetRegisteredPrefabNames();
+        /// A copy of the registered prefab's Prefab JSON; nullopt if no prefab has this name
+        std::optional<nlohmann::json> GetPrefabData(const std::string &prefabName);
     }
 }
