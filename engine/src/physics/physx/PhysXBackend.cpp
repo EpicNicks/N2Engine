@@ -2451,8 +2451,8 @@ namespace N2Engine::Physics
             }
             OverlapHit hit;
             hit.bodyHandle = located[i].handle;
-            DescribeSide(hit.bodyHandle, {}, hit.gameObject, hit.rigidbody);
-            hit.collider = LiveCollider(hit.bodyHandle, ColliderOf(located[i].px.shape));
+            _tracker.DescribeSide(hit.bodyHandle, {}, hit.gameObject, hit.rigidbody);
+            hit.collider = _tracker.LiveCollider(hit.bodyHandle, ColliderOf(located[i].px.shape));
             hits.push_back(hit);
         }
         return static_cast<int>(hits.size());
