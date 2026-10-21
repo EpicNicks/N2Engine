@@ -50,6 +50,7 @@
 <h2>Scripting</h2>
 <ul>
 <li><a href="scripting-lua.html">Lua scripting</a></li>
+<li><a href="editor-extensions.html">Lua editor extensions</a></li>
 </ul>
 </div>
 <div>
@@ -438,7 +439,7 @@ if (!h.IsValid()) { /* not initialized, group full, or no source */ }
 <li>Master volume, mixer groups, pitch, looping, one-shots and the source pool (32 pre-allocated) work as described above (the audible result is not verified in a browser).</li>
 </ul>
 <p>What the engine calls, what the port covers, the backend choice (<code>N2ENGINE_WEB_AUDIO</code>), the node behaviour and what is not verified: <a href="web-build.html#audio">Web build: Audio</a>. By hand: <a href="web-checklist.html#audio">the checklist</a>.</p>
-<p class="src">Source: <code>engine/src/audio/AudioSystem.cpp</code> — <code>IsOutputSuspended</code>, <code>RefuseWhileSuspended</code>, <code>OpenLoopbackDevice</code>, <code>PlayOneShot</code>; <code>engine/src/audio/AudioSource.cpp</code> — <code>Play</code>; <code>engine/src/Application.cpp</code> — <code>Application::Init</code>; <code>web/n2-loader.js</code> — <code>createAudioUnlock</code>; tests: <code>WebAudioDegradeTests</code> (<code>tests/web/WebAudioTests.cpp</code>), <code>scripts/web-audio-unlock-test.mjs</code></p>
+<p class="src">Source: <code>engine/src/audio/AudioSystem.cpp</code> ï¿½ <code>IsOutputSuspended</code>, <code>RefuseWhileSuspended</code>, <code>OpenLoopbackDevice</code>, <code>PlayOneShot</code>; <code>engine/src/audio/AudioSource.cpp</code> ï¿½ <code>Play</code>; <code>engine/src/Application.cpp</code> ï¿½ <code>Application::Init</code>; <code>web/n2-loader.js</code> ï¿½ <code>createAudioUnlock</code>; tests: <code>WebAudioDegradeTests</code> (<code>tests/web/WebAudioTests.cpp</code>), <code>scripts/web-audio-unlock-test.mjs</code></p>
 
 <h2 id="lua">Lua API</h2>
 <p>Lua sees <code>AudioSource</code> and <code>AudioListener</code> as component handles <span class="badge">PR #29</span>: every method goes through a checked handle and raises "attempt to use a destroyed â€¦" once the component is torn down; <code>IsValid()</code> checks first. See <a href="scripting-lua.html">Lua scripting</a>.</p>

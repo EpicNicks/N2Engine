@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lua editor extensions · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="particles.html">Particles</a></li>
+<li><a href="soft-bodies.html">Soft bodies</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+<li><a href="netcode.html">Netcode (n2net)</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+<li><a href="editor-extensions.html" aria-current="page">Lua editor extensions</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="editor.html">Editor projects</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+<li><a href="web-build.html">Web build</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Lua editor extensions</h1>
+<p class="lead">An editor extension is a Lua file in a project's <code>editor/</code> folder that adds menu items, inspector sections and hooks to the editor. The editor host runs it in a sandbox of its own and the editor only draws what it declares. This page is the guide: the model, how to turn extensions on, the whole <code>Editor</code> API, who may do what, the limits, what to look at when a file does not load, and a worked example. The command-level detail (every gate, every error code, the registry, the watcher) is in <a href="editor.html#editor-extensions">Editor projects</a>, and the function-by-function reference with its argument shapes is in <a href="scripting-lua.html#editor-api">Lua scripting</a>. Everything here was checked against the host's code; the files it was checked against are named in the source lines.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#model">The model</a></li>
+<li><a href="#enabling">Turning extensions on, and trusting a project</a></li>
+<li><a href="#layout">Where the files are</a></li>
+<li><a href="#declaration">What a file declares</a></li>
+<li><a href="#forms">Forms and field kinds</a></li>
+<li><a href="#menu">Menu items</a></li>
+<li><a href="#inspector">Inspector sections</a></li>
+<li><a href="#hooks">Hooks</a></li>
+<li><a href="#api">The Editor API, function by function</a></li>
+<li><a href="#capabilities">Capabilities and roles</a></li>
+<li><a href="#budgets">Budgets, workers and the fault flag</a></li>
+<li><a href="#sandbox">The sandbox</a></li>
+<li><a href="#security">Security notes</a></li>
+<li><a href="#troubleshooting">Troubleshooting: states and messages</a></li>
+<li><a href="#example">A worked example: AlignTools</a></li>
+<li><a href="#annotations">Editor completion: editor-api.lua</a></li>
+</ol>
+</div>
+
+<h2 id="model">The model</h2>
+<p>Three facts hold everything else together.</p>
+<ul>
+<li><strong>The Lua runs in the editor host, not in the editor.</strong> The host (<code>N2EditorHost</code>) is the process that has the scene. Each extension file runs in one Lua state of its own, made by the shared sandbox builder with the <code>EditorExtension</code> profile (<a href="#sandbox">below</a>), and that state has <strong>no engine bindings</strong>: there is no <code>GameObject</code>, no <code>Vector3</code>, no <code>Application</code>. It has the <code>Editor</code> namespace and nothing that reaches the machine. These states are not the game's state and not the declaration evaluator's throwaway state (<a href="scripting-lua.html#editor-extension-states">Lua scripting</a>).</li>
+<li><strong>The UI is data.</strong> A file declares menu items, parameter forms and inspector sections as Lua tables. The host checks them when the file loads and lists them (<code>GetEditorUi</code>) as plain data: the functions stay in the host's state and are never sent. The editor draws the data with its own widgets, so <strong>no project code runs in the Electron editor</strong>. The Electron editor's source treats every string that comes from an extension as untrusted text and shows it as text, never as HTML.</li>
+<li><strong>Every change is a command.</strong> When a client runs an item, the host runs the item's function on a worker thread, and each <code>Editor.Scene</code> or <code>Editor.Assets</code> call of the script is a request to the host's command thread, which answers it by sending the command a client would send (<code>SetLocalTransform</code>, <code>AddComponent</code>, ...) with <strong>the role of the user who ran the item</strong>. So the read-only gate, the role gate and the audit line apply to the script as to a person, and a script can never do what the user who ran it could not. The whole call is <strong>one undo step</strong> labelled with the item's title, and a failure takes every change back (<a href="editor.html#editor-extensions-invoke">Running a menu item</a>).</li>
+</ul>
+<p>Extensions load at host start, on <code>ReloadEditorExtensions</code> and, with <code>--editor-extensions-watch</code>, for a single file when it changes. <strong>Opening, creating or loading a scene never loads or reloads one.</strong> A scene open does call the <code>OnSceneOpened</code> hooks of the extensions that are already loaded, after the scene is loaded (<a href="#hooks">Hooks</a>).</p>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>A host that was not started with <code>--editor-extensions</code> has no extension host at all: it never reads <code>editor/</code>, <code>ListEditorExtensions</code> answers <code>enabled: false</code> with nothing listed, and <code>InvokeMenuItem</code> is refused (<code>EditorExtensionCommandsTest.*</code>, <code>AlignToolsOffByDefaultTest.AHostThatWasNotGivenTheFlagHasNoExtensionHostAndListsNothing</code>).</p>
+</div>
+<p class="src">Source: <code>editor-server/src/ExtensionHost.cpp</code> &mdash; <code>EditorPrelude</code>, <code>UiJson</code>, <code>RunInvocation</code>; <code>editor-server/src/EditorServerExtensions.cpp</code> &mdash; <code>EditorServer::ExtensionRequest</code>, <code>DispatchNested</code>, <code>RunExtensionCall</code>; <code>editor-server/src/EditorServer.cpp</code> &mdash; <code>EnableEditorExtensions</code>, <code>HandleListEditorExtensions</code>; <code>engine/include/engine/scripting/LuaSandbox.hpp</code>; Electron editor (the separate N2Engine-Electron-Frontend repository, read at its master after its PR #55): <code>src/protocol/extension-output.ts</code></p>
+
+<h2 id="enabling">Turning extensions on, and trusting a project <span class="badge">PR #222</span></h2>
+<p>Extension code is project code that runs on the host, and a host cannot tell a project it should trust from one it should not. So <strong>extensions are off unless whoever starts the host asks for them</strong>, with two flags of <code>N2EditorHost</code> (<code>--help</code> lists both):</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Flag</th><th>What it does</th><th>Refused when the arguments are parsed (a line on stderr, exit code 1)</th></tr></thead>
+<tbody>
+<tr><td>(neither)</td><td>No extension host. <code>editor/</code> is never read.</td><td>-</td></tr>
+<tr><td><code>--editor-extensions</code></td><td>Loads the project's <code>editor/**/*.lua</code> at host start, and again only on <code>ReloadEditorExtensions</code> (or, with the watch flag, for the one file that changed). Works with <code>--read-only</code> (the extensions are listed; nothing can run or reload them there). Without <code>--project</code> the host warns that there is no project folder to find extensions in, and has none.</td><td>With <code>--play</code> ("a play host never loads editor extensions"). With a <code>--bind</code> address outside <code>127.0.0.0/8</code> and no <code>--tokens-file</code>: a single <code>--token-env</code> token is one admin and no roles, and <code>--insecure-bind</code> does not lift this, because who may run extension code on a host other machines reach has to be a role.</td></tr>
+<tr><td><code>--editor-extensions-watch</code></td><td>Checks <code>editor/</code> about once a second (modification time and size, then a hash of the content) and loads again only the file that changed, loads a file that was added and drops one that was removed (<a href="editor.html#editor-extensions-watch">the watcher</a>). It does not wait for a client to be connected.</td><td>Without <code>--editor-extensions</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>In the Electron editor</strong> (the separate N2Engine-Electron-Frontend repository) the flag is passed by one place, the project trust in its main process. A <em>local</em> project gets <code>--editor-extensions</code> only when its own <code>editor/</code> folder holds at least one <code>.lua</code> file and the user answered <strong>Trust</strong> for that folder. The question is a native dialog the page cannot answer for the user: "This project contains N editor extensions. Trust this project?", listing the files and saying they run code on this computer's editor host and that what each may do (its capabilities) is not known until the host loads it. The buttons are <strong>Trust</strong> and <strong>Not now</strong>; Not now is the default button and is what closing the dialog does. The answer is kept per folder, by the folder's real path, in a file in the editor's user data folder: a moved, renamed or copied project asks again, and nothing inside a project can say it is trusted. Not now opens the project without the flag, and the page's banner offers to enable the extensions later (the same question, then a restart of the host). A remote host is never asked about: its flag is its operator's. The launcher passes <code>--editor-extensions</code> and does not pass <code>--editor-extensions-watch</code>, and it passes neither to a <code>--play</code> host.</p>
+<p>The Electron editor draws the items of <code>GetEditorUi</code> as a Tools menu (a path's leading <code>Tools</code> segment is dropped, since the whole menu is Tools), asks the item's <code>confirm</code> question and shows its form before sending <code>InvokeMenuItem</code>, shows inspector sections under components of their type, shows each <code>extensionOutput</code> event in its console as an "extension" line, and has an Extensions section in the project settings with Reload for admins (its frontend PRs #47 and #54). How these look in the real application is not verified here.</p>
+<p>At host start the host writes one log line per file (<a href="#troubleshooting">Troubleshooting</a>). Only an admin can make the host reload: <code>ReloadEditorExtensions</code> is an Admin command.</p>
+<p class="src">Source: <code>editor-server/src/HostOptions.cpp</code> (<code>--editor-extensions</code>, <code>--editor-extensions-watch</code>, the three refusals, the help text); <code>editor-server/src/Host.cpp</code>; <code>editor-server/src/EditorServer.cpp</code> &mdash; <code>EnableEditorExtensions</code>; tests: <code>HostOptionsTest.EditorExtensions*</code>. Electron editor (N2Engine-Electron-Frontend, <code>src/main/extension-trust.ts</code> &mdash; <code>ExtensionTrust</code>, <code>ExtensionTrustStore</code>, <code>trustKey</code>, <code>trustPromptText</code>; <code>src/main/extension-prompt.ts</code>; <code>src/main/host-launcher.ts</code>; <code>src/renderer/extension-menu.ts</code>; <code>src/renderer/console-store.ts</code>; <code>src/renderer/extensions-ui.tsx</code>)</p>
+
+<h2 id="layout">Where the files are</h2>
+<p>The files are <code>&lt;project&gt;/editor/**/*.lua</code>, in a folder <strong>beside <code>assets/</code>, not inside it</strong>. That is the point: every protocol write (<code>WriteTextAsset</code>, <code>CreateScriptAsset</code>, <code>CreateFolder</code>) is confined to <code>assets/</code>, <code>require</code> and the play host resolve only under <code>assets/</code>, the web player packs only <code>assets/</code> and <code>project.n2proj</code>, and <code>ListAssets</code> does not show the folder. So an editor-role user cannot create or change an extension, no game or play host loads one, and extensions arrive with the project (git, a deploy), never through the protocol. Even <code>Editor.Assets</code> cannot reach them: its paths are <code>res://</code> paths inside <code>assets/</code>, so <code>res://editor/x.lua</code> is <code>assets/editor/x.lua</code>.</p>
+<ul>
+<li>A file is found when its extension is <code>.lua</code> in any letter case. Its <strong>id</strong> is its path inside <code>editor/</code> with <code>/</code> separators (<code>tools/Align.lua</code>); the registry is in id order, in byte order.</li>
+<li>The walk goes 8 directory levels down and looks at no more than 4096 entries. Symbolic links, files and folders alike, are skipped and never followed, and a file whose real path is outside <code>editor/</code> is left out; if <code>editor/</code> itself is a link, nothing is loaded from it.</li>
+<li>At most the first <strong>64</strong> files (in id order) are loaded. A file over <strong>1 MiB</strong> fails without being read. A byte order mark at the start is dropped. A precompiled chunk is refused (text only).</li>
+</ul>
+<p class="src">Source: <code>editor-server/src/ExtensionHost.cpp</code> &mdash; <code>ExtensionHost::Discover</code>, <code>LoadOne</code>; <code>editor-server/include/editor-server/ExtensionHost.hpp</code> (<code>MaxFiles</code>, <code>MaxFileBytes</code>, <code>MaxDirectoryDepth</code>, <code>MaxVisitedEntries</code>); <code>web/CMakeLists.txt</code> (what the web player packs); tests: <code>ExtensionHostTest.*</code></p>
+
+<h2 id="declaration">What a file declares</h2>
+<p>A file calls <code>Editor.Extension</code> with a table and returns what it gave back. The host reads the table after the file ran and checks its shape; a wrong shape fails that file alone (its state becomes <code>failed</code>, with the reason), and so does a key this API version does not know, so a typo is found at once.</p>
+<pre class="lang-lua"><code>return Editor.Extension {
+  name = "Snap Tools",
+  apiVersion = 1,
+  capabilities = { "scene.read", "scene.write" },
+  menu = {
+    {
+      id = "snap.toGrid",
+      path = "Tools/Snap/Snap selection to grid",
+      params = { grid = { type = "number", default = 1, min = 0.01, max = 100 } },
+      run = function(ctx, p)
+        -- ctx.selection: the ids the user had selected; p.grid: the checked form value
+        return { message = "done" }
+      end,
+    },
+  },
+}</code></pre>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Key</th><th>Rule</th></tr></thead>
+<tbody>
+<tr><td><code>name</code></td><td>Required. 1 to 64 bytes of text with no path characters (<code>/ \ : &lt; &gt; " | ? *</code>, <code>..</code>) and no space or <code>.</code> at either end: it ends up in logs, audit lines and menus. Several files may share a name; the id identifies a file.</td></tr>
+<tr><td><code>apiVersion</code></td><td>Required, an integer, and it must be <code>1</code>: that is the one version this host speaks.</td></tr>
+<tr><td><code>capabilities</code></td><td>Optional list of at most 8 of <code>scene.read</code>, <code>scene.write</code>, <code>assets.read</code>, <code>assets.write</code>, none twice. <a href="#capabilities">What each installs.</a></td></tr>
+<tr><td><code>menu</code></td><td>Optional list of at most 64 items: <code>id</code>, <code>path</code>, <code>title</code>, <code>minRole</code>, <code>enabledWhen</code>, <code>confirm</code>, <code>params</code> and <code>run</code> (<a href="#menu">Menu items</a>).</td></tr>
+<tr><td><code>hooks</code></td><td>Optional table of hook name = function (<a href="#hooks">Hooks</a>).</td></tr>
+</tbody>
+</table>
+</div>
+<p>Inspector sections are not a key of this table: they are registered with <code>Editor.Inspector.Register</code> while the file loads (<a href="#inspector">Inspector sections</a>). The whole declaration is also bounded: nested at most 8 levels, at most 4000 entries, a string at most 4096 bytes, a key at most 128 bytes; a number that is NaN or infinite, a table with a list and named entries mixed, and a list with a gap are errors. The exact limit of every key is in <a href="editor.html#editor-extensions-shape">Editor projects</a>.</p>
+<p class="src">Source: <code>editor-server/src/ExtensionHost.cpp</code> &mdash; <code>ValidateDeclaration</code>, <code>BuildMenuItem</code>, <code>CheckKeys</code>, the prelude's reader function; tests: <code>ExtensionHostTest.*</code></p>
+
+<h2 id="forms">Forms and field kinds</h2>
+<p>A menu item's (or an inspector button's) <code>params</code> is a form: a table of <code>name = spec</code> with at most 32 entries, each name letters, digits and <code>_</code>, not starting with a digit, at most 64 bytes. The host builds from it the protocol's <code>FieldSchema</code> list (sorted by name) and an object of defaults, the client draws the fields, and the host checks the values it gets back <strong>before any Lua runs</strong>: every name must be a field of the form, each value passes <code>ValidateFieldValue</code> (the check that guards a component's fields) and is clamped to the field's <code>min</code> and <code>max</code> with <code>ClampFieldValue</code>, and a field left out takes its default. An item without a form takes no parameters. The script's <code>params</code> therefore has every field of the form.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th><code>type</code></th><th>Field kind</th><th>The script gets</th><th>Spec keys</th></tr></thead>
+<tbody>
+<tr><td><code>"number"</code></td><td>Float</td><td>a number</td><td><code>default</code>, <code>min</code>, <code>max</code>, <code>tooltip</code>, <code>displayName</code></td></tr>
+<tr><td><code>"int"</code></td><td>Int</td><td>an integer</td><td>the same; <code>min</code>, <code>max</code> and <code>default</code> must be whole numbers (finite, at most 9e15)</td></tr>
+<tr><td><code>"string"</code></td><td>String</td><td>a string</td><td><code>default</code> (at most 1024 bytes), <code>tooltip</code>, <code>displayName</code></td></tr>
+<tr><td><code>"bool"</code></td><td>Bool</td><td>a boolean</td><td><code>default</code>, <code>tooltip</code>, <code>displayName</code></td></tr>
+<tr><td><code>"Vector3"</code></td><td>Vector3</td><td><code>{ x, y, z }</code></td><td><code>default</code> (a table with exactly <code>x</code>, <code>y</code>, <code>z</code>), <code>tooltip</code>, <code>displayName</code></td></tr>
+<tr><td><code>"GameObject"</code></td><td>GameObjectRef</td><td>an object id (a string), or nil when none was chosen</td><td>no <code>default</code>; <code>tooltip</code>, <code>displayName</code></td></tr>
+<tr><td><code>"enum"</code></td><td>Enum</td><td>one of the options (a string)</td><td><code>options</code> (required: 1 to 64 distinct strings of at most 64 bytes), <code>default</code> (one of them; the first when absent), <code>tooltip</code>, <code>displayName</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Another <code>type</code> is an error of the file (component and asset types are not form fields). <code>min</code> and <code>max</code> go only with <code>number</code> and <code>int</code>, <code>options</code> only with <code>enum</code>, <code>min</code> may not be above <code>max</code>, and a <code>default</code> outside them is an error. A number or int with no <code>default</code> takes its <code>min</code> when that is above zero, else its <code>max</code> when that is below zero, else zero; the other kinds start at false, the empty string, a zero vector or the first option. A <code>tooltip</code> is at most 200 bytes and a <code>displayName</code> at most 64 (the name spaced out when absent).</p>
+<p class="src">Source: <code>editor-server/src/ExtensionHost.cpp</code> &mdash; <code>BuildFormField</code>, <code>BuildForm</code>; <code>editor-server/src/EditorServerExtensions.cpp</code> &mdash; <code>FieldOfSchema</code>, <code>CheckInvokeParams</code>; <code>engine/src/serialization/FieldInfo.cpp</code> &mdash; <code>ValidateFieldValue</code>, <code>ClampFieldValue</code>; tests: <code>AlignToolsTest.TheHostChecksTheFormBeforeTheFileRuns</code></p>
+
+<h2 id="menu">Menu items</h2>
+<p>An item is one entry of the editor's Tools menu.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Key</th><th>Rule</th></tr></thead>
+<tbody>
+<tr><td><code>id</code></td><td>Required. Letters, digits, <code>.</code>, <code>_</code>, <code>-</code>, starting with a letter or digit, at most 64 bytes. <strong>Unique across the whole host</strong> (a client names an item by its id and nothing else): the first file in id order keeps an id and a later file that uses it fails.</td></tr>
+<tr><td><code>path</code></td><td>Required. Segments separated by <code>/</code>, at most 6 and 200 bytes, each 1 to 64 bytes, not <code>.</code> or <code>..</code>, no backslash, no space at either end. The last segment is the item's title unless <code>title</code> is given.</td></tr>
+<tr><td><code>title</code></td><td>Optional, at most 100 bytes. It is also the label of the undo step.</td></tr>
+<tr><td><code>minRole</code></td><td><code>"editor"</code> (the default) or <code>"admin"</code>. A viewer never runs an item. The host enforces it (<a href="#capabilities">roles</a>).</td></tr>
+<tr><td><code>enabledWhen</code></td><td>Optional <code>{ selection = "any" | "nonEmpty" | "one" | "none", componentType = "Name" }</code>. <strong>For the client only</strong>: the host does not check it, so a script must cope with any selection it is given.</td></tr>
+<tr><td><code>confirm</code></td><td>Optional question (at most 200 bytes) the client asks first. Also client-only.</td></tr>
+<tr><td><code>params</code></td><td>The form (<a href="#forms">above</a>).</td></tr>
+<tr><td><code>run</code></td><td>Required, a function <code>run(ctx, params)</code>. <code>ctx</code> is <code>{ itemId, selection }</code>, where <code>selection</code> is the list of the UUID strings the client had selected (at most 4096; the host does not check that the objects exist).</td></tr>
+</tbody>
+</table>
+</div>
+<p>The item runs when a client sends <code>InvokeMenuItem</code>. Before any Lua runs, the host checks, in this order: the command gates every command has, that extensions are enabled, that the client's <code>uiRevision</code> is the current one (<code>staleUiRevision</code> otherwise), that the item exists, <code>minRole</code>, that the extension is not faulted, that the client has no edit group open (<code>editGroupOpen</code>), and then the selection and the form values (<a href="editor.html#editor-extensions-invoke">the list, with the codes</a>). Then it opens one edit group and runs <code>run</code> on a worker thread under the invocation budget (<a href="#budgets">Budgets</a>).</p>
+<p>What <code>run</code> returns is nothing, or a table of <code>{ message = "...", select = { ids }, warnings = { "..." } }</code> and no other key: anything else (another key, a number as the message) fails the call. <code>message</code> and each warning are cut to 1024 bytes (control characters other than line breaks and tabs replaced), <code>select</code> holds at most 4096 UUID strings that the client selects, and <code>warnings</code> at most 100. When the item returns, the group ends: changes are <strong>one undo step</strong> labelled with the title, writes that left the scene as it was make no step, and an item that changed nothing makes nothing. When it fails (a Lua error, a budget trip, the memory cap, a result of the wrong shape) <strong>every change is taken back</strong>, no step is made, the redo steps are kept, and the client gets <code>extensionFailed</code> with the reason. A command the host refuses is a Lua error at the call, which <code>pcall</code> can catch: an item that catches it and returns normally keeps what it did before that call. (Asset writes are the exception: they are files, not scene edits, so a failed call leaves them. See <a href="scripting-lua.html#editor-api-assets"><code>Editor.Assets</code></a>.)</p>
+<p class="src">Source: <code>editor-server/src/ExtensionHost.cpp</code> &mdash; <code>BuildMenuItem</code>, <code>CheckMenuPath</code>, <code>ShapeInvokeResult</code>, <code>Load</code> (the id clash); <code>editor-server/src/EditorServerExtensions.cpp</code> &mdash; <code>HandleInvokeMenuItem</code>, <code>PassExtensionGates</code>, <code>PassExtensionCallGates</code>, <code>RunExtensionCall</code>; tests: <code>EditorExtensionInvokeTest.*</code>, <code>AlignToolsTest.*</code></p>
+
+<h2 id="inspector">Inspector sections</h2>
+<p><code>Editor.Inspector.Register(componentType, { sections = { ... } })</code> adds sections to the inspector of one component type. It can be called <strong>only while the file loads</strong> (before or after <code>Editor.Extension</code>, at most 64 times); a call from a running item, button or hook is a Lua error. The file must declare <code>scene.read</code>. A section is <code>{ label, fields?, buttons? }</code> and needs fields or buttons. <code>fields</code> has the shape of a form without <code>default</code> (the client shows the component's own value). <code>buttons</code> is a list of at most 16 of <code>{ id, label, minRole?, params?, run }</code>: a button's id is unique among the inspector buttons of the whole host (in a namespace of its own, so a button and a menu item may share an id), its label is the undo step's label, and its <code>run(ctx, params)</code> gets <code>ctx = { actionId, componentId, entityId }</code>. A file has at most 32 sections.</p>
+<p>The client sends <code>InvokeInspectorAction</code> with a component id and a button id. The host finds the component in the open scene and refuses one that is not of the section's <code>componentType</code> (the host does not check that a type of that name exists, so a section for an unknown type matches nothing), so a button only ever runs on a component its section is shown for; the script gets the object's id from the host. Everything else is as for a menu item: the same gates, one undo step, the same budgets, the same rollback, the same result shape. A section for <code>LuaComponent</code> applies to every Lua script component, since they share that type name.</p>
+<pre class="lang-lua"><code>Editor.Inspector.Register("Light", {
+  sections = {
+    {
+      label = "Light tools",
+      buttons = {
+        {
+          id = "light.double",
+          label = "Double the intensity",
+          run = function(ctx, p)
+            local light = Editor.Scene.GetComponent(ctx.entityId, ctx.componentId)
+            Editor.Scene.SetFields(ctx.entityId, ctx.componentId, { intensity = light.intensity * 2 })
+            return { message = "Doubled" }
+          end,
+        },
+      },
+    },
+  },
+})
+return Editor.Extension { name = "Light Tools", apiVersion = 1, capabilities = { "scene.read", "scene.write" } }</code></pre>
+<p class="src">Source: <code>editor-server/src/ExtensionHost.cpp</code> &mdash; <code>EditorPrelude</code> (<code>Editor.Inspector.Register</code>), <code>BuildInspectorSections</code>, <code>BuildInspectorButton</code>, <code>InvokeAction</code>; <code>editor-server/src/EditorServerExtensions.cpp</code> &mdash; <code>HandleInvokeInspectorAction</code>, <code>FindSceneComponent</code>; tests: <code>ExtensionInspectorTest.*</code>, <code>EditorExtensionInspectorTest.*</code></p>
+
+<h2 id="hooks">Hooks</h2>
+<p>A file may declare <code>hooks = { OnSceneSaved = function(info) ... end }</code>. The four names below are the only ones; another name, or a value that is not a function, fails the file. A hook needs the capability of what it reads, checked when the file loads: <code>scene.read</code> for the three scene hooks, <code>assets.read</code> for <code>OnAssetsChanged</code>.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Hook</th><th>Called</th><th>Argument</th><th>Return value</th></tr></thead>
+<tbody>
+<tr><td><code>OnSceneOpened(info)</code></td><td>After <code>OpenScene</code> or <code>NewScene</code> made a scene the open one</td><td><code>{ scene = "res://..." }</code>, <code>""</code> for a new scene with no file yet</td><td>ignored</td></tr>
+<tr><td><code>OnSceneSaved(info)</code></td><td>After <code>SaveSceneToFile</code> wrote the file and marked the history saved; not after a save that failed</td><td><code>{ scene = "res://..." }</code></td><td>ignored</td></tr>
+<tr><td><code>OnBeforePlay(info)</code></td><td>In the handler of <code>WritePlaySnapshot</code>, before the snapshot is written</td><td><code>{ scene = "res://..." }</code>: the scene the client asked to play, or the open scene's path when it named none</td><td>nothing, or <code>{ warnings = {...}, message = "..." }</code> and no other key</td></tr>
+<tr><td><code>OnAssetsChanged(added, removed, modified)</code></td><td>After the host reloaded the assets that changed and pushed <code>assetsChanged</code>: after <code>RescanAssets</code>, a client's asset write and the asset watcher's poll</td><td>three lists of <code>res://</code> paths, each cut to 1000</td><td>ignored</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li><strong>A hook is read-only.</strong> It may call the readers of <code>Editor.Scene</code>, <code>Editor.Assets.List</code> and <code>ReadText</code> (for the capabilities it declared), <code>Editor.Log</code> and <code>print</code>. A write is a Lua error that says the hook is read-only. Three checks each hold that alone: the worker refuses every operation that is not a read, the host lets only Read-class commands through for a hook, and a hook's commands run as a <strong>viewer</strong>, whoever is connected. A hook opens no edit group and makes no undo step.</li>
+<li><strong>A hook is a small, separate call.</strong> It runs after the work that caused it, on a worker, under the hook budget (20 million instructions, 0.5 s), sending at most 1000 requests. The hooks of one trigger, all extensions together, share 2 s: once they are spent the rest are skipped and the host logs it.</li>
+<li><strong>A hook never fails the work that called it.</strong> A hook that errors, runs out of budget or returns a bad result is logged and counted against its extension like a failed item (<a href="#budgets">the fault flag</a>); the save, the open, the snapshot or the asset change goes on.</li>
+<li><strong><code>OnBeforePlay</code> never blocks play.</strong> Each warning (and the <code>message</code>) becomes an <code>extensionOutput</code> event of level <code>warn</code>, at most 1024 bytes each, and an Admin log line. Unlike <code>Editor.Log</code> output, these events are not Admin-tagged: every role receives them.</li>
+<li>The host opens its startup scene before it loads the extensions, so <code>OnSceneOpened</code> is not called for that scene. No hook is called in a play host, nor while another extension call is running: an asset that an extension writes itself does not call <code>OnAssetsChanged</code>, so a hook cannot start another run of itself. A failed or faulted extension's hooks are not called.</li>
+</ul>
+<p class="src">Source: <code>editor-server/src/ExtensionHost.cpp</code> &mdash; <code>ValidateDeclaration</code>, <code>FindHooks</code>, <code>InvokeHook</code>, <code>IsReadOnlyOp</code>, <code>PerformHostCall</code>; <code>editor-server/src/EditorServerExtensions.cpp</code> &mdash; <code>EditorServer::RunExtensionHook</code>, <code>HookIdentity</code>, <code>DispatchNested</code>; <code>editor-server/src/EditorServer.cpp</code> &mdash; <code>OpenSceneFile</code>, <code>NewSceneFile</code>, <code>SaveSceneFile</code>, <code>HandleWritePlaySnapshot</code>, <code>ApplyAssetChanges</code>; tests: <code>ExtensionHookTest.*</code>, <code>EditorExtensionHooksTest.*</code>, <code>AlignToolsTest.TheOnSceneSavedHookLogsAndFailsNothing</code></p>
+
+<h2 id="api">The Editor API, function by function <span class="badge">PR #222</span></h2>
+<p>This is every function the host puts in an extension's state, and nothing else is in the <code>Editor</code> table. A test makes a state for a file that declares all four capabilities, lists the functions of its <code>Editor</code> table with their parameter counts, and compares the list with <a href="#annotations">editor-api.lua</a> in both directions (<code>ExtensionApiAnnotationTest.*</code>), so this table and that file cannot drift from the host. Values are plain Lua tables, strings and numbers (the JSON of the protocol): an object's id is a string, a vector is <code>{ x, y, z }</code>, a rotation is a quaternion <code>{ x, y, z, w }</code>; a JSON null in an answer is a missing key. What each function sends and returns is in <a href="scripting-lua.html#editor-api">Lua scripting</a>.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Function</th><th>Capability</th><th>Returns</th><th>Where it can be used</th></tr></thead>
+<tbody>
+<tr><td><code>Editor.Extension(declaration)</code></td><td>-</td><td>the table it was given</td><td>At the top level of the file (not enforced); the file must return what it returns</td></tr>
+<tr><td><code>Editor.Log.Info(...)</code>, <code>Warn(...)</code>, <code>Error(...)</code>; <code>print(...)</code> is <code>Info</code></td><td>-</td><td>nothing</td><td>Any time; a line written while the file loads is dropped</td></tr>
+<tr><td><code>Editor.Inspector.Register(componentType, spec)</code></td><td><code>scene.read</code> for the file</td><td>nothing</td><td>Only while the file loads</td></tr>
+<tr><td><code>Editor.Scene.GetHierarchy()</code></td><td><code>scene.read</code></td><td>every object, parents before children</td><td>An item, a button or a hook</td></tr>
+<tr><td><code>Editor.Scene.GetEntity(id)</code></td><td><code>scene.read</code></td><td><code>{ header, transform?, components }</code></td><td>the same</td></tr>
+<tr><td><code>Editor.Scene.GetComponent(entityId, componentId)</code></td><td><code>scene.read</code></td><td>the component's saved values</td><td>the same</td></tr>
+<tr><td><code>Editor.Scene.GetLocalTransform(id)</code></td><td><code>scene.read</code></td><td><code>{ position, rotation, scale }</code></td><td>the same</td></tr>
+<tr><td><code>Editor.Scene.FindByName(name)</code></td><td><code>scene.read</code></td><td>the ids of every object with exactly that name</td><td>the same</td></tr>
+<tr><td><code>Editor.Scene.GetComponentTypes()</code></td><td><code>scene.read</code></td><td>the component schemas, sorted by type name</td><td>the same</td></tr>
+<tr><td><code>Editor.Scene.CreateEntity(spec)</code></td><td><code>scene.write</code></td><td>the new object's id</td><td>An item or a button, not a hook</td></tr>
+<tr><td><code>Editor.Scene.Destroy(id)</code></td><td><code>scene.write</code></td><td>nothing</td><td>the same</td></tr>
+<tr><td><code>Editor.Scene.Duplicate(id)</code></td><td><code>scene.write</code></td><td>the copy's id</td><td>the same</td></tr>
+<tr><td><code>Editor.Scene.SetParent(id, parent, index)</code></td><td><code>scene.write</code></td><td>nothing</td><td>the same</td></tr>
+<tr><td><code>Editor.Scene.SetProperties(id, properties)</code></td><td><code>scene.write</code></td><td>nothing</td><td>the same</td></tr>
+<tr><td><code>Editor.Scene.SetLocalTransform(id, transform)</code></td><td><code>scene.write</code></td><td>nothing</td><td>the same</td></tr>
+<tr><td><code>Editor.Scene.AddComponent(id, typeName, values)</code></td><td><code>scene.write</code></td><td>the new component's id</td><td>the same</td></tr>
+<tr><td><code>Editor.Scene.RemoveComponent(entityId, componentId)</code></td><td><code>scene.write</code></td><td>nothing</td><td>the same</td></tr>
+<tr><td><code>Editor.Scene.SetFields(entityId, componentId, values)</code></td><td><code>scene.write</code></td><td>the component's values as stored</td><td>the same</td></tr>
+<tr><td><code>Editor.Assets.List(folder)</code></td><td><code>assets.read</code></td><td><code>{ folders, assets }</code>, directly in the folder</td><td>An item, a button or a hook</td></tr>
+<tr><td><code>Editor.Assets.ReadText(path)</code></td><td><code>assets.read</code></td><td>the file's text</td><td>the same</td></tr>
+<tr><td><code>Editor.Assets.WriteText(path, text)</code></td><td><code>assets.write</code></td><td>nothing</td><td>An item or a button, not a hook</td></tr>
+<tr><td><code>Editor.Assets.CreateFolder(path)</code></td><td><code>assets.write</code></td><td>nothing</td><td>the same</td></tr>
+</tbody>
+</table>
+</div>
+<p>There are 15 functions in <code>Editor.Scene</code> (6 readers and 9 writers) and 4 in <code>Editor.Assets</code>. A call to an <code>Editor.Scene</code> or <code>Editor.Assets</code> function while the file loads is a Lua error ("... can be used only while a menu item, an inspector button or a hook runs"). Each of these functions sends a command the editor protocol has (the 13 commands of <code>Editor.Scene</code> and the 4 asset commands of <code>Editor.Assets</code>; a call that sends several, such as <code>CreateEntity</code> with <code>components</code>, is all or nothing), and <strong>no other command can be sent from an extension</strong>: every command of the protocol is decided in one table, a test requires it, and the rest (opening or saving scenes, undo and redo, edit groups, play, the viewport, <code>Shutdown</code>, the other asset commands and the extension commands themselves) are refused with "An editor extension may not send ...".</p>
+<p class="src">Source: <code>editor-server/src/ExtensionHost.cpp</code> &mdash; <code>EditorPrelude</code> (<code>sceneApi</code>, <code>assetsApi</code>, <code>Editor</code>), <code>PerformHostCall</code>; <code>editor-server/src/EditorServerExtensions.cpp</code> &mdash; <code>NestedTable</code>, <code>ExtensionRequest</code>; <code>editor-server/editor-api.lua</code>; tests: <code>ExtensionApiAnnotationTest.EveryRegisteredFunctionHasAStubAndEveryStubIsRegistered</code>, <code>ExtensionNestedPolicyTest.*</code>, <code>ExtensionInvokeTest.TheFunctionsOfAnUngrantedCapabilityAreAbsent</code></p>
+
+<h2 id="capabilities">Capabilities and roles</h2>
+<h3 id="capability-table">Capabilities</h3>
+<p>A file asks for what it needs in <code>capabilities</code>, and <strong>a function of a capability the file did not declare does not exist in its state</strong> (it is nil, not refused); the host checks the capability again on every request, in case one reaches it anyway.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Capability</th><th>Installs</th><th>Also needed by</th></tr></thead>
+<tbody>
+<tr><td><code>scene.read</code></td><td>the six readers of <code>Editor.Scene</code></td><td>the hooks <code>OnSceneOpened</code>, <code>OnSceneSaved</code>, <code>OnBeforePlay</code>, and any inspector section</td></tr>
+<tr><td><code>scene.write</code></td><td>the nine writers of <code>Editor.Scene</code></td><td>-</td></tr>
+<tr><td><code>assets.read</code></td><td><code>Editor.Assets.List</code> and <code>ReadText</code></td><td>the hook <code>OnAssetsChanged</code></td></tr>
+<tr><td><code>assets.write</code></td><td><code>Editor.Assets.WriteText</code> and <code>CreateFolder</code></td><td>-</td></tr>
+</tbody>
+</table>
+</div>
+<p>A name that is not in this table (<code>project.write</code> and <code>import.hooks</code> are reserved for later, not granted) fails the file. Every capability is also capped by the role of whoever runs the item: <code>scene.write</code> lets the script send the write commands, and each of them is refused if that user's role may not send it.</p>
+
+<h3 id="role-table">Roles</h3>
+<p>The roles exist only on a host that has access tokens: a <code>--tokens-file</code> gives each user a role (admin, editor or viewer), and a single <code>--token-env</code> token is one admin identity. A host with no token has no roles: the one local user may do everything in this table. A host that is bound to a non-loopback address must have a tokens file to load extensions at all (<a href="#enabling">above</a>).</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>What</th><th>viewer</th><th>editor</th><th>admin</th><th>Command class</th></tr></thead>
+<tbody>
+<tr><td>See the list of extensions (<code>ListEditorExtensions</code>) and the menu items, forms and inspector sections (<code>GetEditorUi</code>)</td><td>yes</td><td>yes</td><td>yes</td><td>Read</td></tr>
+<tr><td>Run a menu item or an inspector button (<code>InvokeMenuItem</code>, <code>InvokeInspectorAction</code>)</td><td>no (<code>forbidden</code>)</td><td>yes, unless its <code>minRole</code> is <code>"admin"</code></td><td>yes</td><td>Write</td></tr>
+<tr><td>Reload the extensions (<code>ReloadEditorExtensions</code>)</td><td>no</td><td>no</td><td>yes</td><td>Admin</td></tr>
+<tr><td>Receive what <code>Editor.Log</code> and <code>print</code> write (<code>extensionOutput</code> events, and the host's log lines)</td><td>no</td><td>no</td><td>yes</td><td>Admin-tagged events</td></tr>
+<tr><td>Receive <code>OnBeforePlay</code>'s warnings (<code>extensionOutput</code> events of level <code>warn</code>)</td><td>yes</td><td>yes</td><td>yes</td><td>not tagged</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li>The commands a running item sends are checked against the role of the user who ran it. The commands of a hook run with a viewer's identity, whoever is connected.</li>
+<li>A <code>--read-only</code> host lists extensions but refuses to run or reload them (<code>readOnly</code>), because both are not reads. A play host loads none and answers an Error to both commands.</li>
+<li>A role that may run an item does not own the extension: it cannot create or change one (<a href="#layout">the folder is out of the protocol's reach</a>). What an editor gains by running an item is CPU time on the host, bounded by the budgets, and the power of that item.</li>
+</ul>
+<p class="src">Source: <code>editor-server/src/ExtensionHost.cpp</code> &mdash; <code>EditorPrelude</code>, <code>ValidateDeclaration</code> (<code>CapabilityNames</code>); <code>editor-server/src/EditorServerExtensions.cpp</code> &mdash; <code>ExtensionRequest</code>, <code>PassExtensionCallGates</code>, <code>HookIdentity</code>; <code>editor-server/src/EditorServer.cpp</code> &mdash; the command classification table, <code>RoleAllows</code>, <code>ProcessCommand</code>, <code>IsEditOnlyCommand</code>; <code>editor-server/protocol/protocol.json</code> (<code>extensionOutput</code>); tests: <code>ExtensionRoleTest.*</code>, <code>ExtensionInvokeRoleTest.*</code>, <code>EditorExtensionInspectorRoleTest.*</code></p>
+
+<h2 id="budgets">Budgets, workers and the fault flag</h2>
+<p>Extension code is bounded in instructions, wall-clock time and memory, and a stalled call cannot stall the host.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Limit</th><th>Loading a file</th><th>A menu item or an inspector button</th><th>A hook</th></tr></thead>
+<tbody>
+<tr><td>VM instructions</td><td>10,000,000 (the chunk, then again for the copy of the declaration)</td><td>200,000,000</td><td>20,000,000</td></tr>
+<tr><td>Wall-clock time</td><td>1 s (each of the two steps)</td><td>5 s</td><td>0.5 s</td></tr>
+<tr><td>The host abandons the worker after</td><td>3 s</td><td>6 s without a request or an answer (the wall budget and 1 s)</td><td>1.5 s without a request or an answer</td></tr>
+<tr><td>Memory of one state</td><td colspan="3">64 MiB (a state made when less was left of the 256 MiB that all the states of one load may hold together has the smaller cap)</td></tr>
+<tr><td>Commands sent to the host (log lines not counted)</td><td>-</td><td>10,000</td><td>1,000</td></tr>
+<tr><td>Bytes of requests and answers moved</td><td>-</td><td colspan="2">64 MiB</td></tr>
+<tr><td><code>Editor.Log</code> lines per call</td><td>dropped</td><td colspan="2">1000 (one more line says the rest were dropped); a line is cut to 1024 bytes</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li><strong>A whole load</strong> (host start or a reload) waits for its workers for at most about 10 s of wall clock; a file it did not reach in time fails as data and is tried again at the next reload. At most 64 files of at most 1 MiB are loaded.</li>
+<li><strong>Workers.</strong> Each file's load and each call runs on a worker thread, and the command thread waits for it. At most <strong>4</strong> workers exist at once, abandoned ones included. A worker that neither asks the host for something nor finishes within the silence limit above is <strong>abandoned</strong>: it owns copies of what it touches, never reads or writes the registry again, and closes its state when it ends. This is what bounds a call into C that the instruction hook cannot interrupt (<a href="scripting-lua.html#lua-sandbox-builder">Lua scripting</a> says which).</li>
+<li><strong>The fault flag.</strong> A failed call counts against its extension: a Lua error or a result of the wrong shape counts one, and <strong>3 failures within 10 minutes</strong> make the extension <code>faulted</code>; a budget trip, the state's memory cap or an abandoned worker faults it <strong>at once</strong>. A faulted extension stays listed with its items (so a client can show them disabled with the reason), refuses <code>InvokeMenuItem</code> and <code>InvokeInspectorAction</code> with <code>extensionFaulted</code>, and its hooks are not called, until the next reload. Hook failures count the same way.</li>
+</ul>
+<p>More on the whole-load limits and why they are what they are: <a href="editor.html#editor-extensions-budgets">Editor projects</a>.</p>
+<p class="src">Source: <code>engine/include/engine/scripting/LuaSandbox.hpp</code> &mdash; <code>SandboxDefaults</code>; <code>editor-server/include/editor-server/ExtensionHost.hpp</code> (<code>MaxTotalBytes</code>, <code>ReloadBudgetMillis</code>, <code>MaxWorkers</code>, <code>FaultThreshold</code>, <code>FaultWindow</code>, <code>MaxNestedCommands</code>, <code>MaxHookNestedCommands</code>, <code>MaxInvocationBytes</code>, <code>MaxLogLines</code>, <code>HookTotalMillis</code>, <code>InvokeGraceMillis</code>, <code>GraceMillis</code>); <code>editor-server/src/ExtensionHost.cpp</code> &mdash; <code>NoteFailure</code>, <code>FaultNow</code>, <code>InvokeWith</code>; tests: <code>ExtensionHostTest.*</code>, <code>ExtensionInvokeTest.*</code></p>
+
+<h2 id="sandbox">The sandbox</h2>
+<p>A state is made by <code>LuaSandbox::Create(SandboxProfile::EditorExtension)</code> (<a href="scripting-lua.html#lua-sandbox-builder">the shared builder</a>). What it has and lacks:</p>
+<ul>
+<li><strong>Has:</strong> the base library without <code>load</code>, <code>loadstring</code>, <code>loadfile</code>, <code>dofile</code>, <code>collectgarbage</code> and <code>warn</code>; <code>math</code>; <code>table</code>; <code>utf8</code>; <code>string</code> without <code>find</code>, <code>match</code>, <code>gmatch</code>, <code>gsub</code> (patterns: their cost in C is invisible to the instruction budget) and <code>dump</code>; <code>print</code>, which the host replaces so that it writes to <code>Editor.Log.Info</code>; and the <code>Editor</code> table described above.</li>
+<li><strong>Lacks:</strong> <code>io</code>, <code>os</code>, <code>debug</code>, <code>package</code>, <code>coroutine</code>, <code>require</code> and <code>load</code> (so no file, no process, no network, no way to turn text into code), and every engine binding. Another extension's globals are not visible (one state per file), and the one C function that reaches the host is taken into a local by the host's prelude and removed from the globals before the file's first line runs.</li>
+<li><strong>Is idle between calls.</strong> After its file loaded, a state runs only when a client runs one of its items or buttons, or the host calls one of its hooks. It is discarded at the next reload (or when its file changes, with the watcher).</li>
+</ul>
+<p class="src">Source: <code>engine/src/scripting/LuaSandbox.cpp</code> &mdash; <code>TrimForEditorExtension</code>, <code>LuaSandbox::Create</code>; <code>editor-server/src/ExtensionHost.cpp</code> &mdash; <code>EditorPrelude</code>, <code>EvaluateFile</code>; tests: <code>LuaSandboxTest.*</code>, <code>ExtensionHostTest.AStateHasNoWayToReachTheHostOrAnotherExtension</code></p>
+
+<h2 id="security">Security notes</h2>
+<ul>
+<li><strong>It is project code, and the sandbox bounds what it can do, not whether it is yours.</strong> The state reaches no file, process or network, and only the 17 commands above, but it reads the whole scene (and, with <code>assets.read</code>, the text assets) and changes whatever the user who runs it may change. The control that matters is <strong>who may put a file in <code>editor/</code></strong> and whether the host loads it: the folder is outside the protocol's reach, the flag is off by default, and the Electron editor passes it for a local project only after the user trusts the folder.</li>
+<li><strong>Trust is per folder, not per file.</strong> A project folder that was trusted and later gets a new <code>.lua</code> file in <code>editor/</code> (a <code>git pull</code>, say) loads it at the next host start without a new question. Review the folder, not only the first version.</li>
+<li><strong>Admin-only things.</strong> <code>ReloadEditorExtensions</code>; an item or button with <code>minRole = "admin"</code> (on a host with tokens); the host's audit and log lines, which include <code>extension=&lt;name&gt;@&lt;first 8 hex digits of the file's sha256&gt;</code>; and <code>Editor.Log</code> output, which is Admin-tagged. Only an admin (or the one user of a host without tokens) receives them. The one extension output every role receives is <code>OnBeforePlay</code>'s warnings.</li>
+<li><strong>The role of the user who runs an item applies to everything the item does.</strong> A viewer runs nothing. A hook is a viewer.</li>
+<li><strong>No host path in an error.</strong> A chunk's name is its id, and an error text that reaches a client has the project's folder and its parent replaced by <code>&lt;project&gt;</code>.</li>
+<li><strong>What is never available to an extension:</strong> an engine object, the game's Lua state, another extension's state, any file or process, <code>load</code>, the <code>editor/</code> folder (not even as an asset path), the commands that open, save or load a scene, undo or redo, group edits, play, <code>Shutdown</code>, the extension commands themselves, and the viewport. An extension cannot call into the Electron editor or put code in it.</li>
+<li><strong>What the budgets do not cover.</strong> A call into a C function that never returns (a <code>table.concat</code>, <code>unpack</code> or <code>sort</code> over a huge range) cannot be interrupted by the instruction hook; the worker is abandoned at its deadline instead, which leaves a thread running until the call ends, and at most 4 such threads can exist before the host refuses to start more extension work until they end. An asset write by <code>Editor.Assets</code> is a real write to the project, and a failed invocation does not take it back.</li>
+</ul>
+<p class="src">Source: <code>editor-server/src/EditorServerExtensions.cpp</code> &mdash; <code>NestedTable</code>, <code>PassExtensionCallGates</code>, <code>HandleInvokeMenuItem</code> (the audit line), <code>ExtensionRequest</code>; <code>editor-server/src/ExtensionHost.cpp</code> &mdash; <code>StripHostPaths</code>, <code>InvokeWith</code>; Electron editor (N2Engine-Electron-Frontend, <code>src/main/extension-trust.ts</code>); tests: <code>ExtensionNestedPolicyTest.*</code>, <code>ExtensionRoleTest.*</code>, <code>EditorSanitisedErrorsTest.*</code></p>
+
+<h2 id="troubleshooting">Troubleshooting: states and messages</h2>
+<p>An extension is in one of three states, shown by <code>ListEditorExtensions</code> with an <code>error</code> text for the last two. There is no separate "refused" or "incompatible" state: every way a file does not load is <code>failed</code>, and the reason says which.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>State</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>loaded</code></td><td>The file ran and returned a valid declaration, and its state is kept. Its items, sections and hooks are live.</td></tr>
+<tr><td><code>failed</code></td><td>Anything else: it could not be read or loaded, or its declaration is wrong. It has no state, no items, no sections and no hooks, and the other files are not affected. It is tried again at the next reload (with the watcher, when the file changes).</td></tr>
+<tr><td><code>faulted</code></td><td>Loaded, then failed too often or ran out of a budget (<a href="#budgets">above</a>): disabled until the next reload. Its items stay listed.</td></tr>
+</tbody>
+</table>
+</div>
+<p>The host writes one line per file when it loads: <code>Editor extension: &lt;name&gt;@&lt;sha8&gt; capabilities=[...] menu items=N inspector sections=N (&lt;id&gt;)</code> (with <code>hooks=[...]</code> when it declared some) for a file that loaded, <code>Editor extension &lt;id&gt; did not load: &lt;reason&gt;</code> for one that did not, and <code>Editor extensions: N of M loaded</code>. The reason is also the <code>error</code> of <code>ListEditorExtensions</code>, with no host path in it.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>You see</th><th>Why, and what to do</th></tr></thead>
+<tbody>
+<tr><td>No Tools menu; <code>ListEditorExtensions</code> says <code>enabled: false</code>; <code>InvokeMenuItem</code> and <code>ReloadEditorExtensions</code> answer <code>extensionsDisabled</code></td><td>The host was not started with <code>--editor-extensions</code>. In the Electron editor: the folder is not trusted yet, or the answer was Not now. Start the host with the flag, or trust the project.</td></tr>
+<tr><td><code>enabled: true</code> and an empty list</td><td>No <code>.lua</code> file is found: check the folder is <code>&lt;project&gt;/editor/</code>, not <code>assets/editor/</code>, that the host's <code>--project</code> is the right one (without it the host warns "there is no project folder to find extensions in"), and that nothing on the way is a link.</td></tr>
+<tr><td><code>failed</code>: <code>Error running the chunk: tools/Align.lua:12: ...</code></td><td>The file raised a Lua error (or has a syntax error) while it loaded. The position is the file's id, then the line.</td></tr>
+<tr><td><code>failed</code>: <code>script exceeded its instruction budget of 10000000</code>, <code>The entry exceeded its time limit</code> or <code>not enough memory (the cap is ... bytes)</code></td><td>The top-level code of the file ran out of a load budget. Do the work in <code>run</code>, not at the top level.</td></tr>
+<tr><td><code>failed</code>: <code>The declaration could not be read: the file did not call Editor.Extension{...}</code> or <code>... must return the table that Editor.Extension{...} gave it</code></td><td>End the file with <code>return Editor.Extension { ... }</code>.</td></tr>
+<tr><td><code>failed</code>: <code>The declaration is not valid: ...</code></td><td>The shape is wrong; the text names the part (<code>menu item 'x': 'run' must be a function</code>, <code>unknown key 'capabilites'</code>, <code>apiVersion 2 is not supported (this host speaks 1)</code>, <code>unknown capability</code>, <code>the hook OnSceneSaved needs the capability scene.read</code>, <code>inspector sections need the capability scene.read</code>, a param spec that is wrong, ...).</td></tr>
+<tr><td><code>failed</code>: <code>The menu item id "x" is already used by the extension ...</code> (or <code>The inspector button id ...</code>)</td><td>Ids are unique across the host. The first file in id order keeps an id; rename it in the later one.</td></tr>
+<tr><td><code>failed</code>: <code>The file is larger than 1048576 bytes and is not loaded</code>, or <code>The file could not be read</code></td><td>The 1 MiB limit, or a file the host's account cannot read.</td></tr>
+<tr><td><code>failed</code>: <code>extension memory budget exhausted ...</code> or <code>reload time budget exhausted ...</code></td><td>The load as a whole ran out of memory (256 MiB for all states) or time (10 s) before or while this file loaded. Nothing is remembered: it is tried again at the next reload.</td></tr>
+<tr><td><code>failed</code>: <code>Loading the file took longer than 3000 ms and was abandoned</code>, or <code>N extension evaluations are still running (abandoned ones count) ...</code></td><td>A load stalled (usually in a C function); its worker is abandoned. While 4 workers are stuck, files after them fail at once.</td></tr>
+<tr><td><code>faulted</code>: <code>Disabled until reload: 3 failures within 10 minutes</code></td><td>Its items failed with a Lua error or a bad result three times. Fix the item, then reload.</td></tr>
+<tr><td><code>faulted</code>: <code>Disabled until reload: the menu item ran out of its budget</code> (or <code>used all the memory of its state</code>, <code>stopped answering and was abandoned</code>; <code>the hook ...</code>)</td><td>One call exceeded 200 million instructions, 5 s, or its memory, or never answered. Reload after fixing it.</td></tr>
+<tr><td>A call answers <code>staleUiRevision</code></td><td>The extensions changed (a reload, a watcher load, an extension that became faulted) since the client fetched <code>GetEditorUi</code>. The client fetches it again.</td></tr>
+<tr><td>A call answers <code>editGroupOpen</code></td><td>The client has an edit group open (a drag in progress). It must end its groups first; an extension's step is never merged into a gesture.</td></tr>
+<tr><td>A call answers <code>forbidden</code> or <code>readOnly</code></td><td>The role may not run items (a viewer), the item's <code>minRole</code> is admin, or the host is <code>--read-only</code>.</td></tr>
+<tr><td>A call answers <code>extensionFailed</code>: <code>The menu item &lt;id&gt; of the extension &lt;name&gt; failed and its changes were taken back: ...</code></td><td>The item raised an error, ran out of its budget or returned a bad result. Nothing it did remains (except asset writes). The reason follows; a Lua error reads <code>The menu item failed: file.lua:12: ...</code>. A command the host refused reads as the host's own message at that line (<code>Entity not found: ...</code>).</td></tr>
+<tr><td>A hook does nothing</td><td>A hook's failure is never shown to a client. Look in the host's log for <code>Editor extension &lt;name&gt;@&lt;sha8&gt; hook &lt;H&gt; failed after N ms: ...</code>. A hook that writes (<code>a hook is read-only: ...</code>), or runs after the extension is faulted, does nothing visible.</td></tr>
+<tr><td>You edited the file and nothing changed</td><td>Extensions load at host start and on reload only. Reload them (an admin), restart the host, or start it with <code>--editor-extensions-watch</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<p class="src">Source: <code>editor-server/src/ExtensionHost.cpp</code> &mdash; <code>LoadOne</code> (every <code>failed</code> text), <code>Load</code>, <code>ValidateDeclaration</code>, <code>NoteFailure</code>, <code>FaultNow</code>, <code>FormatLogLine</code>, <code>InvokeWith</code>; <code>engine/src/scripting/LuaSandbox.cpp</code> &mdash; <code>FailureOutcome</code>, <code>RunChunk</code>; <code>editor-server/src/EditorServerExtensions.cpp</code> &mdash; <code>PassExtensionGates</code>, <code>PassExtensionCallGates</code>, <code>RunExtensionCall</code>, <code>RunExtensionHook</code>; tests: <code>ExtensionHostTest.*</code>, <code>EditorExtensionCommandsTest.*</code>, <code>ExtensionInvokeTest.*</code></p>
+
+<h2 id="example">A worked example: AlignTools <span class="badge">PR #222</span></h2>
+<p><code>lua_project/editor/AlignTools.lua</code> is a small extension that is safe to read, copy and run. It adds three items to Tools &gt; Align, which work on the <em>local</em> positions of the selected objects, and one hook:</p>
+<ul>
+<li><strong>Align selection</strong> (<code>align.align</code>): a form with an <code>axis</code> (x, y or z) and a <code>mode</code> (<code>min</code>, <code>center</code> or <code>max</code>); every selected object moves to the lowest, the middle or the highest position on that axis and keeps its other two coordinates.</li>
+<li><strong>Distribute selection evenly</strong> (<code>align.distribute</code>): the same <code>axis</code>; the two end objects stay and the ones between are spread evenly in their order along the axis. It needs three objects and says so in its message otherwise.</li>
+<li><strong>Snap selection to grid</strong> (<code>align.snapToGrid</code>): a <code>grid</code> size (0.01 to 100, default 1) and a boolean per axis (<code>snapX</code> and <code>snapZ</code> on, <code>snapY</code> off by default).</li>
+<li>An <code>OnSceneSaved</code> hook that writes one line to <code>Editor.Log</code>, which shows that a hook is declared in the same table and reads <code>info.scene</code>.</li>
+</ul>
+<p>It declares only <code>scene.read</code> and <code>scene.write</code>, so it has no <code>Editor.Assets</code>. Each item refuses a selection of more than 2000 objects with a warning, because one call may send at most 10,000 commands and reading an object costs one and moving it two. An abridged copy of the file follows (its comments and the other two items are left out):</p>
+<pre class="lang-lua"><code>local MAX_OBJECTS = 2000
+
+local function tooMany(ctx)
+  if #ctx.selection &gt; MAX_OBJECTS then
+    return {
+      warnings = { string.format("Select at most %d objects (this selection has %d).", MAX_OBJECTS, #ctx.selection) },
+    }
+  end
+  return nil
+end
+
+-- The selected objects as { id, index, position }, in selection order
+local function readPositions(ids)
+  local entries = {}
+  for i, id in ipairs(ids) do
+    entries[i] = { id = id, index = i, position = Editor.Scene.GetLocalTransform(id).position }
+  end
+  return entries
+end
+
+-- Moves one object along one axis; a transform names only what it changes, so the rest of it stays
+local function moveAlong(entry, axis, value)
+  local p = entry.position
+  local moved = { x = p.x, y = p.y, z = p.z }
+  moved[axis] = value
+  Editor.Scene.SetLocalTransform(entry.id, { position = moved })
+end
+
+local AXIS = { type = "enum", options = { "x", "y", "z" }, default = "x", tooltip = "The axis to work along" }
+
+return Editor.Extension {
+  name = "Align Tools",
+  apiVersion = 1,
+  capabilities = { "scene.read", "scene.write" },
+  menu = {
+    {
+      id = "align.align",
+      path = "Tools/Align/Align selection",
+      enabledWhen = { selection = "nonEmpty" },
+      params = {
+        axis = AXIS,
+        mode = {
+          type = "enum",
+          options = { "min", "center", "max" },
+          default = "center",
+          tooltip = "Move every object to the lowest, the middle or the highest position on the axis",
+        },
+      },
+      run = function(ctx, p)
+        local refused = tooMany(ctx)
+        if refused then
+          return refused
+        end
+        local entries = readPositions(ctx.selection)
+        if #entries &lt; 2 then
+          return { message = "Select two or more objects to align." }
+        end
+        local low = entries[1].position[p.axis]
+        local high = low
+        for _, entry in ipairs(entries) do
+          local value = entry.position[p.axis]
+          if value &lt; low then
+            low = value
+          end
+          if value &gt; high then
+            high = value
+          end
+        end
+        local target = low
+        if p.mode == "max" then
+          target = high
+        elseif p.mode == "center" then
+          target = (low + high) / 2
+        end
+        for _, entry in ipairs(entries) do
+          moveAlong(entry, p.axis, target)
+        end
+        return {
+          message = string.format("Aligned %d objects on %s (%s).", #entries, p.axis, p.mode),
+          select = ctx.selection,
+        }
+      end,
+    },
+  },
+  hooks = {
+    OnSceneSaved = function(info)
+      Editor.Log.Info("Align Tools: saved " .. info.scene)
+    end,
+  },
+}</code></pre>
+<p>What happens when a user runs it, in the terms of this page: the editor asks <code>GetEditorUi</code> for the items (the host answers from what it captured when the file loaded and runs no Lua); the user selects objects, picks <em>Align selection</em> and fills the form; the editor sends <code>InvokeMenuItem</code> with the item's id, the selection, the form values and the <code>uiRevision</code> it built the request from; the host checks the gates and the form (an <code>axis</code> that is not an option is refused before the file runs), opens an edit group labelled "Align selection", and runs <code>run</code> on a worker; each <code>GetLocalTransform</code> and <code>SetLocalTransform</code> goes to the host as a command with the user's role; the result's message is shown and its <code>select</code> reselects the same objects; and one undo takes every object back. A selection id that is not an object makes <code>GetLocalTransform</code> raise a Lua error, and the whole call is taken back.</p>
+<p>It is <strong>off by default</strong> in every way that can be checked: it is not an asset, so no game, no play host and no <code>lua_project</code> run loads it; the web player packs only <code>assets/</code> and <code>project.n2proj</code>; and the editor host loads it only when it is started with <code>--editor-extensions</code> for <code>lua_project</code> as its project (in the Electron editor, after the user trusts that folder). In this repository only the editor host's <code>ExtensionHost</code> looks in an <code>editor/</code> folder at all. <code>AlignToolsTest.*</code> (in <code>tests/editor-server/project/EditorExtensionAlignToolsTests.cpp</code>) points an <code>EditorServer</code> at <code>lua_project</code> itself, so the file the test loads is the file in the repository, and runs each item through <code>InvokeMenuItem</code> against a scene: one undo step each, the form checked by the host, an invalid axis refused, a too-large selection refused with a warning, and the hook run. <code>AlignToolsOffByDefaultTest</code> shows a server without the flag has no extension host.</p>
+<div class="callout note" id="design-ext-example">
+<p class="callout-title">Design decision: the example lives in <code>lua_project/editor/</code> and is loaded where it lies <span class="badge">PR #222</span></p>
+<p><code>lua_project</code> is a real project folder (<code>project.n2proj</code>, <code>assets/</code>), and an extension belongs in the <code>editor/</code> folder of a project, so that is where the example is: a reader can open the project and see an extension in its place. Nothing else changes for the project: <code>editor/</code> is beside <code>assets/</code>, so the resource loader, the scene tests that read <code>lua_project/assets</code>, the web package (which packs <code>assets/</code> and the project file) and the <code>lua_project</code> executable never see it. The test does not copy the file into a temporary project: it enables the extension host on <code>lua_project</code>, so a change to the file that breaks it breaks the test. Judgement call of this PR: the plan names the path and asks for a project test using the existing fixtures; reading the real file in place is how this one uses them.</p>
+</div>
+<p class="src">Source: <code>lua_project/editor/AlignTools.lua</code>; <code>tests/editor-server/project/EditorExtensionAlignToolsTests.cpp</code> &mdash; <code>AlignToolsTest.*</code>, <code>AlignToolsOffByDefaultTest.*</code>; <code>tests/editor-server/CMakeLists.txt</code> (<code>N2_LUA_PROJECT_DIR</code> for <code>editor_project_tests</code>); <code>web/CMakeLists.txt</code></p>
+
+<h2 id="annotations">Editor completion: editor-api.lua <span class="badge">PR #222</span></h2>
+<p><code>editor-server/editor-api.lua</code> is a definition file for the Lua Language Server (LuaLS) that describes the <code>Editor</code> API of this page: <code>---@class</code>, <code>---@field</code>, <code>---@param</code> and <code>---@return</code> annotations over empty function stubs, the capability and hook names as aliases and classes, and the shape of a declaration, a form field, a result and every value <code>Editor.Scene</code> and <code>Editor.Assets</code> return. It is <strong>separate from <code>engine-api.lua</code></strong> because it describes a different state: an extension has no <code>GameObject</code> or <code>Vector3</code>, and a scene script has no <code>Editor</code>. Nothing loads it; it exists for completion, hover text and type checking. To use it, add the folder to LuaLS as a library for the files under <code>editor/</code> (in VS Code with the Lua extension, <code>Lua.workspace.library</code> in the workspace settings or a <code>.luarc.json</code>; the repository ships neither), with the path adjusted to where the engine is:</p>
+<pre class="lang-json"><code>{
+  "workspace.library": ["path/to/N2Engine/editor-server"],
+  "runtime.version": "Lua 5.4"
+}</code></pre>
+<p><code>ExtensionApiAnnotationTest.*</code> keeps the file honest. It reads the file, makes a state of an extension that declares every capability, and lists the functions in its <code>Editor</code> table: a function the host registers that has no stub fails the test, so does a stub for a function the host does not register, so does a stub whose number of parameters or <code>...</code> differs from the host's function, and so does a stub whose <code>---@param</code> lines do not name its parameters in order. It compares the file's hook names (the <code>On...</code> fields of <code>EditorHooks</code>) with <code>ExtensionHost::HookNames</code> and its capability names with <code>ExtensionHost::CapabilityNames</code>, and checks that the file is plain ASCII, starts with <code>---@meta</code> and holds no code but the namespace tables and the empty stubs. What it cannot check is the types and the descriptions: they are as accurate as this page and <a href="scripting-lua.html#editor-api">Lua scripting</a>, which were checked by reading.</p>
+<div class="callout note" id="design-ext-annotations">
+<p class="callout-title">Design decision: <code>editor-api.lua</code> is a separate file, checked against the live <code>Editor</code> table <span class="badge">PR #222</span></p>
+<p><code>engine-api.lua</code> has no check: nothing in the build or the tests reads it, so it can drift from the bindings and its docs section lists where it already does. The editor API is small and stable enough to do better cheaply, and an annotation file that names a function the host does not have, or misses one it has, gives wrong completion exactly where an extension author needs it right. The test enumerates what the host really registers by making a state, not by reading <code>ExtensionHost.cpp</code> as text, so a function added to the prelude without a stub fails at once. Parameter counts are read from the functions themselves (<code>lua_getinfo</code>), which needs no debug library in the state. The file sits in <code>editor-server/</code>, next to the host that registers the API, and is found by the test through a compile definition. Judgement call of this PR: the plan says to extend a check if one exists and otherwise add a cheap one; none exists for <code>engine-api.lua</code>, and this PR does not add one for it.</p>
+</div>
+<p class="src">Source: <code>editor-server/editor-api.lua</code>; <code>tests/editor-server/ExtensionApiAnnotationTests.cpp</code> &mdash; <code>ExtensionApiAnnotationTest.*</code>; <code>tests/editor-server/CMakeLists.txt</code> (<code>N2_EDITOR_API_LUA</code>); <code>editor-server/src/ExtensionHost.cpp</code> &mdash; <code>EditorPrelude</code></p>
+
+<p><strong>Not verified here:</strong> nothing was built or run locally (CI is the test), including <code>AlignTools.lua</code> itself, which runs in the engine only in <code>AlignToolsTest</code> (while this PR was written it was run once, outside the build, against the host's own prelude text under another Lua implementation, fengari with Lua 5.3, with a stand-in for the host, and gave the numbers the test expects); LuaLS was not run on <code>editor-api.lua</code>, so its annotations are checked by the test for names and parameters only; what the Electron editor looks like, and its trust flow, are read from the source of its master and were not run; the symbolic-link and role tests of the host skip where links or TLS are not available.</p>
+
+<div class="page-footer">
+<span>Describes master through PR #34.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>
