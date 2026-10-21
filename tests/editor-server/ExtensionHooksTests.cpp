@@ -506,18 +506,12 @@ TEST_F(ExtensionHookTest, TheRequestCapOfAnInvocationAlsoLimitsAHook)
     ExtensionHost::SetMaxNestedCommandsForTest(5);
     TempProject project;
     project.Write("a.lua", HookExtension("Chatty", "\"scene.read\"",
-                                         "    OnSceneSaved = function(info)
-"
-                                         "      for i = 1, 20 do
-"
-                                         "        local ok = pcall(Editor.Scene.GetComponentTypes)
-"
-                                         "        if not ok then Editor.Log.Info('stopped at ' .. i) return end
-"
-                                         "      end
-"
-                                         "      Editor.Log.Info('never stopped')
-"
+                                         "    OnSceneSaved = function(info)\n"
+                                         "      for i = 1, 20 do\n"
+                                         "        local ok = pcall(Editor.Scene.GetComponentTypes)\n"
+                                         "        if not ok then Editor.Log.Info('stopped at ' .. i) return end\n"
+                                         "      end\n"
+                                         "      Editor.Log.Info('never stopped')\n"
                                          "    end,"));
     EditorServer server;
     ASSERT_TRUE(server.EnableEditorExtensions(project.Root()));
