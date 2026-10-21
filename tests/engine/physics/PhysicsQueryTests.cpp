@@ -170,6 +170,27 @@ namespace N2PhysicsTests
         EXPECT_EQ(hit.bodyHandle, hits[0].bodyHandle);
     }
 
+    TYPED_TEST(PhysicsQueryTest, RaycastAllOrdersNearlyEqualHitsLikeTheSingleHit)
+    {
+        // The first box is 0.0005 farther than the second: within kQueryTieTolerance, so a tie, which goes to the lower
+        // handle (the first box), not to the nearer one. RaycastAll puts the tie in the same order as Raycast picks it.
+        const auto lowHandle = this->SpawnBox("LowHandle", Vector3(0.0f, 0.0f, 5.0005f));
+        const auto nearer = this->SpawnBox("Nearer", Vector3(0.0f, 0.0f, 5.0f));
+        const auto beyond = this->SpawnBox("Beyond", Vector3(0.0f, 0.0f, 8.0f));
+        this->Step();
+
+        RaycastHit hit;
+        ASSERT_TRUE(Raycast::Single(Vector3::Zero, Forward, hit, 100.0f));
+        EXPECT_EQ(hit.gameObject, lowHandle.get());
+
+        std::vector<RaycastHit> hits;
+        ASSERT_EQ(Raycast::All(Vector3::Zero, Forward, hits, 100.0f), 3);
+        EXPECT_EQ(hits[0].gameObject, lowHandle.get()) << "the tie goes to the lower handle, as for the single hit";
+        EXPECT_EQ(hits[1].gameObject, nearer.get());
+        EXPECT_EQ(hits[2].gameObject, beyond.get());
+        EXPECT_EQ(hits[0].bodyHandle, hit.bodyHandle);
+    }
+
     TYPED_TEST(PhysicsQueryTest, HitsThatTieOnOneBodyGoToTheFirstCollider)
     {
         // A box and a sphere on one body whose surfaces are both 4.5 away along the ray (the box was added first)

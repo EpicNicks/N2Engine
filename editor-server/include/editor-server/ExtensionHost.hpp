@@ -394,7 +394,7 @@ namespace N2Engine::Editor
         /// a file whose hash is the one the registry holds is only recorded (touched), a file whose hash changed is
         /// loaded again, alone, in a state of its own, and the others keep their states and their failure counts. A file
         /// that is new is loaded; an extension whose file is gone is dropped. A file that failed to load is not tried
-        /// again until it changes. When anything was loaded again, added or removed the uiRevision moves once and the
+        /// again until it changes (one that failed on an id clash is also tried again when the extension that held the id changes or goes). When anything was loaded again, added or removed the uiRevision moves once and the
         /// changed callback is told (extensionsChanged). Called from the command thread, like Load; blocks for the time the
         /// loads take (each file is bounded as in Load).
         WatchOutcome ReloadChanged();
