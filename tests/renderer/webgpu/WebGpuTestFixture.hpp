@@ -13,6 +13,9 @@
 
 #include <renderer/webgpu/WebGpuRenderer.hpp>
 
+#include "common/BlendReference.hpp"
+#include "common/CrossBackendDiff.hpp"
+
 // The fixture and helpers of the WebGPU backend's tests (stage G2 of #155). Every test runs a WebGpuRenderer on Dawn's Vulkan
 // backend, which in CI is Mesa lavapipe, and the fixture fails the test if the device reported ANY error (an uncaptured
 // validation error, an out-of-memory, or a device loss the renderer did not cause: WebGpuRenderer::GetValidationErrorCount) or
@@ -27,6 +30,11 @@
 
 namespace WebGpuTesting
 {
+    // The cross-backend helpers of tests/renderer/common (the diff and the blend reference) were made for the Vulkan tests and
+    // keep the namespace they were made in; the WebGPU tests reach them as Diff:: and Blend::
+    namespace Diff = ::VulkanTesting::Diff;
+    namespace Blend = ::VulkanTesting::Blend;
+
     using Renderer::WebGpu::AdapterPreference;
     using Renderer::WebGpu::InitStatus;
     using Renderer::WebGpu::WebGpuRenderer;
