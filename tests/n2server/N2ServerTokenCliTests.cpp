@@ -196,22 +196,15 @@ TEST(N2ServerTokenCliTest, FormatTokensFileWritesOneEntryPerLine)
 
     const N2Net::JoinTokenEntry alice{"alice", N2Net::JoinRole::Admin, hashA};
     const std::string one = FormatTokensFile(*empty, alice);
-    EXPECT_EQ(one, "[
-  {\"user\":\"alice\",\"role\":\"admin\",\"hash\":\"sha256:" + hexA + "\"}
-]
-");
+    const std::string aliceLine = "  {\"user\":\"alice\",\"role\":\"admin\",\"hash\":\"sha256:" + hexA + "\"}";
+    const std::string bobLine = "  {\"user\":\"bob\",\"role\":\"spectator\",\"hash\":\"sha256:" + hexC + "\"}";
+    EXPECT_EQ(one, "[\n" + aliceLine + "\n]\n");
 
     const auto parsed = N2Net::JoinTokenTable::Parse(one);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     const N2Net::JoinTokenEntry bob{"bob", N2Net::JoinRole::Spectator, hashC};
     const std::string two = FormatTokensFile(*parsed, bob);
-    EXPECT_EQ(two,
-              "[
-  {\"user\":\"alice\",\"role\":\"admin\",\"hash\":\"sha256:" + hexA + "\"},
-"
-              "  {\"user\":\"bob\",\"role\":\"spectator\",\"hash\":\"sha256:" + hexC + "\"}
-]
-");
+    EXPECT_EQ(two, "[\n" + aliceLine + ",\n" + bobLine + "\n]\n");
     EXPECT_TRUE(N2Net::JoinTokenTable::Parse(two).has_value());
 
     // The same hash for two users is refused by the parser, which is why AddJoinToken parses what it is about to write
