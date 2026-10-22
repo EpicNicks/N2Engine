@@ -456,6 +456,135 @@ namespace N2PhysicsTests
         EXPECT_NEAR(state.position.y, kRestHeight + 0.2f, 0.05f);
     }
 
+    TYPED_TEST(CharacterMotorTest, ClimbsEveryStepWithinTheStepOffsetWhateverItsHeightAgainstTheRadius)
+    {
+        // Step offset 0.5, the default capsule (radius 0.5, height 2: its lower sphere's centre rests at 0.52, its
+        // bottom at 0.02). Three steps from x = 2 to x = 12, each in its own lane 4 wide (z = -10, 0, 10):
+        //  - 0.1: the round end meets the edge at (2, 0.1) with a contact normal.y of (0.52 - 0.1) / 0.5 = 0.84,
+        //    within the slope limit, but behind the edge (x = 1.98) there is nothing down to 0.1 - 0.03: a rim, so a
+        //    wall to the slide, and the step-up climbs it.
+        //  - 0.4 and 0.45: normal.y (0.52 - 0.4) / 0.5 = 0.24 and 0.07 / 0.5 = 0.14, a wall. The capsule stops with
+        //    its centre sqrt(0.25 - 0.12^2) = 0.485 and sqrt(0.25 - 0.07^2) = 0.495 short of x = 2.
+        // First blocked tick (0.45): raised by 0.5 (lower sphere centre at 1.02, bottom 0.52, clear of 0.45), the 0.05
+        // move puts the centre 0.515 - 0.05 = 0.465 short of the edge; the sweep down meets the edge when the centre
+        // is 0.45 + sqrt(0.25 - 0.465^2) = 0.45 + 0.184 = 0.634 high (the floor would be at 0.5, lower, so later):
+        // normal.y 0.184 / 0.5 = 0.37, a rim, and just beyond it (x = 2.07) the flat top is at 0.45. It lands
+        // there: 0.45 is within 0.02 + 0.5 of where it started, so it stands on the edge, grounded. Second tick: the
+        // slide meets the same edge (normal.y about 0.4, a wall), the step-up carries it 0.05 further (0.415 short)
+        // and down onto the edge again, higher (0.45 + sqrt(0.25 - 0.415^2) = 0.729). About ten ticks later its
+        // centre is over the top and it stands on the flat at 0.45 + 0.52.
+        const float heights[3] = {0.1f, 0.4f, 0.45f};
+        const float lanes[3] = {-10.0f, 0.0f, 10.0f};
+        this->SpawnGround();
+        for (int i = 0; i < 3; ++i)
+        {
+            this->SpawnBox("Step", Vector3(7.0f, heights[i] * 0.5f, lanes[i]), Vector3(10.0f, heights[i], 4.0f));
+        }
+        this->Build();
+        CharacterSettings settings;
+        settings.stepOffset = 0.5f;
+
+        for (int i = 0; i < 3; ++i)
+        {
+            CharacterState state = this->Settled(settings, Vector3(0.0f, 3.0f, lanes[i]));
+            ASSERT_TRUE(state.grounded) << "step " << heights[i];
+            ASSERT_NEAR(state.position.y, kRestHeight, 0.04f) << "step " << heights[i];
+            CharacterInput walk;
+            walk.move = Vector3(3.0f, 0.0f, 0.0f);
+            float highest = state.position.y;
+            for (int tick = 0; tick < 150; ++tick)
+            {
+                state = CharacterMotor::Step(this->BackendRef(), settings, state, walk, kDt);
+                ASSERT_TRUE(state.grounded) << "step " << heights[i] << ", tick " << tick;
+                highest = std::max(highest, state.position.y);
+            }
+            EXPECT_GT(state.position.x, 5.5f) << "step " << heights[i] << ": it walked on over the step";
+            EXPECT_NEAR(state.position.y, kRestHeight + heights[i], 0.05f) << "step " << heights[i];
+            EXPECT_LT(highest, kRestHeight + heights[i] + 0.05f) << "step " << heights[i] << ": without leaping";
+            EXPECT_NEAR(state.position.z, lanes[i], 1e-3f) << "step " << heights[i];
+        }
+    }
+
+    TYPED_TEST(CharacterMotorTest, ClimbsAStepWithinTheStepOffsetWithASmallerRadius)
+    {
+        // Height 2 for both, so the centre rests at 1.02 whatever the radius (bottom at the skin width, 0.02).
+        //  - Radius 0.3, step offset 0.3, a 0.28 step (lane z = -5): the lower sphere's centre is at 0.32, the edge
+        //    at 0.28 meets it 0.297 short of x = 2 (normal.y 0.04 / 0.3 = 0.13, a wall), so it stops at x = 1.683.
+        //    Raised by 0.3 (bottom 0.32, clear of 0.28) it moves to x = 1.733 (0.267 short), and the sweep down meets
+        //    the edge with the sphere's centre at 0.28 + sqrt(0.09 - 0.267^2) = 0.416: normal.y 0.45, a rim with the
+        //    flat top beyond it at 0.28 <= 0.02 + 0.3, so it stands on the edge. Next tick, 0.217 short: centre at
+        //    0.28 + 0.207 = 0.487, and so on until it is over the top.
+        //  - Radius 0.1, step offset 0.3, a 0.2 step (lane z = 5): the sphere's centre (0.12) is under the top, so
+        //    the face stops it at x = 2 - 0.1 - 0.02 = 1.88. Raised (bottom 0.32) it moves to 1.93 (0.07 short), and
+        //    comes down onto the edge with the sphere's centre at 0.2 + sqrt(0.01 - 0.07^2) = 0.271 (normal.y 0.71).
+        //    Next tick it is 0.02 short (normal.y 0.98), then over the top.
+        struct Case
+        {
+            float radius;
+            float stepHeight;
+            float lane;
+        };
+        const Case cases[2] = {{0.3f, 0.28f, -5.0f}, {0.1f, 0.2f, 5.0f}};
+        this->SpawnGround();
+        for (const Case &step : cases)
+        {
+            this->SpawnBox("Step", Vector3(7.0f, step.stepHeight * 0.5f, step.lane),
+                           Vector3(10.0f, step.stepHeight, 4.0f));
+        }
+        this->Build();
+
+        for (const Case &step : cases)
+        {
+            CharacterSettings settings;
+            settings.radius = step.radius;
+            settings.stepOffset = 0.3f;
+            CharacterState state = this->Settled(settings, Vector3(0.0f, 3.0f, step.lane));
+            ASSERT_TRUE(state.grounded) << "radius " << step.radius;
+            ASSERT_NEAR(state.position.y, kRestHeight, 0.04f) << "radius " << step.radius;
+            CharacterInput walk;
+            walk.move = Vector3(3.0f, 0.0f, 0.0f);
+            for (int tick = 0; tick < 150; ++tick)
+            {
+                state = CharacterMotor::Step(this->BackendRef(), settings, state, walk, kDt);
+                ASSERT_TRUE(state.grounded) << "radius " << step.radius << ", tick " << tick;
+            }
+            EXPECT_GT(state.position.x, 5.5f) << "radius " << step.radius;
+            EXPECT_NEAR(state.position.y, kRestHeight + step.stepHeight, 0.05f) << "radius " << step.radius;
+        }
+    }
+
+    TYPED_TEST(CharacterMotorTest, TheEdgeOfARiserTallerThanTheStepOffsetIsNotStoodOn)
+    {
+        // Step offset 0.5 and a 0.6 riser at x = 2: taller than the step offset but less than one radius above it,
+        // so the raised capsule (bottom at 0.52) can pass over the riser's edge and come down onto it. The face stops
+        // the walk at x = 2 - 0.5 - 0.02 = 1.48. Raised and moved to 1.53 (0.47 short of x = 2), the sweep down meets
+        // the edge (2, 0.6) with the sphere's centre at 0.6 + sqrt(0.25 - 0.47^2) = 0.771, above the floor's 0.5:
+        // a rim with the flat top beyond it, but at 0.6, more than 0.02 + 0.5 above where it started, so the step
+        // is refused and the character stays on the floor at the face, every tick.
+        this->SpawnGround();
+        this->SpawnBox("Riser", Vector3(7.0f, 0.3f, 0.0f), Vector3(10.0f, 0.6f, 60.0f)); // x 2 to 12, top at 0.6
+        this->Build();
+        CharacterSettings settings;
+        settings.stepOffset = 0.5f;
+
+        CharacterState state = this->Settled(settings, Vector3(0.0f, 3.0f, 0.0f));
+        ASSERT_TRUE(state.grounded);
+        CharacterInput walk;
+        walk.move = Vector3(3.0f, 0.0f, 0.0f);
+        float highest = state.position.y;
+        for (int tick = 0; tick < 150; ++tick)
+        {
+            state = CharacterMotor::Step(this->BackendRef(), settings, state, walk, kDt);
+            ASSERT_TRUE(state.grounded) << "tick " << tick;
+            highest = std::max(highest, state.position.y);
+        }
+        // (At most 2 - 0.5: within the skin width of the face, never into it)
+        EXPECT_LT(state.position.x, 1.51f) << "stopped at the face of the riser (x = 2)";
+        EXPECT_GT(state.position.x, 1.4f);
+        EXPECT_NEAR(state.position.y, kRestHeight, 0.04f);
+        EXPECT_LT(highest, kRestHeight + 0.04f) << "never stood on the riser's edge";
+    }
+
     TYPED_TEST(CharacterMotorTest, ARaisedStepOffsetLetsItClimbTheTallerStep)
     {
         this->SpawnGround();
@@ -551,10 +680,18 @@ namespace N2PhysicsTests
 
     TYPED_TEST(CharacterMotorTest, WalksOverTheCrestOfARampOntoAFlatTop)
     {
-        // A 20 degree ramp from x = 3 rising to a flat platform at its top (surface y = 20 sin 20 = 6.84 at x = 3 + 18.8)
+        // A 20 degree ramp whose surface starts at (3, 0) and runs 20 along the slope, so its crest is at
+        // x = 3 + 20 cos 20 = 3 + 18.794 = 21.794, y = 20 sin 20 = 6.840. The platform's top starts exactly there:
+        // centre x = crest + 10 (20 long), centre y = crest - 0.5 (1 thick), so its top-left edge is the crest and
+        // there is no riser. Walking up at 3 m/s the slide follows the ramp (its contacts are on the ramp, with the
+        // ramp still there behind them: climbable), at about 0.048 of x per tick; over the crest the contact is the
+        // crest's edge, with the ramp just behind it, so it is climbed too, with or without a step offset.
+        const float radians = 20.0f * 3.14159265358979f / 180.0f;
+        const float crestX = 3.0f + 20.0f * std::cos(radians);
+        const float crestY = 20.0f * std::sin(radians);
         this->SpawnGround();
         this->SpawnRamp(20.0f, 3.0f);
-        this->SpawnBox("Platform", Vector3(31.0f, 6.34f, 0.0f), Vector3(20.0f, 1.0f, 60.0f)); // top y = 6.84
+        this->SpawnBox("Platform", Vector3(crestX + 10.0f, crestY - 0.5f, 0.0f), Vector3(20.0f, 1.0f, 60.0f));
         this->Build();
         for (const float stepOffset : {0.0f, 0.3f})
         {
@@ -565,15 +702,18 @@ namespace N2PhysicsTests
             CharacterInput walk;
             walk.move = Vector3(3.0f, 0.0f, 0.0f);
             float previousX = state.position.x;
-            for (int i = 0; i < 60 * 9; ++i)
+            // About 1 s to the ramp's foot, 18.8 / 2.9 = 6.5 s up it, then 2.5 s on the platform
+            for (int i = 0; i < 60 * 10; ++i)
             {
                 state = CharacterMotor::Step(this->BackendRef(), settings, state, walk, kDt);
+                ASSERT_TRUE(state.grounded) << "step offset " << stepOffset << ", tick " << i;
                 ASSERT_LT(state.position.x - previousX, 0.1f) << "step offset " << stepOffset << ", tick " << i;
+                ASSERT_GT(state.position.x - previousX, 0.0f) << "step offset " << stepOffset << ", tick " << i;
                 previousX = state.position.x;
             }
-            EXPECT_GT(state.position.x, 24.0f) << "step offset " << stepOffset << ": over the crest";
-            EXPECT_NEAR(state.position.y, 6.84f + kRestHeight, 0.1f);
-            EXPECT_TRUE(state.grounded);
+            EXPECT_GT(state.position.x, crestX + 2.0f) << "step offset " << stepOffset << ": over the crest";
+            EXPECT_NEAR(state.position.y, crestY + kRestHeight, 0.05f) << "step offset " << stepOffset;
+            EXPECT_NEAR(state.groundNormal.y, 1.0f, 1e-3f) << "step offset " << stepOffset << ": on the flat top";
         }
     }
 

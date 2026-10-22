@@ -46,7 +46,8 @@ namespace N2Engine::Physics
         /// The capsule's whole height, caps included (as a CapsuleCollider's); at least 2 * radius (a shorter one is a
         /// sphere)
         float height = 2.0f;
-        /// The tallest step it walks up
+        /// The tallest step it walks up (measured from the bottom of the capsule, which rests a skin width above the
+        /// ground)
         float stepOffset = 0.3f;
         /// The steepest ground it stands on or walks up, in degrees from flat (0 to 89)
         float slopeLimit = 45.0f;
@@ -68,9 +69,9 @@ namespace N2Engine::Physics
 
     /// The movement step as a function: (backend scene, settings, state, input, dt) -> the next state. No component,
     /// no hidden state, nothing read but its arguments and the backend's scene queries (capsule casts, capsule
-    /// overlaps and the gravity), so the same arguments and scene give the same state: what client prediction replays.
-    /// Float arithmetic only (no Vector3 dot, length or normalise, which dispatch on the CPU's SIMD), sqrt and the
-    /// engine's Math::Cos; a fixed number of query calls at most.
+    /// overlaps, downward raycasts and the gravity), so the same arguments and scene give the same state: what client
+    /// prediction replays. Float arithmetic only (no Vector3 dot, length or normalise, which dispatch on the CPU's
+    /// SIMD), sqrt and the engine's Math::Cos and Math::Tan; a fixed number of query calls at most.
     class CharacterMotor
     {
     public:

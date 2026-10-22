@@ -33,6 +33,11 @@ namespace N2Engine::Physics
         constexpr float kStepProgressGain = 1.0e-6f;
         /// The slope test's tolerance: flat ground reports a normal a hair short of (0, 1, 0)
         constexpr float kGroundTolerance = 1.0e-3f;
+        /// How much a backend may round the edges of a box (Jolt gives its boxes a convex radius of up to 0.05; PhysX
+        /// keeps them sharp): the edge probes look past it
+        constexpr float kEdgeRounding = 0.05f;
+        /// The steepest rise per run the edge probes allow for (a slope limit above about 63 degrees probes as 63)
+        constexpr float kMaxProbeSlope = 2.0f;
 
         // Plain float arithmetic on the components: Vector3::Dot, Length and Normalized dispatch on the CPU's SIMD
         // support, so their last bits are not the same everywhere
@@ -69,6 +74,25 @@ namespace N2Engine::Physics
             return Vector3(v.x / length, v.y / length, v.z / length);
         }
 
+        /// The horizontal part of `v` as a unit vector; false when it has next to none
+        bool HorizontalUnit(const Vector3 &v, Vector3 &out)
+        {
+            const float length = std::sqrt(v.x * v.x + v.z * v.z);
+            if (!(length > 1.0e-4f) || !std::isfinite(length))
+            {
+                return false;
+            }
+            out = Vector3(v.x / length, 0.0f, v.z / length);
+            return true;
+        }
+
+        /// Ground under a capsule contact: its normal and the height of the surface stood on
+        struct Support
+        {
+            Vector3 normal = Vector3(0.0f, 1.0f, 0.0f);
+            float height = 0.0f;
+        };
+
         /// The capsule and the scene it is asked about, for one step
         class Context
         {
@@ -83,6 +107,11 @@ namespace N2Engine::Physics
                   minGroundY(Math::Cos(settings.slopeLimit * kDegreesToRadians) - kGroundTolerance),
                   layerMask(settings.layerMask)
             {
+                const float probeSlope = std::min(Math::Tan(settings.slopeLimit * kDegreesToRadians), kMaxProbeSlope);
+                behindInset = skin;
+                behindBand = skin * (probeSlope + 0.5f);
+                beyondInset = skin + kEdgeRounding;
+                beyondRise = beyondInset * probeSlope + kEdgeRounding;
             }
 
             /// Sweeps the capsule from `center` along the unit `direction`; false for no hit within `distance`
@@ -105,48 +134,74 @@ namespace N2Engine::Physics
                 return backend.Overlap(shape, scratch, layerMask, QueryTriggers::Ignore) > 0;
             }
 
-            /// Whether a capsule contact with a ground-like normal is the edge of a step and not a slope: the surface
-            /// just beyond the contact point (along the horizontal move `direction`) is flat while the contact normal
-            /// is slanted (a capsule's round end meeting an edge reports a slanted normal at any step height)
-            bool IsStepEdge(const RaycastHit &contact, const Vector3 &direction, const Vector3 &normal) const
+            /// The walkable surface a downward ray finds at `contact` moved `inset` along the horizontal unit `side`,
+            /// no higher than `rise` above the contact and no lower than `drop` below it. The ray starts a skin
+            /// width above that window, so a ray that starts inside a collider (distance 0) is never in it.
+            bool WalkableSurfaceAt(const Vector3 &contact, const Vector3 &side, const float inset, const float rise,
+                                   const float drop, Support &surface) const
             {
-                if (normal.y >= 1.0f - kGroundTolerance)
-                {
-                    return false;
-                }
-                const Vector3 across = UnitOr(Vector3(direction.x, 0.0f, direction.z), Vector3(0.0f, 0.0f, 0.0f));
-                if (across.x == 0.0f && across.z == 0.0f)
-                {
-                    return false;
-                }
-                const float inward = std::max(0.02f, skin);
-                const float lift = std::max(0.05f, 2.0f * skin);
-                const Vector3 origin(contact.point.x + across.x * inward, contact.point.y + lift,
-                                     contact.point.z + across.z * inward);
-                RaycastHit top;
-                if (!backend.Raycast(origin, Vector3(0.0f, -1.0f, 0.0f), top, 2.0f * lift, layerMask,
+                const float lift = rise + skin;
+                const Vector3 origin(contact.x + side.x * inset, contact.y + lift, contact.z + side.z * inset);
+                RaycastHit hit;
+                if (!backend.Raycast(origin, Vector3(0.0f, -1.0f, 0.0f), hit, lift + drop, layerMask,
                                      QueryTriggers::Ignore))
                 {
                     return false;
                 }
-                if (UnitOr(top.normal, Vector3(0.0f, 1.0f, 0.0f)).y < 1.0f - kGroundTolerance)
+                if (!(hit.distance >= skin))
                 {
                     return false;
                 }
-                // The crest of a ramp that ends in a flat top is not a step: just behind the contact the surface is
-                // still there, within the rise of any slope that can be stood on (behind the edge of a step it is
-                // the open face of the riser, nothing within reach)
-                const Vector3 behindOrigin(contact.point.x - across.x * inward, contact.point.y + lift,
-                                           contact.point.z - across.z * inward);
-                RaycastHit behind;
-                if (backend.Raycast(behindOrigin, Vector3(0.0f, -1.0f, 0.0f), behind, 2.0f * lift, layerMask,
-                                    QueryTriggers::Ignore) &&
-                    behind.distance <= lift + 2.0f * inward &&
-                    UnitOr(behind.normal, Vector3(0.0f, 1.0f, 0.0f)).y >= minGroundY)
+                const Vector3 normal = UnitOr(hit.normal, Vector3(0.0f, 1.0f, 0.0f));
+                if (normal.y < minGroundY)
                 {
                     return false;
                 }
+                surface.normal = normal;
+                surface.height = origin.y - hit.distance;
                 return true;
+            }
+
+            /// Whether the horizontal slide may climb along a contact: it is within the slope limit and the surface
+            /// goes on just behind it (toward the capsule) at about its height: a floor, a ramp, the crest of a ramp.
+            /// The rim of a step is not: behind it is the open face of the riser. A rim is a wall to the slide, so
+            /// only the step-up climbs it and stepOffset is the limit, whatever the slanted normal a capsule's round
+            /// end reports on it.
+            bool IsClimbable(const RaycastHit &contact, const Vector3 &normal) const
+            {
+                if (normal.y < minGroundY)
+                {
+                    return false;
+                }
+                Vector3 towardCapsule;
+                if (normal.y >= 1.0f - kGroundTolerance || !HorizontalUnit(normal, towardCapsule))
+                {
+                    return true;
+                }
+                Support behind;
+                return WalkableSurfaceAt(contact.point, towardCapsule, behindInset, behindBand, behindBand, behind);
+            }
+
+            /// Whether a capsule contact below the capsule is ground to stand on: a contact within the slope limit,
+            /// or (with `rims`) the rim of a walkable surface, where the capsule's round end rests on an edge and
+            /// reports a slanted normal: just beyond the contact (away from the capsule) a downward ray finds ground
+            /// within the slope limit, no lower than the contact and no higher than the edge's rounding and the
+            /// slope allow. `support` gets the normal and height of what is stood on (the surface beyond, for a rim).
+            bool IsGround(const RaycastHit &contact, const Vector3 &normal, const bool rims, Support &support) const
+            {
+                if (normal.y >= minGroundY)
+                {
+                    support.normal = normal;
+                    support.height = contact.point.y;
+                    return true;
+                }
+                Vector3 towardCapsule;
+                if (!rims || !(normal.y > 0.0f) || !HorizontalUnit(normal, towardCapsule))
+                {
+                    return false;
+                }
+                const Vector3 away(-towardCapsule.x, 0.0f, -towardCapsule.z);
+                return WalkableSurfaceAt(contact.point, away, beyondInset, beyondRise, skin, support);
             }
 
             IPhysicsBackend &backend;
@@ -160,9 +215,27 @@ namespace N2Engine::Physics
             /// The lowest normal.y of ground that can be stood on
             float minGroundY;
             std::uint32_t layerMask;
+            /// The rim probe behind a contact: how far in, and how far above or below the contact the surface may be
+            float behindInset = 0.0f;
+            float behindBand = 0.0f;
+            /// The rim probe beyond a contact: how far out (past a rounded edge), and how far above the contact the
+            /// surface may be
+            float beyondInset = 0.0f;
+            float beyondRise = 0.0f;
 
         private:
             mutable std::vector<OverlapHit> scratch;
+        };
+
+        enum class SlideKind
+        {
+            /// A horizontal move: climbs along what IsClimbable allows, slides along the rest as walls
+            Horizontal,
+            /// A vertical move in the air (a fall, a rise): stops on ground within the slope limit
+            Air,
+            /// The move down that keeps a standing character on the ground: stops on ground within the slope limit
+            /// and on the rim of walkable ground
+            Snap
         };
 
         struct SlideResult
@@ -173,15 +246,15 @@ namespace N2Engine::Physics
             Vector3 walkableNormal = Vector3(0.0f, 1.0f, 0.0f);
             /// Vertical move only: stopped while going up
             bool hitCeiling = false;
-            /// Horizontal move only: met a surface steeper than the slope limit, or the edge of a step (a wall)
+            /// Horizontal move only: met a surface steeper than the slope limit, or the rim of a step (a wall)
             bool hitWall = false;
         };
 
         /// Moves the capsule by `delta`, stopping `skin` short of what it hits and bending the rest of the move along
-        /// the surface (at most kSlideIterations times). The horizontal move never climbs ground steeper than the slope
-        /// limit (it slides along the wall, in the horizontal plane); the vertical move stops on ground that can be
-        /// stood on and slides down ground that cannot.
-        SlideResult Slide(const Context &c, const Vector3 &start, const Vector3 &delta, const bool vertical)
+        /// the surface (at most kSlideIterations times). The horizontal move climbs only what IsClimbable allows and
+        /// slides along everything else as a wall, in the horizontal plane; the vertical moves stop on ground (see
+        /// SlideKind) and slide down whatever else they meet.
+        SlideResult Slide(const Context &c, const Vector3 &start, const Vector3 &delta, const SlideKind kind)
         {
             SlideResult result;
             result.position = start;
@@ -210,14 +283,24 @@ namespace N2Engine::Physics
                 result.position = result.position + direction * travel;
 
                 const Vector3 normal = UnitOr(hit.normal, Vector3(-direction.x, -direction.y, -direction.z));
-                const bool walkable = normal.y >= c.minGroundY;
                 remaining = direction * (length - travel);
-                if (vertical)
+                if (kind == SlideKind::Horizontal)
                 {
-                    if (walkable)
+                    Vector3 plane = normal;
+                    if (!c.IsClimbable(hit, normal))
+                    {
+                        result.hitWall = true;
+                        plane = UnitOr(Vector3(normal.x, 0.0f, normal.z), Vector3(-direction.x, 0.0f, -direction.z));
+                    }
+                    remaining = remaining - plane * Dot3(remaining, plane);
+                }
+                else
+                {
+                    Support support;
+                    if (c.IsGround(hit, normal, kind == SlideKind::Snap, support))
                     {
                         result.hitWalkable = true;
-                        result.walkableNormal = normal;
+                        result.walkableNormal = support.normal;
                         break;
                     }
                     if (direction.y > 0.0f)
@@ -226,26 +309,16 @@ namespace N2Engine::Physics
                     }
                     remaining = remaining - normal * Dot3(remaining, normal);
                 }
-                else
-                {
-                    Vector3 plane = normal;
-                    if (!walkable || c.IsStepEdge(hit, direction, normal))
-                    {
-                        result.hitWall = true;
-                        plane = UnitOr(Vector3(normal.x, 0.0f, normal.z), Vector3(-direction.x, 0.0f, -direction.z));
-                    }
-                    remaining = remaining - plane * Dot3(remaining, plane);
-                }
             }
             return result;
         }
 
-        /// Climbs a step: up by the step height (less under a ceiling), the horizontal move from there, and back down
-        /// onto what is below. False when that does not get further than walking into the obstacle did
-        /// (`flatMoved`), or does not end on ground that can be stood on (a ledge, not a step). Once the move is known
-        /// to clear the obstacle, the capsule is carried at least one radius forward, so that it ends over the top of
-        /// the step and not balanced on its edge (where a capsule's contact normal is slanted and the ground would
-        /// count as too steep).
+        /// Climbs a step: up by the step offset (less under a ceiling), the horizontal move from there, and a sweep
+        /// back down by as much. It is taken only when it gets further than walking into the obstacle did
+        /// (`flatMoved`) and the sweep down ends on ground (IsGround, rims included: a capsule's round end resting
+        /// on the edge of the step, which the next ticks climb on over) that is no higher than stepOffset above the
+        /// bottom of the capsule where it started. That last test is what refuses the edge of anything taller: the
+        /// raised capsule can pass over its rim and come down onto it, but what it would stand on is too high.
         bool TryStepUp(const Context &c, const Vector3 &start, const Vector3 &horizontalDelta, const float flatMoved,
                        Vector3 &out)
         {
@@ -262,27 +335,22 @@ namespace N2Engine::Physics
                 return false;
             }
             const Vector3 raised(start.x, start.y + raise, start.z);
-            const SlideResult clears = Slide(c, raised, horizontalDelta, false);
-            if (!(HorizontalDistance(clears.position, start) > flatMoved + kStepProgressGain))
+            const SlideResult over = Slide(c, raised, horizontalDelta, SlideKind::Horizontal);
+            if (!(HorizontalDistance(over.position, start) > flatMoved + kStepProgressGain))
             {
                 return false;
             }
-            const float length = Length3(horizontalDelta);
-            const float forward = std::max(length, c.radius);
-            const SlideResult over = Slide(c, raised, horizontalDelta * (forward / length), false);
             if (!c.Cast(over.position, down, raise + c.skin, hit))
             {
                 return false;
             }
-            const Vector3 normal = UnitOr(hit.normal, up);
-            if (normal.y < c.minGroundY)
+            Support support;
+            if (!c.IsGround(hit, UnitOr(hit.normal, up), true, support))
             {
                 return false;
             }
-            // Perched on the edge of something taller than the step offset (a slanted contact, a flat top beyond):
-            // that is not a landing
-            const Vector3 heading(horizontalDelta.x / length, 0.0f, horizontalDelta.z / length);
-            if (c.IsStepEdge(hit, heading, normal))
+            const float startBottom = start.y - c.halfSegment - c.radius;
+            if (!(support.height <= startBottom + c.stepOffset))
             {
                 return false;
             }
@@ -401,7 +469,7 @@ namespace N2Engine::Physics
         const float horizontalLength = Length3(horizontalDelta);
         if (horizontalLength > kMinMove)
         {
-            const SlideResult flat = Slide(c, position, horizontalDelta, false);
+            const SlideResult flat = Slide(c, position, horizontalDelta, SlideKind::Horizontal);
             const float flatMoved = HorizontalDistance(flat.position, position);
             Vector3 moved = flat.position;
             if (wasGrounded && !jumped && flat.hitWall && c.stepOffset > 0.0f)
@@ -421,7 +489,7 @@ namespace N2Engine::Physics
         const float verticalDelta = vy * dt;
         if (std::abs(verticalDelta) > kMinMove)
         {
-            const SlideResult vertical = Slide(c, position, Vector3(0.0f, verticalDelta, 0.0f), true);
+            const SlideResult vertical = Slide(c, position, Vector3(0.0f, verticalDelta, 0.0f), SlideKind::Air);
             position = vertical.position;
             if (vertical.hitWalkable)
             {
@@ -435,15 +503,15 @@ namespace N2Engine::Physics
             }
         }
 
-        // Ground: standing, it sticks to the ground (down a slope, down a step, off the edge of a ledge no deeper than
-        // the step offset: a vertical slide, which slides off a slanted edge and ends on what is below it); coming
-        // down, it finds the ground just below
+        // Ground: standing, it sticks to the ground (down a slope, down a step, round the edge it stands on and down
+        // onto what is below, when that is no deeper than the step offset: a vertical slide that also stands on the
+        // rim of walkable ground); coming down, it finds ground within the slope limit just below
         if (!landed && vy <= 0.0f)
         {
             if (wasGrounded && !jumped)
             {
                 const SlideResult snap =
-                    Slide(c, position, Vector3(0.0f, -(c.stepOffset + c.probe), 0.0f), true);
+                    Slide(c, position, Vector3(0.0f, -(c.stepOffset + c.probe), 0.0f), SlideKind::Snap);
                 if (snap.hitWalkable)
                 {
                     position = snap.position;
