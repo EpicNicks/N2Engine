@@ -1014,6 +1014,190 @@ TEST(ServerReplicatorTest, ADeltaIsMuchSmallerThanSendingEverythingEveryTick)
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+// The client half on its own
+
+namespace
+{
+    /// A server world and a client world with the same objects, a replicator for one client, and the receiving end
+    struct HalvesRig
+    {
+        explicit HalvesRig(const std::vector<std::uint32_t> &serverObjects = {1, 2, 3},
+                           const std::vector<std::uint32_t> &clientObjects = {1, 2, 3})
+            : server("half-server", serverObjects), client("half-client", clientObjects)
+        {
+            replicator.AddClient(1);
+        }
+
+        /// The messages of one server tick
+        std::vector<std::vector<std::uint8_t>> Tick()
+        {
+            replicator.BeginTick(server.world);
+            return replicator.BuildForClient(1, 0, kMaxStateUpdateBytes);
+        }
+
+        Side server;
+        Side client;
+        ServerReplicator replicator;
+        ClientReplicator receiver;
+    };
+}
+
+TEST(ClientReplicatorTest, AppliesAMessageAcknowledgesItAndIgnoresAReplay)
+{
+    HalvesRig rig;
+    rig.server.Probe(1)->score = 5;
+    rig.server.Probe(2)->label = "two";
+    const auto messages = rig.Tick();
+    ASSERT_EQ(messages.size(), 1u);
+
+    EXPECT_FALSE(rig.receiver.AckPending());
+    EXPECT_EQ(rig.receiver.OnStateUpdate(rig.client.world, messages[0]), ClientReplicator::Result::Applied);
+    EXPECT_EQ(rig.client.Probe(1)->score, 5);
+    EXPECT_EQ(rig.client.Probe(2)->label, "two");
+    EXPECT_TRUE(rig.receiver.AckPending());
+    const StateAckMessage ack = rig.receiver.TakeAck();
+    EXPECT_EQ(ack.latest, 1u);
+    EXPECT_EQ(ack.bits, 0u);
+    EXPECT_FALSE(rig.receiver.AckPending()) << "taking the ack clears it";
+    EXPECT_EQ(rig.receiver.Stats().messagesApplied, 1u);
+    EXPECT_GE(rig.receiver.Stats().entriesApplied, 3u);
+
+    // The same message again (a duplicate the connection did not catch): older or equal is ignored, whatever it says
+    rig.client.Probe(1)->score = 99;
+    EXPECT_EQ(rig.receiver.OnStateUpdate(rig.client.world, messages[0]), ClientReplicator::Result::Stale);
+    EXPECT_EQ(rig.client.Probe(1)->score, 99) << "a stale message changes nothing";
+    EXPECT_EQ(rig.receiver.Stats().messagesStale, 1u);
+    EXPECT_FALSE(rig.receiver.AckPending());
+}
+
+TEST(ClientReplicatorTest, TheAckNamesTheNewestAndTheThirtyTwoBeforeIt)
+{
+    HalvesRig rig;
+    std::vector<std::vector<std::uint8_t>> messages;
+    for (int tick = 0; tick < 4; ++tick)
+    {
+        rig.server.Probe(1)->score = tick + 1;
+        const auto built = rig.Tick();
+        ASSERT_EQ(built.size(), 1u);
+        messages.push_back(built[0]);
+    }
+    // Messages 1, 2 and 4 arrive; 3 is lost
+    for (const std::size_t index : {std::size_t{0}, std::size_t{1}, std::size_t{3}})
+    {
+        EXPECT_EQ(rig.receiver.OnStateUpdate(rig.client.world, messages[index]), ClientReplicator::Result::Applied);
+    }
+    const StateAckMessage ack = rig.receiver.TakeAck();
+    EXPECT_EQ(ack.latest, 4u);
+    EXPECT_EQ(ack.bits, 0b110u) << "bit 0 is sequence 3 (missing), bit 1 is 2, bit 2 is 1";
+    EXPECT_EQ(rig.client.Probe(1)->score, 4);
+    // The one that was late arrives after a newer one: stale
+    EXPECT_EQ(rig.receiver.OnStateUpdate(rig.client.world, messages[2]), ClientReplicator::Result::Stale);
+    EXPECT_EQ(rig.client.Probe(1)->score, 4);
+
+    // The ack is what the server understands: sequences 1, 2 and 4 are confirmed, 3 stays in flight
+    EXPECT_TRUE(rig.replicator.OnAck(1, ack));
+    EXPECT_EQ(rig.replicator.InFlightMessages(1), 1u);
+    EXPECT_EQ(rig.replicator.Stats().messagesAcked, 3u);
+}
+
+TEST(ClientReplicatorTest, AnEntryForAnObjectItDoesNotHaveIsSkippedAndTheMessageIsNotAcknowledged)
+{
+    // The server has ten objects, the client three (the others' spawns are still on their way)
+    std::vector<std::uint32_t> ten;
+    for (std::uint32_t n = 1; n <= 10; ++n)
+    {
+        ten.push_back(n);
+    }
+    HalvesRig rig(ten, {1, 2, 3});
+    for (std::uint32_t n = 1; n <= 10; ++n)
+    {
+        rig.server.Probe(n)->score = static_cast<int>(n) * 10;
+    }
+    const auto messages = rig.Tick();
+    ASSERT_EQ(messages.size(), 1u);
+    EXPECT_EQ(rig.receiver.OnStateUpdate(rig.client.world, messages[0]), ClientReplicator::Result::Partial);
+    EXPECT_EQ(rig.client.Probe(1)->score, 10);
+    EXPECT_EQ(rig.client.Probe(3)->score, 30) << "the entries it could use are applied";
+    EXPECT_EQ(rig.receiver.Stats().entriesUnknownObject, 7u);
+    EXPECT_EQ(rig.receiver.Stats().messagesPartial, 1u);
+    EXPECT_FALSE(rig.receiver.AckPending()) << "not acknowledged, so the server keeps those fields in what it sends";
+    EXPECT_EQ(rig.receiver.LatestApplied(), 0u);
+}
+
+TEST(ClientReplicatorTest, GarbageIsMalformedAndAppliesNothingOutsideTheLayout)
+{
+    HalvesRig rig;
+    rig.server.Probe(1)->score = 5;
+    const auto messages = rig.Tick();
+    ASSERT_EQ(messages.size(), 1u);
+    const std::vector<std::uint8_t> &valid = messages[0];
+
+    // Cut anywhere: the header or an entry is short
+    for (std::size_t length = 0; length < valid.size(); ++length)
+    {
+        ClientReplicator receiver;
+        const std::vector<std::uint8_t> cut(valid.begin(), valid.begin() + static_cast<std::ptrdiff_t>(length));
+        const ClientReplicator::Result result = receiver.OnStateUpdate(rig.client.world, cut);
+        EXPECT_NE(result, ClientReplicator::Result::Applied) << "cut to " << length;
+        EXPECT_FALSE(receiver.AckPending()) << "cut to " << length;
+    }
+    // Bytes after the last entry
+    {
+        ClientReplicator receiver;
+        std::vector<std::uint8_t> longer = valid;
+        longer.push_back(0);
+        EXPECT_EQ(receiver.OnStateUpdate(rig.client.world, longer), ClientReplicator::Result::Malformed);
+    }
+    // Every byte changed to a spread of values (the extremes, and the original with a bit flipped): never a crash, and
+    // the world keeps its objects
+    const std::size_t objects = rig.client.world.Count();
+    for (std::size_t position = 0; position < valid.size(); ++position)
+    {
+        for (const int value : {0, 1, 2, 0x55, 0x7F, 0x80, 0xAA, 0xFF, valid[position] ^ 0x01, valid[position] ^ 0x80})
+        {
+            std::vector<std::uint8_t> changed = valid;
+            changed[position] = static_cast<std::uint8_t>(value);
+            ClientReplicator receiver;
+            (void)receiver.OnStateUpdate(rig.client.world, changed);
+        }
+    }
+    EXPECT_EQ(rig.client.world.Count(), objects);
+    // Random buffers
+    N2Net::SimRandom random(31337);
+    for (int round = 0; round < 3000; ++round)
+    {
+        std::vector<std::uint8_t> bytes(random.NextBelow(80));
+        for (std::uint8_t &byte : bytes)
+        {
+            byte = static_cast<std::uint8_t>(random.NextBelow(256));
+        }
+        if (!bytes.empty() && random.NextBelow(2) == 0)
+        {
+            bytes[0] = kStateUpdateType;
+        }
+        ClientReplicator receiver;
+        (void)receiver.OnStateUpdate(rig.client.world, bytes);
+    }
+}
+
+TEST(ClientReplicatorTest, AnEntryForAnotherLayoutIsSkipped)
+{
+    // A message whose layout hash is wrong for the object: skipped, counted, nothing applied, not acknowledged
+    HalvesRig rig;
+    rig.server.Probe(1)->score = 77;
+    auto messages = rig.Tick();
+    ASSERT_EQ(messages.size(), 1u);
+    // The first entry's layout hash is the two bytes after its (one byte) net id: byte 7 (header) + 1
+    std::vector<std::uint8_t> bent = messages[0];
+    ASSERT_GT(bent.size(), kStateUpdateHeaderBytes + 3);
+    bent[kStateUpdateHeaderBytes + 1] = static_cast<std::uint8_t>(bent[kStateUpdateHeaderBytes + 1] ^ 0xFF);
+    EXPECT_EQ(rig.receiver.OnStateUpdate(rig.client.world, bent), ClientReplicator::Result::Partial);
+    EXPECT_EQ(rig.receiver.Stats().entriesLayoutMismatch, 1u);
+    EXPECT_NE(rig.client.Probe(1)->score, 77);
+    EXPECT_FALSE(rig.receiver.AckPending());
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
 // Server to client over the simulator
 
 TEST(NetworkReplicationTest, AClientGetsTheServersValues)
