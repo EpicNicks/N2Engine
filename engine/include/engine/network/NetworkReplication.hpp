@@ -35,6 +35,8 @@ namespace N2Engine::Network
         std::uint64_t acksInvalid = 0;
         /// Objects skipped because one entry did not fit a message
         std::uint64_t entriesTooLarge = 0;
+        /// Messages not sent because the client's 32-bit sequence is spent (a client has been sent 2^32 - 2 messages)
+        std::uint64_t sequencesExhausted = 0;
     };
 
     struct ServerReplicationOptions

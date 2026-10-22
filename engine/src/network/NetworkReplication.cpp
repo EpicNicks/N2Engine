@@ -202,6 +202,15 @@ namespace N2Engine::Network
         {
             return;
         }
+        if (state.nextSequence == std::numeric_limits<std::uint32_t>::max())
+        {
+            // The 32-bit sequence is spent: nothing more goes to this client (a sequence that wrapped would look stale to
+            // it, and 0 is not a sequence)
+            ++_stats.sequencesExhausted;
+            pending.entries.clear();
+            pending.sent.clear();
+            return;
+        }
         // Room for one more: the oldest message still waiting is given up on (the history is bounded)
         while (state.records.size() >= _options.maxInFlightMessages)
         {

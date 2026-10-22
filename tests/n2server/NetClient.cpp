@@ -8,16 +8,19 @@
 //   refused reason=<reason>                        the fingerprint differs (the error text is on stderr)
 //   closed <text> / failed <text>                  the server ended the connection / broke the protocol
 //   objects count=<n> ids=<a,b,...>                the answer to "list"
+//   position id=<n> x=<f> y=<f> z=<f>              the answer to "where <id>": the object's local position (nan when this
+//                                                  client has no such object), as the server's NetworkTransform set it
 //   left                                           the client left after "quit"
 //
 //   n2server_net_client --project <folder> --port <n> [--scene <res://...>] [--host <ip>] [--protocol-id <n>]
 //                       [--expect-refusal] [--no-crate] [--max-ms <n>]
 //
 // The join token is the first line of stdin (never a command line argument). Later lines are commands: "list" and
-// "quit". --no-crate leaves out the prefab the server registers (the registries then differ: a refusal). Exit code 0
+// "quit" and "where <id>". --no-crate leaves out the prefab the server registers (the registries then differ: a refusal). Exit code 0
 // when the outcome is the expected one (joined, or with --expect-refusal refused), else 1.
 
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -33,6 +36,8 @@
 
 #include "NetTestCommon.hpp"
 #include "engine/Application.hpp"
+#include "engine/GameObject.hpp"
+#include "engine/Positionable.hpp"
 #include "engine/ProjectSettings.hpp"
 #include "engine/io/ProjectFile.hpp"
 #include "engine/io/ResourceLoader.hpp"
@@ -140,6 +145,35 @@ namespace
             return std::nullopt;
         }
         return arguments;
+    }
+
+    /// The answer to "where <id>"
+    std::string PositionLine(const Network::NetworkWorld &world, const std::uint32_t id)
+    {
+        float x = std::nanf("");
+        float y = x;
+        float z = x;
+        if (const Network::NetworkObject *const object = world.Find(Network::NetworkId{id}))
+        {
+            const GameObject &gameObject = object->GetGameObject();
+            if (const Positionable *const positionable = gameObject.GetPositionable())
+            {
+                const Math::Vector3 position = positionable->GetLocalPosition();
+                x = position.x;
+                y = position.y;
+                z = position.z;
+            }
+            else
+            {
+                x = 0.0f;
+                y = 0.0f;
+                z = 0.0f;
+            }
+        }
+        char text[160];
+        std::snprintf(text, sizeof text, "position id=%u x=%.4f y=%.4f z=%.4f", static_cast<unsigned>(id),
+                      static_cast<double>(x), static_cast<double>(y), static_cast<double>(z));
+        return text;
     }
 
     std::string IdList(const Network::NetworkWorld &world)
@@ -307,6 +341,11 @@ namespace
                 if (line == "list")
                 {
                     Say("objects count=" + std::to_string(world.Count()) + " ids=" + IdList(world));
+                }
+                else if (line.rfind("where ", 0) == 0)
+                {
+                    const std::uint32_t id = static_cast<std::uint32_t>(std::strtoul(line.c_str() + 6, nullptr, 10));
+                    Say(PositionLine(world, id));
                 }
                 else if (line == "quit")
                 {
