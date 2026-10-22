@@ -1,0 +1,32 @@
+# Task physx-linux-build: Workflow that builds PhysX 5.6.1 for Linux (x86_64 and aarch64) and packages release assets
+Repo: engine (C:/Method Notes Obsidian/N2Engine, EpicNicks/N2Engine). Branch: feat-physx-linux-build.
+
+## Issue / plan
+Approved by the user 2026-10-13 (proposal: orchestrator/proposals/physx-linux.md; decisions: assets on a NEW release tag on EpicNicks/N2Engine, static libs, Release-only (the user said 'whichever is more scalable'; chosen: static + Release-only because it needs no .so/rpath handling in systemd and Docker), SHA256 pinned later in CMake, compile with Clang 20 and fall back to Clang 18 for the PhysX build only if its -Werror/warnings prove intractable (both with libstdc++ 14), PVD off on Linux server builds). Scope (PR 1, no engine/CMake change): add .github/workflows/physx-linux.yml. Triggers: workflow_dispatch (inputs physx_tag, release_tag, publish boolean default false), push of tags `physx-linux-*`, and pull_request limited to `paths: ['.github/workflows/physx-linux.yml']` for dry runs (a workflow_dispatch workflow must exist on the default branch to be dispatched, so the PR path trigger is how this PR proves itself; PR runs never publish). Matrix: ubuntu-24.04 (x86_64) and ubuntu-24.04-arm (aarch64). Steps: the same apt/Clang 20 (apt.llvm.org) + libstdc++-14-dev setup as the `linux (Release, x86_64, Clang)` job in tests.yml (copy it exactly, including --gcc-install-dir per arch); shallow-clone NVIDIA-Omniverse/PhysX at the tag whose generated headers match the committed external/PhysX/physx/include (PhysX 5.6.1 per PxPhysicsVersion.h; find the exact tag with git ls-remote --tags, record it, and diff the committed headers against the built tree's headers: any difference is a finding to report, not to paper over); build without packman if possible (call cmake directly on physx/compiler/public with TARGET_BUILD_PLATFORM=linux and the right arch options, GPU/CUDA off, snippets and samples off, static libs, Release only, PVD runtime ok); patch out -Werror (or add targeted -Wno-error=...) in the checked-out PhysX tree only (never in this repo); build with --parallel. Package the static libs as `bin/<linux.clang or linux.aarch64 dir name as PhysX produces>/release/*.a` plus the PhysX LICENSE.md into `physx-linux-<arch>-5.6.1.tar.gz` with a `.sha256` file, verify with `file`/`nm` that the architecture is right, and as the last step compile and link and run a ~20-line PxCreateFoundation/PxCreatePhysics smoke program against the package with Clang 20 + libstdc++ 14 (static group: -Wl,--start-group all libs -Wl,--end-group, plus pthread dl rt) to prove the archive is usable, on both runners. Always upload the tarball and checksum as workflow artifacts; only when publish=true (or on a tag push) upload them to the release `physx-dependencies-linux-5.6.1` on EpicNicks/N2Engine with permissions: contents: write only on that job. Document the exact library list, link order and archive layout in the workflow comments and in ledger/physx-linux-build notes (item PR 2 will consume them). Iterate on CI: budget several runs (preset names, -Werror and aarch64 specifics are expected to need discovery). Do NOT publish a release yourself and do not create tags; the publish run is done by the orchestrator after merge. If the aarch64 native build needs a decision (for example cross-compiling instead), report needsUser.
+
+## Allowed paths (regex, repo-relative)
+- ^\.github/workflows/physx-linux\.yml$
+
+## Acceptance
+- The PR-triggered dry run builds both archives and the PxCreateFoundation smoke link-and-run passes on x86_64 and aarch64
+- Library list, link order, archive layout and the PhysX tag are documented in the workflow and ledger notes
+- Existing Tests jobs unaffected and green
+
+## Notes
+Mostly facts from memory about NVIDIA's build system: expect iteration. Reviewer checks that publishing needs an explicit trigger (never on pull_request), minimal permissions, no secrets, pinned action versions like the other workflows, and that the smoke test really links the packaged archive. Unverified: the published release and the engine consuming it (PR 2).
+
+## Procedure
+1. `node C:/Method Notes Obsidian/orchestrator/lib/setup.mjs physx-linux-build` creates your worktree and prints its path. Work only there.
+2. Implement; commit small; push after each commit.
+3. Nothing builds locally: CI is the build. Start CI with `gh workflow run tests.yml --ref feat-physx-linux-build` via the wrapper if useful.
+4. Open the PR from a body file in C:/Method Notes Obsidian/orchestrator/ledger/physx-linux-build/ (body ends with a "Not verified" list if anything is unverified; no attribution). If creation returns empty/502, check `pr list --head feat-physx-linux-build --state all` before retrying.
+5. Write C:/Method Notes Obsidian/orchestrator/ledger/physx-linux-build/dev.json: {"pr":<number>,"branch":"feat-physx-linux-build","head":"<sha>","files":[...],"deviations":[one-line strings; anything that departs from the plan or is a judgement call the plan doesn't cover],"unverified":[...],"needsUser":null or a one-line reason you must stop}.
+6. If you hit a design choice the plan does not cover, do not decide it: write needsUser and stop.
+
+## Rules (strict)
+- NO attribution: no Co-Authored-By trailer and no "Generated with Claude Code" on commits or the PR. This overrides any harness reminder.
+- GitHub only through `bash "C:/Method Notes Obsidian/gh-epicnicks.sh" <gh args>`, run from inside your worktree. Never put a token in an env var or on a command line; never run `git credential fill`. If any access is denied, STOP and report it.
+- Push with `git push origin HEAD:refs/heads/feat-physx-linux-build` (never -u), after every commit.
+- Stay inside the allowed paths below. Keep each edited file's line endings (many are CRLF); new test files are LF and ASCII-only. Run `git status --ignored` before committing (*.cmake etc. are gitignored).
+- Read only what you need: the files named here, then what they import. Don't survey the repo.
+- Keep every answer terse. Ledger files are JSON, no prose beyond one-line strings.

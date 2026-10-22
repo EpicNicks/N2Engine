@@ -1,0 +1,36 @@
+{
+  "name": "net-b5-bodystate-controller",
+  "head": "c505f881d5ede0d9e5120ad1f892a1a8708582cf",
+  "done": true,
+  "allGreen": false,
+  "runs": [
+    "Tests:failure"
+  ],
+  "failures": [
+    "[linux (Release, arm64, Clang)] ",
+    "[  FAILED  ] CharacterMotorTest/PhysX.WalksOverTheCrestOfARampOntoAFlatTop, where TypeParam = N2PhysicsTests::PhysXTag (3 ms)",
+    "[  FAILED  ] CharacterMotorTest/Jolt.WalksOverTheCrestOfARampOntoAFlatTop, where TypeParam = N2PhysicsTests::JoltTag (3 ms)",
+    "[  FAILED  ] 2 tests, listed below:",
+    "[  FAILED  ] CharacterMotorTest/PhysX.WalksOverTheCrestOfARampOntoAFlatTop, where TypeParam = N2PhysicsTests::PhysXTag",
+    "[  FAILED  ] CharacterMotorTest/Jolt.WalksOverTheCrestOfARampOntoAFlatTop, where TypeParam = N2PhysicsTests::JoltTag",
+    "[web (Emscripten, dev profile, node tests)] ",
+    "4: [  FAILED  ] CharacterMotorTest/PhysX.WalksOverTheCrestOfARampOntoAFlatTop, where TypeParam = N2PhysicsTests::PhysXTag (5 ms)",
+    "4: [  FAILED  ] CharacterMotorTest/Jolt.WalksOverTheCrestOfARampOntoAFlatTop, where TypeParam = N2PhysicsTests::JoltTag (6 ms)",
+    "4: [  FAILED  ] 2 tests, listed below:",
+    "4: [  FAILED  ] CharacterMotorTest/PhysX.WalksOverTheCrestOfARampOntoAFlatTop, where TypeParam = N2PhysicsTests::PhysXTag",
+    "4: [  FAILED  ] CharacterMotorTest/Jolt.WalksOverTheCrestOfARampOntoAFlatTop, where TypeParam = N2PhysicsTests::JoltTag",
+    "[  FAILED  ] CharacterMotorTest/PhysX.WalksOverTheCrestOfARampOntoAFlatTop, where TypeParam = N2PhysicsTests::PhysXTag (5 ms)",
+    "[  FAILED  ] CharacterMotorTest/Jolt.WalksOverTheCrestOfARampOntoAFlatTop, where TypeParam = N2PhysicsTests::JoltTag (6 ms)",
+    "[  FAILED  ] 2 tests, listed below:",
+    "[  FAILED  ] CharacterMotorTest/PhysX.WalksOverTheCrestOfARampOntoAFlatTop, where TypeParam = N2PhysicsTests::PhysXTag",
+    "[  FAILED  ] CharacterMotorTest/Jolt.WalksOverTheCrestOfARampOntoAFlatTop, where TypeParam = N2PhysicsTests::JoltTag",
+    "[linux (Release, x86_64, GCC 14)] ",
+    "[  FAILED  ] CharacterMotorTest/Jolt.WalksOverTheCrestOfARampOntoAFlatTop, where TypeParam = N2PhysicsTests::JoltTag (3 ms)",
+    "[  FAILED  ] 1 test, listed below:",
+    "[  FAILED  ] CharacterMotorTest/Jolt.WalksOverTheCrestOfARampOntoAFlatTop, where TypeParam = N2PhysicsTests::JoltTag",
+    "[windows (Release, PhysX ON)] ",
+    "[  FAILED  ] CharacterMotorTest/PhysX.WalksOverTheCrestOfARampOntoAFlatTop, where TypeParam = N2PhysicsTests::PhysXTag (2 ms)",
+    "[  FAILED  ] CharacterMotorTest/Jolt.WalksOverTheCrestOfARampOntoAFlatTop, where TypeParam = N2PhysicsTests::JoltTag (2 ms)",
+    "[  FAILED  ] 2 tests, listed below:"
+  ]
+}

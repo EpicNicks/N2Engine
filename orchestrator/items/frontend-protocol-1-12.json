@@ -1,0 +1,28 @@
+{
+  "name": "frontend-protocol-1-12",
+  "repo": "frontend",
+  "branch": "feat-protocol-1-12-users",
+  "title": "Sync to protocol 1.12.0: user field in the connect dialog, user/role shown, viewer role disables writes and play",
+  "closes": null,
+  "issue": "Engine PR #130 (hardening PR B, merged) shipped protocol 1.12.0: Hello gained a trailing optional `user` string, ServerInfo gained trailing `user` and `role` (admin|editor|viewer; a host without a tokens file answers user '' and role 'admin'; --token-env answers user 'token', role 'admin'), and the host denies commands with ErrorCoded `forbidden` (the 1.11.0 mechanism the frontend already handles). Read the engine repo (C:/Method Notes Obsidian/N2Engine, READ-ONLY) docs/editor.html and the protocol.json history for the exact semantics first. Scope: (1) bump engine-ref.txt to the current engine master commit and run `npm run sync-protocol` so src/protocol/protocol.generated.ts and test-vectors.json are regenerated, never hand-edited (the CI 'Generated protocol matches the pinned engine' check must stay green). (2) engine-client: send the optional user in Hello when the connect options carry one (leave it absent otherwise, which older hosts accept), expose serverInfo.user/role. (3) Connect UI: an optional 'User' field next to the token in the direct-remote form and the other connect paths that take a token (welcome.tsx DirectForm and the ssh/remote forms if they take a token); remembered per recent remote like the other non-secret fields (the TOKEN itself must never be persisted or logged, as today); keep the TLS pinning/TOFU behaviour and its tests unchanged. (4) Show the signed-in user and role in the editor chrome next to the read-only badge from 1.11.0 (e.g. 'alice (editor)'). (5) A `viewer` role behaves like the existing read-only mode for the write guard (write-guard.ts: all write affordances disabled including Play, via the same central canWrite path; a viewer is read-only AND cannot play); an `editor` can write but Shutdown/Admin-class actions the UI exposes (if any, e.g. stopping the host) are disabled with a tooltip; a `forbidden` ErrorCoded denial shows the host's message in the existing banner and, for a forbidden code, does NOT latch the whole UI read-only (only readOnly does), but the denied edit is reverted as today. (6) Tests: codec and golden-vector tests pass after the sync; unit tests for Hello with and without user, ServerInfo decoding of an old (1.11) and new payload; DOM tests for the user field, the user/role badge, and a viewer's disabled controls (use the existing harness in src/test-dom and src/test). (7) README: protocol version, the user field, roles. Run npm run typecheck, build and npm test locally; the repo has CI: open a PR and wait for its checks. Do not change the engine repo. Security: never log or persist the token; the user name is not secret. If a UI path cannot be gated without a design decision, stop and report needsUser.",
+  "allowedPaths": [
+    "^engine-ref\\.txt$",
+    "^package\\.json$",
+    "^package-lock\\.json$",
+    "^README\\.md$",
+    "^src/",
+    "^scripts/"
+  ],
+  "acceptance": [
+    "sync-protocol produces no diff against engine-ref.txt (CI check passes)",
+    "Optional user sent in Hello; user/role shown",
+    "viewer role: all writes and Play disabled; editor denial handled as a banner message",
+    "typecheck, build, tests and frontend CI green"
+  ],
+  "requiresDocs": false,
+  "allowProtocol": true,
+  "gate": null,
+  "approved": true,
+  "reviewer": "opus",
+  "notes": "Reviewer: check the token is never persisted/logged, the user field round-trips only when set, viewer/readOnly share the central write guard, and the old-host (1.11 ServerInfo without user/role) path. Unverified: the Electron UI against a live host with a tokens file."
+}

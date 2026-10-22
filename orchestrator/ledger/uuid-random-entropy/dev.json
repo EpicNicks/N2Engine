@@ -1,0 +1,1 @@
+{"pr":141,"branch":"fix-uuid-random-entropy","head":"c7a2cd85daca2bcbe76401f69413db2923483115","files":["math/src/math/UUID.cpp","tests/math/UUIDRandomTests.cpp","docs/math.html","docs/testing.html"],"deviations":[],"unverified":["Nothing built locally; CI is the build","Original failure being a runner RDSEED issue (hypothesis)","New tests run in under 1 s"],"needsUser":null}

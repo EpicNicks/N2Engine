@@ -1,0 +1,10 @@
+{
+  "name": "net-a5-handshake-aead",
+  "head": "7fbea7a2c8b229b567d572e49ad51430cca874b8",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

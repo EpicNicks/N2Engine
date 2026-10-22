@@ -1,0 +1,12 @@
+Accepted by the user 2026-10-13:
+- Bool is one byte (not one bit); AssetRef is the 16-byte asset UUID (not a session table index or path hash)
+- No ReplicateTo/owner-only fields and ComponentRef/lists/Json are not replicable (owner-writable fields are outside B2)
+- FieldInfo::replicated is not in the editor protocol FieldSchema and the declarations-only DeclarationEvaluator does not read the Lua flag
+- Wire version bumped 1 to 2; two existing tests that used version 2 as 'another version' now use 3
+- Delta baseline is per field with an in-flight union (a field in any unacked message is resent) so applying on top of client state stays correct
+- NetworkTransform keeps hidden read-only cache members (position/rotation/scale/teleportSerial) so describe fields equal saved keys; teleport is a replicated counter
+- Each entry carries a 16-bit layout hash (the check for Lua per-object fields) which the plan did not list
+- Loopback script waits for the server to log the client leaving before stopping it (Windows race)
+- Review fix: a layout-mismatch entry no longer withholds the ack (persistent mismatch would otherwise force full sends for the whole session); that object stays unreplicated on that client
+- maxClientAcksPerSecond raised 240 to 1024 (above 4 msgs x 240 Hz)
+- Review lows left unfixed: refused ApplyReplicated acked, stepped-float clamp at +-2^31, stale layout on reused component address

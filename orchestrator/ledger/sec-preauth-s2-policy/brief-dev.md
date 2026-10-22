@@ -1,0 +1,37 @@
+# Task sec-preauth-s2-policy: Editor host pre-auth slots, PR S-2: PreAuthSlots, SessionArbiter, token bucket and a thread-safe RateLimiter (pure policy classes, not wired in), token checked before per-user backoff (audit F1/F2/F6, item 8 first half)
+Repo: engine (C:/Method Notes Obsidian/N2Engine, EpicNicks/N2Engine). Branch: sec-preauth-s2-policy-classes.
+
+## Issue / plan
+Design (APPROVED by the user 2026-10-15): C:/Method Notes Obsidian/orchestrator/proposals/security-design-lua-editmode-and-preauth-slots.md PART 2 (read 2.2-2.8 fully, especially 2.4 'Budgets and limits', 'Rate limiter (item 8 folded in)', 'Arbiter', 2.5 tests, 2.6 staged plan, 2.7 decisions), the audit C:/Method Notes Obsidian/orchestrator/proposals/editor-host-security-audit-2026-10-15.md findings F1/F2/F6 and fix item 8. S-1 (Connection struct, poll) is MERGED. This item is ONLY 'PR S-2, policy classes only' of section 2.6: (1) `PreAuthSlots` (new pure, mutex-guarded class, injected clock where time matters): at most N slots total (default 4, configurable 1-16 later via a flag in S-3: for now a constructor parameter), at most 2 per non-loopback peer address, loopback may use all N, Acquire/Release RAII handle, when full the caller is told to close at once; counters for refused admissions so a periodic summary can be logged later; optional reserved slot for recently authenticated non-loopback addresses (24 h, design decision 6: implement behind a constructor option defaulting OFF, since the user's decisions list says to see the design doc 2.7 for which were approved: follow the approved choices there, and where the doc left a decision open, choose the conservative default and record it as a deviation). (2) `TokenBucket` (pure, injected clock, double or integer math: no libm trig): global 20 handshakes/s and per address 5/s defaults (constructor parameters; per-address map with bounded size and expiry so an attacker cannot grow it without limit), `TryTake(address)`. (3) `SessionArbiter` (pure, mutex-guarded): given the active session (none or {user, role}) and a verified candidate {user, role}: no session => Accept; same user and role => Takeover; candidate role strictly higher (admin > editor > viewer) => Preempt; otherwise Busy; also the no-token-host rule (every client is admin with empty user: newest takes over, per 2.4 'No-token host'); expose the decision as an enum + reason text; pure function style + a small stateful holder with Begin/End session. (4) `RateLimiter` (existing, editor-server/include/editor-server/RateLimiter.hpp): add ONE mutex covering all its methods (they are short logic-only); and the item-8 FIRST HALF: check the token BEFORE the per-user backoff so a correct token always gets in while failures are still counted (read how Authenticate/Hello handling and the limiter interact today: PR #130 per-user tokens, #132 rate limiting, #134 log policy `user=?`/`user=-`, and #153's counting of unfinished Hellos; keep ALL existing rate-limit behaviour and logging otherwise: the existing RateLimitServerTests/EditorTokensTests etc must pass, updating a test ONLY where it asserts the old order 'backoff before token check' and then say exactly which and why). The classes are NOT wired into EditorServer yet (that is S-3): the server's behaviour must be UNCHANGED except the token-before-backoff ordering inside the limiter/Hello path. Tests (pure unit tests, no sockets, injected clock): PreAuthSlotsTests (total cap, per-address cap, loopback, release, reserved slot option, counters), TokenBucketTests (refill, burst, per-address isolation, map bound/expiry, clock going backwards), SessionArbiterTests (full role matrix, same-user takeover, no-token host, Busy), RateLimiter thread-safety smoke test (many threads hammering the limiter: no data race: if the repo has a TSan option use it as described in docs; otherwise a stress test that must not crash), and the ordering change test (correct token during per-user backoff gets in; wrong token still counted and backs off). Docs: a developer-facing section in docs/logging-and-editor.html (or editor.html) describing the classes and the ordering change ONLY as far as true in code (S-3 wires them; do not claim server behaviour that does not exist yet). Nothing builds locally: CI (10 checks) is the test. Unverified items to list: anything depending on the later stages.
+
+## Allowed paths (regex, repo-relative)
+- ^editor-server/
+- ^tests/editor-server/
+- ^tests/common/
+- ^docs/(editor|logging-and-editor|testing)\.html$
+
+## Acceptance
+- PreAuthSlots, TokenBucket, SessionArbiter exist as pure tested classes, not yet wired into the server
+- RateLimiter is thread-safe (one mutex) and checks the token before the per-user backoff; all other limiter behaviour and logs unchanged
+- Only tests asserting the old ordering are changed, each justified
+- All 10 checks green; docs claim nothing about unwired behaviour
+- docs/ updated in the same PR (PR #N badge, design-decision callouts).
+
+## Notes
+Reviewer: the ordering change cannot let a WRONG token bypass backoff or be uncounted (security-critical), no timing side channel introduced (constant-time token compare stays), thread-safety of the limiter (every public method locked, no calls out under lock, no recursive lock), the pure classes' arithmetic (overflow, clock going backwards, per-address map bound), the role matrix, and that nothing in EditorServer behaviour changed besides the ordering.
+
+## Procedure
+1. `node C:/Method Notes Obsidian/orchestrator/lib/setup.mjs sec-preauth-s2-policy` creates your worktree and prints its path. Work only there.
+2. Implement; commit small; push after each commit.
+3. Nothing builds locally: CI is the build. Start CI with `gh workflow run tests.yml --ref sec-preauth-s2-policy-classes` via the wrapper if useful.
+4. Open the PR from a body file in C:/Method Notes Obsidian/orchestrator/ledger/sec-preauth-s2-policy/ (body ends with a "Not verified" list if anything is unverified; no attribution). If creation returns empty/502, check `pr list --head sec-preauth-s2-policy-classes --state all` before retrying.
+5. Write C:/Method Notes Obsidian/orchestrator/ledger/sec-preauth-s2-policy/dev.json: {"pr":<number>,"branch":"sec-preauth-s2-policy-classes","head":"<sha>","files":[...],"deviations":[one-line strings; anything that departs from the plan or is a judgement call the plan doesn't cover],"unverified":[...],"needsUser":null or a one-line reason you must stop}.
+6. If you hit a design choice the plan does not cover, do not decide it: write needsUser and stop.
+
+## Rules (strict)
+- NO attribution: no Co-Authored-By trailer and no "Generated with Claude Code" on commits or the PR. This overrides any harness reminder.
+- GitHub only through `bash "C:/Method Notes Obsidian/gh-epicnicks.sh" <gh args>`, run from inside your worktree. Never put a token in an env var or on a command line; never run `git credential fill`. If any access is denied, STOP and report it.
+- Push with `git push origin HEAD:refs/heads/sec-preauth-s2-policy-classes` (never -u), after every commit.
+- Stay inside the allowed paths below. Keep each edited file's line endings (many are CRLF); new test files are LF and ASCII-only. Run `git status --ignored` before committing (*.cmake etc. are gitignored).
+- Read only what you need: the files named here, then what they import. Don't survey the repo.
+- Keep every answer terse. Ledger files are JSON, no prose beyond one-line strings.

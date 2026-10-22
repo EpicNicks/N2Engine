@@ -1,0 +1,10 @@
+{
+  "name": "net-a6-lows",
+  "head": "382b77c0b52940ba8d53ccf7ab759f81576f9c77",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

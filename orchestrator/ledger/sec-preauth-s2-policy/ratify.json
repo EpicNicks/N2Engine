@@ -1,0 +1,7 @@
+{
+  "name": "sec-preauth-s2-policy",
+  "decision": "merge",
+  "reasons": [],
+  "relaxed": "behind master by 20 file(s), no code overlap with the PR's files (docs overlap: docs/logging-and-editor.html), trial merge clean",
+  "merged": true
+}

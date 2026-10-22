@@ -1,0 +1,11 @@
+Accepted by the user 2026-10-13:
+- Editor.Scene API names follow design 4.2 (GetLocalTransform/SetLocalTransform, FindByName, SetProperties, Destroy, Duplicate, SetFields), not the brief's Find/Children/SetTransform/SetName; no Children (GetHierarchy has parentId)
+- Component calls take the entity id first (GetComponent/RemoveComponent/SetFields(entityId, componentId, ...)) because the commands address a component through its entity
+- Nested dispatch uses a full policy table of every protocol command (test-enforced) with an ALLOW effect for the 13 Editor.Scene commands, instead of a pure deny list; it contains the design's deny list
+- extensionOutput events and their log lines are Admin-tagged (only admins or unauthenticated hosts see them)
+- A refused nested command raises a Lua error; a script that catches it with pcall keeps the edits made before that call; a multi-command call (CreateEntity with components, AddComponent with values) is all or nothing (EditHistory::MarkGroup/TakeBackGroupTo), and if it cannot be taken back exactly the whole invocation fails
+- New error codes staleUiRevision and editGroupOpen for the two refusals the design names without a code
+- Invocation runs on a worker that hands every Editor.Scene/Editor.Log call to the command thread (design said command thread blocked by the wall budget); a silent worker is abandoned after wall budget + 1 s and faults the extension
+- Rollback uses a new EditHistory::AbortGroup (undo the open group's ops before any step exists) instead of EndGroup then undo, so the redo stack is kept
+- ctx holds itemId and selection only
+- A call whose only writes were taken back leaves an empty group with a moved revision: treated like NoChange (NoteGroupWithoutChange), so a saved scene stays saved

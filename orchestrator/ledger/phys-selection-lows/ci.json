@@ -1,0 +1,10 @@
+{
+  "name": "phys-selection-lows",
+  "head": "f23d185436d53d680c92703184e108c6174af327",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

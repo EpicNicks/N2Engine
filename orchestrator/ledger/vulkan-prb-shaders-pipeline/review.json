@@ -1,0 +1,34 @@
+{
+  "head": "cb94f13155cee3e15bd64a5fe013f6f2a4382305",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "tests/renderer/vulkan/CrossBackendDiff.hpp",
+      "line": 199,
+      "summary": "CARRIED to stage C by the user (prior finding 4, unchanged): the share mode (maxFractionOverSecond > 0) has no mean-error <= 2/255 criterion; unused in stage B",
+      "scenario": "A lit scene where every pixel is off by 7/255 passes with maxFractionOverSecond 0.01, where the proposal's mean-error criterion would fail it"
+    },
+    {
+      "severity": "low",
+      "file": "docs/testing.html",
+      "line": 212,
+      "summary": "The four new test hooks (SetWireframeUnavailableForTest, SetFailPipelineCreationForTest, GetPipelineCreateAttemptCountForTest, GetTextureIdForTest) and the four new VulkanUnlitDrawTests cases are not in the test-file table rows, which list every other stage B hook and case",
+      "scenario": "A reader of testing.html's hook list does not learn that pipeline-creation failure, wireframe-unavailable and texture-id hooks exist"
+    },
+    {
+      "severity": "low",
+      "file": "renderer/src/vulkan/VulkanDraw.cpp",
+      "line": 909,
+      "summary": "SetWireframeUnavailableForTest(true) AFTER Initialize clears wireframeSupported but leaves draw.wireframe as it was, so with wireframe already on every draw is dropped silently (GetPipelineLocked returns null), unlike the production path that turns wireframe off with the log line. Test hook only; no test uses it that way",
+      "scenario": "SetWireframe(true) on lavapipe, then SetWireframeUnavailableForTest(true): DrawMesh draws nothing and nothing is logged, contrary to the hook's comment ('wireframe support is switched off at once')"
+    },
+    {
+      "severity": "low",
+      "file": "tests/renderer/vulkan/VulkanUnlitDrawTests.cpp",
+      "line": 1180,
+      "summary": "ATextureCreatedAtTheAddressOfADestroyedOne... exercises the recycled-address path only if the allocator hands the address back within 64 tries; otherwise it passes after checking only id uniqueness and the destroyed-texture default (a std::cout note, not a skip). Not flaky; just possibly not testing the fix on some allocator",
+      "scenario": "On an allocator that never reuses the address, a regression of fix 3 would not be caught by this test"
+    }
+  ],
+  "verdict": "clean"
+}

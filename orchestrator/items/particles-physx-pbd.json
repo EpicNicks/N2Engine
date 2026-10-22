@@ -1,0 +1,28 @@
+{
+  "name": "particles-physx-pbd",
+  "repo": "engine",
+  "branch": "feat-particles-physx-pbd",
+  "title": "Particles PR-C: PhysX PBD GPU backend (mock-tested logic; GPU run verified by the user)",
+  "closes": null,
+  "issue": "Design and the user's decisions: C:/Method Notes Obsidian/orchestrator/proposals/physx-particles.md (read sections 1, 3, 5 and 'Decisions (user, 2026-10-13)' fully first). Already merged: PR-A probe/health/physics.gpu (#122), PR-B IParticleBackend seam + ParticleSystem component + CPU backend + billboards + Lua (#125; read docs/particles.html and the code under engine/ for particles at current master, plus how PhysXBackend does the GPU probe). Known limit from #125 the user accepted: the stale-handle guard compares backends by ADDRESS; this PR must replace it with a GENERATION COUNTER (a handle carries the generation of the backend that issued it; a replaced or recreated backend, even at the same address, invalidates old handles); keep the documented behaviour: a replaced physics backend restarts the system on CPU with one warning, removed entirely means inert. Scope: implement the PhysX PBD backend behind IParticleBackend, as much as is verifiable WITHOUT a GPU: (1) a thin internal driver layer between the backend logic and the PhysX/CUDA calls (e.g. IPbdDriver: create CUDA manager / scene GPU flags, createPBDMaterial/System, create buffer, write host staging arrays, upload, set active count, raise update flags, copy positions back) so the backend logic (slot allocation in the particle buffer, emission accumulation, lifetime ageing and compaction, burst handling, per-system material preset mapping water/sand/smoke to PBD parameters, capping at maxParticles, generation-counted handles, Clear/Stop/Destroy, restart-on-CPU on failure) is unit-tested in CI against a FAKE driver on every leg; the real driver is compiled on legs where PhysX is ON (headers are present) and guarded so a build or host without GPU support (Linux CPU-only static libs: PX_SUPPORT_GPU_PHYSX is 0, createPBDParticleSystem returns NULL) fails soft: log once, Particles health row Disabled, component falls back per `backend: Auto|PhysX|CPU` exactly as PR-B defines (Auto = PhysX only when the probe is Ready AND physics.gpu allows it, else CPU; explicit PhysX with no GPU = inert with one warning). (2) GPU scene creation when the probe is Ready (eENABLE_GPU_DYNAMICS, eGPU broadphase, cudaContextManager) only when physics.gpu is auto/on; physics.gpu=off keeps today's CPU scene byte-for-byte (regression tests). (3) PBD material/system/buffer creation, spawn (write new entries into the pinned host arrays, bump the active count, raise update flags), host read-back of positions after fetchResults under a scoped CUDA lock, feeding the existing billboard path (UpdateMesh) and the Particles health row (Running with detail 'PhysX GPU: <device>'). All PhysX GPU calls live ONLY in the real driver. (4) A GPU golden test registered in ctest but skipped (GTEST_SKIP with a clear message) unless PxGetSuggestedCudaDeviceOrdinal() >= 0 and the GPU module loads, so it runs on the user's Windows GPU PC and stays skipped on every CI leg; it checks that spawned particles exist, fall under gravity, respect the cap, and that exit/destroy releases cleanly. (5) Docs: docs/particles.html and docs/physics.html (backend selection table, PBD material presets, limits, the generation-counter behaviour, how to run the GPU test and what to expect, VRAM note, which things are unverified). (6) Add a short manual verification checklist file for the user's PC under docs/ or the PR body: exact steps (build with PhysX ON, run the GPU test, run the sample scene with backend PhysX, expected outputs). Nothing can be built locally; CI is the build (8 checks; required `linux (Release, x86_64, Clang)`; Windows legs build the real driver with PhysX ON). Do NOT change the protocol. Do NOT touch the Linux GPU asset/workflows (PR-D, deferred). Do NOT touch root CMakeLists.txt PhysX download logic (another item owns it); if you need new sources registered, edit the module CMakeLists only. If the PhysX 5.6.1 API cannot do something the proposal assumes (the proposal marks some points [M]), say so precisely in `unverified` and pick the safest fallback instead of guessing silently.",
+  "allowedPaths": [
+    "^engine/",
+    "^tests/",
+    "^docs/",
+    "^cmake/",
+    "^renderer/",
+    "^math/"
+  ],
+  "acceptance": [
+    "All Tests-workflow jobs green; fake-driver tests exercise the backend logic on every leg",
+    "Generation-counter handles replace the address guard, with tests incl. same-address recreation",
+    "physics.gpu=off unchanged; no GPU => soft fail with one warning and the documented fallback",
+    "GPU golden test skipped in CI and documented for the user's PC"
+  ],
+  "requiresDocs": true,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "reviewer": "opus",
+  "notes": "HOLD FOR THE USER: do NOT ratify/merge this PR until the user has run the GPU test and the manual checklist on their Windows GPU PC and reported the result (hardware rule). Reviewer: check all PhysX GPU calls are behind the driver, the fake covers the logic, the generation counter is really used for every handle, the cap and ageing are correct, soft failure paths, and that physics.gpu=off is untouched. Unverified in CI: everything that touches a real CUDA context."
+}

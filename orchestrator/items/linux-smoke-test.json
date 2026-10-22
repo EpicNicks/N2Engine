@@ -1,0 +1,23 @@
+{
+  "repo": "engine",
+  "closes": null,
+  "requiresDocs": true,
+  "allowProtocol": false,
+  "reviewer": "opus",
+  "name": "linux-smoke-test",
+  "branch": "feat-linux-smoke-test",
+  "title": "One cross-platform Python smoke test for the editor host, run on Windows and Linux",
+  "issue": "Approved by the user 2026-10-10 (proposal: orchestrator/proposals/linux-host.md; answers: PhysX OFF on Linux for now with a later PhysX-for-Linux PR, x86_64 AND arm64 eventually, host stays loopback-bound behind an SSH tunnel/proxy, the ubuntu leg becomes a required check once green (the user sets branch protection), smoke test ported to one Python script for both OSes, install X11/Vulkan dev packages for now, Dockerfile AND systemd unit). Nothing can be built locally; CI is the build. Scope (PR C): port the long pwsh host smoke step in .github/workflows/tests.yml (docs/testing.html describes it) to one Python 3 script (tests/smoke/editor_host_smoke.py, standard library only) that runs on both OSes: create a project, start N2EditorHost, parse the ready line with the documented regex, open a TCP session with Hello and the token (via --token-env), exercise what the pwsh step exercises today, stdin-EOF shutdown, and for the TLS leg: TLS handshake, fingerprint equals the ready line, certificate reuse across restarts, key file mode 0600 on POSIX. Windows jobs and the ubuntu job both call it; keep the pwsh step only if something in it cannot be ported (say so). Update docs/testing.html. Specifics (re-read against master after #113/#114): the two pwsh steps in tests.yml are `Editor host smoke test` (~500 lines: create project, ready line, session, scene save/reopen, hierarchy, duplicate, GetEntity, GetProjectInfo user:// folder, and more) and `Editor host TLS smoke test`; port BOTH, step by step with the same assertions, into one or two Python modules under tests/smoke/ (a shared frame codec module plus the scenarios). Keep the Windows pwsh steps in place until the Python version is green on Windows, then switch the Windows legs to Python and delete the pwsh steps only if every assertion is covered (list the mapping in the PR body). `Play child smoke test` (tests/editor-server/PlaySmokeTest.ps1, needs a Windows renderer) stays pwsh and is out of scope. The Linux Clang job (named `linux (Release, x86_64, Clang)`, the required check, do not rename it) gains the Python smoke steps; the GCC leg does not. The user:// folder assertion must accept the Linux path ($XDG_DATA_HOME/n2engine or $HOME/.local/share/n2engine, see PR #114). Host binary path on Linux is build/bin/N2EditorHost.",
+  "allowedPaths": [
+    "^tests/",
+    "^docs/testing.html$",
+    "^.github/workflows/tests.yml$"
+  ],
+  "acceptance": [
+    "Windows legs and the ubuntu leg all run the Python script and pass",
+    "docs/testing.html describes the script"
+  ],
+  "gate": null,
+  "approved": true,
+  "notes": "Draft: re-read the pwsh step and the merged ubuntu leg before approving. Unverified: anything Windows-ACL specific."
+}

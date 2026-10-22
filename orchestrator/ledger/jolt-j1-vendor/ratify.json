@@ -1,0 +1,7 @@
+{
+  "name": "jolt-j1-vendor",
+  "decision": "merge",
+  "reasons": [],
+  "relaxed": "behind master by 1 file(s), no code overlap with the PR's files (docs overlap: docs/web-build.html), trial merge clean",
+  "merged": true
+}

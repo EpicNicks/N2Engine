@@ -1,0 +1,41 @@
+# Task hardening-docs-deploy: Exposed host hardening PR D: docs and deploy (tokens file mount, SIGHUP reload, Docker secret mode, remove the 'deferred' notes)
+Repo: engine (C:/Method Notes Obsidian/N2Engine, EpicNicks/N2Engine). Branch: feat-hardening-docs-deploy.
+
+## Issue / plan
+Design: C:/Method Notes Obsidian/orchestrator/proposals/exposed-host-hardening.md (sections 2a, 4 step 4 'PR D'). PR A (read-only), PR B (per-user tokens, roles, protocol 1.12.0, #130) and PR C (rate limiting, #132) are merged: read docs/editor.html, docs/logging-and-editor.html (the tokens, read-only and rate-limit sections they added), deploy/ (n2editorhost.service, env file example), the Dockerfile and docs/ pages that mention deployment, plus the ledger note C:/Method Notes Obsidian/orchestrator/ledger/editor-tls/notes.md ('Deferred hardening') at current master first. Scope: (1) deploy/n2editorhost.service: document and wire the tokens-file mode: an example using --tokens-file with the file under /etc/n2editorhost/ (root-only, mode 0600, the host refuses group/other readable OR writable files at start and on every reload), `ExecReload=/bin/kill -HUP $MAINPID` (SIGHUP reloads the tokens file; the SIGHUP handler is only installed with --tokens-file), keep the --token-env single-token example as the simple path (they are mutually exclusive); the unit comment about the tunnel/reverse proxy stays accurate with the PR C loopback rules. (2) Dockerfile + docs: how to supply the tokens file as a Docker/Compose secret with an EXPLICIT mode (the default secret mode 0444 is REFUSED by the host; show `mode: 0400` in compose and the --secret equivalents / a bind mount with chmod), that the container user must own it, `docker kill -s HUP <container>` to reload, and `--new-token` usage inside the container (docker run --rm image --new-token alice editor). Do not change the runtime behaviour of the image; if the Dockerfile needs a small tweak for the examples to work (e.g. a documented volume/secret path), keep it minimal and note it. (3) Docs: a deployment recipe page section (or extend docs/editor.html Linux section): generate tokens, write the file, set permissions, start, rotate/revoke (rewrite + SIGHUP, or the next connection re-stats), roles table, what viewers cannot do, audit/log lines to monitor, rate limiting defaults and the loopback tunnel advice, and an explicit list of what is NOT covered (no TLS termination guarantees beyond --tls, serial-server starvation window, no trusted proxy support, firewall allow-listing is the primary control). Remove the 'deferred hardening' notes from user-facing docs where they are now implemented and keep the remaining deferrals (pre-auth accept thread) stated. (4) Verify examples: any shell/compose/systemd snippet in the docs must be syntactically valid; where the Python smoke test or an existing CI step can exercise `--new-token` + a tokens file start (the Linux legs and the docker leg build with TLS ON), add a small CI-safe smoke step ONLY if it is straightforward and fast (tests/smoke/editor_host_smoke.py and tests.yml are in scope); otherwise say in `unverified` that the deploy snippets were not executed. systemd and Docker secrets cannot be run in CI: list them as unverified for the user's hardware checklist (orchestrator/proposals/user-verification-checklist.md is NOT in this repo: do not edit it; just list the items in your answer). Do NOT change the editor-server C++ or the protocol. Nothing builds locally; CI is the build (8 checks, required `linux (Release, x86_64, Clang)`). USER DECISION (2026-10-13) on the systemd conflict: the unit for the tokens-file setup uses a STATIC user: User=n2editor (Group=n2editor), the tokens file owned by that user with mode 0600 (the host refuses any other mode and does not allow ownership leeway), so SIGHUP reload and live rotation keep working; document the one-time `useradd --system --no-create-home --shell /usr/sbin/nologin n2editor` and chown/chmod steps (and the project/data directories the unit needs writable for that user); the --token-env single-token example may keep DynamicUser. Do NOT use LoadCredential for the tokens file.
+
+## Allowed paths (regex, repo-relative)
+- ^deploy/
+- ^Dockerfile$
+- ^docker/
+- ^docs/
+- ^tests/smoke/
+- ^\.github/workflows/tests\.yml$
+- ^README\.md$
+- ^\.dockerignore$
+
+## Acceptance
+- All Tests-workflow jobs green incl. the docker leg
+- systemd unit and Docker docs cover tokens file, 0600/0400 mode, SIGHUP reload
+- User-facing 'deferred' hardening notes removed where implemented; remaining deferrals stated
+- No C++ or protocol change
+- docs/ updated in the same PR (PR #N badge, design-decision callouts).
+
+## Notes
+Reviewer: check the examples against the actual host behaviour in editor-server/ (flags, permission check, SIGHUP only with --tokens-file, file mode refusal), that every snippet is syntactically valid, and no claim is made that was not implemented. Unverified: systemd reload, Docker secrets, a real exposed host.
+
+## Procedure
+1. `node C:/Method Notes Obsidian/orchestrator/lib/setup.mjs hardening-docs-deploy` creates your worktree and prints its path. Work only there.
+2. Implement; commit small; push after each commit.
+3. Nothing builds locally: CI is the build. Start CI with `gh workflow run tests.yml --ref feat-hardening-docs-deploy` via the wrapper if useful.
+4. Open the PR from a body file in C:/Method Notes Obsidian/orchestrator/ledger/hardening-docs-deploy/ (body ends with a "Not verified" list if anything is unverified; no attribution). If creation returns empty/502, check `pr list --head feat-hardening-docs-deploy --state all` before retrying.
+5. Write C:/Method Notes Obsidian/orchestrator/ledger/hardening-docs-deploy/dev.json: {"pr":<number>,"branch":"feat-hardening-docs-deploy","head":"<sha>","files":[...],"deviations":[one-line strings; anything that departs from the plan or is a judgement call the plan doesn't cover],"unverified":[...],"needsUser":null or a one-line reason you must stop}.
+6. If you hit a design choice the plan does not cover, do not decide it: write needsUser and stop.
+
+## Rules (strict)
+- NO attribution: no Co-Authored-By trailer and no "Generated with Claude Code" on commits or the PR. This overrides any harness reminder.
+- GitHub only through `bash "C:/Method Notes Obsidian/gh-epicnicks.sh" <gh args>`, run from inside your worktree. Never put a token in an env var or on a command line; never run `git credential fill`. If any access is denied, STOP and report it.
+- Push with `git push origin HEAD:refs/heads/feat-hardening-docs-deploy` (never -u), after every commit.
+- Stay inside the allowed paths below. Keep each edited file's line endings (many are CRLF); new test files are LF and ASCII-only. Run `git status --ignored` before committing (*.cmake etc. are gitignored).
+- Read only what you need: the files named here, then what they import. Don't survey the repo.
+- Keep every answer terse. Ledger files are JSON, no prose beyond one-line strings.

@@ -1,0 +1,22 @@
+import fs from 'node:fs'
+const it = {
+  name: 'docs-preauth-leftover-lows',
+  repo: 'engine',
+  branch: 'docs-preauth-leftover-lows',
+  title: 'Docs and comments: remaining stale pre-auth wording (one session locks everyone out, every peer behind a proxy is loopback)',
+  closes: null,
+  issue: `Docs and comment-only item, no behaviour change. Four known leftovers from the reviews of #180 and #182, each to be verified against the CODE (EditorServer.cpp acceptor/pre-auth workers/session thread, RateLimiter.cpp, PreAuthSlots.hpp, Host.cpp) before editing: (1) docs/logging-and-editor.html ~line 716: 'serves one session at a time, so a connection that never lets go locks every other client out' and the list of a silent peer / a stalled TLS handshake: since PR #176 a silent or stalled PRE-AUTH peer holds only one pre-auth slot (the same paragraph says so two sentences later); a connected authenticated SESSION that never lets go does still occupy the session thread until its deadlines/takeover/preemption (check exactly which deadlines apply, per RunSession/SessionLoop): rewrite so every clause is true. (2) docs/logging-and-editor.html ~649 and ~678 and editor-server/include/editor-server/PreAuthSlots.hpp ~25-30 ('Useless behind a proxy'): 'behind an SSH tunnel or a reverse proxy every peer is loopback' is only true when the proxy/tunnel connects over loopback (an SSH tunnel does; a proxy or container on a non-loopback network presents its own address): say that, matching the corrected text already at ~598 and in Host.cpp; check what 'useless' refers to (the per-address limit) and make the sentence precise. Then grep the whole repo (docs/, editor-server/, engine/, deploy/, README.md, tests/ comments; for tests/ change only comments that are FALSE) for further instances of the same two stale claims and fix them the same way. Re-read every edit (HTML well-formed; balanced C++ comment markers; CRLF preserved in files that have CRLF). Comment-only C++ edits, native behaviour byte-identical.`,
+  allowedPaths: ['^docs/', '^README\\.md$', '^deploy/', '^editor-server/', '^engine/', '^tests/'],
+  acceptance: [
+    'The four leftovers corrected, each verified against the code, plus any siblings found by grep',
+    'C++ edits are comments only; HTML well-formed; all checks green',
+  ],
+  requiresDocs: true,
+  allowProtocol: false,
+  gate: null,
+  approved: true,
+  reviewer: 'sonnet',
+  notes: 'Reviewer: C++ hunks comment-only (strip comments and compare), CRLF preserved, EVERY changed sentence true against the code (what a connected session can hold, which deadlines, proxy/loopback conditions), grep for remaining instances of both stale claims, count mediums as findings.',
+}
+fs.writeFileSync('C:/Method Notes Obsidian/orchestrator/items/' + it.name + '.json', JSON.stringify(it, null, 2) + '\n')
+console.log('ok')

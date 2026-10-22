@@ -102,3 +102,8 @@ Behaviour reference for the engine (lifecycles, frame order, guarantees and edge
 - Run ```./build-vs.bat```
 ### Other
 - Run ```cmake``` with parameters for your compiler and options of choice
+
+## Plans and orchestration
+
+Saved design proposals, stage briefs, review records, and the original
+orchestrator scripts are in [orchestrator/](orchestrator/README.md).

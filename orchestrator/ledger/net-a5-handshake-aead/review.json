@@ -1,0 +1,17 @@
+{
+  "head": "0e8aa48a3e4c5f13c840270abdeea416f1a53cbb",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "engine/src/network/n2net/SecureTransport.cpp",
+      "note": "SecureTransport::Poll runs RunTimers (idle sweep) before draining inner_->Poll, the sweep-then-drain order #207 removed from UdpTransport: a caller stall > idleTimeoutMicros (10 s) ends established sessions whose authenticated packets are queued. Fails closed; robustness only."
+    },
+    {
+      "severity": "low",
+      "file": "docs/netcode.html",
+      "note": "udp-peers 'Disconnect is local' bullet: 'This differs from the interface's wording for SimTransport' is stale after #207 (interface now says it depends on the transport). Pre-existing on master, not from the conflict resolution."
+    }
+  ],
+  "verdict": "clean",
+  "confirmedDelta": "master merge reviewed by opus"
+}

@@ -1,0 +1,7 @@
+{
+  "repo": "engine",
+  "branch": "fix-msvc-extended-aligned-storage",
+  "worktree": "C:/Method Notes Obsidian/N2Engine-msvc-extended-aligned-storage",
+  "merged": true,
+  "pr": 139
+}

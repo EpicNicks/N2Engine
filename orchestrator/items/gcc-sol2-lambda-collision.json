@@ -1,0 +1,27 @@
+{
+  "name": "gcc-sol2-lambda-collision",
+  "repo": "engine",
+  "branch": "fix-gcc-sol2-lambda-collision",
+  "title": "Fix the sol2 lambda metatable-name collision under GCC so GCC-built hosts run Lua correctly",
+  "closes": null,
+  "issue": "Recommended first by Claude and started on the user's instruction 2026-10-13 (\"continue and start with your recommended actions\"). Problem: sol2 (vendored, external/sol2/include/sol/sol.hpp, 3.2.3) names the metatable of a bound function object from ctti_get_type_name_from_sig(__PRETTY_FUNCTION__) (~line 8978). GCC prints every lambda of the same signature in one function as the same \"<lambda(int)>\", so two lambdas with one signature share a metatable and Lua calls the wrong one: on the GCC 14 leg 3 tests fail (LuaLayerTest.NamesAndMasks, LuaPickingTest.MouseFunctionsWithoutAWindow, LuaPickingTest.RaycastBindingsHandleBadInput; e.g. Layers.MaskOf ran LayerToName). The Clang and MSVC builds are correct. This is a real runtime bug for any GCC-built host, not a test problem. Goal: GCC-built Lua bindings behave identically to Clang/MSVC. Approach, in order of preference (pick one, explain why): (1) a minimal, marked patch to the vendored sol2 type-name path so the name is unique per lambda on GCC (for example derive it from typeid(T).name(), whose mangled name is unique per lambda, only when the type is a closure type, or a per-type counter/address that is stable within the process), leaving the Clang/MSVC paths byte-identical; add a marker comment like the existing optional<T&>::emplace patch (what, why, upstream version 3.2.3, re-apply on re-vendor) and check whether upstream sol2 already has a fix or macro for this and use it if so; (2) if (1) is impractical, make the engine's binding lambdas distinct types (named functors or free functions) in engine/src/scripting/bindings, but only if the set is small and a test guards against reintroducing the collision. Add a regression test that binds two same-signature lambdas in one function and checks each calls its own body (runs on every compiler). The GCC 14 leg in .github/workflows/tests.yml must go green; once it passes with all 3 tests, you may remove continue-on-error and the 'informational - known sol2 bug' wording from the leg's name and comments (it must stay NOT required: the user sets branch protection) and update the doc sentences that say GCC-built hosts are unsupported (docs/testing.html, docs/editor.html Linux section). Do not touch the required Clang job's name or steps. Iterate on CI; the first GCC run after a change takes ~10 min.",
+  "allowedPaths": [
+    "^engine/",
+    "^tests/",
+    "^external/sol2/include/sol/sol\\.hpp$",
+    "^docs/",
+    "^\\.github/workflows/tests\\.yml$",
+    "^deploy/Dockerfile$"
+  ],
+  "acceptance": [
+    "All Tests-workflow jobs green including the GCC 14 leg with all Lua tests",
+    "A regression test for same-signature lambdas that passes on Clang, GCC and MSVC",
+    "The sol2 patch (if any) is marked in the vendored file and documented"
+  ],
+  "requiresDocs": true,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "reviewer": "opus",
+  "notes": "Touches vendored code and the Lua binding layer: the reviewer checks that the Clang/MSVC paths are unchanged (diff of the preprocessed paths by inspection), that names stay stable and unique (no collisions with distinct non-lambda types), and that no behaviour changes for existing Lua scripts or saved scenes. Unverified: nothing GPU related; a real GCC-built host run is covered by the GCC leg's smoke tests only if the leg runs them (add the two Python smoke steps to the GCC leg if cheap)."
+}

@@ -1,0 +1,27 @@
+{
+  "name": "cleanup-hostcpp-comments-application-docs",
+  "repo": "engine",
+  "branch": "fix-hostcpp-comments-app-docs",
+  "title": "Tidy: stale comments in editor-server/src/Host.cpp (one-at-a-time server, everything behind a proxy is loopback) and the docs/application.html Init sentence that predates the three settings Init reads",
+  "closes": null,
+  "issue": "Small cleanup, comments and docs only, no behaviour change. (1) editor-server/src/Host.cpp around lines 486-492: the comment 'The deadlines that keep one connection from holding the one-at-a-time server' is stale since PR #176 (acceptor + pre-auth workers + a session thread; a pre-Hello connection holds one pre-auth slot, the deadlines bound how long) and 'Everything behind a proxy is loopback, which has no per-address limits (see the docs)' is wrong in general: the host sees the peer address the proxy/container presents, which is loopback only when the proxy connects over loopback (docs/editor.html and docs/logging-and-editor.html, 'behind a proxy' text, now say the right thing since PR #180: read them and match them, verify against EditorServer.cpp/RateLimiter.cpp/PreAuthSlots.hpp/Host.cpp). Search editor-server/ and engine/ for any OTHER comment with the same stale claims (grep 'one-at-a-time', 'one at a time', 'serial', 'serving thread', 'loopback backoff', 'shared backoff') and correct only comments that are verifiably stale; do not touch code. (2) docs/application.html around line 119 (the Config::ApplicationOptions table, row projectPath and the surrounding prose): 'Init does not report a bad value of either' (or similar) predates Init reading THREE project settings (determinism.luaSeed, math.simdTier and the third one: read Application::Init in engine/src/Application.cpp to see exactly which and what Init does with a bad value of each: report/ignore/default); rewrite the sentence so it is TRUE for all three, verified against the code, and check the 'four fields' wording of the table against the struct in the header. Re-read every edit (comments must still compile: balanced comment markers). Native behaviour must be byte-identical (comment-only C++ edits). No other changes. USER-APPROVED WIDENING (2026-10-20): also fix docs/logging-and-editor.html (the --project row around line 219 says Init reads projectPath only for physics.gpu: it reads four settings, verify against Application::Init and match docs/application.html) and the user-visible --help strings in editor-server/src/HostOptions.cpp (--no-rate-limit, --preauth-slots ~517-534) that say everyone behind a proxy is loopback: correct them to what the code does (loopback only when the proxy connects over loopback), text only, and CHECK that no test or doc compares the --help output (grep tests/ and docs/ for those strings; update any that quote them).",
+  "allowedPaths": [
+    "^editor-server/src/",
+    "^editor-server/include/",
+    "^engine/src/",
+    "^engine/include/",
+    "^docs/application\\.html$",
+    "^docs/logging-and-editor\\.html$"
+  ],
+  "acceptance": [
+    "Host.cpp comments (and any sibling stale comments found) match the post-#176/#177 code",
+    "docs/application.html Init sentence true for all three project settings, verified against Application::Init",
+    "Comment-only C++ edits; all checks green"
+  ],
+  "requiresDocs": true,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "reviewer": "sonnet",
+  "notes": "Reviewer: C++ diff is comments only (strip comments and compare, or inspect each hunk), comment syntax balanced, every changed sentence true against the code, docs sentence true for all three settings."
+}

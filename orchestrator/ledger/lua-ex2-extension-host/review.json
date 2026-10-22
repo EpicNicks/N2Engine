@@ -1,0 +1,34 @@
+{
+  "head": "c995c91da2a719b459d53ca46fb912c1617302af",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "editor-server/src/ExtensionHost.cpp",
+      "line": 1600,
+      "summary": "A reload has no overall time limit: the command thread waits for the files one after another, so it can be blocked for many seconds when many files each use most of their 1 s load budget.",
+      "scenario": "64 files each run about 1 s of Lua (inside the 10M-instruction budget). ReloadEditorExtensions, or host start, then holds the command thread for about 64 s, and stuck files add up to 4 x 3 s more. No client gets an answer in that time. Design 6.4 says the main thread is blocked for at most the wall budget. The editor.html docs admit the cost but give no upper limit."
+    },
+    {
+      "severity": "low",
+      "file": "editor-server/src/ExtensionHost.cpp",
+      "line": 1615,
+      "summary": "Load() logs from _entries after releasing _mutex. That breaks the header's promise that the registry is guarded by the mutex.",
+      "scenario": "Once E-X3 calls NoteFailure from a thread other than the one running Reload, that thread writes entry.state and entry.error under the lock while LogEntry reads them without it. That is a data race and undefined behaviour. Today only tests and the command thread call NoteFailure, so it is latent."
+    },
+    {
+      "severity": "low",
+      "file": "editor-server/src/ExtensionHost.cpp",
+      "line": 800,
+      "summary": "An int param accepts min/max values that are not whole numbers, and with no default it takes min as its default, so an Int field can get a fractional default.",
+      "scenario": "params = { n = { type = \"int\", min = 0.5 } } loads, and GetEditorUi lists kind Int with min 0.5 and default 0.5. The 'whole number' check covers only a given default, not one taken from min or max."
+    },
+    {
+      "severity": "low",
+      "file": "tests/editor-server/EditorExtensionCommandsTests.cpp",
+      "line": 378,
+      "summary": "The play-host test and the role tests only check the static tables. No play host and no role-bound session actually runs the commands.",
+      "scenario": "APlayHostRefusesTheReloadAndAnswersTheLists asserts IsEditOnlyCommand but never sends a command to a server in play mode. The role test asserts RoleAllows but never runs ListEditorExtensions as a viewer through Hello with a tokens file. A wiring change in ProcessCommand that skipped those gates for the new ids would still pass."
+    }
+  ],
+  "verdict": "clean"
+}

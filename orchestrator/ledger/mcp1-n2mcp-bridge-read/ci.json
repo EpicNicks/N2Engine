@@ -1,0 +1,10 @@
+{
+  "name": "mcp1-n2mcp-bridge-read",
+  "head": "8d90e5972510b155cbb6cee4df8e712e90aef50c",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "CI:success"
+  ],
+  "failures": []
+}

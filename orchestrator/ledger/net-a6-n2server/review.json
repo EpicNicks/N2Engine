@@ -1,0 +1,34 @@
+{
+  "head": "02070dfc33db9368c7ff01dc0fbf5a3d9eee5720",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "n2server/src/Server.cpp",
+      "line": 673,
+      "summary": "The std::exception catch returns 1 without OnApplicationQuit or app.Shutdown(), so scenes, physics and audio are torn down only by static destruction, which Application::Shutdown's own comment says is unsafe.",
+      "scenario": "A component or Lua binding throws during Tick: 'Fatal error' is logged, RunServer returns 1, and at process exit the physics backend and scenes are destroyed after the statics they use, so the process can crash instead of exiting 1."
+    },
+    {
+      "severity": "low",
+      "file": "docs/netcode.html",
+      "line": 606,
+      "summary": "'Nothing else is written to stdout' is false in Debug builds: Application::Init calls Logger::InitializeDebugConsoleHelper under N2ENGINE_DEBUG, which echoes every Logger line to stdout, including the Admin-tagged 'Client connected: user=... address=...' lines.",
+      "scenario": "A launcher or operator runs a Debug N2Server and expects stdout to carry only the ready line, but every log line (with user names and peer addresses) also goes to stdout."
+    },
+    {
+      "severity": "low",
+      "file": "docs/netcode.html",
+      "line": 627,
+      "summary": "The Security section says the proofs are matched with BasicTokenTable::Authenticate, but SecureTransport::OnConnectResponse runs its own constant-time HMAC loop over Entries() and never calls Authenticate.",
+      "scenario": "A security reviewer who follows the docs reviews TokenTable::Authenticate, not the code that actually decides admission (SecureTransport.cpp's proof loop)."
+    },
+    {
+      "severity": "low",
+      "file": "n2server/src/Server.cpp",
+      "line": 555,
+      "summary": "When PeerConnected has no identity, the warning says the session 'is dropped', but nothing disconnects it (SecureTransport::Disconnect is a no-op inside Poll's handler and is not called later); it is only left out of the clients map.",
+      "scenario": "If GetPeerIdentity ever fails for an established peer, the session stays up and uncounted while the log says it was dropped (unreachable today by the transport's contract)."
+    }
+  ],
+  "verdict": "clean"
+}

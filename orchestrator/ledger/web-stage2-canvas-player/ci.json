@@ -1,0 +1,10 @@
+{
+  "name": "web-stage2-canvas-player",
+  "head": "6de7899b9c14b7dbb8b6bbd243d76f42c02aa41e",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

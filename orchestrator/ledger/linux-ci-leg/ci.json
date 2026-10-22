@@ -1,0 +1,10 @@
+{
+  "name": "linux-ci-leg",
+  "head": "9c1dda18266c03543b172ae908ddcd4e8d4db254",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

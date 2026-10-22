@@ -1,0 +1,10 @@
+{
+  "name": "ci-tls-smoke-warmup",
+  "head": "a7c64722358bac732cd9b294c33b6417074b4be0",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

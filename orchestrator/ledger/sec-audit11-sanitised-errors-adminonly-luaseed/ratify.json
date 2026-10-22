@@ -1,0 +1,7 @@
+{
+  "name": "sec-audit11-sanitised-errors-adminonly-luaseed",
+  "decision": "merge",
+  "reasons": [],
+  "relaxed": "behind master by 27 file(s), no code overlap with the PR's files (docs overlap: docs/editor.html, docs/logging-and-editor.html, docs/testing.html), trial merge clean",
+  "merged": true
+}

@@ -1,0 +1,7 @@
+{
+  "name": "sec-preauth-s3-structural",
+  "decision": "merge",
+  "reasons": [],
+  "relaxed": "behind master by 14 file(s), no code overlap with the PR's files (docs overlap: docs/testing.html), trial merge clean",
+  "merged": true
+}

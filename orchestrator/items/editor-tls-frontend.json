@@ -1,0 +1,23 @@
+{
+  "name": "editor-tls-frontend",
+  "repo": "frontend",
+  "branch": "feat-editor-tls-frontend",
+  "title": "Frontend half of native TLS: fingerprint pinning and a direct-address remote",
+  "closes": null,
+  "issue": "Engine PR #112 is merged (master c0eee5e); see engine docs/logging-and-editor.html#ready-line. Engine side prints `N2EditorHost ready port=<port> tls=1 fingerprint=<64 lowercase hex, no colons>` when started with --tls, and serves TLS 1.2+/1.3 with a self-signed certificate. Frontend: (1) parseReadyLine in src/main/host-launcher.ts returns {port, fingerprint?}; unknown key=value fields stay ignored, a line without tls=1 behaves as today. (2) Node tls pinning with no new dependency, behind the SocketFactory seam in src/protocol/engine-client.ts (open() ~L172) and connectTo in src/main/engine-ipc.ts: tls.connect({host, port, rejectUnauthorized:false, checkServerIdentity:()=>undefined}), then on secureConnect compare socket.getPeerCertificate().fingerprint256 normalised to lowercase hex without colons to the pinned value and destroy the socket on mismatch; the Hello/token handshake happens only after the pin check passes. (3) A trust-on-first-use pin store, like src/main/recent-remotes.ts: key host:port, value fingerprint plus first-seen time; first connect to an unknown host asks the user in the connect form to confirm the displayed fingerprint (never auto-trust silently), a changed fingerprint is refused with a clear message that names the old and new values and how to reset (a Forget pin button); the store is a JSON file in userData. (4) A direct-address remote option beside the SSH tunnel in the remote form (src/main/remote-ipc.ts, RemoteSettings): host, port, token, and the expected fingerprint (optional, pins up front); TLS is required for non-loopback direct addresses (refuse plaintext to a non-loopback host). The SSH tunnel mode is unchanged. Play mode stays disabled for remote engines. (5) Tests with node:test for parseReadyLine, the fingerprint normaliser, the pin store (first use, match, mismatch, forget) and the pin check against a local tls server with a generated self-signed cert (do NOT commit a PEM or any BEGIN ... PRIVATE KEY text, it trips the ratify secret scan: generate a throwaway self-signed key and cert once with the openssl CLI at development time, commit them as base64 DER strings in a test helper clearly marked test-only, and rebuild the PEM at runtime with node:crypto createPrivateKey/X509Certificate export; also test that a different cert is refused). (6) README: a Remote editing section for the direct-address mode, the trust-on-first-use model, what it does not give (no per-user tokens or rate limiting; see engine docs), and that it is untested against a real cloud host. Run npm run typecheck, build and test.",
+  "allowedPaths": [
+    "^src/",
+    "^README.md$"
+  ],
+  "acceptance": [
+    "npm run typecheck, npm run build and npm test pass locally",
+    "Tests as listed; the fixture key is clearly test-only",
+    "README documents the direct-address mode and its limits"
+  ],
+  "requiresDocs": false,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "reviewer": "opus",
+  "notes": "Security-sensitive: the reviewer looks hard at the order (pin check before sending the token), normalisation of fingerprints, never auto-trusting, and not logging the token. No PEM literals in the repo (ratify secret scan); DER base64 fixture rebuilt to PEM at runtime. Not verifiable here: a real cloud host. List under unverified."
+}

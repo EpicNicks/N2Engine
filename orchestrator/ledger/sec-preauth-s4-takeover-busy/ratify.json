@@ -1,0 +1,7 @@
+{
+  "name": "sec-preauth-s4-takeover-busy",
+  "decision": "merge",
+  "reasons": [],
+  "relaxed": "behind master by 10 file(s), no code overlap with the PR's files (docs overlap: docs/testing.html), trial merge clean",
+  "merged": true
+}

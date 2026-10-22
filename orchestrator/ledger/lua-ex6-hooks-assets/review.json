@@ -1,0 +1,28 @@
+{
+  "head": "65b640ee54c99dc12b149e4ce649eb0b65c82edd",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "editor-server/src/EditorServer.cpp",
+      "line": 5685,
+      "summary": "Carried over (declared, unfixed): OnBeforePlay runs and broadcasts its warnings before WritePlaySnapshot validates the request, with the unvalidated client scenePath as info.scene",
+      "scenario": "WritePlaySnapshot with a bad or unresolvable scenePath: every OnBeforePlay hook runs and its warnings go out as Public extensionOutput events naming a scene that is never played, then the command fails"
+    },
+    {
+      "severity": "low",
+      "file": "editor-server/src/EditorServerExtensions.cpp",
+      "line": 1344,
+      "summary": "Carried over (declared deviation): an extension's own asset write never reaches any OnAssetsChanged hook, because NoteAssetWritten refreshes the index so no later poll reports it",
+      "scenario": "Extension A calls Editor.Assets.WriteText('res://x.txt'); extension B's OnAssetsChanged never sees res://x.txt, while it does see a client's identical write"
+    },
+    {
+      "severity": "low",
+      "file": "editor-server/src/ExtensionHost.cpp",
+      "line": 3330,
+      "summary": "Carried over (declared, unfixed): the watcher never retries a file that failed on an id clash when the owning file changes, and the untouched extension always wins whatever the file order",
+      "scenario": "a.lua and b.lua both declare id X; edit b.lua, so it fails on the clash; rename the id in a.lua; b.lua stays Failed until b.lua itself is touched or there is a full reload"
+    }
+  ],
+  "verdict": "clean",
+  "confirmedDelta": "delta = 1 test-only commit (EditorExtensionHooksTests.cpp) + clean master merge (merge-tree tree equal), verified by orchestrator"
+}

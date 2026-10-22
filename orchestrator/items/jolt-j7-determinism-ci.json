@@ -1,0 +1,30 @@
+{
+  "closes": null,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "requiresDocs": true,
+  "repo": "engine",
+  "name": "jolt-j7-determinism-ci",
+  "branch": "feat-jolt-j7-determinism-ci",
+  "title": "Jolt J7: strict-FP legs with Jolt, the physics scene corpus runner, cross-leg determinism aggregation job with goldens (non-required)",
+  "issue": "Design: C:/Method Notes Obsidian/orchestrator/proposals/physics-backend-investigation-156.md (P1-P11 ACCEPTED), section 5 (5.1 scene corpus of 10 scenes, 5.2 legs and flag matrix, 5.3 golden hashes and aggregation), row J7 (line ~248), question Q1/Q2/Q11. J1-J6 are merged: read the Jolt backend, SaveState/RestoreState/HashState, the existing determinism tests (JoltBackendDeterminismTest and its golden), the PhysX determinism option tests from #161, .github/workflows/tests.yml (every leg and how N2ENGINE_STRICT_FP is set), CMake strict-FP handling, and the existing netcode C2 physics-free canary if present. SCOPE: (1) a headless corpus runner (a test executable or gtest in the existing engine test binary that can also write JSON: pick what fits) that runs the 10 scenes of 5.1 on Jolt (600 ticks at 60 Hz, hash every 60 ticks; HashState; event log hashes; query result hashes; snapshot round trip; rollback simulation) and writes determinism-hashes.json (scene, tick, hash, build fingerprint: compiler, arch, flags) ; the same-leg negative control that also runs PhysX where built and prints its hashes; (2) CI: turn N2ENGINE_STRICT_FP=ON with Jolt on the legs of 5.2 (windows Release, linux x86_64 clang, linux arm64 clang, linux x86_64 GCC 14 (already strict), web/node) without breaking the existing tests/budgets (measure nothing locally: be conservative; if strict FP on a leg is known to break other tests, put the corpus on a dedicated new job/leg instead of changing the existing one and say so); each leg uploads determinism-hashes.json as an artifact; (3) a new 'determinism' job with needs: all those legs that downloads the artifacts and compares them with each other AND with the committed tests/golden/physics-determinism.json, printing the first differing scene/tick per leg; the job is NON-required (do not add it to required checks; document how to make it required later per P9) ; a script (tools/ or scripts/) regenerates the goldens from the Linux leg's artifact and a docs paragraph says goldens change only in a PR that says why; since the first goldens cannot be produced locally, the first run may have no golden: implement 'golden missing => compare legs only and print the hashes in the job summary, and the PR report says the user/orchestrator must commit them from the first green run'; (4) docs: physics.html determinism section and testing.html rows, true against the code and workflow; the docs-only check job must still work. IMPORTANT: a mismatch between legs is a REAL RESULT, not a failure to hide: if a leg differs from the others, the job reports it clearly; do not tune goldens or loosen compares to make it green; record in the PR report what the first CI run showed. Nothing builds locally; re-read every YAML/CMake/C++ edit twice. Nothing builds locally for the engine; CI (12 checks) is the test; expect fix rounds; re-read every edit twice (CMake/YAML/C++ syntax); NEVER call a stateful function (RNG etc.) twice in one argument list or operator expression (unspecified evaluation order); NEVER run taskkill or kill other processes; verify every docs sentence against the CODE; no attribution lines on commits or PRs (no Co-Authored-By, no Generated-with footer); GitHub only via the wrapper; before your final push merge origin/master into the branch if it moved; your FINAL message must be a real report (PR number, head sha, what you did, deviations), never a single word.",
+  "allowedPaths": [
+    "^engine/",
+    "^tests/",
+    "^docs/",
+    "^CMakeLists\\.txt$",
+    "^cmake/",
+    "^\\.github/",
+    "^tools/",
+    "^scripts/"
+  ],
+  "acceptance": [
+    "Corpus runner writes determinism-hashes.json with the 10 scenes on Jolt",
+    "Strict FP + Jolt on the legs of the matrix (or dedicated legs) with artifacts",
+    "determinism aggregation job compares legs and goldens, non-required; goldens regeneration script",
+    "Docs true; existing tests and budgets unaffected; CI green"
+  ],
+  "reviewer": "opus",
+  "notes": "Reviewer (numerics/CI): workflow YAML valid and needs: graph right, artifact names consistent, comparison logic correct (cannot pass vacuously when an artifact is missing), no leg silently skipped, strict-FP flags actually reach the Jolt and engine targets on each compiler, corpus scenes deterministic by construction (no unordered iteration, one RNG draw per statement), compile-level correctness."
+}

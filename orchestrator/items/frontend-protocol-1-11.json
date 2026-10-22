@@ -1,0 +1,29 @@
+{
+  "name": "frontend-protocol-1-11",
+  "repo": "frontend",
+  "branch": "feat-protocol-1-11-readonly",
+  "title": "Sync to protocol 1.11.0: read-only host badge, ErrorCoded denials as toasts, writes disabled",
+  "closes": null,
+  "issue": "Engine master 2705888 (PR #126) shipped protocol 1.11.0. Scope: (1) bump engine-ref.txt to the engine commit 2705888a93a9cf06c3dc685d74933c6a7a06f135 (or the then-current master if the protocol is unchanged since) and run `npm run sync-protocol` (default ../N2Engine; the engine checkout at C:/Method Notes Obsidian/N2Engine may be used READ-ONLY for this) so src/protocol/protocol.generated.ts and test-vectors.json are regenerated, never hand-edited; keep their line endings as the script does. (2) engine-client: Hello now sets the new trailing flag `errorCodes` so the host answers a refused command with the new response ErrorCoded (0x1C: message + code readOnly|forbidden) instead of a plain Error; expose the code on the thrown error (a typed EngineError with `code`, keep existing Error handling and messages working for 1.10 hosts which never send ErrorCoded and have no ServerInfo.readOnly: the trailing field decodes to its default false). (3) Read ServerInfo.readOnly into the app state (store) and show a clear read-only badge in the editor chrome; disable (not hide) every write affordance while read-only: hierarchy create/delete/rename/reparent/duplicate, inspector edits, asset import/delete/move/rename, scene save/new/open-write, play, undo/redo, drag and drop; find the write call sites through the store/edit-controller rather than per-widget where possible so a new write cannot be forgotten (a single `canWrite` guard). (4) A denial that still reaches the client (readOnly or forbidden code) shows a toast with the host's message and does NOT leave the UI in a half-applied state (revert optimistic edits if there are any). (5) Tests: codec/golden-vector tests pass after the sync; unit tests for the ErrorCoded decode and the error mapping; DOM tests (the harness exists, see src/test-dom and the README testing section) for the badge and disabled controls and the denial toast; a 1.10 host (no readOnly, plain Error) still works. (6) README: protocol version, read-only mode behaviour. Run npm run typecheck, npm run build and npm test locally; the repo also has CI, so open the PR and wait for its checks. Do not change the engine repo. Do not change main-process connection security code (TLS pinning, tokens). If a write path cannot be guarded without a design decision, stop and report needsUser.",
+  "allowedPaths": [
+    "^engine-ref.txt$",
+    "^package.json$",
+    "^package-lock.json$",
+    "^README.md$",
+    "^src/",
+    "^scripts/",
+    "^.github/"
+  ],
+  "acceptance": [
+    "sync-protocol produces no diff against engine-ref.txt (CI check passes)",
+    "ServerInfo.readOnly shown as a badge; every write affordance disabled while read-only",
+    "ErrorCoded decoded and shown as a toast; 1.10-style plain Error still works",
+    "typecheck, build, tests and frontend CI green"
+  ],
+  "requiresDocs": false,
+  "allowProtocol": true,
+  "gate": null,
+  "approved": true,
+  "reviewer": "opus",
+  "notes": "Reviewer: check the write guard is central, no write path is missed (grep the store/edit-controller/ipc call sites), the toast does not leak tokens, generated files are untouched by hand, CRLF preserved. Unverified: the Electron UI against a live --read-only host (user hardware checklist)."
+}

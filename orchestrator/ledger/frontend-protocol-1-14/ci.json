@@ -1,0 +1,10 @@
+{
+  "name": "frontend-protocol-1-14",
+  "head": "0e3b4f14d71dcc9164acda6a681006916e6fb7ca",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "CI:success"
+  ],
+  "failures": []
+}

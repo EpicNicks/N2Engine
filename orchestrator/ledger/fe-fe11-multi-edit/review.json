@@ -1,0 +1,21 @@
+{
+  "head": "b2733c4fbddb0fb63c9db59cc1d2e085993153d1",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "src/renderer/inspector-multi.ts",
+      "line": 484,
+      "summary": "removeComponent captures component.entries before the async confirm dialog and sends removals for those ids afterwards",
+      "scenario": "If a sceneChanged refresh or selection change lands while the confirm dialog is open, the jobs target stale component ids on objects no longer selected or refresh-changed; the host refuses and the user sees a spurious error (no corruption)."
+    },
+    {
+      "severity": "low",
+      "file": "src/renderer/inspector-multi.ts",
+      "line": 526,
+      "summary": "A refusal leaves earlier objects edited (no rollback); roadmap says aborted/rolled back",
+      "scenario": "3 objects, 2nd refuses: object 1 stays changed until the user presses Undo; documented in README and dev deviations, so only a product decision to confirm."
+    }
+  ],
+  "verdict": "clean",
+  "confirmedDelta": "master merges + README resolution reviewed by sonnet"
+}

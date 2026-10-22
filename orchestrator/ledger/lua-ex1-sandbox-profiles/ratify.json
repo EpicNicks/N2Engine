@@ -1,0 +1,7 @@
+{
+  "name": "lua-ex1-sandbox-profiles",
+  "decision": "merge",
+  "reasons": [],
+  "relaxed": "behind master by 33 file(s), no code overlap with the PR's files (docs overlap: docs/testing.html), trial merge clean",
+  "merged": true
+}

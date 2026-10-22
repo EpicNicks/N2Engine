@@ -1,0 +1,6 @@
+{
+  "head": "b33abd1a7c1f8caa453c76f664972e2db3858631",
+  "findings": [],
+  "verdict": "clean",
+  "confirmedDelta": "only low (OnBeforePlay annotation wording) fixed in a 4-line comment/doc commit verified by orchestrator diff vs f424980"
+}

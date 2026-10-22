@@ -1,0 +1,166 @@
+# THIRD_PARTY_NOTICES.md completeness audit (2026-10-15)
+
+Scope: read-only audit of origin/master (a1aa100) of N2Engine. Evidence is `file:line` from `git show origin/master:<file>`.
+This is not legal advice. `[M]` marks anything stated from memory and not verified in the repo.
+
+## 1. What the repo does (facts)
+
+### Vendored under external/ (tracked in git)
+| Dir | Licence file in repo | Version / commit recorded | Notes |
+|---|---|---|---|
+| stb_image, stb_truetype, stb_vorbis | none (text at end of each header) | stb_image 2.30 @ 2c980bb (external/stb_image/README.md), truetype 1.26, vorbis 1.22 (header line 1) | stb_image_write 1.16 tests only |
+| cgltf | external/cgltf/LICENSE (Copyright 2018-2021 Johannes Kuhlmann) | v1.15, commit 360db1a (README.md) | bundles jsmn (MIT) |
+| ufbx | external/ufbx/LICENSE (Copyright 2020 Samuli Raivio; dual MIT / Unlicense) | v0.23.1 | source files carry no licence text, so LICENSE is the only carrier |
+| mbedtls | external/mbedtls/LICENSE (Apache-2.0 OR GPL-2.0-or-later) | 3.6.7 | static lib `n2_mbedtls`, only with N2ENGINE_EDITOR_TLS; the Dockerfile turns it ON (deploy/Dockerfile:36) |
+| mikktspace | external/mikktspace/LICENSE (zlib) | commit 3e895b4 | |
+| VulkanMemoryAllocator | LICENSE.txt (Copyright 2017-2026 AMD, MIT) | 3.4.0 | |
+| dr_libs | none (end of each header: Unlicense or MIT-0) | dr_wav 0.14.x, dr_flac 0.13.2, dr_mp3 0.7.3 (header says `v0.7.3 - TBD`) | no version in notices |
+| lua | none (MIT text at external/lua/lua.h:499-520+, "Copyright (C) 1994-2025 Lua.org, PUC-Rio") | **5.4.8** (lua.h:21) | |
+| sol2 | none (MIT text at top of sol.hpp: Copyright 2013-2020 Rapptz, ThePhD and contributors) | **3.2.3** (sol.hpp:40-42) | |
+| nlohmann | none (SPDX MIT, Copyright 2013-2025 Niels Lohmann, json.hpp:6-7) | **3.12.0** | |
+| TinySHA1 | none (ISC-style text in header; Copyright 2012-22 Saurav Mohapatra) | none | |
+| glad | none (generated; no licence text in glad.h or glad.c); KHR/khrplatform.h carries the Khronos MIT-style notice (Copyright 2008-2018 Khronos Group) | glad 0.1.36, gl=4.6 compatibility, generated 2025-09-14 (glad.c:3) | |
+| PhysX (headers only) | **none tracked**: 359 files, all under external/PhysX/physx/include; each header carries the BSD-3 text, "Copyright (c) 2008-2025 NVIDIA Corporation" and AGEIA 2004-2008 | 5.6.1 (CMake/notices) | libraries and DLLs are downloaded at configure time |
+
+### Fetched / downloaded at configure time
+- GLFW: `FetchContent`, tag 3.4, renderer/CMakeLists.txt:50-55, no hash. Built static (no BUILD_SHARED_LIBS override anywhere) [M: GLFW default is static].
+- OpenAL Soft: `FetchContent` GIT_TAG 1.24.0, CMakeLists.txt:285-290. The repo sets only ALSOFT_UTILS/EXAMPLES/INSTALL* OFF (CMakeLists.txt:278-283). No LIBTYPE or BUILD_SHARED_LIBS is set anywhere, so OpenAL Soft's default applies: a **shared library** [M: default LIBTYPE=SHARED]. The repo confirms this in practice: deploy/Dockerfile:38 copies `build/lib/libopenal.so*`, :50-51 "OpenAL Soft is built as a shared library next to the host", and deploy/n2editorhost.service:3-5 does the same. On Windows the DLL lands in `${CMAKE_BINARY_DIR}/bin` (CMakeLists.txt:8), next to the executables; the post-build copies in lua_project/CMakeLists.txt:26-33 and test_project/CMakeLists.txt:32-37 copy only the PhysX DLLs.
+- FreeType 2.13.3: `FetchContent` URL + SHA256, text/CMakeLists.txt:84-90, only when N2ENGINE_TEXT_FREETYPE=ON; built **static** and linked privately (text/CMakeLists.txt:78, :93-95). All optional deps (zlib, bzip2, png, harfbuzz, brotli) disabled (:64-76). The Dockerfile enables it (deploy/Dockerfile:36).
+- GoogleTest 1.17.0: URL zip, CMakeLists.txt:297, tests only, no hash.
+- PhysX binaries: downloaded from this repo's releases, SHA256 pinned (CMakeLists.txt:47, :144; cmake/PhysX*Hashes.cmake). Windows ships PhysX_64, PhysXCommon_64, PhysXFoundation_64, PhysXCooking_64 DLLs (and optionally PhysXGpu_64.dll, CMakeLists.txt:62-67, :119) beside the exe; Linux links static libs into the host.
+
+### Build/CI tools (not shipped)
+Vulkan SDK on Windows (jakoch/install-vulkan-sdk-action, tests.yml:80-81; README.md:54), `libvulkan-dev`, `glslang-tools`, `mesa-vulkan-drivers` (lavapipe), `vulkan-validationlayers` in the build stage (tests.yml:169, deploy/Dockerfile:25). The Docker **runtime** stage installs none of Mesa, glslang or validation layers; it installs `libvulkan1`, `libgl1`, X11 libs, `libasound2t64`, `libstdc++6` (deploy/Dockerfile:46). docs/application.html:362 already states that glslang is a build tool only and ships none of it. The SPIR-V compiled in is generated from this repo's own GLSL.
+
+### Assets
+- engine/assets/fonts/NotoSans-Regular.ttf: Noto Sans subset, OFL 1.1 (OFL.txt: "Copyright 2022 The Noto Project Authors"). It is **embedded into every binary** (text/CMakeLists.txt:16-18).
+- lua_project/assets textures, ui/icon.png, smoke_robot.gltf, and tests/assets/models/*.fbx|glb: own work, generated by scripts (lua_project/tools/make_smoke_assets.py:4 "no third-party asset or licence is involved"; tests/assets/models/README.md: "this repository's own work, under its MIT licence"). Not stated in THIRD_PARTY_NOTICES.md.
+
+### Binary distribution
+The Docker image (deploy/Dockerfile) ships N2EditorHost (statically containing PhysX, Mbed TLS, FreeType, Lua, sol2, json, stb, dr_libs, glad, mikktspace, cgltf, ufbx, VMA, GLFW, the embedded Noto font) plus `libopenal.so*` in /usr/local/lib. It copies **no licence or notice file at all**: no THIRD_PARTY_NOTICES.md, no OpenAL COPYING, no Apache-2.0 text. A Windows release (exe + PhysX DLLs + OpenAL32.dll) likewise has no mechanism in the repo that adds notices (no install/CPack rules found).
+
+## 2. Row-by-row comparison with THIRD_PARTY_NOTICES.md
+
+Lic = licence name correct; (C) = copyright line in notices; Ver = version pinned in notices.
+
+| Dependency | Present (line) | Lic | (C) | Ver | Text / requirement | Ships in binary/Docker? |
+|---|---|---|---|---|---|---|
+| stb_truetype | yes :13 | ok | n/a (public-domain choice) | 1.26 ok | fine | yes (static) |
+| stb_vorbis | yes :14 | ok | n/a | 1.22 ok | fine | yes |
+| stb_image | yes :15 | ok | n/a | 2.30 ok | fine | yes |
+| cgltf | yes :16 | ok | no | 1.15 ok | LICENSE in repo; MIT needs the notice with binaries: only via repo | yes |
+| ufbx | yes :17 | ok | no | 0.23.1 ok | LICENSE in repo | yes if UFBX on (Docker: yes) |
+| Mbed TLS | yes :18 | ok | no | 3.6.7 ok | Apache-2.0 sec. 4 needs a copy of the licence with each distribution: not carried by the Docker image. Upstream has no NOTICE file [M], so nothing to reproduce | yes (Docker: yes) |
+| MikkTSpace | yes :19 | ok | no | commit ok | zlib needs no binary notice | yes |
+| dr_libs | yes :20 | ok | no | **no version** | Unlicense / MIT-0 choice: no notice needed | yes |
+| Lua | yes :21 | ok | **no** | "5.4" vs actual **5.4.8** | MIT text only at lua.h:499+; binary distribution needs it carried | yes |
+| VMA | yes :22 | ok | no | ok | LICENSE.txt in repo | yes (Vulkan ON by default) |
+| sol2 | yes :23 | ok | **no** | **no version** (3.2.3) | MIT text only in header | yes |
+| nlohmann | yes :24 | ok | **no** | **no version** (3.12.0) | MIT text only in header | yes |
+| TinySHA1 | yes :25 | "ISC-style": correct in substance | **no** | none | notice must appear "in all copies"; only in header | yes |
+| glad | yes :26 | "generated code, see headers" is vague | no | **no version** (0.1.36) | glad.h has no licence text; khrplatform.h has the Khronos notice, the only one needing carriage | yes |
+| Noto Sans | yes :27 | OFL 1.1 ok | **no** | 2.015 ok | OFL sec. 2: copyright + licence must accompany any copy, including one embedded in a binary. OFL.txt is in the repo, not in any binary release | yes, embedded in every binary |
+| GLFW | yes :33 | zlib/libpng ok | no | 3.4 ok | zlib: no binary notice required | yes |
+| OpenAL Soft | yes :34 | "GNU LGPL" imprecise (see 3.1) | no | 1.24.0 ok | see 3.1 | yes (shared lib; Docker: yes) |
+| PhysX | yes :35 (only under "Fetched") | BSD-3 ok | **no** | 5.6.1 ok | BSD-3 clause 2 needs the notice in documentation for binary redistribution; not carried by the Docker image. Headers are tracked in external/PhysX/physx/include although the notices describe the dir as download-only | yes |
+| FreeType | yes :36, :39-51 | see 3.2 | credit present | 2.13.3 ok | FTL credit present | only with option ON (Docker: yes) |
+| GoogleTest | yes :37 | ok | no | 1.17.0 ok | tests only | no |
+| Vulkan SDK / loader (Apache-2.0) | **absent** | | | | build/link only (headers; vulkan-1.dll / libvulkan1 loaded from the system, not bundled) | Docker installs distro `libvulkan1` (its own package licence) |
+| Mesa lavapipe, validation layers, glslang | absent | | | | CI / build stage only, not in the runtime image; docs/application.html:362 already says so | no |
+| OpenGL | absent | | | | system API; the glad loader is listed | no |
+| Test/sample assets, smoke_robot, icon | **absent** | | | | own work; one line makes the audit trail explicit | n/a |
+
+## 3. Discrepancies ranked by legal importance
+
+### 3.1 [HIGH] OpenAL Soft (LGPL): what the notices say vs what the repo does
+- Notices, THIRD_PARTY_NOTICES.md:34: "GNU LGPL (see its `COPYING`); ship it in a form that lets users replace it, such as its DLL".
+- Repo: OpenAL Soft is fetched at configure time, unmodified (no patch step, CMakeLists.txt:285-290), and built as a **shared library** (default; Dockerfile:38, :50-51). It is dynamically linked, which is the LGPL-friendly arrangement; the "replaceable" sentence is accurate for the Windows exe and the Docker image (a user can swap libopenal.so in /usr/local/lib).
+- Gaps (none about the linking mechanism itself):
+  1. The notices never say that dynamic linking of an unmodified library is the repo's actual configuration, so a reader cannot tell what the obligation is. State it, and state "do not change the build to static (`-DLIBTYPE=STATIC`) without revisiting this".
+  2. **No copy of the LGPL text or COPYING travels with any binary.** The Docker image copies only `libopenal.so*` (Dockerfile:51). LGPL requires the licence text to accompany the library [M: OpenAL Soft's COPYING is LGPL-2.0-or-later; confirm].
+  3. **No source offer.** LGPL requires the library source (or a written offer) to be available with a binary distribution [M]. Here the source is an unmodified public tag; pointing at `https://github.com/kcat/openal-soft/tree/1.24.0` is the practical equivalent, but the notices name neither the URL nor the exact tag. Only CMakeLists.txt has the tag, which a binary recipient does not see.
+  4. No copyright holder in the row.
+  5. OpenAL Soft's tree bundles other-licensed parts (e.g. fmt MIT, pffft BSD-like) [M, unverified]. Dynamic linking means these ride along inside the .so. The notices say only "LGPL".
+  6. The Windows DLL is **not** copied by the post-build rules (they copy PhysX only); it lands in `bin/` through RUNTIME_OUTPUT_DIRECTORY. A hand-assembled release zip must include the DLL (it needs it) and COPYING with it.
+- Proposed text (replace the row at :34):
+  `| OpenAL Soft 1.24.0 (kcat/openal-soft tag 1.24.0, unmodified; source: https://github.com/kcat/openal-soft/tree/1.24.0) | FetchContent in the root CMakeLists.txt | GNU LGPL (see COPYING in that source tree; the tree also contains some code under other permissive licences) |`
+  and add a section below the tables:
+  > ## OpenAL Soft (LGPL)
+  > N2Engine links OpenAL Soft **dynamically** (`OpenAL32.dll` on Windows, `libopenal.so` on Linux), unmodified, built from the 1.24.0 tag. You may replace that library with your own build of OpenAL Soft or another compatible version. The source is at <URL>; a copy of the licence is `COPYING` in that source tree and must be shipped next to the library in any binary distribution. Do not link OpenAL Soft statically into a distributed product without taking separate advice.
+
+### 3.2 [HIGH] FreeType licence choice
+- Notices :36 and :39-50 claim **FTL only**, with the standard credit text. FreeType is dual-licensed (FTL or GPLv2) [M]; the repo takes FTL, the right choice for an MIT project, and docs/text.html:177 says the same. No error here.
+- Issues: (a) the notices do not say "dual FTL / GPL-2.0, used under FTL", so the choice is implicit; (b) the credit year "2024" matches 2.13.3 (released 2024) [M]; (c) 2.13.3 contains `src/gzip` (zlib-derived) and possibly other small parts with their own notices, listed in FreeType's `docs/LICENSE.TXT` [M, unverified whether compiled with zlib disabled]. The pointer to `docs/FTL.TXT` is fine; a binary recipient has no copy, and carrying FTL.TXT in a release is optional but cheap [M].
+- Proposed: change the :36 licence cell to `FreeType License (FTL), chosen from FreeType's dual FTL / GPL-2.0 licence; credit below`, and add one sentence under the FreeType section: "FreeType is dual-licensed (FTL or GPL-2.0); N2Engine uses it under the FTL."
+
+### 3.3 [MEDIUM] No notices accompany the binary artefacts
+- deploy/Dockerfile copies no licence file (:49-52). Statically linked MIT/BSD/Apache components (PhysX BSD-3, Mbed TLS Apache-2.0, Lua/sol2/json/cgltf/ufbx/VMA MIT, TinySHA1 ISC, Noto OFL, FreeType FTL credit) all require their notice or credit to travel with binaries. THIRD_PARTY_NOTICES.md satisfies this only for source recipients.
+- Proposed (separate item, not docs-only): `COPY THIRD_PARTY_NOTICES.md LICENSE.md /usr/share/doc/n2editorhost/` in the runtime stage, plus the OpenAL COPYING and Mbed TLS LICENSE, and a rule for Windows release archives. Check that Dockerfile.dockerignore does not exclude them.
+
+### 3.4 [MEDIUM] Missing copyright lines
+Rows with no copyright holder: cgltf, ufbx, Mbed TLS, MikkTSpace, Lua, VMA, sol2, nlohmann, TinySHA1, Noto Sans, GLFW, PhysX, GoogleTest, OpenAL Soft (dr_libs and stb optional). Verified holders (from repo files):
+- cgltf: Copyright (c) 2018-2021 Johannes Kuhlmann
+- ufbx: Copyright (c) 2020 Samuli Raivio
+- Lua: Copyright (C) 1994-2025 Lua.org, PUC-Rio
+- sol2: Copyright (c) 2013-2020 Rapptz, ThePhD and contributors
+- nlohmann/json: Copyright (c) 2013-2025 Niels Lohmann
+- TinySHA1: Copyright (c) 2012-22 Saurav Mohapatra
+- VMA: Copyright (c) 2017-2026 Advanced Micro Devices, Inc.
+- PhysX: Copyright (c) 2008-2025 NVIDIA Corporation; 2004-2008 AGEIA Technologies, Inc.
+- Noto Sans: Copyright 2022 The Noto Project Authors
+- glad/khrplatform: Copyright (c) 2008-2018 The Khronos Group Inc.
+- From memory only [M]: Mbed TLS "The Mbed TLS Contributors"; MikkTSpace "Morten S. Mikkelsen"; GLFW "Marcus Geelnard, Camilla Loewy"; GoogleTest "Google Inc."; stb "Sean Barrett"; dr_libs "David Reid".
+
+### 3.5 [MEDIUM] PhysX
+- Notices :35 list PhysX only as downloaded into `external/PhysX/`. Repo reality: **359 header files are tracked** in `external/PhysX/physx/include` (no LICENSE.md next to them; the BSD text is in each header). Say so.
+- The row says each archive carries PhysX's LICENSE.md (not verifiable from the repo; the archives are release assets). Whether they carry NVIDIA's separate third-party notices is unknown [M: the PhysX 5 SDK has `physx/documentation/license/` with extra third-party texts]. The Windows slim zip is "derived from the original bin.zip whose build recipe is unknown" (:35), so provenance of third-party code inside the DLLs cannot be confirmed. Open question.
+- Binary: the Windows build ships PhysX DLLs; the Docker image links static PhysX. BSD-3 notice needed in accompanying documentation.
+
+### 3.6 [LOW] Wrong or missing versions
+- Lua: notices "Lua 5.4" (:21) vs actual 5.4.8 (external/lua/lua.h:21).
+- sol2 (:23): add 3.2.3 (sol.hpp:40-42).
+- nlohmann/json (:24): add 3.12.0 (json.hpp:3).
+- dr_libs (:20): add dr_wav 0.14.x, dr_flac 0.13.2, dr_mp3 0.7.3 (mp3 header says "TBD", possibly a pre-release snapshot; record the upstream commit if known; I could not determine it).
+- glad (:26): add "glad 0.1.36, OpenGL 4.6 compatibility, generated 2025-09-14" (glad.c:3).
+- TinySHA1 (:25): no version exists; add upstream URL if known.
+- GLFW, GoogleTest, OpenAL are pinned by tag only (no hash); FreeType and PhysX have SHA256. Informational.
+
+### 3.7 [LOW] Omissions and clarity
+- No row for the own-work test and demo assets; add one line (sources: lua_project/tools/make_smoke_assets.py:4, tests/assets/models/README.md).
+- No mention of build/CI-only tools (Vulkan SDK/loader Apache-2.0, Mesa lavapipe MIT, Khronos validation layers Apache-2.0, glslang BSD-3 and others). Not shipped; one sentence avoids questions. The Docker runtime stage does ship distro `libvulkan1`.
+- Intro (:3-7) says each component's full licence text is in its own files. Not true for Lua, sol2, nlohmann, TinySHA1, dr_libs, stb, glad (text sits at the end of or inside headers) or PhysX headers. Reword: "in its own files or in its headers".
+- Ubuntu base-image content (libstdc++, ALSA, X11, GL client libs) carries its own licences under /usr/share/doc in the image; nothing to add here.
+
+## 4. What I am NOT certain about
+- Default OpenAL Soft library type (shared) [M]. Supported by the Dockerfile comment and the `ldd` check, not by reading OpenAL's CMake. Confirm in a configured build tree.
+- LGPL version (2.x vs 3) of OpenAL Soft 1.24.0 COPYING, and which bundled third-party files it contains.
+- Whether FreeType's built-in gzip/zlib code is compiled with `FT_DISABLE_ZLIB`, and any extra FreeType notices.
+- Contents of the PhysX release archives (LICENSE.md, NVIDIA third-party notices).
+- Whether Mbed TLS 3.6.7 has no NOTICE file [M].
+- Copyright holders marked [M].
+- Whether anyone actually distributes release zips (no CPack/install rules found); the Docker image is the only binary packaging in the repo.
+- None of this is legal advice.
+
+## 5. Proposed single docs-only fix item (THIRD_PARTY_NOTICES.md only)
+
+Title: "Notices: copyright lines, versions, OpenAL Soft LGPL section, FreeType dual-licence statement".
+Edits to THIRD_PARTY_NOTICES.md, no code or CMake changes:
+1. Intro (:3-7): replace "Each component's full licence text is in its own files (...)" with "... in its own files or in its headers".
+2. Vendored table, add or change:
+   - :16, :17, :22 (cgltf, ufbx, VMA): add the copyright lines from 3.4.
+   - :20 dr_libs: add `dr_wav 0.14.x, dr_flac 0.13.2, dr_mp3 0.7.3`.
+   - :21 Lua: `Lua 5.4.8 (Copyright (C) 1994-2025 Lua.org, PUC-Rio; MIT text at the end of external/lua/lua.h)`.
+   - :23 sol2: `sol2 3.2.3 (Copyright (c) 2013-2020 Rapptz, ThePhD and contributors)`.
+   - :24 nlohmann: `nlohmann/json 3.12.0 (Copyright (c) 2013-2025 Niels Lohmann)`.
+   - :25 TinySHA1: add `(Copyright (c) 2012-22 Saurav Mohapatra)`.
+   - :26 glad: `glad 0.1.36, OpenGL 4.6 compatibility, generated 2025-09-14 (generated loader with no licence text of its own; KHR/khrplatform.h: Copyright (c) 2008-2018 The Khronos Group Inc., MIT-style)`.
+   - :27 Noto Sans: add `Copyright 2022 The Noto Project Authors; embedded in every binary`.
+   - New row: `PhysX headers | external/PhysX/physx/include | BSD 3-Clause (Copyright (c) 2008-2025 NVIDIA Corporation; 2004-2008 AGEIA Technologies, Inc.; text in each header)`.
+   - New row: `Test and demo assets | lua_project/assets, tests/assets | This repository's own work (generated by lua_project/tools/make_smoke_assets.py and tests/assets/models/make_sample_models.py), MIT`.
+3. Fetched table:
+   - :34 OpenAL Soft: replace per 3.1 and add the new "OpenAL Soft (LGPL)" section.
+   - :35 PhysX: change "into external/PhysX/" to "libraries and DLLs into external/PhysX/ (the headers are vendored in external/PhysX/physx/include)"; add the copyright line; add "third-party notices inside the archives not verified".
+   - :36 FreeType: licence cell per 3.2; add the dual-licence sentence to the FreeType section.
+   - :33 GLFW and :37 GoogleTest: add copyright holders only after verifying them against the upstream LICENSE files.
+4. New short section "Not shipped": the Vulkan SDK/loader (Apache-2.0), Mesa lavapipe, Khronos validation layers and glslang are build or CI tools only; the Docker runtime image installs only `libvulkan1` and system libraries from Ubuntu.
+5. Out of scope for this item (separate follow-up): copying THIRD_PARTY_NOTICES.md, OpenAL COPYING and Mbed TLS LICENSE into the Docker runtime image (deploy/Dockerfile:49-52) and into any Windows release archive.

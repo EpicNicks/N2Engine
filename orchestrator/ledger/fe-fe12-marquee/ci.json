@@ -1,0 +1,10 @@
+{
+  "name": "fe-fe12-marquee",
+  "head": "0df7078bb2a5767a392ccbf99eecb284e709fd2a",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "CI:success"
+  ],
+  "failures": []
+}

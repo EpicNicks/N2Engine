@@ -1,0 +1,8 @@
+import fs from 'node:fs'
+const f = 'C:/Method Notes Obsidian/orchestrator/tools/mk-lows-fe11.mjs'
+let s = fs.readFileSync(f, 'utf8')
+s = s.replace(/title: '[^\n]*',\n/, "title: 'Electron UI FE11 follow-ups: Remove-for-all uses the post-confirm component list; a refusal rolls back earlier edits',\n")
+s = s.replace(/issue: '.*?' \+ FECOMMON,/s, "issue: 'Follow-up of merged frontend PR FE11 (#50, inspector multi-edit); the user accepted these LOW review findings as a follow-up. Verify each against the code on master first. (1) Remove-for-all uses the component list captured BEFORE the confirm dialog (src/renderer/inspector-multi.ts ~line 484): re-read the selection/component list after the dialog resolves (or abort if the selection changed) so a selection change while the dialog is open cannot remove from the wrong objects; add a test. (2) A refusal mid-batch leaves earlier objects edited with no rollback (inspector-multi.ts ~line 526; one Undo reverts today): on refusal, roll the already-applied edits back (undo the open edit group) when the protocol allows it, otherwise show a clear message that N objects were already changed and one Undo reverts; choose what the existing edit-group/undo protocol supports and describe it in the report; add a test.' + FECOMMON,")
+s = s.replace(/acceptance: \[[^\n]*\],\n/, "acceptance: ['Remove-for-all acts on the post-dialog component list or aborts on a changed selection', 'A refusal mid-batch rolls back or clearly reports earlier edits; typecheck, tests and 3 CI checks green'],\n")
+s = s.replace(/notes: '[^\n]*',\n/, "notes: 'Reviewer: both findings fixed at the cited code with tests; no change to the single-object edit paths.',\n")
+fs.writeFileSync(f, s)

@@ -1,0 +1,27 @@
+{
+  "name": "frontend-assets-error-text",
+  "repo": "frontend",
+  "branch": "fix-assets-state-error-text",
+  "title": "assets-state: strip the error-code prefix from host errors and report coded denials to the banner",
+  "closes": null,
+  "issue": "Follow-up to the reviewed low finding on merged frontend PR #28. In src/renderer/assets-state.ts `messageOf` (around line 94) reads the raw error message, so a coded denial (the code travels as a U+2063-delimited message prefix, see errorCodeOf/errorTextOf in src/shared/api.ts and how src/renderer/inspector-state.ts handles it) would show the code glued to the host text; the catch blocks that save import settings and save a text file (around lines 346 and 475) set only the inline error. Fix: use errorTextOf in messageOf, and for a coded denial (readOnly/forbidden) in those catch blocks also call the state's error callback (store.reportError: banner + deniedAsReadOnly), keeping the inline error; plain failures stay inline only. Mirror what inspector-state.ts already does. Add unit/DOM tests (existing harness in src/test-dom and src/test) for both: coded denial shows clean text and reaches the banner callback; plain error unchanged. Run npm run typecheck, build and npm test; open a PR and wait for repo CI. No new dependencies; no other behaviour change.",
+  "allowedPaths": [
+    "^src/renderer/assets-state.ts$",
+    "^src/renderer/assets-panel.tsx$",
+    "^src/renderer/store.ts$",
+    "^src/test/",
+    "^src/test-dom/",
+    "^README.md$"
+  ],
+  "acceptance": [
+    "typecheck, build, npm test and frontend CI green",
+    "coded denial in assets saves shows clean text, reaches the banner, and latches read-only for readOnly",
+    "plain errors unchanged"
+  ],
+  "requiresDocs": false,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "reviewer": "sonnet",
+  "notes": "Small follow-up; reviewer checks it mirrors inspector-state.ts and tests assert behaviour."
+}

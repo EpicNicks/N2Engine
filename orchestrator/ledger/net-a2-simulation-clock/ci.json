@@ -1,0 +1,10 @@
+{
+  "name": "net-a2-simulation-clock",
+  "head": "58302585cfde69f8766af98a269b46f348e40768",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

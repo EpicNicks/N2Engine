@@ -1,0 +1,25 @@
+{
+  "repo": "engine",
+  "closes": null,
+  "requiresDocs": true,
+  "allowProtocol": false,
+  "reviewer": "opus",
+  "name": "linux-runtime-fixes",
+  "branch": "feat-linux-runtime-fixes",
+  "title": "Linux runtime fixes: no SIGPIPE kill, UserDataBase without $HOME",
+  "issue": "Approved by the user 2026-10-10 (proposal: orchestrator/proposals/linux-host.md; answers: PhysX OFF on Linux for now with a later PhysX-for-Linux PR, x86_64 AND arm64 eventually, host stays loopback-bound behind an SSH tunnel/proxy, the ubuntu leg becomes a required check once green (the user sets branch protection), smoke test ported to one Python script for both OSes, install X11/Vulkan dev packages for now, Dockerfile AND systemd unit). Nothing can be built locally; CI is the build. Scope (PR B, unblocked now that #112 is merged): (1) EditorServer: pass MSG_NOSIGNAL on every send on non-Windows and call signal(SIGPIPE, SIG_IGN) once at host start (covers the Mbed TLS BIO writes too); a client that drops mid-frame must never kill the host. (2) Verify the non-Windows branch of UserDataBase() in engine/src/ProjectFile.cpp: XDG_DATA_HOME then $HOME/.local/share, and a defined, documented behaviour (a clear error or a fallback; pick the safest and say why) when neither is set (systemd, docker). The TLS identity dir <UserDataBase()>/editor-tls must stay 0700 and the key 0600. (3) Tests meaningful on both OSes: a client that closes with a pending large send does not terminate the test process, and UserDataBase with HOME unset (platform-neutral env helper in the test). The code cannot be run on Linux until item linux-ci-leg merges, so write it to compile on MSVC today and on GCC/Clang with no Windows-only names; guard POSIX-only calls with #ifndef _WIN32. Update docs/logging-and-editor.html (or editor.html) with the Linux behaviour.",
+  "allowedPaths": [
+    "^editor-server/",
+    "^engine/",
+    "^tests/",
+    "^docs/"
+  ],
+  "acceptance": [
+    "All existing Tests-workflow jobs green",
+    "The new tests run on the Windows legs",
+    "docs state the SIGPIPE and no-HOME behaviour"
+  ],
+  "gate": null,
+  "approved": true,
+  "notes": "Security-sensitive (key directory permissions, behaviour without HOME). Unverified: running on a real Linux host (until the ubuntu leg exists)."
+}

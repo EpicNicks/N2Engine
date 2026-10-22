@@ -1,0 +1,38 @@
+# Task sec-audit10-viewer-event-filtering: Security audit item 10 (F9), MCP0a: sensitivity tags on log lines and role-filtered PollEvents: viewers/editors no longer get audit, rate-limit or peer lines or host absolute paths
+Repo: engine (C:/Method Notes Obsidian/N2Engine, EpicNicks/N2Engine). Branch: feat-sec-audit10-event-filtering.
+
+## Issue / plan
+Security audit item 10 / finding F9 of C:/Method Notes Obsidian/orchestrator/proposals/editor-host-security-audit-2026-10-15.md (read F9 and the recommended-order table row 10 first) and C:/Method Notes Obsidian/orchestrator/proposals/mcp-engine-design.md section on MCP0 (the reason it is a prerequisite: AI agents and shared hosts must not see other users' names, peer IPs and host paths). The user accepted ALL recommendations on 2026-10-20 (MCP0 before agents are pointed at shared hosts). TODAY: PollEvents returns the whole process log (users, roles, peer IPs, rate-limit lines, absolute paths) to every authenticated role including viewers. SCOPE: (1) SENSITIVITY TAGS on log records: extend the logger/EventRing record (find editor-server's event ring and the engine Logger hook that feeds it) with a sensitivity level (e.g. Public | Operator | Admin) assigned at the call site or by category: the audit: lines, 'Rate limit:' lines, peer=/address lines, token/identity/user lines, pre-auth/busy/takeover lines and anything that prints an absolute host path are Admin (or Operator) only; engine/game logs the project's scripts and components produce (Lua print/Debug.Log, component warnings) stay visible to every role. Prefer explicit tagging at the call sites you can find (grep Logger:: calls in editor-server/ and the audit/rate-limit/pre-auth code paths) with a safe default for untagged lines (decide: untagged engine lines are Public; untagged editor-server lines are Admin: justify and test); NEVER filter by string matching alone. (2) PollEvents (and any other command or event that returns log lines: grep for the log/event ring consumers, GetEngineHealth, the audio/health events) filters by the caller's role: admin sees everything; editor and viewer see only Public lines; a --no-token loopback host (no roles) keeps today's full visibility for the single local user (state this and test it); the ring must keep its eviction behaviour and sequence numbers consistent per client (a client must not see sequence gaps that leak the existence of hidden lines: either number per role view or document that gaps can occur: choose the safer one, test it). (3) REMOVE absolute host paths from anything non-admin roles still receive in events (paths in public lines become res://-relative or are stripped): coordinate with item 11 (error responses) only by keeping this item to the LOG/EVENT surface. (4) TESTS: PollEventsTests per role (admin full; editor and viewer filtered; no-token loopback full), a golden list of the exact audit/rate-limit/peer line prefixes being Admin-only, untagged-default behaviour, path stripping, sequence behaviour, concurrency of the ring unchanged; no protocol change (allowProtocol false: if the fix needs a protocol change STOP and report in needsUser). (5) DOCS: docs/logging-and-editor.html (what each role sees in the event stream: verify against the code), docs/editor.html roles text, docs/testing.html. Verify every docs sentence against the CODE. Nothing builds locally; CI (10 checks) is the test; expect fix rounds.
+
+## Allowed paths (regex, repo-relative)
+- ^editor-server/
+- ^engine/
+- ^tests/
+- ^docs/
+- ^CMakeLists\.txt$
+
+## Acceptance
+- Log records carry a sensitivity tag; audit, rate-limit, peer, identity and host-path lines are admin-only; script/component logs stay public
+- PollEvents (and other log-returning surfaces) filter by the caller role; no-token loopback keeps full visibility; no sequence leak of hidden lines
+- Per-role tests and a golden list of admin-only prefixes; no protocol change
+- All 10 checks green; docs verified against code
+- docs/ updated in the same PR (PR #N badge, design-decision callouts).
+
+## Notes
+Reviewer: every audit/rate-limit/peer/identity/path log site is tagged (grep all Logger calls in editor-server), nothing sensitive reaches editor/viewer through ANY other surface (health, events, errors), default for untagged lines is safe, sequence handling leaks nothing, no-token loopback behaviour documented and tested, docs true, mediums count.
+
+## Procedure
+1. `node C:/Method Notes Obsidian/orchestrator/lib/setup.mjs sec-audit10-viewer-event-filtering` creates your worktree and prints its path. Work only there.
+2. Implement; commit small; push after each commit.
+3. Nothing builds locally: CI is the build. Start CI with `gh workflow run tests.yml --ref feat-sec-audit10-event-filtering` via the wrapper if useful.
+4. Open the PR from a body file in C:/Method Notes Obsidian/orchestrator/ledger/sec-audit10-viewer-event-filtering/ (body ends with a "Not verified" list if anything is unverified; no attribution). If creation returns empty/502, check `pr list --head feat-sec-audit10-event-filtering --state all` before retrying.
+5. Write C:/Method Notes Obsidian/orchestrator/ledger/sec-audit10-viewer-event-filtering/dev.json: {"pr":<number>,"branch":"feat-sec-audit10-event-filtering","head":"<sha>","files":[...],"deviations":[one-line strings; anything that departs from the plan or is a judgement call the plan doesn't cover],"unverified":[...],"needsUser":null or a one-line reason you must stop}.
+6. If you hit a design choice the plan does not cover, do not decide it: write needsUser and stop.
+
+## Rules (strict)
+- NO attribution: no Co-Authored-By trailer and no "Generated with Claude Code" on commits or the PR. This overrides any harness reminder.
+- GitHub only through `bash "C:/Method Notes Obsidian/gh-epicnicks.sh" <gh args>`, run from inside your worktree. Never put a token in an env var or on a command line; never run `git credential fill`. If any access is denied, STOP and report it.
+- Push with `git push origin HEAD:refs/heads/feat-sec-audit10-event-filtering` (never -u), after every commit.
+- Stay inside the allowed paths below. Keep each edited file's line endings (many are CRLF); new test files are LF and ASCII-only. Run `git status --ignored` before committing (*.cmake etc. are gitignored).
+- Read only what you need: the files named here, then what they import. Don't survey the repo.
+- Keep every answer terse. Ledger files are JSON, no prose beyond one-line strings.

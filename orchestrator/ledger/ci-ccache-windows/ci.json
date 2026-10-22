@@ -1,0 +1,10 @@
+{
+  "name": "ci-ccache-windows",
+  "head": "05a8bbce86600e654c710061413dcda7b4b28a77",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

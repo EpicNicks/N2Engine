@@ -1,0 +1,11 @@
+Accepted by the user 2026-10-13:
+- Scalar PhysX math (PX_SIMD_DISABLED), not WebAssembly SIMD: the PhysX source does not build for Emscripten without one or the other, and SIMD would make the whole module need WebAssembly SIMD in the browser; speed cost unmeasured, a SIMD build is an option for a separate artifact
+- PhysX is built from source in the web job (pinned commit 09ff24f3279b735e672ff27b155cbf49f6296f4d, cached by actions/cache), not fetched as a prebuilt release archive with a SHA256: nothing to publish, but the output is not byte-reproducible (the input is pinned)
+- Six one-line patches to the PhysX source in scripts/web-build-physx.sh (-Werror, PxMath.h .symver guard, PxHash.h size_t overload, FdUnixThread pause asm, FdTempAllocator ambiguous call, FdUnixMutex priority ceiling); each checked to apply; the vendored headers in external/PhysX/physx/include are untouched and the web engine compiles against the patched header copy staged beside the libraries
+- All three web size budgets raised on purpose, each to the CI measurement plus about 15 percent: the compressed size and speed packages grow 79 to 101 percent (size wasm.brotli 765,466 to 1,537,129)
+- Web dispatcher worker count is forced to 0 under N2ENGINE_SINGLE_THREADED (also overriding SetWorkerThreadsForTesting); the two default-worker-count expectations in PhysXDeterminismTests.cpp are 0 on the web (kDefaultWorkers), 4 natively, plus one new web-only test
+- Web PhysX errors go to the engine Logger through a new PxErrorCallback; no assertion handler is installed (release flavour: PX_ASSERT compiles to nothing, 5.6.1 has no setter)
+- Two PxCudaContextManager::release() calls in PhysXBackend.cpp are under #if PX_SUPPORT_GPU_PHYSX (1 on every native platform that builds the file; the Emscripten headers have no CUDA types)
+- lua_project is not an allowed path, so the checklist's stack-of-N-bodies performance step is a Lua snippet to paste into a copy of scene.lua
+- No licence file in the web package (follow-up, the same as for the other third-party code); PhysX is compiled once at -O3 without LTO for all profiles (no -Oz variant for the size profile)
+- Windows (Release, PhysX ON) failed once on a ninja post-build copy race of PhysXCooking_64.dll between lua_project and test_project (unrelated, native, passed on the next run)

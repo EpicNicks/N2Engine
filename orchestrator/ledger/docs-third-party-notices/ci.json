@@ -1,0 +1,10 @@
+{
+  "name": "docs-third-party-notices",
+  "head": "fcdfeb30dc3e7234233ca2e736332ae432fe7117",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

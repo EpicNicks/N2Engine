@@ -1,0 +1,29 @@
+{
+  "physxTag": "107.3-omni-and-physx-5.6.1",
+  "physxCommit": "09ff24f3279b735e672ff27b155cbf49f6296f4d",
+  "buildCommand": "cmake -S physx/compiler/public -G Ninja -DCMAKE_BUILD_TYPE=release -DTARGET_BUILD_PLATFORM=linux -DPX_OUTPUT_ARCH=x86|arm -DPHYSX_ROOT_DIR/PX_OUTPUT_LIB_DIR/PX_OUTPUT_BIN_DIR=<physx dir> -DPX_GENERATE_STATIC_LIBRARIES=True -DPX_BUILDSNIPPETS=False -DPX_BUILDPUBLICSAMPLES=False -DPX_BUILDPVDRUNTIME=False GPU off; CMAKE_CXX_FLAGS='--gcc-install-dir=... -w'; ' -Werror' sed-removed from source/compiler/cmake/linux/CMakeLists.txt; no packman; Clang 20 built clean, no Clang 18 fallback needed",
+  "archiveNames": [
+    "physx-linux-x86_64-5.6.1.tar.gz",
+    "physx-linux-aarch64-5.6.1.tar.gz"
+  ],
+  "archiveLayout": [
+    "LICENSE.md",
+    "bin/linux.x86_64/release/*.a (x86_64)",
+    "bin/linux.aarch64/release/*.a (aarch64)"
+  ],
+  "extractAt": "external/PhysX/physx",
+  "libs": [
+    "libPhysX_static_64.a",
+    "libPhysXCommon_static_64.a",
+    "libPhysXFoundation_static_64.a",
+    "libPhysXCooking_static_64.a",
+    "libPhysXExtensions_static_64.a",
+    "libPhysXPvdSDK_static_64.a",
+    "libPhysXCharacterKinematic_static_64.a",
+    "libPhysXVehicle2_static_64.a"
+  ],
+  "linkOrder": "-Wl,--start-group <all eight .a> -Wl,--end-group -lpthread -ldl -lrt (order inside the group irrelevant); compile consumers with -DNDEBUG, never PX_CHECKED/PX_DEBUG; headers as -isystem avoid -Winconsistent-missing-override noise",
+  "smokeResult": "PxCreateFoundation+PxCreatePhysics+scene step passes on both arches, body y 8.732875 after 30 steps",
+  "headerDiff": "committed external/PhysX/physx/include vs tag 107.3-omni-and-physx-5.6.1 (run on 5902851): differs only in PxDeformableBody.h, PxFEMSoftBodyMaterial.h, PxPhysicsAPI.h, PxScene.h; extra file only in committed: PxConfig.h (generated at build). Committed headers otherwise match the tag.",
+  "pr2Hints": "dir name is linux.x86_64 not linux.clang; sha256 differs per build, pin after the publish run; publish run: workflow_dispatch publish=true or push tag physx-linux-*"
+}

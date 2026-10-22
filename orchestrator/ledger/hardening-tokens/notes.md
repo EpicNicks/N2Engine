@@ -1,0 +1,12 @@
+Accepted by the user 2026-10-13:
+- Hello failure log line carries the claimed user and role=none (no role is known on failure); a host without authentication logs Hello lines as before, with no user/role
+- ServerInfo on a host with no tokens file answers user '' and role 'admin'; --token-env answers user 'token', role 'admin' (so role is always one of three)
+- An empty JSON array is a valid tokens file (no users): it is how all users are revoked; unknown keys in an entry and two entries with the same hash are also refused
+- POSIX permission check refuses group/other read OR write, runs on the open fd (fstat) at start and on every reload, and a symlink target is what is checked
+- A reload that rotates a token (same user and role, new hash) also closes the open connection
+- SIGHUP handler is installed only when --tokens-file is given, so a host without one keeps SIGHUP's default; Windows reloads only on the next connection
+- Extra audit: denied Warn line for refused commands; ExecuteCommand on a gated host with no Hello identity answers the Hello-required Error (defense in depth)
+- optionalTrailing may now list strings (default empty): generators, protocol_spec validation, TS codec tests changed; golden shortPayloads now has one vector per older minor version with an 'omitted' key
+- Empty Hello user string means absent; forbidden code description in protocol.json changed from reserved to live
+- Existing tests that read ServerInfo's tail (ReadOnlyModeTests, hardening, project, session tests, smoke script) were updated for the new trailing fields
+- Dockerfile and linux legs (x86_64 Clang, arm64, GCC 14) confirmed to configure N2ENGINE_EDITOR_TLS=ON; windows has one TLS ON leg and two OFF

@@ -1,0 +1,1 @@
+{"pr":139,"branch":"fix-msvc-extended-aligned-storage","head":"7987ddc3742218be579250dbb287e8174311e356","files":["CMakeLists.txt","tests/math/StableSortAlignedTests.cpp","docs/testing.html"],"deviations":[],"unverified":["User's PC rebuild with MSVC 14.44.35207"],"needsUser":null}

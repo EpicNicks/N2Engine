@@ -1,0 +1,10 @@
+{
+  "name": "fe-fe6-fe7-filters",
+  "head": "df448f14017ad4e9b2f09debbe11d24ef83ac07e",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "CI:success"
+  ],
+  "failures": []
+}

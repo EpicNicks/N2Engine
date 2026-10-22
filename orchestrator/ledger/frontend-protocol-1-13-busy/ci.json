@@ -1,0 +1,10 @@
+{
+  "name": "frontend-protocol-1-13-busy",
+  "head": "bf13d302b595af2d975048e8a2b0324b1d8d5c6e",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "CI:success"
+  ],
+  "failures": []
+}

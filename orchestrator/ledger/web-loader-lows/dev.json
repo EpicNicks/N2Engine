@@ -1,0 +1,1 @@
+{"pr":178,"branch":"fix-web-loader-lows","head":"9c81fa63fb6d17e18b2d700641aef32d92c55556","files":["web/n2-loader.js","scripts/web-loader-test.mjs"],"deviations":[],"unverified":["CI not yet run","real browser stream cancellation"],"needsUser":null}

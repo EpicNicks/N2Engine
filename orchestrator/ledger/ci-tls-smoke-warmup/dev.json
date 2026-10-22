@@ -1,0 +1,1 @@
+{"pr":169,"branch":"ci-tls-smoke-warmup","head":"a7c64722358bac732cd9b294c33b6417074b4be0","files":["tests/smoke/n2_frames.py"],"deviations":[],"unverified":["Nothing run locally; CI (esp. Windows Debug TLS leg) is the test; flake is intermittent so one green run is weak evidence"],"needsUser":null}

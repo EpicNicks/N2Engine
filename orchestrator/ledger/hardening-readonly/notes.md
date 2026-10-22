@@ -1,0 +1,12 @@
+# Notes (hardening-readonly, 2026-10-13)
+Approved deviations (accepted by the user):
+- Classes are Read, Write, Admin; Admin is only Shutdown here (all other project-level commands are Write) since both refuse identically under --read-only; the editor/admin split is left for the per-user-roles PR.
+- Play commands (WritePlaySnapshot, SetPaused, Step, SendInput) and SetCameraPosition are Write; Hello is Read (it must pass); PollEvents, GetLuaFields, GetComponent, GetEntity are Read (PollEvents can expose host log lines/paths; DescribeFields reads a Lua instance table).
+- Added trailing ServerInfo.readOnly (cheap, backward compatible); updated EditorSessionTests, EditorProjectTests and tests/smoke/editor_host_smoke.py, which assumed projectLoaded was the last ServerInfo byte.
+- ErrorCoded is declared under a new top-level protocol.json key extraResponses (no command answers with it) and codes under errorCodes; protocol_spec.py and typescript-codecs.test.mjs were extended to read extraResponses.
+- Hello capability flag is named errorCodes (trailing bool, default false); code 'forbidden' is defined and documented but never sent in this PR.
+- Refusals are not logged (a polling viewer would flood the log ring); audit lines are left for the per-user-tokens PR.
+- Added a deploy/n2editorhost.service comment, docs/index.html design-decision rows and a docs/testing.html row; merged origin/master into the branch.
+- Review fix 1: added protocol.json optionalTrailing (HelloRequest.errorCodes, ServerInfoResponse.readOnly; last fields, bool or number) and a lenient TS decoder (default false/0 when no bytes remain); C++/C# generators only mark the field in a comment (they emit structs); shortPayloads golden vectors; TS, ProtocolVectorTests and ProtocolSpecTests cover a 1.10 ServerInfo and Hello.
+- Review fix 2: --read-only is now an option-parse error with --play and with --create (no earlier decision recorded accepting --create; it writes a project); HostOptionsTests case added.
+NEXT hardening PRs: B per-user tokens (tokens file with hashed tokens via Mbed TLS SHA-256, roles admin/editor/viewer, audit lines, ServerInfo user/role), C rate limiting (loopback gets one global backoff), D docs/deploy; frontend sync for protocol 1.11.0 (ServerInfo.readOnly, ErrorCoded, Hello errorCodes flag, read-only badge, disable writes, map denial to a toast) is a separate frontend item. Unverified: Frontend showing the denial (later frontend item); A real exposed host; Windows tests with ctest ran in CI only; nothing built locally

@@ -1,0 +1,10 @@
+{
+  "name": "inspector-pass-list",
+  "head": "e9aedf2022af6e2b510a2d8519746b320b5654cb",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "CI:success"
+  ],
+  "failures": []
+}

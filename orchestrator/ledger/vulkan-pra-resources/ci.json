@@ -1,0 +1,10 @@
+{
+  "name": "vulkan-pra-resources",
+  "head": "d2a47bdff69621003d69835f0e337765e07dc5de",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

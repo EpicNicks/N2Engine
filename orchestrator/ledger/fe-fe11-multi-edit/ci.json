@@ -1,0 +1,10 @@
+{
+  "name": "fe-fe11-multi-edit",
+  "head": "b78813857cebe45a6f781613bf1ca81b42114c37",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "CI:success"
+  ],
+  "failures": []
+}

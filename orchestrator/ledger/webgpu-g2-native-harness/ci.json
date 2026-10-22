@@ -1,0 +1,10 @@
+{
+  "name": "webgpu-g2-native-harness",
+  "head": "0b5556368af4afe293e0639afeec63f6e16c0999",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}
