@@ -1,0 +1,26 @@
+{
+  "name": "math-avx-vector2-batch-fix",
+  "repo": "engine",
+  "branch": "fix-vector2-avx-batch",
+  "title": "Fix Vector2::DotBatch/LengthBatch (AVX): wrong results for 2 of every 4 elements (#131)",
+  "closes": "#131",
+  "issue": "GitHub issue #131 (read it via the gh wrapper first: api repos/EpicNicks/N2Engine/issues/131). Found by the NEON review: Vector2::DotBatch and LengthBatch (the AVX path, math/src/math/Vector2.cpp) read lanes 0,2,4,6 of a hadd result that holds its values in lanes 0,1,4,5, so for batches of 4 or more elements results 2 and 4 of each group of four are wrong on every x86 build that defines __AVX__ (all required CI legs). Scope: (1) fix the lane extraction/permute so every result is correct, for all counts including tails that are not multiples of the group size; (2) in tests/math/math_types/SimdDispatchTests.cpp remove the `#ifndef __AVX__` exclusion (marked with issue #131) so the Dot/Length batch comparisons run on x86 legs against the scalar reference with the EXISTING tolerances; add targeted tests with distinct values per element (so a permuted lane cannot pass by accident) for counts 1..17 and unaligned starts as the existing tests do; (3) remove the known-flaw note about this bug from docs/math.html (it links #131) and say in the PR body that it closes #131; (4) check the other batch functions in Vector2.cpp (and Vector3/4 AVX batch code) for the same hadd-lane pattern and report any further instance as a finding in your answer (fix it only if it is the identical bug and has the same test approach; otherwise leave it and list it). Do not change the NEON path or any API. Nothing builds locally; CI is the build (8 checks, required `linux (Release, x86_64, Clang)`; the arm64 leg exercises NEON, not this path; the Windows legs build with /arch:AVX).",
+  "allowedPaths": [
+    "^math/",
+    "^tests/math/",
+    "^docs/math\\.html$",
+    "^docs/testing\\.html$"
+  ],
+  "acceptance": [
+    "All Tests-workflow jobs green",
+    "Dot/Length batch results correct for every element on AVX builds, with the exclusion removed and tests for counts 1..17",
+    "docs/math.html no longer lists the flaw",
+    "No API change; NEON path untouched"
+  ],
+  "requiresDocs": true,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "reviewer": "sonnet",
+  "notes": "Reviewer: check the permute/extract logic by hand for all 8 lanes, the tail handling, the tests use per-element-distinct data, no tolerance loosened, and that other batch ops with the same pattern were examined."
+}

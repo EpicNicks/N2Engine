@@ -1,0 +1,10 @@
+{
+  "name": "fe-fe10-import-settings",
+  "head": "38e545d1362993e8dd5b1c428b776b6d1798f697",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "CI:success"
+  ],
+  "failures": []
+}

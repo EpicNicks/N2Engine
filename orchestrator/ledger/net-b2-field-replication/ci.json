@@ -1,0 +1,10 @@
+{
+  "name": "net-b2-field-replication",
+  "head": "79881f9bcafcc393173fd9026ae663880bc88ab5",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

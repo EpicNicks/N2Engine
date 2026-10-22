@@ -1,0 +1,3 @@
+{"head":"c69c60a7f9e952d32a09c72c03f23a0adeefc595","findings":[
+{"severity":"low","file":"math/CMakeLists.txt","line":49,"summary":"PUBLIC -ffp-contract=off turns off FMA contraction in every target that links math on aarch64, not only the math code (carried over from the previous review; declared deviation, unchanged)","scenario":"On aarch64, engine, physics and game code that links math loses fused multiply-add, which can cost performance in hot loops outside math. The bit-exact Vector4 batch edge tests need it for the inline header code, and CI has no benchmark to measure the cost."}
+],"verdict":"clean"}

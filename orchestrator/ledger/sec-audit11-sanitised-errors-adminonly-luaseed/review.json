@@ -1,0 +1,27 @@
+{
+  "head": "35c348f79f5137c3320a6f5797948637c48dfcef",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "editor-server/src/ClientText.cpp",
+      "line": 88,
+      "summary": "The new left-boundary check treats ':' and '.' (and any run of slashes not preceded by file:) before a root as 'inside a name', so the net no longer rewrites a real host path glued to a colon or written after a non-file URL scheme or a '\\\\.\\' device prefix; no test pins this exception",
+      "scenario": "A remote client's Error frame reading 'open:C:\\proj\\assets\\a.txt' (Windows) or 'key:/srv/game/x' (POSIX) passes RedactHostPaths unchanged; only the net is affected (no current site found that builds such text: std::filesystem_error quotes or brackets its paths, every e.what() path to a remote client goes through ClientText::Failure)"
+    },
+    {
+      "severity": "low",
+      "file": "editor-server/src/ClientText.cpp",
+      "line": 190,
+      "summary": "Only single '\\' is normalised: a host path whose separators are doubled (JSON- or C-escaped, 'C:\\\\proj\\\\assets') or URL-encoded is never matched by the net",
+      "scenario": "An error text that embeds a JSON dump or an escaped path normalises 'C:\\\\proj\\\\x' to 'C://proj//x', which does not contain 'C:/proj', so the folder reaches a remote client; pre-existing since 9b77519 and net-only"
+    },
+    {
+      "severity": "low",
+      "file": "docs/logging-and-editor.html",
+      "line": 1062,
+      "summary": "The 'net under the messages' paragraph was not updated for the delta: it still lists the working folder unconditionally (HostRoots now drops a drive/file-system root) and states only the right-hand 'matches whole' rule, not that a folder after a name char, ':', '.' or a slash run (other than file:// and \\\\?\\) is left alone",
+      "scenario": "A reader trusting the docs assumes 'path:/srv/game/x' or a cwd of C:\\ is rewritten for a remote client; the code leaves both as they are (testing.html was updated, this section was not)"
+    }
+  ],
+  "verdict": "clean"
+}

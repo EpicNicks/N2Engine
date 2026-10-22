@@ -1,0 +1,1 @@
+{"pr":29,"branch":"feat-dom-tests-welcome-store","head":"46e4f53e26216729ee71ab740ca3e3a40b7d7cdc","files":["src/test/fake-store-api.ts","src/test/store.test.ts","src/test-dom/helpers.tsx","src/test-dom/welcome-store.test.tsx","README.md"],"deviations":[],"unverified":[],"needsUser":null}

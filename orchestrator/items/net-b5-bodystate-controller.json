@@ -1,0 +1,29 @@
+{
+  "closes": null,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "requiresDocs": true,
+  "repo": "engine",
+  "name": "net-b5-bodystate-controller",
+  "branch": "feat-net-b5-bodystate-controller",
+  "title": "Netcode B5: BodyState get/set on IPhysicsBackend (PhysX and Jolt), capsule cast/overlap check, engine-owned character controller",
+  "issue": "Design: C:/Method Notes Obsidian/orchestrator/proposals/netcode-runtime-design.md (row B5 line ~299; the prediction/controller and BodyState sections; decisions N1-N15) and C:/Method Notes Obsidian/orchestrator/proposals/physics-backend-investigation-156.md (IPhysicsBackend interface sections: BodyState get/set, teleport, sleep; character-controller notes). Read the merged physics code first: IPhysicsBackend.hpp, PhysXBackend, JoltBackend (J3-J6: layers, triggers, events, queries incl. CapsuleCast/Overlap, SaveState), ContactTracker, the Rigidbody/Collider components, existing character-related code if any. SCOPE: (1) BodyState (position, rotation, linear and angular velocity, sleeping flag) get/set on IPhysicsBackend with implementations on PhysX AND Jolt (teleport semantics: setting state wakes or sleeps as asked, does not generate spurious trigger/collision events beyond what the design says, kinematic bodies handled, disabled/parked bodies refuse or queue per contract), exact-roundtrip tests on both backends (typed suites); (2) verify capsule cast and overlap exist on both backends from J5 (they should: if anything is missing add it); (3) an engine-owned CharacterController component/system (capsule-based, kinematic move with collide-and-slide via the backend's capsule sweeps, ground detection, step offset, slope limit, jump/gravity integration, deterministic given the same input and the fixed tick, using only float math through the engine's deterministic math helpers where those exist), exposed to C++ and Lua (Lua binding in the same style as Rigidbody/Physics queries), with an input struct (move vector, jump) and state (position, velocity, grounded) that can be saved/restored and set from a server correction (this is what B6 prediction will use); (4) tests: BodyState round trip on both backends, controller on flat ground, slopes, steps, walls (slide), falling and jumping, ground detection, determinism (same inputs => identical state hash across two runs and on both backends), corner cases (zero move, tiny capsule, penetration recovery); (5) docs/physics.html (and scripting-lua.html for the Lua API) verified against the code. No networking in this item. PhysX behaviour for existing features must not change. Nothing builds locally for the engine; CI (12 checks) is the test; expect fix rounds; re-read every edit twice (CMake/YAML/C++ syntax); NEVER call a stateful function (RNG etc.) twice in one argument list or operator expression (unspecified evaluation order); NEVER run taskkill or kill other processes; verify every docs sentence against the CODE; no attribution lines on commits or PRs (no Co-Authored-By, no Generated-with footer); GitHub only via the wrapper; before your final push merge origin/master into the branch if it moved; your FINAL message must be a real report (PR number, head sha, what you did, deviations), never a single word.",
+  "allowedPaths": [
+    "^engine/",
+    "^tests/",
+    "^docs/",
+    "^CMakeLists\\.txt$",
+    "^cmake/",
+    "^lua_project/",
+    "^[^/]*\\.lua$"
+  ],
+  "acceptance": [
+    "BodyState get/set on PhysX and Jolt with round-trip tests",
+    "CharacterController with sweeps, ground, step, slope, jump; C++ and Lua API",
+    "Deterministic same-input tests on both backends; edge cases covered",
+    "Docs true; CI green"
+  ],
+  "reviewer": "opus",
+  "notes": "Reviewer (numerics): no NaN/inf propagation, penetration recovery bounded (no infinite loops), event side effects of teleport, determinism (no unordered iteration, one RNG draw per statement, no uninitialised state), save/restore completeness of controller state, Lua binding argument validation, compile-level correctness."
+}

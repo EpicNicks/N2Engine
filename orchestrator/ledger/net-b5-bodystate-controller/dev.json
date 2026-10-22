@@ -1,0 +1,29 @@
+{
+  "pr": 223,
+  "branch": "feat-net-b5-bodystate-controller",
+  "head": "b79a314d7a1a485b51e01cc7bcc5491f53a82ddf",
+  "files": [
+    "engine/include/engine/physics/CharacterController.hpp",
+    "engine/src/physics/CharacterController.cpp",
+    "engine/src/scripting/bindings/LuaPhysicsBindings.cpp",
+    "engine/src/scripting/bindings/LuaComponentBindings.cpp",
+    "engine/src/scripting/bindings/engine-api.lua",
+    "engine/src/serialization/BuiltinComponents.cpp",
+    "tests/engine/physics/BodyStateTests.cpp",
+    "tests/engine/physics/CharacterControllerTests.cpp",
+    "tests/engine/physics/LuaCharacterControllerTests.cpp",
+    "tests/engine/serialization/ReflectionTests.cpp",
+    "docs/physics.html",
+    "docs/scripting-lua.html",
+    "docs/testing.html",
+    "docs/index.html"
+  ],
+  "deviations": [],
+  "unverified": [
+    "controller against the Jolt thread pool",
+    "moving platforms, pushing bodies, crouching, rotating capsule",
+    "web CI leg has no physics backend tests",
+    "round 3 (rim probes, new step/riser/crest tests) not built locally; relies on CI; probe tolerances assume Jolt convex radius <= 0.05"
+  ],
+  "needsUser": null
+}

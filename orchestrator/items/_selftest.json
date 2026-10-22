@@ -1,0 +1,15 @@
+{
+  "name": "_selftest",
+  "repo": "frontend",
+  "branch": "f9-bom-sync",
+  "title": "selftest",
+  "closes": null,
+  "issue": "self-test only",
+  "allowedPaths": ["^README\\.md$", "^src/", "^engine-ref\\.txt$"],
+  "acceptance": ["n/a"],
+  "requiresDocs": false,
+  "allowProtocol": true,
+  "gate": null,
+  "approved": true,
+  "reviewer": "sonnet"
+}

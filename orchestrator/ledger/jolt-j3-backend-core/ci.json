@@ -1,0 +1,10 @@
+{
+  "name": "jolt-j3-backend-core",
+  "head": "e650674ef208a890fc1e63d7a9fbe8eae25874a6",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

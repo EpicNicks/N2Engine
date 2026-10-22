@@ -1,0 +1,10 @@
+{
+  "name": "sec-lua-registry-reserve",
+  "head": "0ba2adba5b3ef778380389ce92779a9da93df2c0",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

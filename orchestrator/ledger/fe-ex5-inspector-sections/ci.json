@@ -1,0 +1,10 @@
+{
+  "name": "fe-ex5-inspector-sections",
+  "head": "22c3e0003f82a0c945b9b66e22e9a3d4239b5f9a",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "CI:success"
+  ],
+  "failures": []
+}

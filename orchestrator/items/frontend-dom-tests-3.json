@@ -1,0 +1,24 @@
+{
+  "name": "frontend-dom-tests-3",
+  "repo": "frontend",
+  "branch": "feat-dom-tests-assets-hierarchy",
+  "title": "DOM tests PR 3: assets panel and hierarchy panel flows",
+  "closes": null,
+  "issue": "Approved plan: C:/Method Notes Obsidian/orchestrator/proposals/frontend-dom-tests.md (section 4 item 4, section 5 jsdom gaps, section 6 PR 3; read it first). Harness from PRs #27/#29 exists (src/test-dom/setup.ts, helpers.tsx with renderWithApp/renderWithStore, src/test/fake-store-api.ts); read them and the existing read-only DOM test (src/test-dom/read-only.test.tsx) first, and reuse their patterns. Scope: DOM tests for src/renderer/assets-panel.tsx and src/renderer/hierarchy-panel.tsx over AssetsState/HierarchyState (or the real store) with a fake engine: assets: context menu items per asset kind and which are enabled, rename prompt flow (type new name, confirm, the right state/engine call with the right args; cancel and invalid names), delete confirmation, tree expand/collapse; hierarchy: tree rendering from fake entities, expand/collapse, selection, rename and create/delete flows and their calls, disabled state when the host is read-only (writeguard). Assert calls and resulting DOM, not just rendering. Drag and drop: jsdom has no DataTransfer; test drop handlers via fireEvent.drop with a hand-made dataTransfer object only if simple, else skip and say so in the README note. Out of scope: viewport panel (canvas/ResizeObserver), layout/positioning. Extend the shared fake additively only if needed. README testing note: what these tests cover. Run npm run typecheck, build and npm test locally; open a PR and wait for repo CI. Do NOT change production code under src/main, src/preload or src/renderer, except exporting a symbol purely for testing if unavoidable (report it as a deviation); if a test reveals a real bug stop and report needsUser. No new dependencies.",
+  "allowedPaths": [
+    "^src/test-dom/",
+    "^src/test/",
+    "^README.md$"
+  ],
+  "acceptance": [
+    "typecheck, build, npm test and frontend CI green",
+    "Assets and hierarchy flows asserted (calls and DOM)",
+    "No production code changed"
+  ],
+  "requiresDocs": false,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "reviewer": "sonnet",
+  "notes": "Reviewer: tests must assert behaviour, no production file changed, no flaky timing."
+}

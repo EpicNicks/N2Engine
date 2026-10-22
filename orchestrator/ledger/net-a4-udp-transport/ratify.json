@@ -1,0 +1,7 @@
+{
+  "name": "net-a4-udp-transport",
+  "decision": "merge",
+  "reasons": [],
+  "relaxed": "behind master by 87 file(s), no code overlap with the PR's files (docs overlap: docs/testing.html), trial merge clean",
+  "merged": true
+}

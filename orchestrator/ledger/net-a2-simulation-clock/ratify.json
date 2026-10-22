@@ -1,0 +1,7 @@
+{
+  "name": "net-a2-simulation-clock",
+  "decision": "merge",
+  "reasons": [],
+  "relaxed": "behind master by 49 file(s), no code overlap with the PR's files (docs overlap: docs/application.html, docs/physics.html, docs/testing.html), trial merge clean",
+  "merged": true
+}

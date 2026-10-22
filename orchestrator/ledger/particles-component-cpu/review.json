@@ -1,0 +1,13 @@
+{
+  "head": "8368842f4a04bfde00b774c1fef7ad9e3cc36a7a",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "docs/particles.html",
+      "line": 160,
+      "summary": "The stale-handle guard compares the particle backend by pointer identity (_gpuOwner), and neither the docs nor the header say that a replacement backend allocated at the freed backend's address defeats it.",
+      "scenario": "Once PR-C adds a GPU particle backend: the old physics backend is destroyed first, the new one is created at the same address, Backend() matches _gpuOwner and the old handle reaches the new backend's systems. Unreachable today (no real backend returns a particle backend); document as a known limit or use a generation counter in PR-C."
+    }
+  ],
+  "verdict": "clean"
+}

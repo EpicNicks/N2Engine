@@ -1,0 +1,31 @@
+{
+ "pr": 112,
+ "branch": "feat-editor-tls",
+ "head": "c079f4f2eb2fa38bbfa5233beb7992e5667d5d5c",
+ "files": [
+  ".github/workflows/tests.yml",
+  "THIRD_PARTY_NOTICES.md",
+  "docs/logging-and-editor.html",
+  "docs/testing.html",
+  "editor-server/CMakeLists.txt",
+  "editor-server/include/editor-server/EditorServer.hpp",
+  "editor-server/include/editor-server/EditorTls.hpp",
+  "editor-server/include/editor-server/HostOptions.hpp",
+  "editor-server/src/EditorServer.cpp",
+  "editor-server/src/EditorTls.cpp",
+  "editor-server/src/Host.cpp",
+  "editor-server/src/HostOptions.cpp",
+  "tests/editor-server/CMakeLists.txt",
+  "tests/editor-server/EditorTlsTests.cpp",
+  "tests/editor-server/HostOptionsTests.cpp",
+  "external/mbedtls/ (vendored Mbed TLS 3.6.7: library/, include/, LICENSE, README.md)"
+ ],
+ "deviations": [],
+ "unverified": [
+  "Real cloud host, non-loopback networks, WAN throughput/latency",
+  "POSIX branches (socket shims in EditorTls.cpp, 0700/0600 permissions) never compiled or run",
+  "Windows ACLs on the key file not inspected (relies on inherited profile permissions)",
+  "Individual TLS gtest names not visible in CI log (ctest summary only: 100% of 7 passed); TLS 1.3 negotiated in the smoke test"
+ ],
+ "needsUser": null
+}

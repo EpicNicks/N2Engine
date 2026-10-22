@@ -1,0 +1,26 @@
+{
+  "closes": null,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "requiresDocs": false,
+  "repo": "frontend",
+  "name": "fe-fe9b-layers-matrix",
+  "branch": "feat-fe9b-layers-matrix",
+  "title": "Electron UI FE9b: layer collision matrix editor (32x32 checkbox grid) in the project settings Layers section",
+  "issue": "Electron UI roadmap C:/Method Notes Obsidian/orchestrator/proposals/electron-ui-roadmap.md (U1-U21 ACCEPTED): section 5 (project settings; FE9b row: the layers collision matrix as a 32x32 checkbox grid in a second PR) and section 16 (panels lane: FE9 -> FE9b -> FE15). MERGED: FE9 project settings panel (frontend #43: section registry, typed tables in project-settings-schema.ts, Layers section with 32 names and a READ-ONLY note about the collision matrix). Read the FE9 code, its README section, and in the engine repo the project settings format for layers and the collision matrix (engine physics layer matrix and how SetProjectSettings validates it: find it in the engine code and docs/physics.html / docs/project-settings docs) FIRST: the frontend must send exactly the shape the host validates. SCOPE: replace the read-only note with an editable symmetric matrix (toggling (a,b) toggles (b,a)), rows/columns labelled with layer names (unnamed layers collapsed by default with a show-all toggle), row/column select-all helpers, dirty tracking and Apply/Revert consistent with the other FE9 sections, admin/role gating the same as other settings writes, read-only when the host is read-only or a viewer; DOM tests (toggle symmetry, apply sends the right payload, revert, role gating, 32-layer bounds) and unit tests for the matrix model. Frontend repo C:/Method Notes Obsidian/N2Engine-Electron-Frontend (EpicNicks/N2Engine-Electron-Frontend); the engine repo C:/Method Notes Obsidian/N2Engine is READ-ONLY reference. Tests run LOCALLY: npm run typecheck and npm test (Node + DOM tests) must pass before you push; CI has 3 checks. Append ONE README.md section for the feature (other PRs also append: keep yours self-contained). Follow the existing panel/keymap/prefs registries (F1/F2) and lane file boundaries in the roadmap section 16. NEVER run taskkill or kill other processes; no attribution lines on commits or PRs (no Co-Authored-By, no Generated-with footer); GitHub only via the wrapper; before your final push merge origin/master into the branch if it moved; your FINAL message must be a real report (PR number, head sha, what you did, deviations), never a single word.",
+  "allowedPaths": [
+    "^package\\.json$",
+    "^package-lock\\.json$",
+    "^README\\.md$",
+    "^src/",
+    "^scripts/"
+  ],
+  "acceptance": [
+    "Editable symmetric 32x32 matrix in the Layers section sending exactly what the host validates",
+    "Apply/Revert/dirty and role gating like the other sections",
+    "Node + DOM tests pass; 3 CI checks green"
+  ],
+  "reviewer": "sonnet",
+  "notes": "Reviewer: payload matches the engine validation (read the engine code), symmetry, bit order, gating, tests real."
+}

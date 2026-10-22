@@ -1,0 +1,15 @@
+{
+  "name": "fbx-blender-fixture",
+  "repo": "engine",
+  "branch": "test-fbx-blender-fixture",
+  "title": "Real Blender-exported binary FBX fixture for the ufbx importer",
+  "closes": null,
+  "issue": "TODO(user): supply a small binary FBX exported from Blender (agents cannot produce one). Add it as a fixture with tests asserting the importer reads its meshes, materials and transforms, and document the export settings used.",
+  "allowedPaths": ["^tests/", "^docs/", "^engine/"],
+  "acceptance": ["Fixture committed with the Blender version and export settings recorded", "Tests green on the ufbx CI leg"],
+  "requiresDocs": true,
+  "allowProtocol": false,
+  "gate": "needs a Blender-exported binary FBX from the user",
+  "approved": false,
+  "reviewer": "sonnet"
+}

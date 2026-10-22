@@ -1,0 +1,20 @@
+{
+ "head": "7e3d14582b0628dda15e23a39ac3c320be2808a6",
+ "findings": [
+  {
+   "severity": "low",
+   "file": "tests/renderer/vulkan/VulkanBlendTests.cpp",
+   "line": 664,
+   "summary": "EXPECT_GE(GetRingChunkCountForTest(), chunksBefore + 2) does not prove what its message says ('the 4096 draws of a frame spanned at least three ring chunks'): GetRingChunkCountForTest sums the chunks of BOTH frame slots and chunksBefore is 0 (chunks are made lazily), so one chunk per slot already passes.",
+   "scenario": "Today each frame needs 4096 x (192+128 aligned) >= 1.31 MB, i.e. 3 chunks (256K+512K+1M), so coverage is real; but if FirstChunkSize grew to e.g. 4 MB every draw would sit in chunk 0, the test would silently stop exercising chunk chaining, and the guard assertion would still pass (2 slots x 1 chunk). Assert per frame (e.g. count after the first frame >= 3, or a per-slot accessor)."
+  },
+  {
+   "severity": "low",
+   "file": "docs/testing.html",
+   "line": 0,
+   "summary": "The new Transparent-queue scene's measured numbers are not reported anywhere: testing.html defers to the test log line '[ cross-diff ] transparent queue back to front', which exists in the test's stdout but ctest runs with --output-on-failure, so the passing CI log of 0548a8c does not contain it; the PR body does not mention the new test or its numbers either.",
+   "scenario": "Brief: 'Report the measured numbers ... of every compared scene in the PR body'. A reader following the docs to the CI log finds nothing; the strict pass only bounds the max at 2/255. Copy the numbers from a run of renderer_tests (or a one-off print) into the PR body and testing.html, or reword the docs."
+  }
+ ],
+ "verdict": "clean"
+}

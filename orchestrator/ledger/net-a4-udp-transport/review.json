@@ -1,0 +1,27 @@
+{
+  "head": "54c551bb1c0c250bb29cb031624b8692109031c7",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "engine/src/network/n2net/UdpTransport.cpp",
+      "line": 832,
+      "summary": "The idle-peer sweep runs before the socket is drained, so a stall between Polls longer than peerIdleTimeoutMs drops every peer even though their datagrams sit in the receive buffer.",
+      "scenario": "A client (acceptUnknownPeers=false) hitches past 30 s, for example on a synchronous load or at a breakpoint. The next Poll removes its Connect peer first, then drops the server's queued datagrams as droppedUnknownSource, so the link is lost for good. A server in the same case re-creates every peer under a new PeerId."
+    },
+    {
+      "severity": "low",
+      "file": "engine/src/network/n2net/UdpTransport.cpp",
+      "line": 613,
+      "summary": "DualStack() returns true for any IPv6 bind whose IPV6_V6ONLY=0 was accepted, including a specific address such as ::1 that can never reach IPv4. Connect to an IPv4 address then succeeds, but every Send fails silently.",
+      "scenario": "Open(bindAddress=\"::1\") returns DualStack()==true. Connect(\"127.0.0.1\", p) returns None and makes a peer. Every Send returns Sent but only bumps sendErrors. The Ipv6Loopback test (tests line 1117-1119) asserts this behaviour while its comment says IPv4 is unreachable."
+    },
+    {
+      "severity": "low",
+      "file": "engine/include/engine/network/n2net/Transport.hpp",
+      "line": 52,
+      "summary": "The ITransport header was not updated: it still says the library has no sockets and native UDP is later work, and that Disconnect makes the other side see PeerDisconnected. UdpTransport now breaks that (an accepted deviation).",
+      "scenario": "A reader of Transport.hpp (lines 52 and 75) relies on the Disconnect contract and the 'no sockets' note. docs/netcode.html was updated to say the opposite, so the code comments and the docs disagree."
+    }
+  ],
+  "verdict": "clean"
+}

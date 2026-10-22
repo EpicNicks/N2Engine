@@ -1,0 +1,7 @@
+{
+  "name": "webgpu-g3a-resources-unlit",
+  "decision": "merge",
+  "reasons": [],
+  "relaxed": "behind master by 28 file(s), no code overlap with the PR's files (docs overlap: docs/application.html, docs/testing.html), trial merge clean",
+  "merged": true
+}

@@ -1,0 +1,10 @@
+{
+  "name": "sec-host-dos-limits",
+  "head": "0bbea36b891767a77cd2c80ca2155f0148382820",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

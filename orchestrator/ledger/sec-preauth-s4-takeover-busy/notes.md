@@ -1,0 +1,13 @@
+Accepted by the user 2026-10-13:
+- Busy message names the holder's ROLE only (design decision 5 recommended 'role only', approved); text 'The host is serving another session (a <role> session); try again later', generic text when no holder is known (a candidate overtaken by a newer claim).
+- Loopback cap: the shared loopback backoff is removed outright (RateLimitPolicy loopbackFailures/loopbackWindow and FailureOutcome::loopback gone); the cap is the existing pre-auth slots (loopback may use all) plus the global handshake bucket; no new loopback-specific tunable was added.
+- A candidate that would be turned away (Busy verdict) still waits the 1 s busy grace first, as in S-3, so a session whose client just went away is not mistaken for a busy host.
+- A session closed for a takeover or preemption does not stop a host running with --exit-on-disconnect (its successor is a client that is there); not in the plan.
+- A later Hello on the session's connection updates the arbiter identity (new SessionArbiter::UpdateIdentity), otherwise an editor could preempt what is now an admin's session.
+- One claim at a time: a newer candidate that outranks or equals (same user) the waiting claimant replaces its claim and the old waiter is answered busy with no role; the close request is cleared when the session thread takes the hand-off, not in BeginSessionState.
+- Waiter hang-up detection is Linux POLLRDHUP / recv peek elsewhere; with TLS only the transport is looked at.
+- Existing tests changed on purpose: PreAuthServerTests (same-token second client now takes over; no-token newest takes over; Stop test uses a stuck session), RateLimiterTests and RateLimitServerTests (no loopback backoff), ReadOnlyModeTests (spec codes include busy).
+- Protocol 1.13.0 takes the next minor ahead of the reserved 0x80-0x84 Lua-extension commands; noted in the PR.
+- Review fixes: docs (3 places) updated; hung-up waiter checked before claiming; _sessionReplaced cleared when a claim is abandoned; takeover wait 0 now answers Busy without closing the running session. No new tests for the three low fixes.
+- CI fix: EditorTokensTests ANewConnectionStartsWithoutTheLastOnesIdentity raced the first session's thread ending (second connection now answered by a worker); the final identity check now polls up to 10 s.
+- Review low (_sessionReplaced reset when a claim is abandoned in the last poll) not fixed: narrow window, host keeps running only in the stop-on-disconnect case.

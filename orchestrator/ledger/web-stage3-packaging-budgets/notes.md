@@ -1,0 +1,11 @@
+Accepted by the user 2026-10-13:
+- Removed the stage 0 budget env vars and N2ENGINE_WEB_BUDGET_* CMake variables from web-size-report so budgets live only in web/budgets.json
+- Compression done with node zlib (gzip 9, brotli 11) instead of a pinned brotli module or CLI; manifest gzip sizes are slightly larger than gzip -9 CLI sizes
+- size/speed packages added as steps to the existing web job (+3.75 and +4.85 min, job ~17.5 min), no new job
+- Loader uses instantiateWasm and getPreloadedPackage hooks (pack prefetched before the engine starts, wasm downloaded after it); no custom pack format, no per-asset lazy loading
+- Budgets set at measured +~15 percent after a first CI run with placeholder limits; dev has a ceiling only
+- Added docs/web-checklist.html items and a precompressed-hosting recipes section (recipes not run on any server)
+- Review fix: index.js and n2-loader.js versioned by rewriting the script tags in index.html at package time (web-package-finalize.mjs; static files only); finalize fails if either tag is not found exactly once
+- Review fix: added options.indexJsVersion (the page passes the ?v= it loaded index.js with); a page older than manifest.json fails with a reload message instead of a LinkError
+- Review fix: wasm streams only when Content-Type is application/wasm, otherwise the first response is read (one GET); a second GET happens only if streaming fails with a non-Link/Compile error, after cancelling the first body
+- Review fix: without a manifest, Content-Length is used as the expected size only when there is no Content-Encoding (else no total, no length check)

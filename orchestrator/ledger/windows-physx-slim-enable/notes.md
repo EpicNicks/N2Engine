@@ -1,0 +1,1 @@
+No plan deviation. The only dev.json entry was a ci-wait tooling timeout; all 8 checks were green on head 125b92c. Orchestrator verified from job logs: the first PR run downloaded physx-windows-x86_64-5.6.1-slim.zip (cache key from cmake/PhysXWindowsHashes.cmake), later runs restored that cache, PhysX stayed ON and the PhysX tests passed on both PhysX-ON Windows legs.

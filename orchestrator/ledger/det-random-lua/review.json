@@ -1,0 +1,3 @@
+{"head":"64e8de85c80a46ff09d3382db6a2f9571aeb83b7","findings":[
+{"severity":"low","file":"docs/application.html","line":119,"summary":"projectPath row lists three settings Init reads (determinism.luaSeed, math.simdTier, physics.gpu) but still says 'Init does not report a bad value of either'","scenario":"Stale wording; should say 'of any of them' (Init does not report a bad luaSeed, ApplyProjectSettings does)"}
+],"verdict":"clean"}

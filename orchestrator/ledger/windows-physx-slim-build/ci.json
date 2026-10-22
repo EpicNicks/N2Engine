@@ -1,0 +1,11 @@
+{
+  "name": "windows-physx-slim-build",
+  "head": "c2519859c7dd7c2736503c8e3acae2a482e0225d",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success",
+    "PhysX Windows slim:success"
+  ],
+  "failures": []
+}

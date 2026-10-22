@@ -1,0 +1,3 @@
+{"head":"b73bdf120947ade068d2720142e78ff965c70757","findings":[
+{"severity":"low","file":"src/renderer/console-filter.ts","line":73,"summary":"The NestedRepeat ReDoS heuristic is bypassed by nested or alternation shapes such as ((a+))+ and (a|aa)+$","scenario":"User enables regex and types ((a+))+$ or (a|aa)+$ against a long run of a's: the guard does not match, test() backtracks exponentially and freezes the renderer until restart (no longer persisted, so only on deliberate input)."}
+],"verdict":"clean"}

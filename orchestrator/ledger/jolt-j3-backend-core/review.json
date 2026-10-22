@@ -1,0 +1,27 @@
+{
+  "head": "b9c2f435842fd05c5dcfceb46044724d54d2f28b",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "engine/src/network/NetworkValidation.cpp",
+      "line": 87,
+      "summary": "The Deterministic preset now starts on Jolt (strict-FP build, physics.deterministic on) although triggers, layers, contact/trigger events and queries are silently absent (one warning only); nothing in the validation refuses or flags it",
+      "scenario": "A Deterministic lockstep project that relies on OnTriggerEnter or a layer matrix starts cleanly on the GCC strict build and plays with no triggers, no events and every layer colliding; the dev recorded it as a FINDING, the user must accept it or the check should refuse until J4/J5"
+    },
+    {
+      "severity": "low",
+      "file": "docs/physics.html",
+      "line": 444,
+      "summary": "The Jolt section's 'Not verified' callout lists 'that the hashes of all legs are equal', but JoltBackendDeterminismTest asserts the golden constants on every leg and docs/testing.html tabulates equal hashes on all seven legs",
+      "scenario": "A reader of physics.html is told cross-leg equality is unverified while the CI test fails on any leg that differs; the two docs pages contradict each other"
+    },
+    {
+      "severity": "low",
+      "file": "engine/src/Application.cpp",
+      "line": 394,
+      "summary": "In a build with N2ENGINE_USE_JOLT=ON and N2ENGINE_USE_PHYSX=OFF (the GCC strict leg's configuration), a project that does not set physics.backend gets no physics ('Built without PhysX') even though Jolt is compiled in: the default/fallback is always PhysX",
+      "scenario": "Jolt-only build, project without physics.backend: physicsStatus Disabled, every Rigidbody logs 'Physics backend not available'; only an explicit physics.backend jolt gets the Jolt backend (pre-existing ChooseBackend rule, now reachable)"
+    }
+  ],
+  "verdict": "clean"
+}

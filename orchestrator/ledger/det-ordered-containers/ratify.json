@@ -1,0 +1,7 @@
+{
+  "name": "det-ordered-containers",
+  "decision": "merge",
+  "reasons": [],
+  "relaxed": "behind master by 13 file(s), no overlap with the PR's files, trial merge clean",
+  "merged": true
+}

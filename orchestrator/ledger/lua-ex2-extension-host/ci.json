@@ -1,0 +1,10 @@
+{
+  "name": "lua-ex2-extension-host",
+  "head": "c995c91da2a719b459d53ca46fb912c1617302af",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

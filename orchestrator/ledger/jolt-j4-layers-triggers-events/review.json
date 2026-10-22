@@ -1,0 +1,35 @@
+{
+  "head": "1b7e87c0a0a47b6228177ed6b14fa2fbee39b637",
+  "previous": {
+    "head": "382e367ea6b7cb3ea1ea757c99e356171bea07fb",
+    "high sub-shape id change ends a touching pair (JoltBackend.cpp FoldContacts)": "fixed: presentPairs keeps the touch when the same collider pair is reported present under a new key",
+    "high Persisted solid reports dropped after a re-filter (ContactBridge::Handle)": "fixed: Persisted is buffered when Impl::IsReported finds the contact not tracked; concurrent reads of contacts/bodies only during Update, nothing writes them then",
+    "low relativeVelocity ignored kinematic bodies": "fixed: !IsStatic()",
+    "low silent Jolt skip in LayerSetWhileTheBodyIsDisabledAppliesWhenItIsEnabled": "fixed: visible GTEST_SKIP at the end of the test"
+  },
+  "findings": [
+    {
+      "severity": "low",
+      "file": "engine/src/physics/jolt/JoltBackend.cpp",
+      "line": 1347,
+      "summary": "presentPairs is filled for every present report, including a trigger contact that is only inside the speculative distance (touching false). The old key of a tracked trigger touch is then erased silently while the new key's info stays reported=false, so the tracker keeps the trigger touch and no later parted/ended path can ever send its Exit.",
+      "scenario": "A collider is added to a body (its shape is rebuilt, sub-shape ids change) in the same step that a visitor leaves that body's trigger to within 0.02 m: OnTriggerStay keeps firing and OnTriggerExit never comes, even after the visitor moves away. Insert into presentPairs only when touching (or carry info.reported over to the new key)."
+    },
+    {
+      "severity": "low",
+      "file": "docs/physics.html",
+      "line": 442,
+      "summary": "Docs out of sync with the fix round: 'every Added, the Persisted of trigger contacts, every Removed' no longer describes the listener (solid Persisted reports of untracked contacts are now buffered too), and nothing in the docs says that a touch begun again after SetIsTrigger or a matrix change starts with an Enter that carries no contact points, impulse or relativeVelocity (dev.json lists it, line 448 implies data 'from the contact's first report').",
+      "scenario": "A reader of the Events section or the difference table (row 489) expects a full Collision on the re-Enter after toggling SetIsTrigger; on Jolt contacts is empty and impulse/relativeVelocity are zero, unlike PhysX."
+    },
+    {
+      "severity": "low",
+      "file": "docs/physics.html",
+      "line": 306,
+      "summary": "The physics-features row quotes the reason as \"jolt does not implement scene queries yet\"; the code's string (NetworkValidation.cpp, asserted in NetworkValidationTests and HealthTests) is \"the selected backend (jolt) does not implement scene queries yet\". The quote is a shortened substring (the same shortening #211 used), not a wrong claim.",
+      "scenario": "A reader searching the log or Health row for the quoted text finds it only as a substring; quote the full string for exactness."
+    }
+  ],
+  "verdict": "clean",
+  "confirmedDelta": "master merge + feature bits reviewed by opus"
+}

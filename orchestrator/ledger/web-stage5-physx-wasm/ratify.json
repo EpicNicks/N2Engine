@@ -1,0 +1,7 @@
+{
+  "name": "web-stage5-physx-wasm",
+  "decision": "merge",
+  "reasons": [],
+  "relaxed": "behind master by 20 file(s), no code overlap with the PR's files (docs overlap: docs/testing.html), trial merge clean",
+  "merged": true
+}

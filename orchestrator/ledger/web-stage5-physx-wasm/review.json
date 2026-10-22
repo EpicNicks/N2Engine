@@ -1,0 +1,27 @@
+{
+  "head": "cb6036d68983a346471a2dd7e9efa5990ab7008c",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "docs/web-build.html",
+      "line": 408,
+      "summary": "The engine_tests counts in 'The PhysX tests under node' (1504 tests: 1490 passed, 14 skipped) do not match the CI run at this head (1529 passed, 14 skipped, so 1543 in all).",
+      "scenario": "A reader who checks the web job log of run 39443555978 against the docs finds 1529 passed where the page says 1490, so the page's evidence looks like it came from a different build."
+    },
+    {
+      "severity": "low",
+      "file": "docs/web-build.html",
+      "line": 358,
+      "summary": "The design-decision callout puts the cold-cache source build at 'about four minutes of one job', but the CI bullet just above (line 354) measures it at 102 s of PhysX build, 122 s of configure, and 'about 2 minutes more on a cold cache'.",
+      "scenario": "The page contradicts itself on the cold-cache CI cost the brief asked it to state, so a maintainer weighing a prebuilt archive against the source build gets two different numbers."
+    },
+    {
+      "severity": "low",
+      "file": "docs/web-build.html",
+      "line": 385,
+      "summary": "The page says a threaded stage-6 artifact 'would not define the macro', as if that alone would bring the PhysX workers back. The web PhysX libraries are built without -pthread, and neither the .pin stamp nor the CI cache key records threading.",
+      "scenario": "Stage 6 drops N2ENGINE_SINGLE_THREADED as the docs suggest. PhysXBackend then asks for 4 workers from libraries compiled without pthreads, and the cache or stamp still reuses those single-threaded archives, so the threaded artifact fails or misbehaves until a second PhysX build and a second cache key are added."
+    }
+  ],
+  "verdict": "clean"
+}

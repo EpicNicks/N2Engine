@@ -1,0 +1,41 @@
+{
+  "head": "79881f9bcafcc393173fd9026ae663880bc88ab5",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "engine/src/network/NetworkReplication.cpp",
+      "line": 427,
+      "summary": "Acknowledging a message whose entry was skipped for a layout mismatch makes the server record those field values as received, so a mismatch that later resolves leaves unchanged fields permanently stale (no test covers recovery)",
+      "scenario": "Client's layout for object A differs while the full-state message arrives (its component list later changes so LayoutCache rebuilds and the hash matches): the message was acked, the server's baseline holds every field, later deltas carry only changed fields, so a static replicated field never reaches the client"
+    },
+    {
+      "severity": "low",
+      "file": "engine/include/engine/network/ReplicationCodec.hpp",
+      "line": 32,
+      "summary": "The corrected quaternion bound 'the rebuilt largest up to ~0.0011' (also docs/netcode.html) is still too low: the rebuilt component error reaches about 0.0018-0.002",
+      "scenario": "q ~ (0.5368, 0.4908, 0.4880, 0.4825) encoded with the shipped 10-bit formula: the three sent components are each off by <=0.00069 in the same direction and the rebuilt largest is off by 0.0018 (first-order bound 3 x 0.00069 = 0.0021)"
+    },
+    {
+      "severity": "low",
+      "file": "engine/src/network/ReplicationLayout.cpp",
+      "line": 313,
+      "summary": "Carried over, unfixed (declared deviation): a value the component refuses (ApplyReplicated throws) still makes the entry Applied and the message acked, so the server never resends it",
+      "scenario": "Client component throws applying f=5: valuesRefused++ but the ack moves the server baseline to 5 and the client keeps its old value until the server's value changes"
+    },
+    {
+      "severity": "low",
+      "file": "engine/src/network/ReplicationCodec.cpp",
+      "line": 55,
+      "summary": "Carried over, unfixed (declared deviation): stepped Float/vector axes silently clamp the step count to +-2^31-1",
+      "scenario": "NetworkTransform positionStep 0.0001 and x=300000: the client places the object at x=214748.36 with no error or log"
+    },
+    {
+      "severity": "low",
+      "file": "engine/src/network/ReplicationLayout.cpp",
+      "line": 145,
+      "summary": "Carried over, unfixed (declared deviation): LayoutCache treats a layout as current when component pointers are equal, so a replaced component at a reused address keeps the stale layout",
+      "scenario": "Server removes X and adds Y at X's old address: EncodeObjectState reads Y with X's field list; with the new ack-on-mismatch rule the client now silently skips and acks those entries for the rest of the session"
+    }
+  ],
+  "verdict": "clean"
+}

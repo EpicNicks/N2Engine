@@ -1,0 +1,1 @@
+{"pr":33,"branch":"feat-protocol-1-13-busy","head":"ff990afc456a890cd74de61d26198260b5ffb4c2","files":["src/main/project-session.ts","src/test/direct-remote.test.ts","src/test/project-session.test.ts"],"deviations":[],"unverified":["Live host busy/takeover behaviour (engine issue #149)"],"needsUser":null}

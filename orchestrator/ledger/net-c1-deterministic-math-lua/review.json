@@ -1,0 +1,13 @@
+{
+  "head": "77f464caab9899e7356385e7802c63f8b887f690",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "tests/engine/network/n2net/N2NetFuzzTests.cpp",
+      "line": 88,
+      "summary": "Already on master, outside this PR: the engine-wide grep for two stateful calls in one argument list found it here (lines 88 and 101: .Ack(random.NextBelow(65536), random.Next())) and in tests/engine/picking/PickAccelerationTests.cpp line 59 (Vector3(Next(lo, hi), Next(lo, hi), Next(lo, hi))). The order in which those calls run is unspecified, so the generated inputs differ between compilers. No engine (non-test) code has the pattern, and DeterministicMathTests.cpp has none left after this head's fix.",
+      "scenario": "A fuzz or picking failure seen on MSVC can't be replayed with the same seed on GCC or Clang, because the points or packets differ. It doesn't change correctness. Fix later, in a separate change, by splitting the calls into statements."
+    }
+  ],
+  "verdict": "clean"
+}

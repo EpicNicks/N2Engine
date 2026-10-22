@@ -1,0 +1,10 @@
+{
+  "name": "sec-preauth-s4-takeover-busy",
+  "head": "7122c31b4de3638ab467cb2261ac9362f73652c1",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

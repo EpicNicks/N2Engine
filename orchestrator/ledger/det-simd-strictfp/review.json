@@ -1,0 +1,3 @@
+{"head":"1953ef03d5536863434b98698437f9a6c93b37a3","findings":[
+{"severity":"low","file":"docs/math.html","line":210,"summary":"The bit-difference table lists only the dispatched single-value functions and the 'Not a difference' list names explicit operations, but nowhere says that non-dispatched operations built on them inherit the difference: Quaternion::Slerp (Quaternion.cpp:92, Dot), Lerp (:119, Normalized), LookRotation (:47-48, Vector3 Normalized), Angle (:164, Dot)","scenario":"Someone planning the determinism stages from this section assumes Slerp/LookRotation (in neither list) are tier-independent, when on x86 at SSE2/SSE4.1/AVX they differ from Scalar in the last bit through Quaternion::Dot and Vector3/Quaternion Normalized"}
+],"verdict":"clean"}

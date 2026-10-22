@@ -1,0 +1,15 @@
+Accepted by the user 2026-10-13:
+- Worker/abandon/cap/shutdown machinery is ExtensionHost's own (same shape as ScriptDeclarationCache's), not factored out: the cache's is tied to DeclarationResult and CommandBudget
+- States are loaded|failed|faulted as the brief lists; the design's incompatible is folded into failed (the reason names the version)
+- Unknown keys (top level, item, param, enabledWhen) fail the file instead of being ignored (design 5.2 suggests additive keys); judgement call
+- Form param types limited to number|int|string|bool|Vector3|GameObject|enum; component and asset types not accepted yet
+- Editor.Extension only checks it got a table; the shape check is in C++ on a plain-data copy made by a Lua function under a second load budget
+- extensionFailed and extensionFaulted codes/constants exist but nothing answers them until invocation (E-X3); NoteFailure/faulted exist and are tested but nothing calls them yet
+- GetEditorUi keeps listing a faulted extension's items (so a client can show them disabled); failed ones have none
+- Menu item ids are unique host-wide; the later file (id order) with a taken id fails
+- Limits the design leaves open were chosen: name 64 B, 64 items, 32 form fields, 6 path segments, declaration 8 levels/4000 entries/4096 B strings, abandon deadline 3 s, 4 workers, 1 s shutdown wait
+- --editor-extensions without --project is accepted (warning, enabled, empty list)
+- SHA-256 implemented in-tree because EditorTlsServer::Sha256 needs the optional TLS build
+- Editor global comes from a prelude the host runs itself; E-X1's profile prelude stays empty
+- EditorEvent jsonType gains optional uiRevision; existing tests updated for 1.14.0 (capabilities now [editorExtensions], three new error codes)
+- States may hold 64 MiB each and up to 64 files load (4 GiB worst case, not capped in total); documented

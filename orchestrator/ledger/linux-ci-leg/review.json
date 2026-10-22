@@ -1,0 +1,27 @@
+{
+  "head": "9c1dda18266c03543b172ae908ddcd4e8d4db254",
+  "findings": [
+    {
+      "severity": "low",
+      "file": ".github/workflows/tests.yml",
+      "line": 709,
+      "summary": "Required Linux job is named 'linux (Release, x86_64, Clang)', not the planned 'linux (Release, x86_64)' (carried over, unchanged)",
+      "scenario": "The user sets branch protection from the plan's name and it never matches a reported check, so the Linux leg is silently not required. The name is stated in the PR body, so the user must use that exact string."
+    },
+    {
+      "severity": "low",
+      "file": ".github/workflows/tests.yml",
+      "line": 744,
+      "summary": "The informational GCC job (continue-on-error) reports a failed check run on every PR, although the workflow run concludes success (carried over; seen again on run 38103538920 for this head)",
+      "scenario": "Every PR shows a red X for 'linux (... GCC 14, informational - known sol2 bug)', which can mask a real new failure in that leg and conflicts with a 'CI-green before merge' rule unless that check is explicitly excluded."
+    },
+    {
+      "severity": "low",
+      "file": "tests/common/TestSockets.hpp",
+      "line": 142,
+      "summary": "On POSIX, LastErrorWasTimeout counts ETIMEDOUT as a receive timeout (carried over, unchanged)",
+      "scenario": "On Linux, recv failing with ETIMEDOUT means the connection died, so IsClosedByServer returns false for a dead connection. Practically unreachable on loopback; EAGAIN/EWOULDBLOCK alone is the SO_RCVTIMEO case."
+    }
+  ],
+  "verdict": "clean"
+}

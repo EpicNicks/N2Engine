@@ -1,0 +1,11 @@
+Accepted by the user 2026-10-13:
+- webgpu_tests now links the engine (and tests/common is on its include path) so the golden scenes are the Vulkan goldens' engine scenes; the webgpu job therefore builds the engine: 5m56s and 7m09s on the two runs instead of about 1m10s
+- The Vulkan goldens are ported file for file (not parameterised by a renderer factory as the design suggested); the shared diff helpers keep the VulkanTesting namespace and the WebGPU fixture header aliases it as Diff and Blend
+- Vulkan-only assertions dropped in the ports (GetLiveAllocationCountForTest, GetPendingDeletionCountForTest, frames in flight, the wireframe argument of CreatePipelineForTest); WebGPU has no retire lists and the fixture leak check covers it; the custom-shader refusal test expects this backend's message
+- Limits check at Initialize raised for the lighting block: uniform binding max(192, 752), 3 dynamic uniform buffers per layout, 3 uniform buffers per stage
+- A ring chunk is never smaller than the aligned 752-byte lighting block (unlit and text draws bind group 0 binding 1 at offset 0 and WebGPU validates the range)
+- Lighting copies follow the Vulkan rule (one per ring chunk per version, named by a dynamic offset); the design table only said the block is reused as is
+- No live WebGPU-versus-Vulkan frame diff (Vulkan is compiled out of the job): the Vulkan side is the ported structural expectations plus the shared software comparison
+- Existing G3a tests changed because behaviour changed: the blended-draw-is-opaque test became a real blend test, the not-implemented test no longer expects lit/text nulls, the pipeline test counts 29 with lit and text; the G3a golden test lost its own Diff alias (the fixture header provides it)
+- Merged origin/master once (docs/testing.html conflict with the netcode C1 section, both kept) because the PR had gone CONFLICTING and CI does not run on conflicting PRs
+- gh pr edit fails with this token's scopes (GraphQL read:org); the PR body was updated through the REST API instead

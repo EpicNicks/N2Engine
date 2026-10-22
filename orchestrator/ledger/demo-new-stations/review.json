@@ -1,0 +1,3 @@
+{"head":"d4b29e87a0fcf9bd1a1d150cbe861c95cd71401c","findings":[
+{"severity":"low","file":"tests/engine/scripting/LuaSceneTests.cpp","line":368,"summary":"Prior medium is fixed for load/syntax/require errors (HasMissingScript is set when the script or its require fails), but LuaComponent::CallLuaMethod logs Lua runtime errors instead of throwing, so EXPECT_NO_THROW on OnAttach/OnUpdate cannot catch an error inside them; and with no action map in the test, the key handlers and CycleBackend are never run","scenario":"A runtime Lua error in ParticleStation OnUpdate (e.g. a wrong method name on the status refresh) still passes CI and shows only in the log on the user's machine; residual, same as the other scripts in the list, accept"}
+],"verdict":"clean"}

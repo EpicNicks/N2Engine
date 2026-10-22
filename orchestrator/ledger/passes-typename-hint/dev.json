@@ -1,0 +1,14 @@
+{
+ "pr": 111,
+ "branch": "feat-passes-typename-hint",
+ "head": "0228a522ecafcb59154ea71d4f3b6f2054b06c74",
+ "files": [
+  "engine/include/engine/text/TextJson.hpp",
+  "tests/engine/serialization/ReflectionTests.cpp",
+  "docs/serialization.html",
+  "docs/text.html"
+ ],
+ "deviations": [],
+ "unverified": [],
+ "needsUser": null
+}

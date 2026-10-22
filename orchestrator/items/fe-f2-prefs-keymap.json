@@ -1,0 +1,29 @@
+{
+  "name": "fe-f2-prefs-keymap",
+  "repo": "frontend",
+  "branch": "feat-fe-f2-prefs-keymap",
+  "title": "Electron UI F2: editor prefs store (user and project scopes) and a keymap registry with scoped chords and one dispatcher, migrating the scattered shortcut handlers; plus the F1 follow-up (stable panel-stack ids)",
+  "closes": null,
+  "issue": "Electron UI roadmap C:/Method Notes Obsidian/orchestrator/proposals/electron-ui-roadmap.md: the user accepted ALL U1-U21 on 2026-10-20. F1 (panel registry, PR #34) is merged. Read the roadmap section 3 (Foundation F2: prefs store and keymap), decisions U2, U3, U4 and the shortcut notes in sections 1 and 16, the frontend README and the current shortcut sites FIRST: src/renderer/editor.tsx (Ctrl+S and Undo/Redo ~lines 350-395), hierarchy-panel.tsx (F2/Del/Ctrl+D/arrows), viewport-panel.tsx and viewport-input.ts (F/Esc/fly keys, gizmo), console/assets panels, ui.tsx (modalOpen, isTextEntry helpers), the F1 layout code (src/renderer/layout/*) and how F1 persists layout (the localStorage-with-try/catch layer the roadmap says F2 adopts). THIS ITEM IS F2 + ONE F1 LOW: (1) PREFS STORE (src/renderer/prefs.ts or similar, framework-free, unit tested): typed keys with defaults and validators, two scopes (user: global per machine; project: keyed by the project's projectId as F1 does), subscribe/notify, debounced writes, every storage access in try/catch, corrupt or wrong-typed values fall back to the default and are dropped, a version field, no secrets ever stored (assert in a test that a token-looking key is refused or never present); migrate F1's layout persistence to sit on this store WITHOUT changing the stored layout format or losing existing saved layouts (read the old keys, write through the store: keep reading the old key as a fallback for one release and document); (2) KEYMAP (src/renderer/keymap.ts): a registry of NAMED ACTIONS (edit.undo, edit.redo, file.save, hierarchy.rename/delete/duplicate, viewport.frame, viewport.cancel, gizmo.translate etc. only where the action exists today: do NOT add new features; reserve the names the roadmap lists for FE3/FE4 as comments, not code) with DEFAULT chords, a scope (global, viewport, hierarchy, assets, console, text), chord parsing/formatting (Ctrl/Cmd mapping per platform: Cmd on macOS where the app already does so), conflict detection, and ONE dispatcher installed at the document level that respects isTextEntry (no shortcut fires while typing in an input/textarea/contenteditable unless the action is marked allowInText) and modalOpen() and the right scope (focus-based: the focused panel decides viewport/hierarchy scope), with the viewport's hold-right-button fly-key priority preserved exactly as today; MIGRATE every existing shortcut site to register actions with the keymap instead of per-component keydown listeners with IDENTICAL behaviour for the default chords (a regression test per migrated shortcut: simulate the key event in the DOM test harness, assert the same effect); user rebinding storage (user-scope pref 'keymap.overrides': a map action -> chords) is supported by the registry and tested (override, reset, conflict reported) but there is NO rebinding UI yet; (3) a tiny read-only 'Keyboard shortcuts' list in the Window or Help menu showing action names and current chords (so shortcuts are discoverable) with keyboard accessible markup, no editing; (4) F1 LOW: the layout view keys stacks by index (key={i}); closing or reopening a panel shifts later stacks' keys and can remount them: give each stack a stable id in the layout model (generated deterministically, persisted, migrated for old layouts that lack ids) and key by it; add a DOM test that closing/reopening a panel in a region does not remount the other stacks (a mount counter on a stand-in panel); (5) TESTS: node unit tests for prefs (scopes, corrupt, defaults, debounce, subscribe), keymap (parsing, platform mapping, scope, text-entry suppression, modal suppression, conflicts, overrides), DOM tests for each migrated shortcut and the shortcuts list; keep ALL existing tests green; run typecheck and the whole test suite locally before pushing (npm run typecheck; npm test). (6) README: the shortcuts/prefs section (match style, verify against code). Rules: requiresDocs false (README only), no engine/protocol change, no token in logs/storage, do not touch files of the in-flight items beyond what is needed: frontend-protocol-1-14 touches src/protocol and engine-ref.txt only; the MCP1 item adds a new top-level mcp/ directory.",
+  "allowedPaths": [
+    "^engine-ref\\.txt$",
+    "^package\\.json$",
+    "^package-lock\\.json$",
+    "^README\\.md$",
+    "^src/",
+    "^scripts/",
+    "^tsconfig[^/]*\\.json$"
+  ],
+  "acceptance": [
+    "Prefs store with user and project scopes, validation and safe storage; F1 layout persistence runs on it with old saved layouts still loading",
+    "Keymap registry with named actions, scoped chords, one dispatcher that respects text entry, modals and the viewport fly-key priority; all existing shortcuts migrated with unchanged default behaviour and a regression test each; override storage tested, no rebinding UI",
+    "Read-only shortcuts list; stable stack ids so closing/reopening a panel does not remount others",
+    "Unit and DOM tests; typecheck, build, tests and frontend CI green; README updated"
+  ],
+  "requiresDocs": false,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "reviewer": "opus",
+  "notes": "Reviewer: no shortcut regresses (compare every migrated site: same chord, same scope, same text-entry behaviour, viewport fly keys with the right button held), dispatcher cannot double-fire or leak listeners, storage failures never throw, old layout keys still load, no secret stored, stable ids correct for migrated layouts, tests meaningful, mediums count. Unverified: real Electron focus behaviour across panels."
+}

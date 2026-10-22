@@ -1,0 +1,10 @@
+{
+  "name": "softbody-pra-seam",
+  "head": "9cdda16fa042bbeb25f0298c7512ef03a834d200",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

@@ -1,0 +1,10 @@
+{
+  "name": "phys-j2-interface-backend-setting",
+  "head": "660c3d3264e74469d9fffce9f3e38a3dd60159fc",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

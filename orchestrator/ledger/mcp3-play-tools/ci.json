@@ -1,0 +1,10 @@
+{
+  "name": "mcp3-play-tools",
+  "head": "36060194d713195a61b1a0228e71624daf4bee68",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "CI:success"
+  ],
+  "failures": []
+}

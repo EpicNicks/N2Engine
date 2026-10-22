@@ -1,0 +1,14 @@
+{
+  "head": "5c9d91891790b169bb5682250278a9b71d939fc0",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "engine/src/network/NetworkServer.cpp",
+      "line": 485,
+      "summary": "The previous medium is fixed for every drop that goes through MarkDrop/ApplyDrops, but peers NetworkServer refuses in OnPeerConnected (_refusedPeers: world lost, over capacity, client id exhausted) are disconnected in ApplyDrops without NotifyLeft, so N2Server's forgetClient never runs for them although its transport observer already added them to `clients`.",
+      "scenario": "A ServerHooks host unloads the scene (world lost): every later client that completes the secure handshake is refused and locally disconnected, and each one stays in N2Server's `clients` map, inflating the '(n/max)' counts and never logging 'Client disconnected' (over capacity is normally unreachable since SecureTransport maxSessions equals maxClients)."
+    }
+  ],
+  "verdict": "clean",
+  "confirmedDelta": "update-branch merge of master confirmed"
+}
