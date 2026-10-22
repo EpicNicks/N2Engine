@@ -10,7 +10,10 @@ Real processes on real loopback UDP, through the secure handshake:
   - a test host (N2Server's RunServer with hooks, which registers a prefab and runs spawn and despawn commands from
     stdin) with several clients: a spawn reaches the clients that have joined, with its owner; a client that joins later is
     sent the objects spawned and the scene objects destroyed before it; a despawn of a spawned object and of a scene object
-    reaches everyone; a spawn of a prefab outside the table is refused.
+    reaches everyone; a spawn of a prefab outside the table is refused. Field replication (stage B2): every scene object
+    and the test prefab has a NetworkTransform, and a position the host sets on an object (a spawned one and a scene one)
+    shows at every client within the transform's quantisation step, and a client that joins afterwards is sent the
+    objects' state in full.
 
   python tests/smoke/n2server_net.py --server build/bin/N2Server --host build/bin/n2server_net_host \\
       --client build/bin/n2server_net_client
@@ -176,6 +179,8 @@ def game_object(object_uuid, number):
         "components": [
             # A fixed component UUID: it is part of the scene's content, which must be the same in every project folder
             {"type": "NetworkObject", "data": {"uuid": "1" + object_uuid[1:], "isActive": True}},
+            # The position, rotation and teleport serial replicate (the default step of 1 cm)
+            {"type": "NetworkTransform", "data": {"uuid": "2" + object_uuid[1:], "isActive": True}},
         ],
         "children": [],
     }
@@ -261,6 +266,29 @@ def objects_line(tool, timeout=30):
     return [int(number) for number in found[before][1].split(",") if number]
 
 
+def position_of(tool, object_id, timeout=30):
+    """Asks the client where it has an object (its local position, nan if it has no such object)."""
+    pattern = re.compile(r"^position id=%d x=(\S+) y=(\S+) z=(\S+)$" % object_id, re.MULTILINE)
+    before = len(pattern.findall(tool.out()))
+    tool.send("where %d" % object_id)
+    found = wait_for(lambda: pattern.findall(tool.out()) if len(pattern.findall(tool.out())) > before else None,
+                     timeout, "the position of object %d from %s" % (object_id, tool.name), tool)
+    return tuple(float(value) for value in found[before])
+
+
+def wait_position(tool, object_id, expected, timeout=60):
+    """Polls until the client has the object within half a centimetre of `expected` (the NetworkTransform sends whole
+    steps of a centimetre)."""
+    deadline = time.monotonic() + timeout
+    last = None
+    while time.monotonic() < deadline:
+        last = position_of(tool, object_id)
+        if all(abs(a - b) <= 0.0051 for a, b in zip(last, expected)):
+            return
+        time.sleep(0.1)
+    raise Failure("%s has object %d at %s, expected %s" % (tool.name, object_id, last, expected))
+
+
 def scenario_real_server(run, work, tokens):
     say("the real N2Server: join, refusals")
     project = work / "project-a"
@@ -304,6 +332,9 @@ def scenario_real_server(run, work, tokens):
     check(not server.exited(), "the server must still be running")
     check(tokens[0] not in server.err() + server.out(), "a token reached the server's output")
     stop_client(client)
+    # The client's leave is a datagram: wait until the server has seen it before the server is stopped
+    wait_for(lambda: "Network client left the world: client=1" in server.err(), 30, "the server's line for the client leaving",
+             server)
 
     # Ending: stdin closes, the server stops cleanly
     server.close_stdin()
@@ -344,6 +375,22 @@ def scenario_host(run, work, tokens):
     for client in (first, second):
         wait_line(client, r"^spawn id=5 prefab=Crate owner=1$", 30, "the owned spawn at " + client.name, client, host)
 
+    # Field replication: the host moves a spawned object and a scene object, and every client sees them where the host put
+    # them (the NetworkTransform's position, in whole centimetres), the object it did not move where it was
+    host.send("move 5 7.25 -8.5 9.125")
+    wait_line(host, r"^moved id=5 ok=1$", 30, "the host's move of object 5", host)
+    host.send("move 1 10 0 -2.5")
+    wait_line(host, r"^moved id=1 ok=1$", 30, "the host's move of scene object 1", host)
+    host.send("move 4 0.5 0.25 0.125")
+    wait_line(host, r"^moved id=4 ok=1$", 30, "the host's move of object 4", host)
+    host.send("move 99 1 1 1")
+    wait_line(host, r"^moved id=99 ok=0$", 30, "the refusal of a move of an unknown object", host)
+    for client in (first, second):
+        wait_position(client, 5, (7.25, -8.5, 9.125))
+        wait_position(client, 1, (10.0, 0.0, -2.5))
+        wait_position(client, 4, (0.5, 0.25, 0.125))
+        wait_position(client, 3, (0.0, 0.0, 0.0))
+
     # A prefab outside the table, an owner that has not joined, and an id that is not there: refused, nothing sent
     host.send("spawn NoSuchPrefab")
     wait_line(host, r"^spawn-failed .*prefab table", 30, "the refusal of an unknown prefab", host)
@@ -370,6 +417,10 @@ def scenario_host(run, work, tokens):
           "the join state is not in order (destroyed scene objects, live spawns, the end):\n" + out)
     check("spawn id=4" not in out, "the late joiner was told of an object that was despawned")
     check(objects_line(third) == [1, 3, 5], "the late joiner does not hold objects 1, 3 and 5")
+    # ... and the state of the objects it has: what the host set before it came, sent in full
+    wait_position(third, 5, (7.25, -8.5, 9.125))
+    wait_position(third, 1, (10.0, 0.0, -2.5))
+    wait_position(third, 3, (0.0, 0.0, 0.0))
 
     host.send("joined")
     wait_line(host, r"^joined count=3 ids=1,2,3$", 30, "the host's list of joined clients", host)

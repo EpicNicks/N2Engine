@@ -14,6 +14,7 @@
 #include "engine/serialization/JsonLimits.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <format>
 #include <iterator>
@@ -1149,6 +1150,8 @@ namespace N2Engine::Scripting
             bool isDefinition = false; // { default = 5, type = "..." } rather than the shorthand `speed = 5`
             std::string declaredType;
             DefaultKind defaultKind = DefaultKind::Other; // what the default (or the shorthand value) is
+            // `replicated` of a definition: 0 absent or false, 1 true, 2 present but not a boolean
+            int replicated = 0;
         };
         const auto classify = [](lua_State *state, const int index)
         {
@@ -1242,6 +1245,16 @@ namespace N2Engine::Scripting
                             declaration.declaredType.assign(text, length);
                         }
                         lua_pop(state, 1);
+                        lua_getfield(state, definition, "replicated");
+                        if (lua_type(state, -1) == LUA_TBOOLEAN)
+                        {
+                            declaration.replicated = lua_toboolean(state, -1) != 0 ? 1 : 0;
+                        }
+                        else if (lua_type(state, -1) != LUA_TNIL)
+                        {
+                            declaration.replicated = 2;
+                        }
+                        lua_pop(state, 1);
                         lua_getfield(state, definition, "default");
                         declaration.defaultKind = classify(state, -1);
                     }
@@ -1254,7 +1267,15 @@ namespace N2Engine::Scripting
         for (const Declaration &declaration : declarations)
         {
             // The mapping from a declaration to the editor field is shared with the DeclarationEvaluator
-            FieldInfo info = MakeLuaFieldInfo(declaration.name, declaration.declaredType, declaration.defaultKind);
+            FieldInfo info = MakeLuaFieldInfo(declaration.name, declaration.declaredType, declaration.defaultKind,
+                                              declaration.replicated == 1);
+            if (!_replicatedWarned && (declaration.replicated == 2 || (declaration.replicated == 1 && !info.replicated)))
+            {
+                _replicatedWarned = true;
+                Logger::Warn(std::format("Field '{}' of {}: `replicated` must be true or false, and only a bool, int, "
+                                         "float, string or Vector3 field can be replicated: it stays local",
+                                         declaration.name, _scriptPath.ToString()));
+            }
             scriptFields.push_back(std::move(info));
         }
 
@@ -1323,6 +1344,142 @@ namespace N2Engine::Scripting
                     ResolveReferences(_scriptData, resolver);
                 });
             }
+        }
+    }
+
+    void LuaComponent::InjectField(const std::string &key, const nlohmann::json &value)
+    {
+        if (!_scriptInstance.valid())
+            return;
+
+        GuardedAccess([&]
+        {
+            if (value.is_number_float())
+                _scriptInstance[key] = value.get<float>();
+            else if (value.is_number_integer())
+                _scriptInstance[key] = value.get<std::int64_t>();
+            else if (value.is_boolean())
+                _scriptInstance[key] = value.get<bool>();
+            else if (value.is_string())
+                _scriptInstance[key] = value.get<std::string>();
+            else if (value.is_object() && value.contains("x"))
+            {
+                const auto component = [&value](const char *axis)
+                {
+                    return value.contains(axis) && value[axis].is_number() ? value[axis].get<float>() : 0.0f;
+                };
+                _scriptInstance[key] = Math::Vector3{component("x"), component("y"), component("z")};
+            }
+        });
+    }
+
+    nlohmann::json LuaComponent::SerializeReplicated(const std::span<const FieldInfo> replicated)
+    {
+        nlohmann::json json = Serialize();
+        if (replicated.empty() || !_scriptInstance.valid() || !LuaRuntime::RunsScripts())
+        {
+            return json;
+        }
+        if (!json.contains("scriptData") || !json["scriptData"].is_object())
+        {
+            json["scriptData"] = nlohmann::json::object();
+        }
+        nlohmann::json &data = json["scriptData"];
+
+        const EntryScope budget;
+        lua_State *const luaState = _scriptInstance.lua_state();
+        // The live values, read with Lua's own API into plain data (as DescribeFields reads the declarations)
+        GuardedAccess([&]
+        {
+            lua_State *state = luaState;
+            const int base = lua_gettop(state);
+            _scriptInstance.push(state);
+            const int instance = lua_gettop(state);
+            for (const FieldInfo &field : replicated)
+            {
+                if (field.container != "scriptData")
+                {
+                    continue;
+                }
+                lua_getfield(state, instance, field.name.c_str());
+                const int type = lua_type(state, -1);
+                switch (field.kind)
+                {
+                case FieldKind::Bool:
+                    if (type == LUA_TBOOLEAN)
+                    {
+                        data[field.name] = lua_toboolean(state, -1) != 0;
+                    }
+                    break;
+                case FieldKind::Int:
+                    if (type == LUA_TNUMBER)
+                    {
+                        if (lua_isinteger(state, -1) != 0)
+                        {
+                            data[field.name] = static_cast<std::int64_t>(lua_tointeger(state, -1));
+                        }
+                        else
+                        {
+                            const double number = static_cast<double>(lua_tonumber(state, -1));
+                            if (std::isfinite(number) && std::fabs(number) < 9.0e18)
+                            {
+                                data[field.name] = static_cast<std::int64_t>(std::llround(number));
+                            }
+                        }
+                    }
+                    break;
+                case FieldKind::Float:
+                    if (type == LUA_TNUMBER)
+                    {
+                        data[field.name] = static_cast<double>(lua_tonumber(state, -1));
+                    }
+                    break;
+                case FieldKind::String:
+                    if (type == LUA_TSTRING)
+                    {
+                        std::size_t length = 0;
+                        const char *text = lua_tolstring(state, -1, &length);
+                        data[field.name] = std::string(text, length);
+                    }
+                    break;
+                case FieldKind::Vector3:
+                    if (sol::stack_object(state, -1).is<Math::Vector3>())
+                    {
+                        const auto vector = sol::stack_object(state, -1).as<Math::Vector3>();
+                        data[field.name] = {{"x", vector.x}, {"y", vector.y}, {"z", vector.z}};
+                    }
+                    break;
+                default:
+                    break;
+                }
+                lua_pop(state, 1);
+            }
+            lua_settop(state, base);
+        });
+        return json;
+    }
+
+    void LuaComponent::ApplyReplicated(const nlohmann::json &values, ReferenceResolver * /*resolver*/)
+    {
+        if (!values.is_object())
+        {
+            return;
+        }
+        const auto found = values.find("scriptData");
+        if (found == values.end() || !found->is_object())
+        {
+            return;
+        }
+        const EntryScope budget;
+        if (!_scriptData.is_object())
+        {
+            _scriptData = nlohmann::json::object();
+        }
+        for (const auto &entry : found->items())
+        {
+            // Plain values only (the codecs make nothing else): no nesting to copy without recursion
+            _scriptData[entry.key()] = entry.value();
+            InjectField(entry.key(), entry.value());
         }
     }
 
