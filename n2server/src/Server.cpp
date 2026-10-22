@@ -31,6 +31,10 @@
 #include "engine/io/ProjectFile.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourceUUID.hpp"
+#include "engine/network/NetworkFingerprint.hpp"
+#include "engine/network/NetworkServer.hpp"
+#include "engine/network/NetworkWorld.hpp"
+#include "engine/network/PrefabTable.hpp"
 #include "engine/network/n2net/SecureTransport.hpp"
 #include "engine/network/n2net/UdpTransport.hpp"
 #include "engine/sceneManagement/Scene.hpp"
@@ -43,6 +47,7 @@
 #include "editor-server/HostOptions.hpp"
 #include "editor-server/LogSink.hpp"
 
+#include "n2server/SceneLoading.hpp"
 #include "n2server/TokenCli.hpp"
 
 // Last: <windows.h> defines macros (near, far, ...) that must not reach the engine headers
@@ -178,78 +183,6 @@ namespace N2Engine::Server
 #endif
         };
 
-        std::expected<std::string, std::string> ReadTextFile(const std::filesystem::path &file)
-        {
-            std::ifstream stream(file, std::ios::binary);
-            if (!stream)
-            {
-                return std::unexpected("the file can't be read");
-            }
-            std::ostringstream text;
-            text << stream.rdbuf();
-            if (stream.bad())
-            {
-                return std::unexpected("the file can't be read");
-            }
-            return std::move(text).str();
-        }
-
-        /// Loads the scene `scenePath` (a res:// path inside the project) as a running game: built and made current, its
-        /// components attach at the first tick. The path is resolved like the editor host resolves one (inside the
-        /// project's assets folder, links resolved). Returns the scene's resource path, or what went wrong.
-        std::expected<std::string, std::string> LoadScene(const std::filesystem::path &projectDir,
-                                                          const std::string &scenePath)
-        {
-            const auto resolved = Editor::EditorServer::ResolveScenePath(projectDir / "assets", scenePath);
-            if (!resolved)
-            {
-                return std::unexpected(resolved.error());
-            }
-            const std::string resourcePath = resolved->resourcePath.ToString();
-            std::error_code error;
-            if (!std::filesystem::is_regular_file(resolved->file, error))
-            {
-                return std::unexpected("scene file not found: " + resourcePath);
-            }
-            const auto text = ReadTextFile(resolved->file);
-            if (!text)
-            {
-                return std::unexpected("can't read " + resourcePath + ": " + text.error());
-            }
-            if (JsonLimits::SceneJsonTooDeep(*text))
-            {
-                return std::unexpected(resourcePath + ": " + JsonLimits::SceneJsonTooDeepMessage());
-            }
-            const nlohmann::json sceneJson = nlohmann::json::parse(*text, nullptr, false);
-            if (sceneJson.is_discarded())
-            {
-                return std::unexpected("not valid JSON: " + resourcePath);
-            }
-            std::unique_ptr<Scene> scene = Scene::FromJSON(sceneJson, true);
-            if (scene == nullptr)
-            {
-                return std::unexpected("not a valid scene (see the log): " + resourcePath);
-            }
-
-            // The file's asset UUID, the same every run: a scene's UUID is its file's
-            auto &loader = IO::ResourceLoader::Instance();
-            if (!loader.Exists(resolved->resourcePath))
-            {
-                (void)loader.Reload(resolved->resourcePath);
-            }
-            scene->SetUUID(IO::ResourceUUID::FromPath(resolved->resourcePath));
-            scene->SetResourcePath(resolved->resourcePath);
-
-            Scene *const loaded = scene.get();
-            SceneManager::AddScene(std::move(scene), true);
-            SceneManager::ProcessAnyPendingSceneChange();
-            if (SceneManager::GetCurScene() != loaded)
-            {
-                return std::unexpected("the scene couldn't be loaded: " + resourcePath);
-            }
-            return resourcePath;
-        }
-
         /// "ip:port", or "[ip]:port" for an IPv6 address
         std::string FormatAddress(const std::string &address, const std::uint16_t port)
         {
@@ -323,6 +256,11 @@ namespace N2Engine::Server
     }
 
     int RunServer(const ServerOptions &options)
+    {
+        return RunServer(options, ServerHooks{});
+    }
+
+    int RunServer(const ServerOptions &options, const ServerHooks &hooks)
     {
         if (options.showHelp)
         {
@@ -501,15 +439,43 @@ namespace N2Engine::Server
                 Logger::Warn("Project settings: " + problem);
             }
 
-            const auto scene = LoadScene(projectDir, scenePath);
-            if (!scene)
+            const auto loadedScene = LoadSceneForRun(projectDir, scenePath);
+            if (!loadedScene)
             {
-                std::println(stderr, "N2Server --scene: {}", scene.error());
-                Logger::Error("Couldn't load the scene: " + scene.error());
+                std::println(stderr, "N2Server --scene: {}", loadedScene.error());
+                Logger::Error("Couldn't load the scene: " + loadedScene.error());
                 stopEngine();
                 return 1;
             }
-            Logger::Info("Loaded scene " + *scene);
+            Logger::Info("Loaded scene " + loadedScene->resourcePath);
+
+            // The network world: the scene's NetworkObjects get their net ids (matched by GameObject UUID, so a client
+            // that loads the same scene file computes the same ones). Declared before the transport and the server, so
+            // it outlives both. A scene whose objects can't be matched (a UUID used twice) is a setup failure.
+            Network::NetworkWorld world;
+            const auto matched = world.BindScene(SceneManager::GetCurSceneRef());
+            if (!matched)
+            {
+                std::println(stderr, "N2Server --scene: the network objects of {} can't be matched: {}",
+                             loadedScene->resourcePath, matched.error());
+                Logger::Error("Couldn't match the scene's network objects: " + matched.error());
+                stopEngine();
+                return 1;
+            }
+            Logger::Info(std::format("Network world: {} scene object(s) with a NetworkObject", *matched));
+            if (hooks.beforeListening)
+            {
+                if (const std::optional<std::string> problem = hooks.beforeListening())
+                {
+                    std::println(stderr, "N2Server: {}", *problem);
+                    Logger::Error("Startup hook failed: " + *problem);
+                    stopEngine();
+                    return 1;
+                }
+            }
+            // Frozen now: a spawn names a prefab by its index in this table, which the fingerprint covers
+            Network::PrefabTable prefabs = Network::PrefabTable::Capture();
+            Logger::Info(std::format("Network world: {} prefab(s) in the prefab table", prefabs.Size()));
 
             // The network: a SecureTransport over a UdpTransport. It is the only way to open the UDP transport with
             // encryption counted as available, which is what allows a non-loopback bind at all (ParseServerArguments
@@ -584,10 +550,24 @@ namespace N2Engine::Server
             }
 
             std::map<N2Net::PeerId, ClientInfo> clients;
-            // Sessions to disconnect once Poll has returned (SecureTransport::Disconnect does nothing inside Poll's handler)
+            // Sessions to drop once the network update has returned (a transport's Disconnect does nothing inside its
+            // Poll's handler)
             std::vector<N2Net::PeerId> dropAfterPoll;
-            std::uint64_t ignoredDatagrams = 0;
             std::uint64_t clientsEverConnected = 0;
+            // A client leaves the list when its transport peer goes: remotely (PeerDisconnected) or because the world
+            // dropped it (a local Disconnect raises no event, so the network server's Left event calls this too)
+            const auto forgetClient = [&](const N2Net::PeerId peer)
+            {
+                const auto found = clients.find(peer);
+                if (found == clients.end())
+                {
+                    return;
+                }
+                const ClientInfo info = found->second;
+                clients.erase(found);
+                LogAdmin(std::format("Client disconnected: user={} role={} peer={} ({}/{})", info.user,
+                                     N2Net::JoinRoleName(info.role), peer, clients.size(), options.maxClients));
+            };
             const auto onEvent = [&](const N2Net::TransportEvent &event)
             {
                 if (event.type == N2Net::TransportEventType::PeerConnected)
@@ -618,22 +598,44 @@ namespace N2Engine::Server
                 }
                 else if (event.type == N2Net::TransportEventType::PeerDisconnected)
                 {
-                    const auto found = clients.find(event.peer);
-                    if (found == clients.end())
-                    {
-                        return;
-                    }
-                    const ClientInfo info = found->second;
-                    clients.erase(found);
-                    LogAdmin(std::format("Client disconnected: user={} role={} peer={} ({}/{})", info.user,
-                                         N2Net::JoinRoleName(info.role), event.peer, clients.size(), options.maxClients));
+                    forgetClient(event.peer);
                 }
-                else
-                {
-                    // No gameplay networking yet (track B): an authenticated client's data has nowhere to go
-                    ++ignoredDatagrams;
-                }
+                // Datagrams are the network server's: it runs a Connection per client over the same events
             };
+
+            // The world protocol over the secure transport (NetworkServer polls the transport itself; onEvent above still
+            // sees every event first, for the connect and disconnect log lines)
+            Network::NetworkServerOptions netOptions;
+            netOptions.protocolId = options.protocolId;
+            netOptions.maxClients = static_cast<std::uint32_t>(options.maxClients);
+            netOptions.scenePath = loadedScene->resourcePath;
+            netOptions.sceneHash = loadedScene->contentHash;
+            netOptions.prefabs = std::move(prefabs);
+            Network::NetworkServer netServer(secure, world, std::move(netOptions));
+            netServer.SetTransportObserver(onEvent);
+            netServer.SetClientObserver(
+                [&forgetClient](const Network::NetworkClientEvent &event)
+                {
+                    if (event.type == Network::NetworkClientEvent::Type::Joined)
+                    {
+                        LogAdmin(std::format("Network client joined the world: client={} peer={}", event.client,
+                                             event.peer));
+                    }
+                    else
+                    {
+                        LogAdmin(std::format("Network client left the world: client={} peer={} joined={} ({})",
+                                             event.client, event.peer, event.wasJoined ? "yes" : "no", event.reason));
+                        forgetClient(event.peer);
+                    }
+                });
+            const auto loopStart = std::chrono::steady_clock::now();
+            const auto elapsedMicros = [&loopStart]
+            {
+                return static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - loopStart)
+                        .count());
+            };
+            bool hookStop = false;
 
             TickOptions tick;
             tick.pollEvents = false; // no window to poll
@@ -642,8 +644,9 @@ namespace N2Engine::Server
             auto lastDropReport = std::chrono::steady_clock::now();
             std::uint64_t lastDropTotal = 0;
 
-            // Main loop: network events, then the fixed ticks that are due (Application::Tick), then a short sleep
-            while (g_running && !app.IsQuitRequested() && (!stdinClosed || !stdinClosed->load()))
+            // Main loop: network events and sends (NetworkServer::Update), then the fixed ticks that are due
+            // (Application::Tick), then a short sleep
+            while (g_running && !app.IsQuitRequested() && !hookStop && (!stdinClosed || !stdinClosed->load()))
             {
                 // A SIGHUP: the new table applies to handshakes from now on; sessions that exist are kept. A file that
                 // fails its checks leaves the old table in place.
@@ -663,13 +666,18 @@ namespace N2Engine::Server
                     }
                 }
 
-                secure.Poll(onEvent);
+                netServer.Update(elapsedMicros());
                 for (const N2Net::PeerId peer : dropAfterPoll)
                 {
-                    secure.Disconnect(peer);
+                    netServer.DropPeer(peer, "it came up without an identity");
                 }
                 dropAfterPoll.clear();
                 app.Tick(tick);
+                if (hooks.onTick && !hooks.onTick(netServer, elapsedMicros()))
+                {
+                    hookStop = true;
+                    Logger::Info("The server's host asked it to stop");
+                }
 
                 const auto now = std::chrono::steady_clock::now();
                 if (now - lastDropReport >= kDropReportInterval)
@@ -704,9 +712,8 @@ namespace N2Engine::Server
                 const N2Net::SecureTransportStats &stats = secure.Stats();
                 const std::string drops = DropText(stats);
                 Logger::Info(std::format("Stopping: {} session(s) established, {} client(s) connected over the run, {} "
-                                         "datagram(s) from clients ignored (no gameplay networking yet); handshakes "
-                                         "dropped: {}",
-                                         stats.sessionsEstablished, clientsEverConnected, ignoredDatagrams,
+                                         "client(s) joined the world; handshakes dropped: {}",
+                                         stats.sessionsEstablished, clientsEverConnected, netServer.Stats().clientsJoined,
                                          drops.empty() ? std::string("none") : drops));
             }
             opened.transport.reset();
