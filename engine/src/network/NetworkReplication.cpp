@@ -426,8 +426,10 @@ namespace N2Engine::Network
             const ObjectLayout &layout = _layouts.Get(netId, gameObject);
             if (!layout.usable || layout.hash != hash)
             {
+                // Counted and skipped, but not a reason to withhold the acknowledgement: a layout that differs stays
+                // different (a component added on the server at runtime, another Lua script), and an unacknowledged message
+                // would keep every object that shares it from ever getting a baseline
                 ++_stats.entriesLayoutMismatch;
-                partial = true;
                 continue;
             }
             N2Net::ByteReader payload(payloadBytes);

@@ -57,8 +57,8 @@ namespace N2Engine::Network
         /// network.authoritative.snapshotRate in a game. 0 turns state replication off; at most 240.
         std::uint32_t stateSendRateHz = 30;
         /// More state acknowledgements than this from one client in one second is a violation and the client is dropped.
-        /// A client sends at most one per update it applied state in, so this is a ceiling, not a rate anyone needs.
-        std::uint32_t maxClientAcksPerSecond = 240;
+        /// A client sends at most one per update it applied state in, so this is a ceiling, not a rate anyone needs: above the most messages a client is sent in a second (4 per tick at 240 ticks).
+        std::uint32_t maxClientAcksPerSecond = 1024;
         /// The bounds of the state messages (see ServerReplicationOptions)
         ServerReplicationOptions replication;
     };

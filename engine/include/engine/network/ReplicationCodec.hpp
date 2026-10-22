@@ -29,7 +29,7 @@ namespace N2Engine::Network
     //   Vector2/3/4    each axis (x, y, z; Vector4: w, x, y, z) as a Float with a step, or float32 bits
     //   Quaternion     smallest-three: u32 = largest component index (2 bits) then the other three, each 10 bits across
     //                  [-1/sqrt 2, 1/sqrt 2], the largest taken positive (the sign of q does not matter). The error is
-    //                  at most 0.0007 per component, under 0.005 radians (0.3 degrees) of rotation.
+    //                  at most 0.0007 per sent component (the rebuilt largest up to ~0.0011), under 0.005 radians (0.3 degrees) of rotation.
     //   Color          8 bits per channel clamped to [0, 1]: r, g, b, a (Common::Color), x, y, z (a Vector3 marked
     //                  AsColor) or w, x, y, z (a Vector4 marked AsColor); the error is at most 1/510
     //   String         varint length (at most kMaxReplicatedStringBytes) and the UTF-8 bytes; a longer string is cut at

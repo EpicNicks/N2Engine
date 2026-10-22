@@ -1182,7 +1182,7 @@ TEST(ClientReplicatorTest, GarbageIsMalformedAndAppliesNothingOutsideTheLayout)
 
 TEST(ClientReplicatorTest, AnEntryForAnotherLayoutIsSkipped)
 {
-    // A message whose layout hash is wrong for the object: skipped, counted, nothing applied, not acknowledged
+    // A message whose layout hash is wrong for the object: skipped, counted, nothing applied, acknowledged (a layout that differs stays different)
     HalvesRig rig;
     rig.server.Probe(1)->score = 77;
     auto messages = rig.Tick();
@@ -1191,10 +1191,10 @@ TEST(ClientReplicatorTest, AnEntryForAnotherLayoutIsSkipped)
     std::vector<std::uint8_t> bent = messages[0];
     ASSERT_GT(bent.size(), kStateUpdateHeaderBytes + 3);
     bent[kStateUpdateHeaderBytes + 1] = static_cast<std::uint8_t>(bent[kStateUpdateHeaderBytes + 1] ^ 0xFF);
-    EXPECT_EQ(rig.receiver.OnStateUpdate(rig.client.world, bent), ClientReplicator::Result::Partial);
+    EXPECT_EQ(rig.receiver.OnStateUpdate(rig.client.world, bent), ClientReplicator::Result::Applied);
     EXPECT_EQ(rig.receiver.Stats().entriesLayoutMismatch, 1u);
     EXPECT_NE(rig.client.Probe(1)->score, 77);
-    EXPECT_FALSE(rig.receiver.AckPending());
+    EXPECT_TRUE(rig.receiver.AckPending());
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1324,10 +1324,10 @@ TEST(NetworkReplicationTest, TooManyAcksPerSecondDropTheClient)
     // Let the server send some state first, so the acknowledgements below name a sequence it did send
     session.RunFor(200'000);
     ASSERT_GT(session.server->ReplicationStats().messagesSent, 0u);
-    // Far more than maxClientAcksPerSecond (240) in well under a second
+    // Far more than maxClientAcksPerSecond (1024) in well under a second
     for (int round = 0; round < 20; ++round)
     {
-        for (int i = 0; i < 40; ++i)
+        for (int i = 0; i < 100; ++i)
         {
             raw.SendUnreliable(Encode(StateAckMessage{1, 0}));
         }
@@ -1459,9 +1459,9 @@ TEST(NetworkReplicationTest, AClientWhoseObjectHasAnotherLayoutSkipsTheEntryAndI
     session.RunFor(500'000);
     EXPECT_GT(rig.client->ReplicationStats().entriesLayoutMismatch, 0u);
     EXPECT_EQ(rig.client->ReplicationStats().entriesApplied, 0u);
-    EXPECT_GT(rig.client->ReplicationStats().messagesPartial, 0u);
     EXPECT_TRUE(rig.client->IsJoined());
-    // Never acknowledged: the server keeps the history bounded
+    // Acknowledged, so the history drains and the unusable object does not hold other objects back
+    EXPECT_TRUE(session.RunUntil([&] { return session.server->Replicator().InFlightMessages(1) == 0; }));
     EXPECT_LE(session.server->Replicator().InFlightMessages(1), session.config.replication.maxInFlightMessages);
 }
 
