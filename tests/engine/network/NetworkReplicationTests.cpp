@@ -1226,7 +1226,7 @@ TEST(NetworkReplicationTest, AClientGetsTheServersValues)
     EXPECT_EQ(clientProbe.local, 0) << "a field that is not replicated is not sent";
     EXPECT_GT(rig.client->ReplicationStats().entriesApplied, 0u);
     EXPECT_EQ(rig.client->ReplicationStats().messagesMalformed, 0u);
-    EXPECT_GT(session.server->ReplicationStats().messagesAcked, 0u);
+    EXPECT_TRUE(session.RunUntil([&] { return session.server->ReplicationStats().messagesAcked > 0; }));
 }
 
 TEST(NetworkReplicationTest, AnIdleWorldCostsNothingAndAChangeCostsOneField)
