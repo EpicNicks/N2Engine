@@ -1,9 +1,29 @@
 #pragma once
 
+#include <cstdint>
+#include <functional>
+#include <optional>
+#include <string>
+
+#include "engine/network/NetworkServer.hpp"
 #include "n2server/ServerOptions.hpp"
 
 namespace N2Engine::Server
 {
+    /// How a host built over RunServer takes part in the server's start and its loop (a test host, a game's own server
+    /// executable). N2Server itself passes none.
+    struct ServerHooks
+    {
+        /// Called once, with the engine running, the scene loaded and its NetworkObjects given their ids, before the
+        /// prefab table is captured and before the server listens: register the game's prefabs here
+        /// (PrefabManager::RegisterPrefab). Returns nullopt to go on, or a message that ends the server with exit code
+        /// 1 (printed to stderr, before any ready line).
+        std::function<std::optional<std::string>()> beforeListening;
+        /// Called once per pass of the main loop, after the network update, with the running network server and a
+        /// monotonic microsecond clock: spawn and despawn here. Returns false to stop the loop (a clean stop).
+        std::function<bool(Network::NetworkServer &server, std::uint64_t nowMicros)> onTick;
+    };
+
     /**
      * Runs a dedicated server, as N2Server does. With options.showHelp it prints ServerUsage() and returns 0; with
      * options.newTokenUser it is RunNewToken (TokenCli.hpp). With options.relay it prints one line to stderr
@@ -27,11 +47,17 @@ namespace N2Engine::Server
      * still shut down in order (the scene's OnApplicationQuit, then Application::Shutdown, each guarded so neither throws),
      * and the exit code stays 1.
      *
-     * At this stage the server authenticates and counts clients and logs when they connect and disconnect; it replicates
-     * nothing and runs no gameplay networking (track B). Call it at most once at a time: it installs signal handlers and
-     * uses the Application singleton.
+     * The server hosts the world of the scene (netcode stage B1, docs/netcode.html "The network world"): after the scene
+     * is loaded its NetworkObjects are given net ids (Network::NetworkWorld::BindScene; a scene that can't be matched ends
+     * the server with exit code 1), the prefab table is captured, and a Network::NetworkServer runs over the secure
+     * transport: each client that joins is sent the fingerprint and the join state, and every spawn and despawn is
+     * replicated. N2Server spawns nothing by itself; a host spawns through ServerHooks::onTick. Call it at most once at a
+     * time: it installs signal handlers and uses the Application singleton.
      */
     int RunServer(const ServerOptions &options);
+
+    /// RunServer with hooks (see ServerHooks)
+    int RunServer(const ServerOptions &options, const ServerHooks &hooks);
 
     /// The command line form: parses the arguments after the program name (ParseServerArguments), prints a parse error to
     /// stderr and returns 1, otherwise returns RunServer(options). N2Server's main is just this.

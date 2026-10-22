@@ -38,13 +38,41 @@ endif()
 # Building the client builds the server the smoke test starts
 add_dependencies(n2server_smoke_client N2Server)
 
-# The smoke test: Python 3 standard library only. Without an interpreter it is not registered (the unit tests above are).
+# The world-protocol loopback test (netcode stage B1): a test host (N2Server's RunServer with hooks: it registers a prefab
+# and runs spawn and despawn commands from stdin) and a headless test client (a NetworkClient over the secure handshake),
+# started as real processes on loopback by tests/smoke/n2server_net.py. Both run the engine, so they need what N2Server
+# needs (on Windows its PhysX DLLs, copied next to it, which the dependency on N2Server below guarantees).
+add_executable(n2server_net_host NetHost.cpp)
+target_link_libraries(n2server_net_host PRIVATE N2ServerCore)
+add_executable(n2server_net_client NetClient.cpp)
+target_link_libraries(n2server_net_client PRIVATE N2ServerCore)
+foreach(NET_TOOL n2server_net_host n2server_net_client)
+    set_target_properties(${NET_TOOL} PROPERTIES
+            CXX_STANDARD 23
+            CXX_STANDARD_REQUIRED ON
+            CXX_EXTENSIONS OFF
+    )
+    if (MSVC)
+        target_compile_options(${NET_TOOL} PRIVATE /W4)
+    else()
+        target_compile_options(${NET_TOOL} PRIVATE -Wall -Wextra)
+    endif()
+    add_dependencies(${NET_TOOL} N2Server)
+endforeach()
+
+# The smoke tests: Python 3 standard library only. Without an interpreter they are not registered (the unit tests above are).
 find_package(Python3 COMPONENTS Interpreter)
 if (Python3_FOUND)
     add_test(NAME n2server_smoke
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/smoke/n2server_smoke.py
             --server $<TARGET_FILE:N2Server> --client $<TARGET_FILE:n2server_smoke_client>)
     set_tests_properties(n2server_smoke PROPERTIES TIMEOUT 600)
+
+    add_test(NAME n2server_net
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/smoke/n2server_net.py
+            --server $<TARGET_FILE:N2Server> --host $<TARGET_FILE:n2server_net_host>
+            --client $<TARGET_FILE:n2server_net_client>)
+    set_tests_properties(n2server_net PROPERTIES TIMEOUT 600)
 else()
-    message(STATUS "N2Server smoke test not registered: no Python 3 interpreter found")
+    message(STATUS "N2Server smoke tests not registered: no Python 3 interpreter found")
 endif()

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <exception>
 #include <format>
 #include <optional>
@@ -291,4 +292,27 @@ std::shared_ptr<GameObject> PrefabManager::InstantiateRegisteredPrefab(const std
     // A copy: instantiating runs component code, which could register (and rehash) another prefab
     const nlohmann::json data = JsonLimits::IterativeCopy(it->second);
     return InstantiatePrefab(data);
+}
+
+std::vector<std::string> PrefabManager::GetRegisteredPrefabNames()
+{
+    std::vector<std::string> names;
+    names.reserve(Registry().size());
+    for (const auto &entry : Registry())
+    {
+        names.push_back(entry.first);
+    }
+    std::sort(names.begin(), names.end());
+    return names;
+}
+
+std::optional<nlohmann::json> PrefabManager::GetPrefabData(const std::string &prefabName)
+{
+    const auto &registry = Registry();
+    const auto it = registry.find(prefabName);
+    if (it == registry.end())
+    {
+        return std::nullopt;
+    }
+    return JsonLimits::IterativeCopy(it->second);
 }

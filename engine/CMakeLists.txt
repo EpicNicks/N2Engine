@@ -5,7 +5,7 @@ file(GLOB_RECURSE ENGINE_SOURCES
 )
 
 # n2net (the netcode's packet layer and network simulator) has no engine dependency: it is its own library, below, and
-# the engine does not link it yet. Keep its sources out of the engine's glob.
+# the engine links it (the world layer in src/network/ runs n2net Connections). Keep its sources out of the engine's glob.
 list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/network/n2net/")
 # n2security (the shared admission policy, token files and crypto wrappers) is its own library too, below
 list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/security/")
@@ -106,6 +106,7 @@ target_link_libraries(engine
     OpenAL::OpenAL # public audio headers include <AL/al.h>
     lua
     N2Engine::text # public: engine/text/Font.hpp exposes the text library's types
+    n2net # public: the network headers (NetworkServer, NetworkClient) expose its Connection and ITransport
 )
 
 # == n2net: ITransport, the in-memory SimTransport, the packet layer (acks, reliable and unreliable channels,
