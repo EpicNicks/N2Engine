@@ -13,6 +13,7 @@ namespace N2Engine::Network
     {
         constexpr std::uint64_t kMicrosPerSecond = 1'000'000;
         constexpr std::uint32_t kHardMaxClients = 1024;
+        constexpr std::uint32_t kMaxStateSendRateHz = 240;
 
         const char *FailureName(const N2Net::FailureReason reason)
         {
@@ -45,9 +46,10 @@ namespace N2Engine::Network
     }
 
     NetworkServer::NetworkServer(N2Net::ITransport &transport, NetworkWorld &world, NetworkServerOptions options)
-        : _transport(transport), _world(world), _options(std::move(options))
+        : _transport(transport), _world(world), _options(std::move(options)), _replicator(_options.replication)
     {
         _options.maxClients = std::clamp<std::uint32_t>(_options.maxClients, 1u, kHardMaxClients);
+        _options.stateSendRateHz = std::min<std::uint32_t>(_options.stateSendRateHz, kMaxStateSendRateHz);
         _fingerprint = MakeFingerprint(_options.scenePath, _options.sceneHash, _world.SceneObjectCount(), _options.prefabs);
         _world.SetDestroyedHandler([this](const NetworkId id, const bool wasSpawned)
                                    { _pendingDespawns.emplace_back(id.value, wasSpawned); });
@@ -83,6 +85,7 @@ namespace N2Engine::Network
         else
         {
             FlushPendingDespawns();
+            SendState();
         }
         RunTimers();
         SendPackets();
@@ -130,6 +133,7 @@ namespace N2Engine::Network
             std::make_unique<N2Net::Connection>(MakeWorldConnectionConfig(_options.protocolId, _transport), _now);
         client.connectedAt = _now;
         client.rateWindowStart = _now;
+        client.ackWindowStart = _now;
         const auto inserted = _clients.emplace(peer, std::move(client));
 
         ServerHelloMessage hello;
@@ -151,6 +155,7 @@ namespace N2Engine::Network
             return;
         }
         NotifyLeft(found->second, "disconnected");
+        _replicator.RemoveClient(found->second.id);
         _clients.erase(found);
     }
 
@@ -175,15 +180,14 @@ namespace N2Engine::Network
         {
             return;
         }
+        if (channel == N2Net::MessageChannel::UnreliableSequenced)
+        {
+            OnUnreliable(client, message);
+            return;
+        }
         if (!AllowMessage(client))
         {
             MarkDrop(client, "it sent more messages per second than allowed", &NetworkServerStats::droppedRateLimited);
-            return;
-        }
-        if (channel != N2Net::MessageChannel::ReliableOrdered)
-        {
-            MarkDrop(client, "it sent a message on the unreliable channel, which the world protocol does not use",
-                     &NetworkServerStats::droppedProtocol);
             return;
         }
 
@@ -216,6 +220,40 @@ namespace N2Engine::Network
         }
     }
 
+    void NetworkServer::OnUnreliable(Client &client, const std::span<const std::uint8_t> message)
+    {
+        if (!AllowAck(client))
+        {
+            MarkDrop(client, "it sent more state acknowledgements per second than allowed",
+                     &NetworkServerStats::droppedRateLimited);
+            return;
+        }
+        // The one thing a client sends on the unreliable channel is the acknowledgement of state it applied. It carries
+        // sequence numbers and nothing else: no value of any field.
+        if (message.empty() || message[0] != kStateAckType)
+        {
+            MarkDrop(client, "it sent a message on the unreliable channel that is not a state acknowledgement",
+                     &NetworkServerStats::droppedProtocol);
+            return;
+        }
+        const std::expected<StateAckMessage, DecodeError> ack = DecodeStateAck(message);
+        if (!ack)
+        {
+            MarkDrop(client, std::format("it sent a malformed state acknowledgement ({})", ToString(ack.error())),
+                     &NetworkServerStats::droppedMalformed);
+            return;
+        }
+        if (client.state != ClientState::Joined)
+        {
+            MarkDrop(client, "it acknowledged state before it joined", &NetworkServerStats::droppedProtocol);
+            return;
+        }
+        if (!_replicator.OnAck(client.id, *ack))
+        {
+            MarkDrop(client, "it acknowledged a state update the server never sent", &NetworkServerStats::droppedProtocol);
+        }
+    }
+
     void NetworkServer::OnAccept(Client &client, const Fingerprint &fingerprint)
     {
         if (client.state != ClientState::Handshaking)
@@ -233,6 +271,7 @@ namespace N2Engine::Network
 
         client.state = ClientState::Joined;
         ++_stats.clientsJoined;
+        _replicator.AddClient(client.id);
         SendJoinState(client);
         if (!client.dropping && _clientObserver)
         {
@@ -366,6 +405,7 @@ namespace N2Engine::Network
         {
             _destroyedSceneIds.insert(id.value);
         }
+        _replicator.ForgetObject(id);
         DespawnMessage message;
         message.id = id;
         Broadcast(Encode(message));
@@ -434,10 +474,40 @@ namespace N2Engine::Network
             {
                 _destroyedSceneIds.insert(entry.first);
             }
+            _replicator.ForgetObject(NetworkId{entry.first});
             DespawnMessage message;
             message.id = NetworkId{entry.first};
             Broadcast(Encode(message));
             ++_stats.despawnsSent;
+        }
+    }
+
+    void NetworkServer::SendState()
+    {
+        if (_options.stateSendRateHz == 0 || _worldLost || _now < _nextStateAt)
+        {
+            return;
+        }
+        _nextStateAt = _now + kMicrosPerSecond / _options.stateSendRateHz;
+        if (JoinedClientCount() == 0)
+        {
+            return;
+        }
+        _replicator.BeginTick(_world);
+        for (auto &entry : _clients)
+        {
+            Client &client = entry.second;
+            if (client.state != ClientState::Joined || client.dropping || client.connection->IsFailed())
+            {
+                continue;
+            }
+            const std::vector<std::vector<std::uint8_t>> messages =
+                _replicator.BuildForClient(client.id, _now, client.connection->MaxUnreliableMessageSize());
+            for (const std::vector<std::uint8_t> &message : messages)
+            {
+                // A message that does not get out is as good as a lost one: the next tick sends what is still needed
+                (void)client.connection->SendUnreliable(message);
+            }
         }
     }
 
@@ -497,6 +567,7 @@ namespace N2Engine::Network
                 continue;
             }
             NotifyLeft(client, client.dropReason);
+            _replicator.RemoveClient(client.id);
             _transport.Disconnect(client.peer);
             it = _clients.erase(it);
         }
@@ -541,6 +612,17 @@ namespace N2Engine::Network
         }
         ++client.rateWindowCount;
         return client.rateWindowCount <= _options.maxClientMessagesPerSecond;
+    }
+
+    bool NetworkServer::AllowAck(Client &client)
+    {
+        if (_now - client.ackWindowStart >= kMicrosPerSecond)
+        {
+            client.ackWindowStart = _now;
+            client.ackWindowCount = 0;
+        }
+        ++client.ackWindowCount;
+        return client.ackWindowCount <= _options.maxClientAcksPerSecond;
     }
 
     void NetworkServer::NotifyLeft(const Client &client, const std::string_view reason)

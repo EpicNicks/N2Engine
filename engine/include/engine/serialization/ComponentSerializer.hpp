@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <concepts>
 #include <cstddef>
 #include <format>
@@ -121,6 +122,25 @@ namespace N2Engine
         FieldBuilder &Hidden()
         {
             Info().hidden = true;
+            return *this;
+        }
+
+        /// Netcode stage B2: the server replicates this member to every client (only the server writes it; a client's
+        /// copy is overwritten by what the server sends). `step` above 0 sends a Float or a vector as whole steps (see
+        /// FieldInfo::replicationStep). A kind that cannot be replicated (a list, a component reference, Json) logs an
+        /// error and stays unreplicated. A client and a server must register the same replicated members: the set is part
+        /// of the registry fingerprint, so a mismatch refuses the join.
+        FieldBuilder &Replicated(const double step = 0.0)
+        {
+            FieldInfo &info = Info();
+            if (!IsReplicableKind(info.kind))
+            {
+                Logger::Error(std::format("Field '{}' is of kind {}, which cannot be replicated: it stays local", info.name,
+                                          FieldKindName(info.kind)));
+                return *this;
+            }
+            info.replicated = true;
+            info.replicationStep = (std::isfinite(step) && step > 0.0) ? step : 0.0;
             return *this;
         }
 

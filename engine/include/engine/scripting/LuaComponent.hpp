@@ -49,6 +49,9 @@ namespace N2Engine::Scripting
         // Track missing lua script and refs
         bool _hasMissingScript = false;
         bool _hasUnresolvedReferences = false;
+        // DescribeFields said once that a declaration's `replicated` was refused (not a boolean, or a kind that cannot be
+        // replicated), so describing the fields again does not repeat it
+        mutable bool _replicatedWarned = false;
         // Set when a call into the script ran out of instructions or memory (LuaLimits): its lifecycle calls are skipped
         // until the script is set again or reloaded, so a looping OnUpdate doesn't burn the whole budget every frame
         bool _faulted = false;
@@ -109,6 +112,8 @@ namespace N2Engine::Scripting
         void CopyReferenceFields(const sol::table &from);
         void ExtractSerializableFields();
         void InjectFieldsIntoScript();
+        /// InjectFieldsIntoScript for one field: the value of `key` in _scriptData is already set
+        void InjectField(const std::string &key, const nlohmann::json &value);
         void CacheLifecycleMethods();
         /// Cuts the script off from this component: flags its callbacks dead, clears
         /// self.component/self.gameObject and drops the reload callback. Safe to call twice.
@@ -203,5 +208,14 @@ namespace N2Engine::Scripting
         /// scriptUUID loads that script (std::invalid_argument for null, an unknown UUID or an asset that isn't a
         /// script); scriptData's keys are merged into the script's data and injected, references re-resolved
         void SetEditorFields(const nlohmann::json &values, ReferenceResolver *resolver) override;
+
+        // Network replication (netcode stage B2). A field declared `{ type = "int", default = 0, replicated = true }` is
+        // replicated when it is a bool, int, float, string or Vector3; the script's LIVE value is what the server sends
+        // (the instance's field, not the saved default), and a client sets only that field on its instance.
+        /// Serialize() with the live values of the replicated script fields in "scriptData"
+        [[nodiscard]] nlohmann::json SerializeReplicated(std::span<const FieldInfo> replicated) override;
+        /// Sets the replicated script fields `values` names in "scriptData", on the instance and in the saved data; the
+        /// script's other fields are not touched (SetEditorFields would write every saved field back to the instance)
+        void ApplyReplicated(const nlohmann::json &values, ReferenceResolver *resolver) override;
     };
 }

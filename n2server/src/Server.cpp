@@ -611,6 +611,9 @@ namespace N2Engine::Server
             netOptions.scenePath = loadedScene->resourcePath;
             netOptions.sceneHash = loadedScene->contentHash;
             netOptions.prefabs = std::move(prefabs);
+            // How often the replicated fields are sent: the project's network.authoritative.snapshotRate (30 by default)
+            netOptions.stateSendRateHz = static_cast<std::uint32_t>(
+                std::max(1, ReadNetworkSettings(project->settings).authoritative.snapshotRate));
             Network::NetworkServer netServer(secure, world, std::move(netOptions));
             netServer.SetTransportObserver(onEvent);
             netServer.SetClientObserver(
