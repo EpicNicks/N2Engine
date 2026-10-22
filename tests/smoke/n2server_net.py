@@ -332,6 +332,9 @@ def scenario_real_server(run, work, tokens):
     check(not server.exited(), "the server must still be running")
     check(tokens[0] not in server.err() + server.out(), "a token reached the server's output")
     stop_client(client)
+    # The client's leave is a datagram: wait until the server has seen it before the server is stopped
+    wait_for(lambda: "Network client left the world: client=1" in server.err(), 30, "the server's line for the client leaving",
+             server)
 
     # Ending: stdin closes, the server stops cleanly
     server.close_stdin()
