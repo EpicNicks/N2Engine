@@ -4,6 +4,7 @@
 #include "engine/GameObjectScene.hpp"
 #include "engine/Time.hpp"
 #include "engine/network/InputLayout.hpp"
+#include "engine/network/NetworkClient.hpp"
 #include "engine/network/NetworkObject.hpp"
 #include "engine/network/NetworkServer.hpp"
 
@@ -212,6 +213,76 @@ namespace N2Engine::Scripting::Bindings
         }
     }
 
+    namespace
+    {
+        /// The server's tick and tick rate as this process knows them: the client's estimate when it runs a client (nothing
+        /// until the clock has synced), else the server's own count
+        struct ClockView
+        {
+            bool known = false;
+            double tick = 0.0;
+            double rate = 0.0;
+        };
+
+        ClockView CurrentClock()
+        {
+            ClockView view;
+            if (Network::NetworkClient *const client = Network::NetworkClient::Active())
+            {
+                if (client->ClockSynced() && client->ServerTickRate() != 0)
+                {
+                    view.known = true;
+                    view.tick = client->ServerTick();
+                    view.rate = static_cast<double>(client->ServerTickRate());
+                }
+                return view;
+            }
+            if (Network::NetworkServer *const server = Network::NetworkServer::Active())
+            {
+                view.known = true;
+                view.tick = static_cast<double>(server->CurrentTick());
+                view.rate = static_cast<double>(server->TickRate());
+            }
+            return view;
+        }
+
+        /// Network.GetServerTime(): the server's time in seconds (its tick divided by its tick rate); on a client the
+        /// estimate, which never decreases. nil until a client has synced its clock, and when this process runs neither.
+        sol::object GetServerTime(sol::this_state state)
+        {
+            const ClockView view = CurrentClock();
+            if (!view.known)
+            {
+                return sol::make_object(state, sol::lua_nil);
+            }
+            return sol::make_object(state, view.tick / view.rate);
+        }
+
+        /// Network.GetServerTick(): the server's tick, fractional on a client (an estimate)
+        sol::object GetServerTick(sol::this_state state)
+        {
+            const ClockView view = CurrentClock();
+            if (!view.known)
+            {
+                return sol::make_object(state, sol::lua_nil);
+            }
+            return sol::make_object(state, view.tick);
+        }
+
+        /// Network.GetRtt() and Network.GetJitter(): the round trip to the server and its jitter, in seconds; nil on a
+        /// process that runs no client, or before its clock has synced
+        sol::object ClientSeconds(sol::this_state state, const bool jitter)
+        {
+            Network::NetworkClient *const client = Network::NetworkClient::Active();
+            if (client == nullptr || !client->ClockSynced())
+            {
+                return sol::make_object(state, sol::lua_nil);
+            }
+            const std::uint64_t micros = jitter ? client->JitterMicros() : client->RttMicros();
+            return sol::make_object(state, static_cast<double>(micros) / 1.0e6);
+        }
+    }
+
     void BindNetwork(LuaRuntime &runtime)
     {
         auto &lua = runtime.GetState();
@@ -222,5 +293,9 @@ namespace N2Engine::Scripting::Bindings
         sol::table network = lua["Network"].get_or_create<sol::table>();
         network["DeclareInputLayout"] = [](const sol::object &controls) { DeclareInputLayout(controls); };
         network["GetInput"] = [](const GameObjectRef *target, sol::this_state state) { return GetInput(target, state); };
+        network["GetServerTime"] = [](sol::this_state state) { return GetServerTime(state); };
+        network["GetServerTick"] = [](sol::this_state state) { return GetServerTick(state); };
+        network["GetRtt"] = [](sol::this_state state) { return ClientSeconds(state, false); };
+        network["GetJitter"] = [](sol::this_state state) { return ClientSeconds(state, true); };
     }
 }
