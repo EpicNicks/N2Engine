@@ -1220,6 +1220,15 @@ return Bouncer
 <p>See <a href="testing.html">Testing &amp; CI</a> for how the suite is built and run.</p>
 
 <h2 id="network-queries">Server networking queries</h2><p><code>Physics.RaycastLagCompensated(clientId, renderTimeMicros, origin, direction, maxDistance, layerMask?, ignoreNetId?)</code> and <code>Physics.SphereCastLagCompensated(clientId, renderTimeMicros, origin, radius, direction, maxDistance, layerMask?, ignoreNetId?)</code> return nil or a table containing netId, hitbox, point, normal, distance and timeMicros. Without a bound game server they return nil. See <a href="netcode.html#lag-compensation">historical hit queries</a> for the server time domain and authority requirements. Server scripts configure relevance through <a href="netcode.html#interest-management">Network.SetInterestPolicy, SetObserver and ClearObserver</a>.</p>
+<h3 id="network-clock">Network clock <span class="badge">PR #TBD</span></h3>
+<p>Four functions read the clock a client keeps of its server (netcode stage B3, <a href="netcode.html#clock">Clock sync and interpolation</a>); each returns a number, or nil when this process has nothing to say. They take no arguments.</p>
+<ul>
+<li><code>Network.GetServerTime()</code> returns the server's time in seconds (its fixed tick divided by its tick rate). On a client it is the estimate, as of the last network update: it never decreases, and it is nil until the first answer to a clock ping has arrived. On a process that runs a server and no client it is the server's own tick count over its tick rate; in a process that runs neither it is nil.</li>
+<li><code>Network.GetServerTick()</code> returns the server's fixed tick: fractional on a client, whole on a server. nil in the same cases.</li>
+<li><code>Network.GetRtt()</code> and <code>Network.GetJitter()</code> return the round trip to the server and its jitter in seconds (the median of the recent clock pings and their mean absolute deviation from it). nil on a process that runs no client, and before its clock has synced.</li>
+</ul>
+<pre><code>local t = Network.GetServerTime()
+if t then Log.Info(string.format("server time %.3f, rtt %.0f ms", t, (Network.GetRtt() or 0) * 1000)) end</code></pre>
 
 <div class="page-footer">
 <span>Describes master through PR #34.</span>

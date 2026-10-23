@@ -2610,6 +2610,27 @@ function Network.DeclareInputLayout(controls) end
 ---@return ("frame"|"repeated"|"neutral")? source
 function Network.GetInput(gameObject) end
 
+---The server's time in seconds (its fixed tick divided by its tick rate). On a client it is the estimate from the clock sync
+---(netcode stage B3): it never decreases, and it is nil until the first answer from the server has arrived. On a server it is
+---the server's own tick count. nil when this process runs neither.
+---@return number? seconds
+function Network.GetServerTime() end
+
+---The server's fixed tick: fractional on a client (an estimate, never decreasing), whole on a server. nil under the same
+---conditions as Network.GetServerTime.
+---@return number? tick
+function Network.GetServerTick() end
+
+---The round trip from this client to the server in seconds (the median of its recent clock pings). nil on a process that
+---runs no client and before the clock has synced.
+---@return number? seconds
+function Network.GetRtt() end
+
+---The jitter of the round trip in seconds (the mean absolute deviation of the recent clock pings from their median). nil under
+---the same conditions as Network.GetRtt.
+---@return number? seconds
+function Network.GetJitter() end
+
 -- ===== APPLICATION =====
 
 ---@class Application

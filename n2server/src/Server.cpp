@@ -652,7 +652,9 @@ namespace N2Engine::Server
             // How often the replicated fields are sent: the project's network.authoritative.snapshotRate (30 by default)
             netOptions.stateSendRateHz = static_cast<std::uint32_t>(
                 std::max(1, ReadNetworkSettings(project->settings).authoritative.snapshotRate));
-            netOptions.lagCompMaxMicros = static_cast<std::uint64_t>(ReadNetworkSettings(project->settings).authoritative.lagCompMaxMs) * 1000;
+            // The tick rate the clock pongs announce to the clients (netcode stage B3): the project's network.tickRate
+            netOptions.tickRate = static_cast<std::uint32_t>(std::max(1, ReadNetworkSettings(project->settings).tickRate));
+            netOptions.lagCompMaxMicros =static_cast<std::uint64_t>(ReadNetworkSettings(project->settings).authoritative.lagCompMaxMs) * 1000;
             Network::NetworkServer netServer(transport, world, std::move(netOptions));
             netServer.BindPhysicsQueries();
             netServer.SetTransportObserver(onEvent);

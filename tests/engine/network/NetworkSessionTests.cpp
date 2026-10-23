@@ -1111,13 +1111,20 @@ TEST(NetworkClientTest, NeverSendsASpawnOrADespawn)
     rig.Step(500'000);
     // Everything the client ever said to its server decodes as an accept: nothing else
     ASSERT_FALSE(rig.fromClient.empty());
+    // (the clock pings of netcode stage B3 are the one other thing a client sends, and they are no world message)
+    std::size_t worldMessages = 0;
     for (const std::vector<std::uint8_t> &message : rig.fromClient)
     {
+        if (!message.empty() && message[0] == 0x85)
+        {
+            continue;
+        }
+        ++worldMessages;
         const auto decoded = DecodeClientMessage(message);
         ASSERT_TRUE(decoded.has_value());
         EXPECT_NE(std::get_if<ClientAcceptMessage>(&*decoded), nullptr);
     }
-    EXPECT_EQ(rig.fromClient.size(), 1u);
+    EXPECT_EQ(worldMessages, 1u);
 }
 
 TEST(NetworkClientTest, FailsWhenTheServerSendsNoHello)
