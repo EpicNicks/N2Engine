@@ -31,6 +31,7 @@
 #include "engine/io/ResourcePath.hpp"
 #include "engine/physics/BoxCollider.hpp"
 #include "engine/physics/CapsuleCollider.hpp"
+#include "engine/physics/CharacterController.hpp"
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/SoftBody.hpp"
 #include "engine/physics/SphereCollider.hpp"
@@ -108,6 +109,7 @@ namespace N2Engine::Scripting::Bindings
                 {"BoxCollider", MakeAccess<Physics::BoxCollider>()},
                 {"SphereCollider", MakeAccess<Physics::SphereCollider>()},
                 {"CapsuleCollider", MakeAccess<Physics::CapsuleCollider>()},
+                {"CharacterController", MakeAccess<Physics::CharacterController>()},
                 {"CubeRenderer", MakeAccess<Example::CubeRenderer>()},
                 {"SphereRenderer", MakeAccess<Example::SphereRenderer>()},
                 {"QuadRenderer", MakeAccess<Example::QuadRenderer>()},

@@ -12,6 +12,7 @@
 #include "engine/network/NetworkTransform.hpp"
 #include "engine/physics/BoxCollider.hpp"
 #include "engine/physics/CapsuleCollider.hpp"
+#include "engine/physics/CharacterController.hpp"
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/SoftBody.hpp"
 #include "engine/physics/SphereCollider.hpp"
@@ -51,6 +52,7 @@ namespace N2Engine
         Add<Physics::BoxCollider>(registry, "BoxCollider");
         Add<Physics::SphereCollider>(registry, "SphereCollider");
         Add<Physics::CapsuleCollider>(registry, "CapsuleCollider");
+        Add<Physics::CharacterController>(registry, "CharacterController");
         Add<Rendering::Light>(registry, "Light");
         Add<Audio::AudioSource>(registry, "AudioSource");
         Add<Audio::AudioListener>(registry, "AudioListener");
