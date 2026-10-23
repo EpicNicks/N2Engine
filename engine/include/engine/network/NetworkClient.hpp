@@ -20,6 +20,7 @@
 #include "engine/network/NetworkInterpolation.hpp"
 #include "engine/network/NetworkProtocol.hpp"
 #include "engine/network/NetworkReplication.hpp"
+#include "engine/network/NetworkRpc.hpp"
 #include "engine/network/NetworkWorld.hpp"
 #include "engine/network/PrefabTable.hpp"
 #include "engine/network/n2net/Connection.hpp"
@@ -79,6 +80,11 @@ namespace N2Engine::Network
         /// second interval. At most one ping per Update. Each at least 20 ms (clamped), so a ping storm cannot come from here.
         std::uint64_t clockBurstIntervalMicros = 100'000;
         std::uint64_t clockIntervalMicros = 500'000;
+        /// The limits on the RPCs the server sends this client (a ceiling that bounds the queue, not a rate anyone needs)
+        /// and on the RPCs this client sends (maxSendPerSecond); clamped
+        RpcLimits rpc;
+        /// True in the Deterministic preset: only RPCs declared cosmetic are sent or run
+        bool cosmeticRpcsOnly = false;
     };
 
     /// What the clock sync did on the client (the estimator's own counters are ClockSync::Stats)
@@ -202,6 +208,11 @@ namespace N2Engine::Network
         [[nodiscard]] const ClientReplicationStats &ReplicationStats() const noexcept { return _replicator.Stats(); }
         [[nodiscard]] NetworkWorld &World() noexcept { return _world; }
 
+        /// Calls RPC `name` of `component` (a ClientToServer RPC on an object this client owns) with `args`: one JSON
+        /// value per parameter. The server checks everything again; a call it refuses has no effect.
+        RpcSendResult CallRpc(Component &component, std::string_view name, const std::vector<nlohmann::json> &args);
+        [[nodiscard]] const RpcStats &RpcStatistics() const noexcept { return _rpcStats; }
+
         /// Packs one tick of local input (`values`: InputLayout::ValueCount() of them, in the layout's order) into an
         /// InputFrame and queues it for the next Update to send. `tick` is the tick the server should apply it on (the
         /// server's own count: matching it to the client's is clock sync, a later stage) and must rise from one call to
@@ -253,6 +264,8 @@ namespace N2Engine::Network
         void OnWorldReady(const WorldReadyMessage &ready);
         void OnInputAck(std::span<const std::uint8_t> message);
         void OnClockPong(std::span<const std::uint8_t> message);
+        void OnRpc(std::span<const std::uint8_t> message);
+        void DispatchRpcs();
         void OnStreamTick(std::span<const std::uint8_t> message);
         void SendClockPing();
         void OnStateMessage(std::uint32_t tick);
@@ -275,6 +288,10 @@ namespace N2Engine::Network
         ClockSync _clock;
         SnapshotInterpolator _interpolator;
         ClientClockStats _clockStats;
+        RpcStats _rpcStats;
+        RpcBudget _rpcBudget;
+        ThrottledLog _rpcLog;
+        std::vector<PendingRpc> _pendingRpcs;
         struct PendingPing
         {
             std::uint32_t sequence = 0;
