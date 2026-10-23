@@ -420,6 +420,69 @@ end
         return std::format("0x{:016x}", hash);
     }
 
+    struct ReplaySimulation::Impl
+    {
+        std::string sceneName;
+        std::unique_ptr<Scene> scene;
+        int ticks = 0;
+    };
+
+    ReplaySimulation::ReplaySimulation(std::unique_ptr<Impl> impl) : _impl(std::move(impl)) {}
+    ReplaySimulation::~ReplaySimulation() = default;
+
+    std::unique_ptr<ReplaySimulation> ReplaySimulation::Create(const std::string &scene, const std::uint32_t seed, std::string &error)
+    {
+        auto impl = std::make_unique<Impl>();
+        impl->sceneName = scene;
+        impl->scene = MakeScene(scene, seed);
+        if (!impl->scene)
+        {
+            error = "unknown scene '" + scene + "'";
+            return nullptr;
+        }
+        if (!impl->scene->Ready(error))
+        {
+            return nullptr;
+        }
+        return std::unique_ptr<ReplaySimulation>(new ReplaySimulation(std::move(impl)));
+    }
+
+    bool ReplaySimulation::Step(const std::span<const SlotState> held, std::string &error)
+    {
+        HeldInputs inputs{};
+        for (std::size_t i = 0; i < held.size() && i < inputs.size(); ++i)
+        {
+            inputs[i] = Held{held[i].moveX, held[i].moveY, held[i].buttons};
+        }
+        // The tick runs under the deterministic floating-point policy whatever a library did to the thread before
+        const Math::FloatEnvironmentGuard guard;
+        if (!guard.Verified())
+        {
+            error = "the floating-point policy could not be set";
+            return false;
+        }
+        if (!_impl->scene->Step(_impl->ticks, inputs, error))
+        {
+            return false;
+        }
+        ++_impl->ticks;
+        return true;
+    }
+
+    int ReplaySimulation::TicksRun() const noexcept
+    {
+        return _impl->ticks;
+    }
+
+    std::uint64_t ReplaySimulation::Hash()
+    {
+        Fnv fnv;
+        fnv.Text(_impl->sceneName);
+        fnv.U32(static_cast<std::uint32_t>(_impl->ticks));
+        _impl->scene->Hash(fnv);
+        return fnv.Value();
+    }
+
     ReplayResult RunReplay(const ReplayLog &log)
     {
         ReplayResult result;
@@ -428,48 +491,30 @@ end
         {
             return result;
         }
-        std::unique_ptr<Scene> scene = MakeScene(log.scene, log.seed);
-        if (!scene)
-        {
-            result.error = "unknown scene '" + log.scene + "'";
-            return result;
-        }
-        if (!scene->Ready(result.error))
+        const std::unique_ptr<ReplaySimulation> simulation = ReplaySimulation::Create(log.scene, log.seed, result.error);
+        if (!simulation)
         {
             return result;
         }
 
-        HeldInputs held{};
+        std::array<SlotState, kMaxSlots> held{};
         std::size_t next = 0;
         for (int tick = 0; tick < log.ticks; ++tick)
         {
             while (next < log.inputs.size() && log.inputs[next].tick == tick)
             {
                 const ReplayInput &row = log.inputs[next];
-                held[static_cast<std::size_t>(row.slot)] = Held{row.moveX, row.moveY, row.buttons};
+                held[static_cast<std::size_t>(row.slot)] = SlotState{row.moveX, row.moveY, row.buttons};
                 ++next;
             }
+            if (!simulation->Step(held, result.error))
             {
-                // The tick runs under the deterministic floating-point policy whatever a library did to the thread before
-                const Math::FloatEnvironmentGuard guard;
-                if (!guard.Verified())
-                {
-                    result.error = "the floating-point policy could not be set";
-                    return result;
-                }
-                if (!scene->Step(tick, held, result.error))
-                {
-                    return result;
-                }
+                return result;
             }
             const int done = tick + 1;
             if (done % log.hashInterval == 0)
             {
-                Fnv fnv;
-                fnv.Text(log.scene);
-                fnv.U32(static_cast<std::uint32_t>(done));
-                scene->Hash(fnv);
-                result.hashes.push_back(ReplayHash{done, fnv.Value()});
+                result.hashes.push_back(ReplayHash{done, simulation->Hash()});
             }
         }
         result.ok = true;

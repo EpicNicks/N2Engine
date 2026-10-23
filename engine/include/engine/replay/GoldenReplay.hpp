@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -44,6 +46,41 @@ namespace N2Engine::Replay
 
     /// The names the scenes go by, in the order of the golden file
     [[nodiscard]] std::vector<std::string> SceneNames();
+
+    /// What a slot holds for one tick (the input of ReplayInput without the position in time)
+    struct SlotState
+    {
+        int moveX = 0;
+        int moveY = 0;
+        std::uint32_t buttons = 0;
+    };
+
+    /**
+     * One scene stepped a tick at a time: what RunReplay is built on, and what a live lockstep session runs so that its
+     * checkpoint hashes are the very ones a replay of its recorded input log produces (netcode C3). Same guarantees as
+     * RunReplay: no clock, no file system, every tick under the floating-point policy.
+     */
+    class ReplaySimulation
+    {
+    public:
+        /// nullptr with `error` set for an unknown scene or a scene whose script failed
+        [[nodiscard]] static std::unique_ptr<ReplaySimulation> Create(const std::string &scene, std::uint32_t seed, std::string &error);
+        ~ReplaySimulation();
+        ReplaySimulation(const ReplaySimulation &) = delete;
+        ReplaySimulation &operator=(const ReplaySimulation &) = delete;
+
+        /// Runs one tick with `held` as the slots' state (slots beyond the span hold zeros; at most kMaxSlots are read)
+        [[nodiscard]] bool Step(std::span<const SlotState> held, std::string &error);
+        /// Ticks run so far
+        [[nodiscard]] int TicksRun() const noexcept;
+        /// The 64-bit state hash after TicksRun() ticks: the value RunReplay records at a checkpoint
+        [[nodiscard]] std::uint64_t Hash();
+
+    private:
+        struct Impl;
+        explicit ReplaySimulation(std::unique_ptr<Impl> impl);
+        std::unique_ptr<Impl> _impl;
+    };
 
     /// Replays the log. ok is false with an error for an invalid log, an unknown scene or a script error.
     [[nodiscard]] ReplayResult RunReplay(const ReplayLog &log);
