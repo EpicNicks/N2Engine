@@ -44,6 +44,38 @@
   var errorBox = document.getElementById('error');
   var logLines = [];
   var failed = false;
+  var renderer = 'software';
+  var gpuSession = null;
+  var started = false;
+
+  function useSoftwareCanvas() {
+    // Canvas context types are exclusive, so software needs a fresh element.
+    var fresh = canvas.cloneNode(false);
+    canvas.parentNode.replaceChild(fresh, canvas);
+    canvas = fresh;
+    canvas.addEventListener('contextmenu', function (event) { event.preventDefault(); });
+    gpuSession = null;
+    renderer = 'software';
+    if (engine) { engine.canvas = canvas; engine.n2GpuSession = null; }
+  }
+
+  function gpuFailure(reason) {
+    if (!started) {
+      log('WebGPU unavailable before Start: ' + reason);
+      useSoftwareCanvas();
+      return;
+    }
+    if (gpuSession) gpuSession.stop();
+    showError('The graphics device was lost: ' + reason);
+    var button = document.createElement('button');
+    button.textContent = 'Continue with the software renderer';
+    button.onclick = function () {
+      var url = new URL(window.location.href);
+      url.searchParams.set('renderer', 'software');
+      window.location.href = url.href;
+    };
+    errorBox.appendChild(button);
+  }
 
   function showError(message) {
     failed = true;
@@ -101,11 +133,12 @@
     onAbort: function (reason) { showError('the engine aborted (' + reason + ')'); },
     n2Present: present,
     n2Stopped: function () {
+      if (gpuSession) gpuSession.stop();
       gate.style.display = 'flex';
       statusLine.textContent = 'The game has ended. Reload the page to play again.';
       startButton.style.display = 'none';
     },
-    n2Failed: function (message) { showError(message); }
+    n2Failed: function (message) { if (renderer === 'webgpu') gpuFailure(message); else showError(message); }
   };
 
   function megabytes(bytes) { return (bytes / 1048576).toFixed(1); }
@@ -144,8 +177,27 @@
       onProgress: onProgress,
       onEvent: function (name, detail) { log('loader: ' + name + (detail && detail.reason ? ' (' + detail.reason + ')' : '')); }
     });
-    loader.run(createN2Player, moduleSettings).then(function (instance) {
-      engine = instance;
+    var probe = N2Loader.createGpuProbe();
+    // Device acquisition and the asset/wasm downloads run concurrently. The
+    // shared session object is filled before Start, after the module is ready.
+    var gpuReady = probe.acquire().then(function (result) {
+      log('renderer: ' + result.reason);
+      if (!result.device) return;
+      try {
+        gpuSession = N2Loader.createGpuSession({ device: result.device, canvas: canvas, gpu: navigator.gpu,
+          probe: probe, onFailure: gpuFailure, onEvent: log });
+        renderer = 'webgpu';
+      } catch (error) {
+        result.device.destroy();
+        log('WebGPU canvas setup failed: ' + String(error.message || error));
+        useSoftwareCanvas();
+      }
+    });
+    Promise.all([loader.run(createN2Player, moduleSettings), gpuReady]).then(function (results) {
+      engine = results[0];
+      engine.canvas = canvas;
+      engine.n2GpuSession = gpuSession;
+      if (failed) return;
       progressBar.hidden = true;
       statusLine.textContent = 'Ready.';
       startButton.disabled = false;
@@ -159,10 +211,12 @@
   // output is created inside this click (see createAudioUnlock above for a browser that suspends it anyway)
   startButton.addEventListener('click', function () {
     if (!engine || failed) return;
+    if (gpuSession && gpuSession.status() === 0) return;
     gate.style.display = 'none';
     canvas.focus();
     try {
-      engine.callMain([]);
+      started = true;
+      engine.callMain(['--renderer', renderer]);
     } catch (error) {
       // callMain's own unwinding for a main that does not return is handled inside it; anything else is a failure
       showError(String(error && error.message ? error.message : error));
