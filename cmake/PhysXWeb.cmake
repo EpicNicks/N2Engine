@@ -51,6 +51,12 @@ endfunction()
 
 n2_physx_web_present(PHYSX_WEB_PRESENT)
 if(NOT PHYSX_WEB_PRESENT)
+    # On Windows the first bash on PATH is often WSL's (System32/bash.exe), which cannot open the Windows paths passed
+    # below and made this step fail with exit status 127; prefer the bash of Git for Windows. -DPHYSX_WEB_BASH=<path> wins.
+    if(CMAKE_HOST_WIN32)
+        find_program(PHYSX_WEB_BASH NAMES bash NO_DEFAULT_PATH
+            PATHS "$ENV{ProgramFiles}/Git/bin" "$ENV{ProgramW6432}/Git/bin" "$ENV{LOCALAPPDATA}/Programs/Git/bin")
+    endif()
     find_program(PHYSX_WEB_BASH bash)
     get_filename_component(PHYSX_WEB_EMDIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
     if(NOT PHYSX_WEB_BASH)
@@ -66,7 +72,7 @@ if(NOT PHYSX_WEB_PRESENT)
         )
         n2_physx_web_present(PHYSX_WEB_PRESENT)
         if(NOT PHYSX_WEB_RESULT EQUAL 0 OR NOT PHYSX_WEB_PRESENT)
-            message(WARNING "Building PhysX for the web failed (exit status: ${PHYSX_WEB_RESULT}). Disabling PhysX.")
+            message(WARNING "Building PhysX for the web failed (exit status: ${PHYSX_WEB_RESULT}, bash: ${PHYSX_WEB_BASH}; on Windows pass -DPHYSX_WEB_BASH=<Git for Windows bash.exe>). Disabling PhysX.")
             set(N2ENGINE_USE_PHYSX OFF)
         endif()
     endif()

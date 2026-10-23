@@ -9,6 +9,7 @@
 # Build directories
 bin/
 build/
+build-web*/
 build-cmake/
 out/
 Debug/

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validates the WebGPU shaders (renderer/shaders/webgpu/*.wgsl) with Tint and naga, the WGSL compilers of Chrome/Edge
+# Validates the three built-in WGSL files and the loader canvas shader with Tint and naga, the WGSL compilers of Chrome/Edge
 # (Dawn) and Firefox (wgpu); Safari's own WGSL compiler (WebKit) has no CI path (a check by hand). The "wgsl (Tint, naga)" CI
 # job runs it; scripts/install-wgsl-validators.sh installs the pinned tools.
 # Locally: TINT=/path/to/tint NAGA=/path/to/naga scripts/validate-wgsl.sh
@@ -59,12 +59,22 @@ if [ "${#shaders[@]}" -ne 3 ]; then
   echo "::error::expected unlit.wgsl, lit.wgsl and text.wgsl under renderer/shaders/webgpu, found ${#shaders[@]} files"
   exit 2
 fi
+# The canvas pass lives in the loader. Validate its exact runtime source too;
+# duplicating it in a .wgsl file could let the shipped shader drift untested.
+if ! command -v node > /dev/null 2>&1; then
+  echo "::error::node is needed to extract the canvas presentation WGSL"
+  exit 2
+fi
+node -e 'process.stdout.write(require(process.argv[1]).presenterWgsl)' "$root/web/n2-loader.js" > "$out/present.wgsl" || exit 2
+shaders+=("$out/present.wgsl")
 
 for shader in "${shaders[@]}"; do
   name="$(basename "$shader" .wgsl)"
   echo "== $name.wgsl"
   # Tint writes one entry point per output file (--ep), so each of the two goes through the SPIR-V writer and spirv-val
-  for entry in vs_main fs_main; do
+  entries=(vs_main fs_main)
+  if [ "$name" = present ]; then entries=(vs fs); fi
+  for entry in "${entries[@]}"; do
     run "tint $name.wgsl $entry (resolve, uniformity, SPIR-V + spirv-val)" "$tint" --format spvasm --validate --ep "$entry" -o "$out/$name.$entry.spvasm" "$shader"
   done
   run "tint $name.wgsl (WGSL round trip)" "$tint" --format wgsl -o "$out/$name.roundtrip.wgsl" "$shader"

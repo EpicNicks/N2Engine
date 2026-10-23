@@ -122,6 +122,9 @@ process.chdir(dir);
 const require = createRequire(pathToFileURL(path.join(dir, 'index.js')));
 const createN2Player = require(path.join(dir, 'index.js'));
 const N2Loader = require(path.join(dir, 'n2-loader.js'));
+const gpuSelection = await N2Loader.createGpuProbe({ search: '' }).acquire();
+expect(gpuSelection.renderer === 'software' && !gpuSelection.device,
+  'node must select the software fallback without a browser WebGPU device');
 
 // The mock host: serves the folder's files by the URL the loader asks for (query dropped), index.wasm with a wrong MIME type
 const requested = [];
