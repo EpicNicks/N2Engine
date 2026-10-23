@@ -14,8 +14,9 @@ namespace N2Engine::Network
     /**
      * Replicates the object's local position, rotation and scale from the server to every client (netcode stage B2). On
      * the server it reads the object's transform at every send; on a client it writes what the server sent straight to
-     * the transform (no smoothing: interpolation of remote objects is a later stage, which reads GetTeleportSerial and
-     * ConsumeTeleport to know when to snap instead). Only the server's value ever counts: a client that moves its copy
+     * the transform. A NetworkClient then shows remote objects interpolated between the states it received (netcode
+     * stage B3, SnapshotInterpolator), from GetReplicatedPosition and the other cached values, and treats a change of the
+     * teleport serial as a jump it does not interpolate across. Only the server's value ever counts: a client that moves its copy
      * has it overwritten by the next update that carries a change, and nothing a client sends is read as a transform.
      *
      * The values travel as replicated fields (see FieldInfo::replicated), so they are delta-compressed against what each
@@ -63,6 +64,13 @@ namespace N2Engine::Network
             _teleportPending = false;
             return pending;
         }
+
+        /// The server's latest values as this component holds them (on a client: what the newest update that carried the
+        /// part set; the object's own transform may differ, because remote objects are shown interpolated, netcode stage
+        /// B3). Quantised as sent.
+        [[nodiscard]] const Math::Vector3 &GetReplicatedPosition() const noexcept { return _position; }
+        [[nodiscard]] const Math::Quaternion &GetReplicatedRotation() const noexcept { return _rotation; }
+        [[nodiscard]] const Math::Vector3 &GetReplicatedScale() const noexcept { return _scale; }
 
         [[nodiscard]] float GetPositionStep() const noexcept { return _positionStep; }
         [[nodiscard]] bool ReplicatesPosition() const noexcept { return _replicatePosition; }

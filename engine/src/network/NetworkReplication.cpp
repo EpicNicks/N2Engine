@@ -213,7 +213,7 @@ namespace N2Engine::Network
     }
 
     void ServerReplicator::Flush(ClientState &state, PendingMessage &pending, const std::uint64_t nowMicros,
-                                 std::vector<std::vector<std::uint8_t>> &messages)
+                                 const std::uint32_t serverTick, std::vector<std::vector<std::uint8_t>> &messages)
     {
         if (pending.sent.empty())
         {
@@ -243,6 +243,7 @@ namespace N2Engine::Network
         StateUpdateHeader header;
         header.sequence = record.sequence;
         header.entryCount = static_cast<std::uint16_t>(record.entries.size());
+        header.tick = serverTick;
         std::vector<std::uint8_t> message = EncodeStateUpdateHeader(header);
         message.insert(message.end(), pending.entries.begin(), pending.entries.end());
 
@@ -276,7 +277,8 @@ namespace N2Engine::Network
 
     std::vector<std::vector<std::uint8_t>> ServerReplicator::BuildForClient(const ClientId client,
                                                                             const std::uint64_t nowMicros,
-                                                                            const std::size_t maxMessageBytes)
+                                                                            const std::size_t maxMessageBytes,
+                                                                            const std::uint32_t serverTick)
     {
         std::vector<std::vector<std::uint8_t>> messages;
         const auto found = _clients.find(client);
@@ -328,7 +330,7 @@ namespace N2Engine::Network
         PendingMessage pending;
         auto flush = [&] {
             const auto size = pending.entries.empty() ? 0 : kStateUpdateHeaderBytes + pending.entries.size();
-            Flush(state,pending,nowMicros,messages);
+            Flush(state,pending,nowMicros,serverTick,messages);
             budget -= size;
         };
         for (auto id : order)
@@ -422,6 +424,10 @@ namespace N2Engine::Network
             return Result::Stale;
         }
         _highestSeen = view.header.sequence;
+        if (_messageObserver)
+        {
+            _messageObserver(view.header.tick);
+        }
 
         N2Net::ByteReader reader(view.entries);
         const WorldReferences references(world);
@@ -470,6 +476,10 @@ namespace N2Engine::Network
             {
             case EntryResult::Applied:
                 ++_stats.entriesApplied;
+                if (_entryObserver)
+                {
+                    _entryObserver(*object, view.header.tick);
+                }
                 break;
             case EntryResult::Skipped:
                 ++_stats.entriesUnknownReference;

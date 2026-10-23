@@ -337,6 +337,7 @@ namespace N2Engine::Network
         StateUpdateView view;
         view.header.sequence = reader.U32();
         view.header.entryCount = reader.U16();
+        view.header.tick = reader.U32();
         view.entries = bytes.subspan(kStateUpdateHeaderBytes);
         // An entry is at least a one byte id, a two byte hash, a one byte length and a one byte mask
         constexpr std::size_t kMinEntryBytes = 5;
@@ -381,6 +382,7 @@ namespace N2Engine::Network
         writer.U8(kStateUpdateType);
         writer.U32(header.sequence);
         writer.U16(header.entryCount);
+        writer.U32(header.tick);
         return std::vector<std::uint8_t>(buffer.data(), buffer.data() + writer.Size());
     }
 

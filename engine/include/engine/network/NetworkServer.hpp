@@ -18,6 +18,7 @@
 #include "engine/network/NetworkFingerprint.hpp"
 #include "engine/network/LagCompensation.hpp"
 #include "engine/network/NetworkId.hpp"
+#include "engine/network/NetworkClock.hpp"
 #include "engine/network/NetworkInput.hpp"
 #include "engine/network/NetworkReplication.hpp"
 #include "engine/network/NetworkWorld.hpp"
@@ -72,6 +73,13 @@ namespace N2Engine::Network
         InputLayout inputLayout;
         /// The jitter buffer, the missing-input policy and the rate limit of the clients' input (ServerInputOptions)
         ServerInputOptions input;
+        /// The fixed tick rate of the simulation (the network setting tickRate), 1 to kMaxClockTickRate (clamped): the
+        /// clock pongs (netcode stage B3) tell the clients, who turn ticks into time with it. The tick itself is the host's
+        /// to give (SetCurrentTick).
+        std::uint32_t tickRate = 60;
+        /// More clock pings than this from one client in one second is a violation and the client is dropped. A client
+        /// sends a few a second at most (NetworkClientOptions), so this is a ceiling.
+        std::uint32_t maxClockPingsPerSecond = 32;
     };
 
     /// Counters since the server was made. All are data: nothing here throws.
@@ -100,6 +108,8 @@ namespace N2Engine::Network
         std::uint64_t droppedOverCapacity = 0;
         std::uint64_t spawnsSent = 0;
         std::uint64_t despawnsSent = 0;
+        /// Clock pings answered (netcode stage B3)
+        std::uint64_t clockPongsSent = 0;
     };
 
     /// The input of one client for one tick, as the server's game reads it (NetworkServer::InputFor)
@@ -199,9 +209,13 @@ namespace N2Engine::Network
         /// Tells the server which fixed tick the simulation is on (the most recent one begun): the reference the input
         /// buffers bound a frame's tick against (a frame too far ahead is refused) and fall back on when the game stops
         /// reading. Call it once per Update with Time::GetTick() (truncated to 32 bits; the buffers compare modulo 2^32). A
-        /// client that joins starts its buffer at the tick given last.
+        /// client that joins starts its buffer at the tick given last. The same tick is what the server stamps on its
+        /// state updates and clock pongs (netcode stage B3): a host that never calls this sends tick 0, and its clients
+        /// have no time to interpolate by.
         void SetCurrentTick(std::uint32_t tick);
         [[nodiscard]] std::uint32_t CurrentTick() const noexcept { return _inputTick; }
+        /// The fixed tick rate the pongs announce (options.tickRate, clamped)
+        [[nodiscard]] std::uint32_t TickRate() const noexcept { return _options.tickRate; }
 
         /// The input the owner of object `id` has for `tick`, for the game's server code to apply to that object. nullopt
         /// when there is no such object, the server owns it (a scene object, or a Spawn with the default owner), its owner
@@ -278,6 +292,10 @@ namespace N2Engine::Network
             std::set<std::uint32_t> hidden;
             std::uint64_t inputWindowStart = 0;
             std::uint32_t inputWindowCount = 0;
+            std::uint64_t clockWindowStart = 0;
+            std::uint32_t clockWindowCount = 0;
+            /// Clock pongs built when the pings arrived, sent by the next SendClockPongs (at most kMaxPendingPongs)
+            std::vector<ClockPongMessage> pendingPongs;
             /// Made when the client joins, if the server takes input
             std::unique_ptr<ServerInputBuffer> input;
             bool dropping = false;
@@ -291,6 +309,9 @@ namespace N2Engine::Network
         void OnMessage(Client &client, N2Net::MessageChannel channel, std::span<const std::uint8_t> message);
         void OnUnreliable(Client &client, std::span<const std::uint8_t> message);
         void OnInputFrames(Client &client, std::span<const std::uint8_t> message);
+        void OnClockPing(Client &client, std::span<const std::uint8_t> message);
+        void SendClockPongs();
+        bool AllowClockPing(Client &client);
         void OnAccept(Client &client, const Fingerprint &fingerprint);
         void SendJoinState(Client &client);
         bool Send(Client &client, const std::vector<std::uint8_t> &message);
@@ -318,6 +339,11 @@ namespace N2Engine::Network
         std::uint64_t _lastHitboxTick = ~std::uint64_t{0};
         std::uint64_t _nextStateAt = 0;
         std::uint32_t _inputTick = 0;
+        /// The tick the host gave last, and the server's clock when Update first saw it (the part of a tick that has passed
+        /// is the difference to now)
+        std::uint32_t _seenTick = 0;
+        std::uint64_t _seenTickAt = 0;
+        bool _haveSeenTick = false;
         /// The input counters of clients that left
         ServerInputStats _departedInput;
         std::uint64_t _now = 0;
