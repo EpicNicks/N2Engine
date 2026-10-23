@@ -27,16 +27,20 @@
 #include "engine/Application.hpp"
 #include "engine/Logger.hpp"
 #include "engine/ProjectSettings.hpp"
+#include "engine/Time.hpp"
 #include "engine/Version.hpp"
 #include "engine/io/ProjectFile.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourceUUID.hpp"
+#include "engine/network/InputLayout.hpp"
 #include "engine/network/NetworkFingerprint.hpp"
 #include "engine/network/NetworkServer.hpp"
 #include "engine/network/NetworkWorld.hpp"
 #include "engine/network/PrefabTable.hpp"
 #include "engine/network/n2net/SecureTransport.hpp"
 #include "engine/network/n2net/UdpTransport.hpp"
+#include "engine/network/n2net/WebSocketTransport.hpp"
+#include "engine/network/n2net/MultiplexTransport.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
@@ -504,6 +508,26 @@ namespace N2Engine::Server
             N2Net::SecureTransport &secure = *opened.transport;
             N2Net::UdpTransport &udpTransport = *opened.udp;
 
+            std::unique_ptr<N2Net::WebSocketTransport> webSocket;
+            std::vector<N2Net::ITransport *> transports{&secure};
+            if (options.webSocketPort >= 0)
+            {
+                N2Net::WebSocketListenOptions ws;
+                ws.port = static_cast<std::uint16_t>(options.webSocketPort);
+                ws.protocolId = options.protocolId;
+                ws.maxPeers = static_cast<std::uint32_t>(options.maxClients);
+                ws.allowedOrigin = options.webSocketOrigin;
+                ws.authenticate = [&tokens](std::string_view token) -> std::optional<N2Net::JoinTokenEntry> {
+                    if (!tokens) return {};
+                    const auto hash = N2Net::HashJoinToken(token);
+                    return hash ? tokens->Authenticate(*hash,std::nullopt) : std::nullopt;
+                };
+                std::string error;
+                webSocket = N2Net::WebSocketTransport::Listen(std::move(ws),error);
+                if (!webSocket) { Logger::Error(error); stopEngine(); return 1; }
+                transports.push_back(webSocket.get());
+            }
+            N2Net::MultiplexTransport transport(std::move(transports));
             const std::string boundAddress = udpTransport.LocalAddress();
             const std::uint16_t boundPort = udpTransport.LocalPort();
             Logger::Info(std::format("Listening on {} (UDP), at most {} client(s), protocol id 0x{:08X}",
@@ -538,7 +562,8 @@ namespace N2Engine::Server
 
             // For launchers (format in ServerOptions.hpp), once listening: straight to C stdout, flushed, since a piped
             // stdout is fully buffered
-            std::println(stdout, "{}", FormatReadyLine(boundPort, boundAddress));
+            std::println(stdout, "{}{}", FormatReadyLine(boundPort, boundAddress),
+                webSocket ? std::format(" websocketPort={}",webSocket->LocalPort()) : std::string{});
             std::fflush(stdout);
 
             // --exit-on-stdin-eof: the flag turns true when stdin ends or fails (a launcher that died)
@@ -573,7 +598,17 @@ namespace N2Engine::Server
                 if (event.type == N2Net::TransportEventType::PeerConnected)
                 {
                     N2Net::SecurePeerIdentity identity;
-                    if (!secure.GetPeerIdentity(event.peer, identity))
+                    N2Net::ITransport *source = nullptr;
+                    N2Net::PeerId sourcePeer = 0;
+                    const bool routed = transport.Source(event.peer,source,sourcePeer);
+                    bool identified = false;
+                    if (routed && source == &secure) identified = secure.GetPeerIdentity(sourcePeer,identity);
+                    else if (routed && webSocket && source == webSocket.get())
+                    {
+                        if (const auto who = webSocket->Identity(sourcePeer))
+                        { identity.user = who->user; identity.role = who->role; identified = true; }
+                    }
+                    if (!identified)
                     {
                         // Cannot happen (a session is made from the token entry that matched, and carries its user and
                         // role); never keep a client that has none: the session is disconnected after this Poll
@@ -585,7 +620,7 @@ namespace N2Engine::Server
                     info.user = identity.user;
                     info.role = identity.role;
                     N2Net::UdpPeerInfo peerInfo;
-                    if (udpTransport.GetPeerInfo(event.peer, peerInfo))
+                    if (source == &secure && udpTransport.GetPeerInfo(sourcePeer, peerInfo))
                     {
                         info.address = FormatAddress(peerInfo.address, peerInfo.port);
                     }
@@ -611,10 +646,15 @@ namespace N2Engine::Server
             netOptions.scenePath = loadedScene->resourcePath;
             netOptions.sceneHash = loadedScene->contentHash;
             netOptions.prefabs = std::move(prefabs);
+            // The networked input layout the game's scripts declared while the scene loaded (Network.DeclareInputLayout);
+            // empty when none did, and then the server takes no input
+            netOptions.inputLayout = Network::DeclaredInputLayout();
             // How often the replicated fields are sent: the project's network.authoritative.snapshotRate (30 by default)
             netOptions.stateSendRateHz = static_cast<std::uint32_t>(
                 std::max(1, ReadNetworkSettings(project->settings).authoritative.snapshotRate));
-            Network::NetworkServer netServer(secure, world, std::move(netOptions));
+            netOptions.lagCompMaxMicros = static_cast<std::uint64_t>(ReadNetworkSettings(project->settings).authoritative.lagCompMaxMs) * 1000;
+            Network::NetworkServer netServer(transport, world, std::move(netOptions));
+            netServer.BindPhysicsQueries();
             netServer.SetTransportObserver(onEvent);
             netServer.SetClientObserver(
                 [&forgetClient](const Network::NetworkClientEvent &event)
@@ -659,7 +699,8 @@ namespace N2Engine::Server
                     if (reloaded)
                     {
                         const std::size_t users = reloaded->Size();
-                        secure.SetTokens(std::make_shared<const N2Net::JoinTokenTable>(std::move(*reloaded)));
+                        tokens = std::make_shared<const N2Net::JoinTokenTable>(std::move(*reloaded));
+                        secure.SetTokens(tokens);
                         Logger::Info(std::format("Reloaded the tokens file: {} user(s)", users));
                     }
                     else
@@ -669,6 +710,8 @@ namespace N2Engine::Server
                     }
                 }
 
+                // The tick input frames are bounded against (the most recent one begun)
+                netServer.SetCurrentTick(static_cast<std::uint32_t>(Time::GetTick()));
                 netServer.Update(elapsedMicros());
                 for (const N2Net::PeerId peer : dropAfterPoll)
                 {
@@ -708,7 +751,7 @@ namespace N2Engine::Server
             // Tell the clients (a sealed Disconnect each), then close the socket
             for (const auto &client : clients)
             {
-                secure.Disconnect(client.first);
+                transport.Disconnect(client.first);
             }
             clients.clear();
             {

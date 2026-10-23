@@ -40,8 +40,11 @@ namespace N2Engine::Web
         friend bool operator==(const RenderSize &, const RenderSize &) = default;
     };
 
-    /// The size the game renders at for a canvas shown at cssWidth x cssHeight CSS pixels: the same shape, at most
-    /// maxWidth wide (a software renderer's cost is its pixel count; the browser scales the canvas up to its CSS size).
+    /// The size the game renders at for a canvas shown at cssWidth x cssHeight CSS pixels on a screen with
+    /// devicePixelRatio device pixels per CSS pixel: the same shape, at device resolution (so the browser does not
+    /// stretch, and blur, the frame) but at most maxWidth wide and maxWidth x maxWidth * 5/8 pixels in all, so a tall canvas
+    /// costs no more than a wide one (a software renderer's cost is its pixel count; past the caps the browser scales the
+    /// canvas up). A devicePixelRatio that is not a positive number counts as 1, and one above 16 as 16.
     /// {0, 0} when the canvas has no size (hidden, or not laid out yet).
-    [[nodiscard]] RenderSize FitRenderSize(double cssWidth, double cssHeight, int maxWidth);
+    [[nodiscard]] RenderSize FitRenderSize(double cssWidth, double cssHeight, double devicePixelRatio, int maxWidth);
 }

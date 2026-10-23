@@ -133,6 +133,12 @@ set_target_properties(n2net PROPERTIES
 
 # n2security: Security::Crypto (it wraps n2_mbedcrypto) and the admission policy SecureTransport uses
 target_link_libraries(n2net PUBLIC n2security)
+if (TARGET n2_mbedcrypto)
+    target_link_libraries(n2net PRIVATE n2_mbedcrypto)
+endif ()
+if (EMSCRIPTEN)
+    target_link_options(n2net PUBLIC "-lwebsocket.js")
+endif ()
 
 # Winsock for UdpTransport (the web build has no UdpTransport and no Winsock)
 if (WIN32)

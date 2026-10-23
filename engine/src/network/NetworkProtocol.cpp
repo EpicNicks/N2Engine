@@ -226,6 +226,17 @@ namespace N2Engine::Network
             }
             return ServerMessage(message);
         }
+        case static_cast<std::uint8_t>(MessageType::Visibility):
+        {
+            VisibilityMessage message;
+            message.id.value = reader.U32();
+            const auto visible = reader.U8();
+            const auto active = reader.U8();
+            if (const auto error = CheckEnd(reader)) return std::unexpected(*error);
+            if (!message.id.IsValid() || visible > 1 || active > 1) return std::unexpected(DecodeError::BadValue);
+            message.visible = visible != 0; message.active = active != 0;
+            return ServerMessage(message);
+        }
         case kTypeWorldReady:
         {
             WorldReadyMessage message;
@@ -299,6 +310,7 @@ namespace N2Engine::Network
         case kTypeServerHello:
         case kTypeSpawn:
         case kTypeDespawn:
+        case static_cast<std::uint8_t>(MessageType::Visibility):
         case kTypeWorldReady:
             return std::unexpected(DecodeError::WrongDirection);
         default:
@@ -422,6 +434,15 @@ namespace N2Engine::Network
         ByteWriter writer(buffer.data(), buffer.size());
         writer.U8(kTypeDespawn);
         writer.U32(message.id.value);
+        return Finish(buffer, writer);
+    }
+
+    std::vector<std::uint8_t> Encode(const VisibilityMessage &message)
+    {
+        std::array<std::uint8_t, kMaxMessageBytes> buffer{};
+        ByteWriter writer(buffer.data(), buffer.size());
+        writer.U8(static_cast<std::uint8_t>(MessageType::Visibility));
+        writer.U32(message.id.value); writer.U8(message.visible ? 1 : 0); writer.U8(message.active ? 1 : 0);
         return Finish(buffer, writer);
     }
 

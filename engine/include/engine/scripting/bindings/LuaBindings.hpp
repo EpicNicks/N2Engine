@@ -35,6 +35,7 @@ namespace N2Engine::Scripting
 
         // Physics
         void BindPhysics(LuaRuntime& runtime);
+        void BindNetworkInterest(LuaRuntime& runtime);
 
         // Audio
         void BindAudio(LuaRuntime& runtime);
@@ -45,6 +46,8 @@ namespace N2Engine::Scripting
 
         // Engine services
         void BindTime(LuaRuntime& runtime);
+        // Network.DeclareInputLayout and Network.GetInput (netcode stage B4)
+        void BindNetwork(LuaRuntime& runtime);
         void BindDebug(LuaRuntime& runtime);
         void BindApplication(LuaRuntime& runtime);
         void BindWindow(LuaRuntime& runtime);

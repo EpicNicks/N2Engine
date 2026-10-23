@@ -3,6 +3,7 @@
 #include <format>
 
 #include "engine/Logger.hpp"
+#include "engine/GameObject.hpp"
 #include "engine/network/NetworkServer.hpp"
 
 namespace N2Engine::Network
@@ -30,10 +31,11 @@ namespace N2Engine::Network
     }
 
     NetworkClient::NetworkClient(N2Net::ITransport &transport, NetworkWorld &world, NetworkClientOptions options)
-        : _transport(transport), _world(world), _options(std::move(options))
+        : _transport(transport), _world(world), _options(std::move(options)),
+          _input(_options.inputLayout, _options.inputRedundancy)
     {
-        _localFingerprint =
-            MakeFingerprint(_options.scenePath, _options.sceneHash, _world.SceneObjectCount(), _options.prefabs);
+        _localFingerprint = MakeFingerprint(_options.scenePath, _options.sceneHash, _world.SceneObjectCount(),
+                                            _options.prefabs, _options.inputLayout);
     }
 
     bool NetworkClient::Live() const noexcept
@@ -77,6 +79,18 @@ namespace N2Engine::Network
             (void)_connection->SendUnreliable(Encode(_replicator.TakeAck()));
         }
 
+        // The input frames queued since the last update, with the unacknowledged ones before them
+        if (_connection != nullptr && _state == NetworkClientState::Joined && !_disconnectPending && _input.HasPending())
+        {
+            const std::optional<std::vector<std::uint8_t>> inputMessage =
+                _input.BuildMessage(_connection->MaxUnreliableMessageSize());
+            if (inputMessage.has_value())
+            {
+                // A message that does not get out is as good as a lost one: the next one repeats its frames
+                (void)_connection->SendUnreliable(*inputMessage);
+            }
+        }
+
         // Out while the connection is up, a refusal's reject included
         if (_connection != nullptr && _serverPeer != N2Net::kInvalidPeer &&
             (Live() || _state == NetworkClientState::Refused) && !_disconnectPending)
@@ -115,13 +129,23 @@ namespace N2Engine::Network
             if (_serverPeer == N2Net::kInvalidPeer && _state == NetworkClientState::Connecting)
             {
                 _serverPeer = event.peer;
-                _connection = std::make_unique<N2Net::Connection>(
-                    MakeWorldConnectionConfig(_options.protocolId, _transport), _now);
+                auto config = MakeWorldConnectionConfig(_options.protocolId, _transport);
+                config.reliableStream = _transport.IsReliablePeer(event.peer);
+                config.maxPacketSize = static_cast<std::uint32_t>(_transport.MaxPeerPacketSize(event.peer));
+                _connection = std::make_unique<N2Net::Connection>(config, _now);
                 _state = NetworkClientState::AwaitingHello;
                 _helloWaitSince = _now;
             }
             break;
         case N2Net::TransportEventType::PeerDisconnected:
+            if (_state == NetworkClientState::Connecting)
+            {
+                _state = NetworkClientState::Failed;
+                _error = "the transport could not connect or authenticate";
+                _finished = true;
+                Notify(NetworkSessionEvent{.type = NetworkSessionEvent::Type::Failed, .text = _error});
+                break;
+            }
             if (event.peer == _serverPeer && _serverPeer != N2Net::kInvalidPeer)
             {
                 if (Live())
@@ -163,10 +187,15 @@ namespace N2Engine::Network
         }
         if (channel != N2Net::MessageChannel::ReliableOrdered)
         {
-            // The one thing the server sends on the unreliable channel is a state update
+            // What the server sends on the unreliable channel: state updates and input acknowledgements
+            if (!message.empty() && message[0] == kInputAckType)
+            {
+                OnInputAck(message);
+                return;
+            }
             if (message.empty() || message[0] != kStateUpdateType)
             {
-                Fail("the server sent a message on the unreliable channel that is not a state update");
+                Fail("the server sent a message on the unreliable channel that is not a state update or an input acknowledgement");
                 return;
             }
             if (_state != NetworkClientState::Joined)
@@ -209,10 +238,45 @@ namespace N2Engine::Network
         {
             OnDespawn(*despawn);
         }
+        else if (const auto *visibility = std::get_if<VisibilityMessage>(&*decoded))
+        {
+            if (_state != NetworkClientState::Joined) { Fail("visibility before joining"); return; }
+            auto *object = _world.Find(visibility->id);
+            if (!object) { Fail("visibility for an unknown object"); return; }
+            object->GetGameObject().SetActive(visibility->visible && visibility->active);
+        }
         else if (const auto *ready = std::get_if<WorldReadyMessage>(&*decoded))
         {
             OnWorldReady(*ready);
         }
+    }
+
+    void NetworkClient::OnInputAck(const std::span<const std::uint8_t> message)
+    {
+        if (_state != NetworkClientState::Joined)
+        {
+            return;
+        }
+        const std::expected<InputAckMessage, DecodeError> ack = DecodeInputAck(message);
+        if (!ack)
+        {
+            Fail(std::format("the server sent a malformed input acknowledgement ({})", ToString(ack.error())));
+            return;
+        }
+        if (!_input.OnAck(*ack))
+        {
+            Fail("the server acknowledged an input frame this client never sent");
+        }
+    }
+
+    std::expected<std::uint32_t, std::string> NetworkClient::QueueInput(const std::uint32_t tick,
+                                                                        const std::span<const float> values)
+    {
+        if (_state != NetworkClientState::Joined)
+        {
+            return std::unexpected(std::string("input can be queued only once the client has joined"));
+        }
+        return _input.Queue(tick, values);
     }
 
     void NetworkClient::OnHello(const ServerHelloMessage &hello)
