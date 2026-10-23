@@ -5,6 +5,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -352,7 +353,7 @@ TEST(StateHashTest, FloatsAndQuaternionsRoundTripThroughTheReplicationCodec)
     EXPECT_NEAR(client.Probe(10).ranged, 33.333333f, 0.002f);
     const Math::Quaternion &sent = server.Probe(30).rot;
     const Math::Quaternion &got = client.Probe(30).rot;
-    EXPECT_NEAR(std::fabs(sent.w * got.w + sent.x * got.x + sent.y * got.y + sent.z * got.z), 1.0f, 1e-3f);
+    EXPECT_NEAR(std::fabs(sent.GetW() * got.GetW() + sent.GetX() * got.GetX() + sent.GetY() * got.GetY() + sent.GetZ() * got.GetZ()), 1.0f, 1e-3f);
 }
 
 TEST(StateHashTest, ANonFiniteFloatHashesAsUnreadable)
