@@ -14,4 +14,4 @@ set(PHYSX_WEB_VERSION "5.6.1")
 
 # Bumped by hand when scripts/web-build-physx.sh changes how the libraries are built (flags, patches, library list). It
 # is part of the stamp the built libraries carry and of the CI cache key, so a changed recipe never reuses old libraries.
-set(PHYSX_WEB_BUILD_REV 1)
+set(PHYSX_WEB_BUILD_REV 2)
