@@ -7,7 +7,9 @@
 #include <string>
 #include <vector>
 
+#include "engine/network/InputLayout.hpp"
 #include "engine/network/n2net/HashTree.hpp"
+#include "engine/network/n2net/Lockstep.hpp"
 #include "engine/replay/GoldenReplay.hpp"
 #include "engine/replay/ReplayLog.hpp"
 
@@ -23,16 +25,29 @@ namespace N2Engine::Replay
      * live session printed (the test of this: tests/engine/replay/LockstepReplayTests.cpp). A session of more than
      * kMaxTicks ticks, or with more than kMaxSlots slots, cannot be recorded in this format (RecordTick refuses).
      *
+     * Real input (C3, input mapping). Decision: the scheduler carries the InputFrame payload as opaque bytes sized by the
+     * layout (N2Net::LockstepInput), and the replay format gets a version 2 with the layout header and a payload per row
+     * (ReplayLog.hpp), while version 1 stays readable and unchanged. A recorder built with a layout writes version 2
+     * (RecordInputs); the one without writes version 1 (RecordTick), which is what the committed C2 goldens are.
+     *
      * The desync report is a JSON file, "n2desync" version 1, written by every peer that finds a mismatch.
      */
     class LockstepRecorder
     {
     public:
+        /// A version 1 recorder: the inputs are the (moveX, moveY, buttons) triples of RecordTick
         LockstepRecorder(std::string scene, std::uint32_t seed, int hashInterval, int slotCount);
+        /// A version 2 recorder: the inputs are the packed InputFrame payloads of RecordInputs, under `layout`
+        LockstepRecorder(std::string scene, std::uint32_t seed, int hashInterval, int slotCount, const Network::InputLayout &layout);
 
         /// The confirmed state of every slot for the next tick, in tick order from tick 0 with no gap. False if the
-        /// recorder is invalid (slotCount outside [1, kMaxSlots]) or full.
+        /// recorder is invalid (slotCount outside [1, kMaxSlots]) or full, or is a version 2 recorder.
         bool RecordTick(std::span<const SlotState> slots);
+
+        /// Version 2: the confirmed input of every slot for the next tick (a slot beyond the span is neutral). False
+        /// when the recorder is invalid, full or version 1, or when an input is not a payload of the layout (nothing is
+        /// recorded then).
+        bool RecordInputs(std::span<const N2Net::LockstepInput> inputs);
 
         [[nodiscard]] int TicksRecorded() const noexcept { return _log.ticks; }
 
@@ -42,8 +57,16 @@ namespace N2Engine::Replay
     private:
         ReplayLog _log;
         int _slotCount;
+        bool _layoutMode = false;
+        Network::InputLayout _layout;
         std::array<SlotState, kMaxSlots> _held{};
+        std::array<std::vector<std::uint8_t>, kMaxSlots> _heldPayload;
     };
+
+    /// The scene input (moveX, moveY, buttons) of a live lockstep input: DeriveSceneInput, which is also what reading a
+    /// version 2 replay row does, so a session and the replay of its log run the scene on the same values. False when the
+    /// input is not a payload of the layout.
+    [[nodiscard]] bool SceneStateFromInput(const Network::InputLayout &layout, const N2Net::LockstepInput &input, SlotState &out);
 
     /// Most objects of one tree written into a report (the checkpoint trees are bounded by kMaxHistory, and a tree with
     /// more objects is cut and marked "truncated")

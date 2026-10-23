@@ -1,5 +1,8 @@
 #include "engine/network/n2net/Lockstep.hpp"
 
+#include <algorithm>
+#include <string>
+
 #include "engine/network/n2net/ByteIO.hpp"
 
 namespace N2Engine::N2Net
@@ -12,8 +15,28 @@ namespace N2Engine::N2Net
         }
     }
 
-    LockstepScheduler::LockstepScheduler(const LockstepConfig &config) noexcept : config_(config)
+    std::optional<LockstepInput> LockstepInput::FromBytes(const std::span<const std::uint8_t> payload) noexcept
     {
+        if (payload.size() > kMaxLockstepInputBytes)
+        {
+            return std::nullopt;
+        }
+        LockstepInput input;
+        std::copy(payload.begin(), payload.end(), input.bytes.begin());
+        input.size = static_cast<std::uint8_t>(payload.size());
+        return input;
+    }
+
+    LockstepScheduler::LockstepScheduler(const LockstepConfig &config) : config_(config)
+    {
+        // The neutral input must be a payload of the layout's size, or the layout info is inconsistent
+        if (config.layout.payloadBytes > kMaxLockstepInputBytes || config.layout.neutral.size != config.layout.payloadBytes)
+        {
+            return;
+        }
+        payloadBytes_ = config.layout.payloadBytes;
+        layoutHash_ = config.layout.hash;
+        neutral_ = config.layout.neutral;
         if (config.slotCount < 1 || config.slotCount > static_cast<std::uint32_t>(kMaxLockstepSlots) ||
             config.inputDelay > kMaxInputDelay)
         {
@@ -24,6 +47,7 @@ namespace N2Engine::N2Net
         for (std::uint32_t s = 0; s < config.slotCount; ++s)
         {
             Slot &slot = slots_[s];
+            slot.lastInput = neutral_;
             slot.nextLocalTick = current_ + config.inputDelay;
             // The ticks no one can send for are known neutral input
             for (std::uint32_t d = 0; d < config.inputDelay; ++d)
@@ -32,6 +56,7 @@ namespace N2Engine::N2Net
                 Entry &entry = slot.ring[tick % kLockstepWindow];
                 entry.tick = tick;
                 entry.valid = true;
+                entry.input = neutral_;
             }
         }
     }
@@ -75,6 +100,10 @@ namespace N2Engine::N2Net
         if (IsDropped(slot, tick))
         {
             return SubmitResult::SlotDropped;
+        }
+        if (input.size != payloadBytes_)
+        {
+            return SubmitResult::BadPayload;
         }
         Entry &entry = slots_[slot].ring[tick % kLockstepWindow];
         if (entry.valid && entry.tick == tick)
@@ -144,7 +173,7 @@ namespace N2Engine::N2Net
             LockstepInput input;
             if (IsDropped(s, current_))
             {
-                input = config_.dropFill == DropFill::HoldLast ? slot.lastInput : LockstepInput{};
+                input = config_.dropFill == DropFill::HoldLast ? slot.lastInput : neutral_;
             }
             else
             {
@@ -208,9 +237,17 @@ namespace N2Engine::N2Net
 
     std::size_t EncodeInputBundle(const InputBundle &bundle, const std::span<std::uint8_t> out) noexcept
     {
-        if (bundle.frames.size() > kMaxBundleFrames || out.size() < InputBundleSize(bundle.frames.size()))
+        if (bundle.frames.size() > kMaxBundleFrames || bundle.payloadBytes > kMaxLockstepInputBytes ||
+            out.size() < InputBundleSize(bundle.frames.size(), bundle.payloadBytes))
         {
             return 0;
+        }
+        for (const LockstepInput &frame : bundle.frames)
+        {
+            if (frame.size != bundle.payloadBytes)
+            {
+                return 0;
+            }
         }
         ByteWriter writer(out.data(), out.size());
         writer.U8(1); // message kind: input bundle
@@ -218,44 +255,53 @@ namespace N2Engine::N2Net
         writer.U32(bundle.ackTick);
         writer.U32(bundle.firstTick);
         writer.U8(static_cast<std::uint8_t>(bundle.frames.size()));
+        writer.U8(bundle.payloadBytes);
+        writer.U32(static_cast<std::uint32_t>(bundle.layoutHash & 0xFFFFFFFFu));
+        writer.U32(static_cast<std::uint32_t>(bundle.layoutHash >> 32));
         for (const LockstepInput &frame : bundle.frames)
         {
-            writer.U8(static_cast<std::uint8_t>(frame.moveX));
-            writer.U8(static_cast<std::uint8_t>(frame.moveY));
-            writer.U32(frame.buttons);
+            writer.Bytes(frame.Bytes());
         }
         return writer.Overflowed() ? 0 : writer.Size();
     }
 
-    std::optional<InputBundle> DecodeInputBundle(const std::span<const std::uint8_t> bytes)
+    std::expected<InputBundle, BundleError> DecodeInputBundle(const std::span<const std::uint8_t> bytes,
+                                                              const LockstepLayoutInfo &layout)
     {
         ByteReader reader(bytes);
         if (reader.U8() != 1)
         {
-            return std::nullopt;
+            return std::unexpected(BundleError::Malformed);
         }
         InputBundle bundle;
         bundle.slot = reader.U8();
         bundle.ackTick = reader.U32();
         bundle.firstTick = reader.U32();
         const std::size_t count = reader.U8();
-        // The count is checked against the cap and against the bytes that are there before anything is reserved
-        if (reader.Failed() || count > kMaxBundleFrames || reader.Remaining() != count * 6)
+        bundle.payloadBytes = reader.U8();
+        const std::uint64_t low = reader.U32();
+        const std::uint64_t high = reader.U32();
+        bundle.layoutHash = low | (high << 32);
+        // The counts are checked against the caps and against the bytes that are there before anything is reserved
+        if (reader.Failed() || count > kMaxBundleFrames || bundle.payloadBytes > kMaxLockstepInputBytes ||
+            reader.Remaining() != count * bundle.payloadBytes)
         {
-            return std::nullopt;
+            return std::unexpected(BundleError::Malformed);
+        }
+        if (bundle.layoutHash != layout.hash || bundle.payloadBytes != layout.payloadBytes)
+        {
+            return std::unexpected(BundleError::LayoutMismatch);
         }
         bundle.frames.reserve(count);
         for (std::size_t i = 0; i < count; ++i)
         {
-            LockstepInput frame;
-            frame.moveX = static_cast<std::int8_t>(reader.U8());
-            frame.moveY = static_cast<std::int8_t>(reader.U8());
-            frame.buttons = reader.U32();
-            bundle.frames.push_back(frame);
-        }
-        if (reader.Failed())
-        {
-            return std::nullopt;
+            const std::span<const std::uint8_t> payload = reader.Bytes(bundle.payloadBytes);
+            const std::optional<LockstepInput> frame = LockstepInput::FromBytes(payload);
+            if (reader.Failed() || !frame)
+            {
+                return std::unexpected(BundleError::Malformed);
+            }
+            bundle.frames.push_back(*frame);
         }
         return bundle;
     }
@@ -263,6 +309,8 @@ namespace N2Engine::N2Net
     InputBundle BuildBundleFor(const LockstepScheduler &scheduler, const std::uint32_t slot, const std::uint32_t peerAck)
     {
         InputBundle bundle;
+        bundle.payloadBytes = static_cast<std::uint8_t>(scheduler.PayloadBytes());
+        bundle.layoutHash = scheduler.LayoutHash();
         bundle.slot = static_cast<std::uint8_t>(slot);
         bundle.ackTick = scheduler.CurrentTick();
         bundle.firstTick = peerAck;
