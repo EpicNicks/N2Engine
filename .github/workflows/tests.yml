@@ -959,8 +959,8 @@ jobs:
           docker logs n2tokens
           exit 1
 
-  # The web (WebAssembly) build, stages 0 to 5 of issue #155 and stage G4 of its WebGPU backend (compiled in with emdawnwebgpu;
-  # the player still starts on the software renderer): the math, text and asset-import libraries, the engine
+  # The web (WebAssembly) build, stages 0 to 5 of issue #155 and WebGPU G4/G5 (emdawnwebgpu, browser selection and presentation;
+  # node smokes use software): the math, text and asset-import libraries, the engine
   # core (single-threaded; audio is Emscripten's OpenAL on WebAudio, which node lacks, so the tests see no audio device) and the software renderer, and their unit tests (math, text, assetimport,
   # engine, renderer and web input tests, the software-renderer goldens among them), built with Emscripten and run under
   # node; and the web player package (index.html, js, wasm, the asset pack, the loader and manifest.json), checked and run
@@ -1045,7 +1045,7 @@ jobs:
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
-          cmake --build build-web --target math_tests text_tests assetimport_tests engine_tests renderer_tests web_tests jolt_smoke_tests -- -k 0
+          cmake --build build-web --target math_tests text_tests assetimport_tests engine_tests renderer_tests web_tests jolt_smoke_tests N2WebGpuReadbackTests -- -k 0
 
       # CMake's Emscripten toolchain sets CMAKE_CROSSCOMPILING_EMULATOR to node, so ctest runs build-web/bin/<name>.js under node
       - name: Test under node
@@ -1112,6 +1112,7 @@ jobs:
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
           node scripts/web-loader-test.mjs
+          node scripts/web-gpu-test.mjs
 
       # Stage 4: the audio unlock of the loader (web/n2-loader.js, createAudioUnlock) under node with a mock AudioContext
       # and a mock document: resume once on the first gesture, listeners removed, failures tolerated, the hidden tab
@@ -1173,8 +1174,8 @@ jobs:
           node scripts/web-jolt-size-report.mjs build-web-speed speed
 
       # WebGPU stage G4 (#155): the WebGPU backend is linked into the player of every profile (built against Emscripten's
-      # emdawnwebgpu port, cmake/EmdawnwebgpuPort.cmake, which emcc fetches at the first compile), while the player still starts
-      # on the software renderer (the smokes above run that path). The proof that it is linked is the port's JavaScript in
+      # emdawnwebgpu port, cmake/EmdawnwebgpuPort.cmake, which emcc fetches at the first compile). G5 selects it in supporting
+      # browsers; the node smokes above run software. The proof that it is linked is the port's JavaScript in
       # index.js: the call that makes a render pipeline on the browser's GPUDevice, which only the backend's pipeline cache reaches
       - name: Check that the WebGPU backend is linked into the player (all profiles)
         run: |
@@ -1234,7 +1235,7 @@ jobs:
       - name: Compare the legs with each other and with the golden
         run: python3 scripts/physics-determinism.py compare --legs-dir determinism-legs --expect windows-release,linux-x86_64-clang,linux-arm64-clang,linux-x86_64-gcc,web-node --golden tests/golden/physics-determinism.json
 
-  # WebGPU backend, stage G1 (#155): the hand-written WGSL shaders (renderer/shaders/webgpu/*.wgsl) are validated by Tint (the
+  # WebGPU backend, stages G1/G5 (#155): the built-in WGSL files and the loader's exact canvas shader are validated by Tint (the
   # WGSL compiler of Chrome and Edge) and by naga (Firefox's; Safari's WebKit compiler has no CI path), the pinned versions in scripts/install-wgsl-validators.sh
   # (Tint: Dawn's prebuilt release binary, SHA-256 checked; naga-cli: its crates.io source package, SHA-256 checked, built with
   # --locked). Not a required check, and it follows the docs-only skip like the jobs above. No build of the engine: a few

@@ -54,3 +54,6 @@ message(STATUS "Web: WebGPU bindings from emdawnwebgpu (Dawn ${N2_EMDAWNWEBGPU_T
 add_library(n2_emdawnwebgpu INTERFACE)
 target_compile_options(n2_emdawnwebgpu INTERFACE "--use-port=${N2_EMDAWNWEBGPU_PORT_FILE}")
 target_link_options(n2_emdawnwebgpu INTERFACE "--use-port=${N2_EMDAWNWEBGPU_PORT_FILE}")
+target_link_options(n2_emdawnwebgpu INTERFACE "SHELL:--js-library \"${CMAKE_SOURCE_DIR}/web/webgpu-library.js\"")
+set_property(TARGET n2_emdawnwebgpu APPEND PROPERTY INTERFACE_LINK_DEPENDS
+    "${CMAKE_SOURCE_DIR}/web/webgpu-library.js")

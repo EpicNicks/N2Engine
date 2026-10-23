@@ -82,6 +82,17 @@
 <li>Any static file server. The simplest: <code>cd build-web/web-package &amp;&amp; python -m http.server 8080</code>.</li>
 </ul>
 
+<h2 id="webgpu">WebGPU (G5): selection, drawing and recovery</h2>
+<p>Run these checks on available Chrome/Edge, Firefox, Safari and mobile devices, recording browser, OS and renderer. Mock tests do not establish browser compatibility.</p>
+<p>A local headless Chrome/Edge run has exercised the G5 browser smoke (automatic selection, HiDPI, resize, forced loss/recovery and software fallback). It does not close this checklist across devices. See <a href="web-build.html#webgpu-browser-smoke">the reproducible command and verification limits</a>.</p>
+<ul>
+<li>On HTTPS or localhost, load normally and with <code>?renderer=webgpu</code>. On a supported device the scene should draw with WebGPU. Compare with <code>?renderer=software</code>: orientation, colours, lighting, text, transparency and particles should agree with the intended GPU rendering semantics. Software text and blending have known differences.</li>
+<li>Verify software fallback with <code>?renderer=software</code>, an unavailable GPU adapter, a browser without WebGPU, plain HTTP on a non-local host, and an insecure iframe ancestor. Check that Start still works without a reload loop.</li>
+<li>Resize, maximize, change display scaling, and test HiDPI and fullscreen. WebGPU follows devicePixelRatio with a 2560-pixel width cap; software caps at 1280. Check pointer picking and UI alignment at both resolutions.</li>
+<li>While playing, simulate device loss using browser graphics diagnostics. Frames should pause, then resume after one device replacement with scene resources restored. On a failed or second loss, click <strong>Continue with the software renderer</strong>; the URL should select software and the game should start after reload.</li>
+<li>Hide/show the tab, embed on a different HTTPS origin, and run for several minutes. Record first-frame delay, frame rate and memory growth. Confirm there are no uncaptured WebGPU validation errors.</li>
+</ul>
+
 <h2 id="load">1. It loads</h2>
 <ul>
 <li>Open <code>http://localhost:8080/</code> with DevTools open (Console and Network). Expected: the dark page says "Loading the engine...", then "Ready." and the <strong>Click to start</strong> button turns on. Network shows <code>index.js</code>, <code>index.wasm</code> and <code>index.data</code>, all relative to the page, all 200.</li>

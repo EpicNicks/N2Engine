@@ -30,6 +30,13 @@
   var MANIFEST = 'manifest.json';
   var WASM = 'index.wasm';
   var DATA = 'index.data';
+  // Exported for Tint/naga validation: the browser compiles this exact string.
+  var PRESENTER_WGSL =
+    '@group(0) @binding(0) var image: texture_2d<f32>;\n' +
+    '@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {\n' +
+    ' let p = array<vec2f,3>(vec2f(-1,-1),vec2f(3,-1),vec2f(-1,3)); return vec4f(p[i],0,1); }\n' +
+    '@fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {\n' +
+    ' return vec4f(textureLoad(image,vec2i(p.xy),0).rgb,1); }';
 
   function LoadError(message, file) {
     var error = new Error(message);
@@ -505,5 +512,128 @@
     };
   }
 
-  return { create: create, createAudioUnlock: createAudioUnlock, LoadError: LoadError, files: { manifest: MANIFEST, wasm: WASM, data: DATA } };
+  // One deadline covers adapter AND device acquisition. Late devices are destroyed.
+  function createGpuProbe(options) {
+    options = options || {};
+    var nav = options.navigator || (typeof navigator !== 'undefined' ? navigator : {});
+    var secure = options.secure !== undefined ? options.secure : typeof isSecureContext !== 'undefined' && isSecureContext;
+    var search = options.search !== undefined ? options.search : typeof location !== 'undefined' ? location.search : '';
+    var override = new URLSearchParams(search).get('renderer');
+    function software(reason) { return { renderer: 'software', device: null, reason: reason }; }
+    async function acquire() {
+      if (override === 'software') return software('software requested');
+      if (override && override !== 'webgpu') return software('unknown renderer: ' + override);
+      if (!secure) return software('not a secure context');
+      if (!nav.gpu) return software('browser has no WebGPU');
+      var expired = false;
+      var timer;
+      var work = (async function () {
+        try {
+          var adapter = await nav.gpu.requestAdapter({ powerPreference: 'high-performance' });
+          if (expired || !adapter) return software('no WebGPU adapter');
+          var device = await adapter.requestDevice();
+          if (expired) { device.destroy(); return software('WebGPU timed out'); }
+          return { renderer: 'webgpu', device: device, reason: 'WebGPU ready' };
+        } catch (error) { return software('WebGPU request failed: ' + String(error.message || error)); }
+      })();
+      var deadline = new Promise(function (resolve) {
+        timer = setTimeout(function () { expired = true; resolve(software('WebGPU timed out')); }, options.timeoutMs || 4000);
+      });
+      var result = await Promise.race([work, deadline]);
+      clearTimeout(timer);
+      return result;
+    }
+    return { acquire: acquire };
+  }
+
+  // Fullscreen triangle: textureLoad copies UNORM values without filtering or a
+  // second colour-space conversion. UVs preserve the offscreen target's top row.
+  function createGpuPresenter(device, canvas, gpu) {
+    var context = canvas.getContext('webgpu');
+    if (!context) throw new Error('The canvas has no WebGPU context');
+    var format = gpu.getPreferredCanvasFormat();
+    context.configure({ device: device, format: format, alphaMode: 'opaque' });
+    var module = device.createShaderModule({ code: PRESENTER_WGSL });
+    var pipeline = device.createRenderPipeline({ layout: 'auto',
+      vertex: { module: module, entryPoint: 'vs' },
+      fragment: { module: module, entryPoint: 'fs', targets: [{ format: format }] },
+      primitive: { topology: 'triangle-list' }
+    });
+    var lastTexture = null;
+    var group;
+    return function (texture) {
+      if (texture !== lastTexture) {
+        group = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0),
+          entries: [{ binding: 0, resource: texture.createView() }] });
+        lastTexture = texture;
+      }
+      var encoder = device.createCommandEncoder();
+      var pass = encoder.beginRenderPass({ colorAttachments: [{ view: context.getCurrentTexture().createView(),
+        loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }] });
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, group);
+      pass.draw(3);
+      pass.end();
+      device.queue.submit([encoder.finish()]);
+    };
+  }
+
+  function createGpuSession(options) {
+    var state = 1;
+    var retried = false;
+    var closed = false;
+    var generation = 0;
+    var draw;
+    var session = { device: null, stop: function () {
+      closed = true;
+      state = 0;
+      ++generation;
+      draw = null;
+    }, status: function () {
+      var current = state;
+      if (state === 2) state = 1;
+      return current;
+    }, present: function (texture) {
+      if (state === 0) return;
+      try { draw(texture); } catch (error) { recover(String(error.message || error)); }
+    } };
+    function failed(reason) {
+      state = 0;
+      options.onFailure(reason);
+    }
+    function attach(device) {
+      var current = ++generation;
+      var errors = 0;
+      draw = (options.createPresenter || createGpuPresenter)(device, options.canvas, options.gpu);
+      session.device = device;
+      device.lost.then(function (info) {
+        if (current === generation) recover(info.message || 'graphics device lost');
+      });
+      device.addEventListener('uncapturederror', function (event) {
+        if (current !== generation) return;
+        if (options.onEvent) options.onEvent(String(event.error && event.error.message || 'WebGPU validation error'));
+        if (++errors >= 8) recover('repeated WebGPU validation errors');
+      });
+    }
+    function recover(reason) {
+      if (state === 0) return;
+      state = 0;
+      ++generation; // ignore callbacks from the retired device
+      if (retried) { failed(reason); return; }
+      retried = true;
+      if (options.onEvent) options.onEvent('Restoring WebGPU: ' + reason);
+      options.probe.acquire().then(function (result) {
+        if (closed) { if (result.device) result.device.destroy(); return; }
+        if (!result.device) { failed(result.reason); return; }
+        try { attach(result.device); state = 2; }
+        catch (error) { result.device.destroy(); failed(String(error.message || error)); }
+      }).catch(function (error) { if (!closed) failed(String(error.message || error)); });
+    }
+    attach(options.device);
+    return session;
+  }
+
+  return { create: create, createAudioUnlock: createAudioUnlock, createGpuProbe: createGpuProbe, createGpuSession: createGpuSession,
+    createGpuPresenter: createGpuPresenter, presenterWgsl: PRESENTER_WGSL,
+    LoadError: LoadError, files: { manifest: MANIFEST, wasm: WASM, data: DATA } };
 });

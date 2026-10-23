@@ -13,7 +13,7 @@ namespace N2Engine::Web
     /// The render backend for the value of --renderer: "software" (the default when the argument is absent) or "webgpu",
     /// exactly those lowercase names. A native backend name ("opengl", "vulkan") is an error saying it does not exist in the
     /// browser; anything else (an empty value included) is "Invalid renderer: <value> (expected software or webgpu)".
-    /// webgpu is accepted, but until stage G5 hands the page's device in, the engine cannot start on it (the player then
-    /// stops with the engine's reason); the page starts the player without --renderer, so on the software renderer.
+    /// WebGPU requires the device acquired by the page before callMain. The shell
+    /// passes its selection explicitly; direct callers without an argument use software.
     [[nodiscard]] std::expected<Config::ApplicationOptions::RenderBackend, std::string> ParseWebRenderer(std::string_view value);
 }
