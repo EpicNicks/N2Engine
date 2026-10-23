@@ -57,6 +57,7 @@ target_compile_definitions(engine_tests PRIVATE
         N2_RENDERER_SOURCE_DIR="${CMAKE_SOURCE_DIR}/renderer" # OpenGlShaderSourceTests reads the GLSL as text
         N2_ENGINE_SOURCE_DIR="${CMAKE_SOURCE_DIR}/engine" # DeterministicMathSourceScanTests scans the sources as text
         N2_MATH_SOURCE_DIR="${CMAKE_SOURCE_DIR}/math"
+        N2_GOLDEN_REPLAY_DIR="${CMAKE_SOURCE_DIR}/tests/golden/replays" # the replay files of the golden determinism job (C2)
 )
 
 # With the optional FBX/OBJ importer (N2ENGINE_MODEL_UFBX) the model tests also load the committed FBX; without it they
