@@ -5,6 +5,7 @@
 
 #include "engine/Logger.hpp"
 #include "engine/GameObject.hpp"
+#include "engine/GameObjectScene.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/network/NetworkObject.hpp"
 #include "engine/network/NetworkServer.hpp"

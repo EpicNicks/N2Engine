@@ -1220,7 +1220,7 @@ return Bouncer
 <p>See <a href="testing.html">Testing &amp; CI</a> for how the suite is built and run.</p>
 
 <h2 id="network-queries">Server networking queries</h2><p><code>Physics.RaycastLagCompensated(clientId, renderTimeMicros, origin, direction, maxDistance, layerMask?, ignoreNetId?)</code> and <code>Physics.SphereCastLagCompensated(clientId, renderTimeMicros, origin, radius, direction, maxDistance, layerMask?, ignoreNetId?)</code> return nil or a table containing netId, hitbox, point, normal, distance and timeMicros. Without a bound game server they return nil. See <a href="netcode.html#lag-compensation">historical hit queries</a> for the server time domain and authority requirements. Server scripts configure relevance through <a href="netcode.html#interest-management">Network.SetInterestPolicy, SetObserver and ClearObserver</a>.</p>
-<h3 id="network-clock">Network clock <span class="badge">PR #TBD</span></h3>
+<h3 id="network-clock">Network clock <span class="badge">PR #236</span></h3>
 <p>Four functions read the clock a client keeps of its server (netcode stage B3, <a href="netcode.html#clock">Clock sync and interpolation</a>); each returns a number, or nil when this process has nothing to say. They take no arguments.</p>
 <ul>
 <li><code>Network.GetServerTime()</code> returns the server's time in seconds (its fixed tick divided by its tick rate). On a client it is the estimate, as of the last network update: it never decreases, and it is nil until the first answer to a clock ping has arrived. On a process that runs a server and no client it is the server's own tick count over its tick rate; in a process that runs neither it is nil.</li>
