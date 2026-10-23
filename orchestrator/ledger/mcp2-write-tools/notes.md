@@ -1,0 +1,12 @@
+Accepted by the user 2026-10-13:
+- tools/list (and a write call that comes first) now asks the host once for the token's role (design 3.1); MCP1's listing-never-connects holds only with --read-only; unreachable host lists read tools only then list_changed
+- McpServer built without capabilities.tools so the listing wrapper is installed before the SDK registers handlers
+- result summaries escape < and > since they quote names outside the envelope
+- tool set follows the brief; n2_create_folder, n2_set_import_settings, n2_set_startup_scene not included
+- worktree already held uncommitted partial MCP2 work (ops, session, write-core, policy, paths) from an earlier attempt; continued from it
+- stdio-e2e, conformance, golden and security tests adjusted for the larger tool list and listing connect
+- n2_status gained a policy block; --write-tools applies to session tools too
+- n2_undo, n2_redo and n2_session_revert (incl. file restores) no longer spend the write budget so the safety revert works when the budget is used
+- edit-group step detection also requires the host history to have moved (foreign same-label step on top is ignored); label format unchanged, no nonce
+- journal overflow drops the oldest entry without a file record so backups are kept
+- review low addressed with two regression tests (foreign same-label step; journal overflow keeps file entries); no source change

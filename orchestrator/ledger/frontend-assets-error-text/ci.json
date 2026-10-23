@@ -1,0 +1,10 @@
+{
+  "name": "frontend-assets-error-text",
+  "head": "623e7065adc9826baa52ac0d56d27a872da0242d",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "CI:success"
+  ],
+  "failures": []
+}

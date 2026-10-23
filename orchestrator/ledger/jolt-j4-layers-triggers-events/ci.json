@@ -1,0 +1,10 @@
+{
+  "name": "jolt-j4-layers-triggers-events",
+  "head": "2ffd0db102cad71386d0ff5ad1bf41ab0866ea4b",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

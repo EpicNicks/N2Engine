@@ -1,0 +1,1 @@
+{"pr":31,"branch":"fix-assets-state-error-text","head":"623e7065adc9826baa52ac0d56d27a872da0242d","files":["src/renderer/assets-state.ts","src/test/assets-state.test.ts"],"deviations":[],"unverified":["banner/latch not re-tested end to end; no manual app run"],"needsUser":null}

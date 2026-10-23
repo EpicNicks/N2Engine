@@ -1,0 +1,10 @@
+{
+  "name": "fe-fe9-project-settings",
+  "head": "299c327bcdce11974107b6e7718120d0fee9c59e",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "CI:success"
+  ],
+  "failures": []
+}

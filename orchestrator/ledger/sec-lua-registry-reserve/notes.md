@@ -1,0 +1,11 @@
+Accepted by the user 2026-10-13:
+- Reserve-then-copy (or move, or raw Lua API) everywhere instead of protected copies: on web and MSVC Debug Lua errors are C++ exceptions so a failing luaL_ref in sol's noexcept ctor terminates even inside a protected call (the web job showed it)
+- DescribeFields rewritten to read SerializableFields with the Lua C API into plain data (no sol refs); a definition's type/default is read in its own protected call
+- GuardedAccess now reserves 16 slots before every protected body
+- RunSource no longer uses sol safe_script (its protected_function ctor looks up the default handler via a string push that terminated at the cap, found by the sweeps); same traceback handler via lua_pcall; handler-name string anchored in the registry at state creation
+- RetireScriptInstance moves the instance out instead of copying (member is empty afterwards as before)
+- Fault hook is compiled only when N2ENGINE_BUILD_TESTS is on (engine/CMakeLists.txt defines N2ENGINE_LUA_ALLOC_FAULT_HOOK)
+- Sweeps stop at the first run in which the registry grew (registry never shrinks, so further runs would double it each time)
+- GuardedAccess takes a reservation count (default 16); HasMethod, method lookup, destructor/Retire nil-ing ask for 2
+- DescribeFields reads the state once up front and re-checks the instance before each definition read; userdata definitions treated as ExtractSerializableFields does
+- Docs: added the still-unprotected binding references (require/make_object/Subscribe args on web and MSVC Debug)

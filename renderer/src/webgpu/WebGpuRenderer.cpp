@@ -14,6 +14,11 @@
 
 #include "WebGpuInternal.hpp"
 
+#ifdef __EMSCRIPTEN__
+extern "C" WGPUDevice n2_webgpu_import_device();
+extern "C" void n2_webgpu_present(WGPUTexture texture);
+#endif
+
 // Stage G2 of the WebGPU backend (#155): headless initialisation, an offscreen colour and depth target, a frame that clears
 // it, a synchronous readback, resizing, shutdown and the counting of every error the device reports. Meshes, textures and
 // the samplers are in WebGpuResources.cpp and the shaders, materials, pipelines, uniform ring and draws in WebGpuDraw.cpp
@@ -25,8 +30,8 @@
 // timeout needs the TimedWaitAny instance feature, which emdawnwebgpu refuses without ASYNCIFY or JSPI, and the web build
 // has neither: a browser completes a request or a buffer map only after control returns to its event loop). So in the
 // browser build:
-//   - Initialize creates the instance and then FAILS: the device is acquired by the page in JavaScript before the engine
-//     starts and handed in (design section 5), which is stage G5; nothing in the player asks for WebGPU in G4.
+//   - Initialize imports the device acquired by the page before the engine starts (G5).
+//     Present sends the offscreen texture to the page's GPU canvas pass.
 //   - ReadFramebuffer is asynchronous (AdvanceAsyncReadback): it returns the last frame whose copy has completed and
 //     starts the next copy; the synchronous test readbacks (ReadDepthForTest, ReadMeshForTest, ReadTextureForTest) fail.
 //   - Errors are delivered by the browser on its own (AllowSpontaneous); a flush only processes events.
@@ -615,13 +620,8 @@ namespace Renderer::WebGpu
     bool WebGpuRenderer::PickAdapter()
     {
 #ifdef __EMSCRIPTEN__
-        // A browser completes an adapter request only after control returns to its event loop, so C++ cannot wait for one here.
-        // The design acquires the adapter and the device in the page's JavaScript before the engine starts and hands the device
-        // in (proposal section 5): that is stage G5. Until then the browser build fails here, and the player starts on the
-        // software renderer
-        return Fail(InitStatus::Failed, "the web build cannot request a WebGPU adapter from C++: the page acquires the device "
-                                        "before the engine starts, which is not wired yet (stage G5 of #155); run the player "
-                                        "with --renderer software");
+        // The loader acquired the adapter and device before callMain; no blocking request.
+        return true;
 #else
         AdapterPreference preference = _preference;
         if (preference == AdapterPreference::Default)
@@ -708,8 +708,11 @@ namespace Renderer::WebGpu
     bool WebGpuRenderer::CreateDevice()
     {
 #ifdef __EMSCRIPTEN__
-        // Not reached in the browser build (PickAdapter fails first): the device will come from the page (stage G5)
-        return Fail(InitStatus::Failed, "the web build gets its WebGPU device from the page (stage G5 of #155)");
+        _state->device.Reset(n2_webgpu_import_device());
+        if (!_state->device)
+        {
+            return Fail(InitStatus::Failed, "the page supplied no WebGPU device; use --renderer software");
+        }
 #else
         // The two callbacks count every error and every loss the renderer did not cause (ErrorCounters). A loss while the
         // renderer destroys its own device is expected (Shutdown sets expectedLoss first)
@@ -736,6 +739,7 @@ namespace Renderer::WebGpu
             return Fail(InitStatus::Failed, "could not create a device: " + result->message);
         }
         _state->device.Reset(result->device);
+#endif
         _state->queue.Reset(wgpuDeviceGetQueue(_state->device.Get()));
         if (!_state->queue)
         {
@@ -777,7 +781,6 @@ namespace Renderer::WebGpu
             _state->uniformAlignment = DefaultUniformAlignment;
         }
         return true;
-#endif
     }
 
     // -----------------------------------------------------------------------------------------------------------------
@@ -805,7 +808,8 @@ namespace Renderer::WebGpu
         WGPUTextureDescriptor colorDescriptor = WGPU_TEXTURE_DESCRIPTOR_INIT;
         colorDescriptor.label = ToView("N2Engine colour target");
         // CopyDst as well: a test writes a pattern into the target to prove the readback's orientation
-        colorDescriptor.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc | WGPUTextureUsage_CopyDst;
+        colorDescriptor.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc | WGPUTextureUsage_CopyDst |
+            WGPUTextureUsage_TextureBinding;
         colorDescriptor.dimension = WGPUTextureDimension_2D;
         colorDescriptor.size = {width, height, 1};
         colorDescriptor.format = GetColorFormat();
@@ -1085,6 +1089,13 @@ namespace Renderer::WebGpu
 
     void WebGpuRenderer::Present()
     {
+#ifdef __EMSCRIPTEN__
+        std::lock_guard lock(_mutex);
+        if (_initialized && !_state->lost.load() && _state->color)
+        {
+            n2_webgpu_present(_state->color.Get());
+        }
+#else
         // No swapchain or window (the browser's canvas arrives in stage G5): a frame is only ever read back. Say so once
         // per renderer, because with a window the user would otherwise just see it stay blank
         {
@@ -1098,6 +1109,7 @@ namespace Renderer::WebGpu
         std::cerr << "WebGPU renderer: Present has nothing to present (no swapchain or window yet): frames render offscreen "
                      "and are only readable through ReadFramebuffer"
                   << std::endl;
+#endif
     }
 
     // -----------------------------------------------------------------------------------------------------------------

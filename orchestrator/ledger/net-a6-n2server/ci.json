@@ -1,0 +1,10 @@
+{
+  "name": "net-a6-n2server",
+  "head": "02070dfc33db9368c7ff01dc0fbf5a3d9eee5720",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

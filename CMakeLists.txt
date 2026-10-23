@@ -91,9 +91,8 @@ if(N2ENGINE_PLATFORM_WEB)
     # a web build with no physics backend
     message(STATUS "Web: Vulkan renderer off (no Vulkan in the browser)")
     set(N2ENGINE_RENDERER_VULKAN OFF)
-    # Stage G4 of #155: the WebGPU backend is compiled into the web build (emdawnwebgpu), but the player still starts on the
-    # software renderer; attaching the canvas and choosing WebGPU at load are stage G5
-    message(STATUS "Web: WebGPU renderer compiled in (emdawnwebgpu); the player starts on the software renderer")
+    # The shell probes WebGPU before Start and selects software when unavailable.
+    message(STATUS "Web: WebGPU renderer compiled in (emdawnwebgpu); automatic browser selection with software fallback")
     set(N2ENGINE_RENDERER_WEBGPU ON)
     message(STATUS "Web: no GLFW window or GL context (external/web-stubs stands in for GLFW; the player shows frames on a canvas and reads input from the page), audio is Emscripten's OpenAL on WebAudio (N2ENGINE_WEB_AUDIO, or a no-op stub); the editor host (sockets, TLS), test_project and lua_project are not built")
 endif()

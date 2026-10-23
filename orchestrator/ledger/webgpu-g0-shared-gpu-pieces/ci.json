@@ -1,0 +1,10 @@
+{
+  "name": "webgpu-g0-shared-gpu-pieces",
+  "head": "74a62d051cf1ff8582c2e6069dbb398770c6b053",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

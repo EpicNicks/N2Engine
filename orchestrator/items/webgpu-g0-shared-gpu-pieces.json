@@ -1,0 +1,28 @@
+{
+  "name": "webgpu-g0-shared-gpu-pieces",
+  "repo": "engine",
+  "branch": "refactor-webgpu-g0-shared-gpu",
+  "title": "WebGPU G0: move the backend-neutral GPU pieces out of the Vulkan tree (shader interface table, lighting block, block material) and the cross-backend test helpers to common locations; no behaviour change",
+  "closes": null,
+  "issue": "USER DECISIONS (2026-10-20, final, do NOT revisit): the design in C:/Method Notes Obsidian/orchestrator/proposals/webgpu-backend-design.md is accepted with ALL recommendations W1-W10: hand-written WGSL for the three built-in shaders tied to the shared interface table by a parity test and validated by Tint (and naga) in CI (W1); WebGPU goldens run natively on Dawn over lavapipe in a new NON-REQUIRED Linux CI job (W2, G2 and later); one wasm containing both renderers chosen at load (W3); WebGPU is the automatic default when the browser offers it with a ?renderer= override (W4); device loss = one silent re-acquire then a 'continue with software' button (W5); emdawnwebgpu with the device acquired in loader JS before callMain, no ASYNCIFY (W6); devicePixelRatio with a 2560 cap (W7); the native WebGPU backend exists only for the CI harness, option OFF by default, not selectable in lua_project or the editor host (W8); v1 = built-in shaders only, wireframe ignored with one warning, no compute, particles/soft bodies on CPU paths (W9); G0-G2 now, G4 after the stage 5 PR #184 merges (W10). Read C:/Method Notes Obsidian/orchestrator/proposals/webgpu-backend-design.md FULLY (sections 3-7 and the staged plan) before starting. THIS ITEM IS PR G0 ONLY, a PURE MOVE/REFACTOR with NO behaviour change. Per the design: renderer/vulkan VulkanShaderInterface.hpp and VulkanLighting.hpp contain no Vulkan code, and VulkanMaterial's interface uses no Vulkan types: (1) move VulkanShaderInterface.hpp -> a common GPU header (e.g. renderer/common/include/.../GpuShaderInterface.hpp: choose the right existing common location by reading renderer/ layout and CMake; rename the symbols/namespace only where the Vulkan prefix would be wrong in a shared header, keep everything else identical), VulkanLighting.hpp -> common (GpuLighting.hpp), and lift VulkanMaterial's backend-neutral part into a shared BlockMaterial (the Vulkan material keeps only its Vulkan-specific parts and derives from or wraps the shared one: pick the least invasive shape that keeps the Vulkan backend's code and results identical); (2) move CrossBackendDiff.hpp and BlendReference.hpp (find them under tests/renderer/) to tests/renderer/common/ so a later WebGPU test target can include them, updating includes and CMake; (3) update every include and CMake target in renderer/, engine/ and tests/; the Vulkan backend must still be selectable and every existing Vulkan, software and OpenGL test must stay green with UNCHANGED results and unchanged test names (CI: the linux Clang legs EXECUTE the lavapipe Vulkan tests: that is the oracle); native Windows builds without Vulkan (the N2ENGINE_RENDERER_VULKAN option OFF leg, GCC 14 leg) must still configure and build since the moved headers must not need Vulkan; (4) docs: update any docs page that names the moved files or the Vulkan-specific location (grep docs/ and comments for the old paths: docs/rendering*, vulkan pages, testing.html) and add one short sentence in the rendering docs that these pieces are shared by GPU backends; verify against the code; (5) NO new code paths, no new targets besides moving files, no WebGPU code yet. List any symbol rename as a deviation. Nothing builds locally; CI (10 checks) is the test; expect fix rounds on include/CMake mistakes: re-read every CMake and include edit twice.",
+  "allowedPaths": [
+    "^renderer/",
+    "^engine/",
+    "^tests/",
+    "^docs/",
+    "^CMakeLists\\.txt$",
+    "^cmake/"
+  ],
+  "acceptance": [
+    "Shader interface, lighting block and block material live in common locations; Vulkan uses them with unchanged behaviour",
+    "CrossBackendDiff and BlendReference live in tests/renderer/common; all includes/CMake updated",
+    "Every existing Vulkan, software and OpenGL test passes unchanged, including legs with Vulkan OFF",
+    "All 10 checks green; docs updated for moved paths"
+  ],
+  "requiresDocs": true,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "reviewer": "sonnet",
+  "notes": "Reviewer: it is a pure move (git diff -M shows renames with only include/namespace edits; no logic change), Vulkan-OFF and non-Vulkan legs still build (the moved headers include nothing from Vulkan), no stale old-path references anywhere (grep), test names unchanged, docs true, mediums count."
+}

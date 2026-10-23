@@ -6,6 +6,7 @@
 
 #include "engine/Version.hpp"
 #include "engine/network/NetworkHash.hpp"
+#include "engine/network/ReplicationCodec.hpp"
 #include "engine/serialization/ComponentRegistry.hpp"
 #include "engine/serialization/JsonLimits.hpp"
 
@@ -43,14 +44,35 @@ namespace N2Engine::Network
 
     std::uint64_t HashRegistry(const PrefabTable &prefabs)
     {
-        std::vector<std::string> types = ComponentRegistry::Instance().GetRegisteredTypes();
+        ComponentRegistry &registry = ComponentRegistry::Instance();
+        std::vector<std::string> types = registry.GetRegisteredTypes();
         std::sort(types.begin(), types.end());
         Fnv1a64 hash;
-        hash.String("n2net-registry-1");
+        hash.String("n2net-registry-2");
         hash.U32(static_cast<std::uint32_t>(types.size()));
         for (const std::string &type : types)
         {
             hash.String(type);
+            // What changes the bytes of replicated fields on the wire: which fields a type replicates and how each is
+            // encoded (kind, shape, step, range, enum options). A LuaComponent's script fields are per instance, not per
+            // type: they are covered by the layout hash every state entry carries.
+            std::vector<const FieldInfo *> replicated;
+            const std::optional<ComponentSchema> schema = registry.Describe(type);
+            if (schema.has_value())
+            {
+                for (const FieldInfo &field : schema->fields)
+                {
+                    if (field.replicated && IsReplicableKind(field.kind))
+                    {
+                        replicated.push_back(&field);
+                    }
+                }
+            }
+            hash.U32(static_cast<std::uint32_t>(replicated.size()));
+            for (const FieldInfo *field : replicated)
+            {
+                HashFieldFormat(hash, *field);
+            }
         }
         hash.U64(prefabs.Hash());
         return hash.Value();

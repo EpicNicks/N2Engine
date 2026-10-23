@@ -1,0 +1,28 @@
+{
+  "head": "5b05708c4f5425c3bfdd4e5f1560ca187c4500fc",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "renderer/src/webgpu/WebGpuRenderer.cpp",
+      "line": 428,
+      "summary": "The browser-only async readback (AdvanceAsyncReadback) and the emdawnwebgpu JS path are GPU code CI cannot run: node has no WebGPU and Initialize fails before a device exists, so this code is compiled but never executed by any test",
+      "scenario": "At G5, when a device is handed in, a mistake in the map/unmap/padding logic (e.g. reading a buffer whose map was aborted by a resize or Shutdown) would surface only in a real browser; acknowledged in dev.json 'unverified', to be covered at G5"
+    },
+    {
+      "severity": "low",
+      "file": "renderer/include/renderer/webgpu/WebGpuFactory.hpp",
+      "line": 7,
+      "summary": "Comment says CreateWebGpuRenderer is 'Declared only where the backend is compiled in', but the header declares it unconditionally (no N2ENGINE_RENDERER_WEBGPU guard); it is only DEFINED where the backend is compiled",
+      "scenario": "A native translation unit that includes the header in a build with the backend OFF compiles and then fails at link time instead of at compile time, contrary to what the comment promises"
+    },
+    {
+      "severity": "low",
+      "file": "docs/application.html",
+      "line": 128,
+      "summary": "The isHeadless option row and the 'Headless mode' intro still name only SOFTWARE (and WEBGPU) as the no-window exceptions; RenderBackend::NONE also creates no window, and does so whatever isHeadless says (InitWindow returns early before UsesNoWindow is checked)",
+      "scenario": "A reader of the options table alone may think NONE with isHeadless=false opens a GLFW window; the #no-renderer section linked from the renderBackend row states the real behaviour, so this is wording only"
+    }
+  ],
+  "verdict": "clean",
+  "confirmedDelta": "master merge incl. A6 reviewed by opus"
+}

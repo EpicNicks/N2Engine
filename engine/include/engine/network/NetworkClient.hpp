@@ -13,6 +13,7 @@
 #include "engine/network/NetworkFingerprint.hpp"
 #include "engine/network/NetworkId.hpp"
 #include "engine/network/NetworkProtocol.hpp"
+#include "engine/network/NetworkReplication.hpp"
 #include "engine/network/NetworkWorld.hpp"
 #include "engine/network/PrefabTable.hpp"
 #include "engine/network/n2net/Connection.hpp"
@@ -103,7 +104,11 @@ namespace N2Engine::Network
      * above every scene id and above the last spawn's, name a prefab of the client's own table that has exactly one
      * NetworkObject on its root, and not exceed kMaxNetworkObjects; the join state must be as long as the server said.
      * Anything else fails the client (Failed, Error() says why) and it disconnects. A client never sends a spawn or a
-     * despawn: it sends its accept or its reject, nothing else.
+     * despawn: it sends its accept or its reject, and the acknowledgements of the state it applied, nothing else.
+     *
+     * Field replication (netcode stage B2): once Joined, the client applies the server's StateUpdates (the unreliable
+     * channel) to the replicated fields of the objects it has, through Component::ApplyReplicated, and acknowledges what
+     * it applied. It writes nothing but replicated fields and takes values from nothing but the server's connection.
      *
      * Single-threaded; call Update every frame with a monotonic microsecond clock. It must not outlive the transport
      * or the world.
@@ -141,6 +146,8 @@ namespace N2Engine::Network
         /// The server's, once its hello arrived
         [[nodiscard]] const std::optional<Fingerprint> &ServerFingerprint() const noexcept { return _serverFingerprint; }
         [[nodiscard]] const NetworkClientStats &Stats() const noexcept { return _stats; }
+        /// What the client did with the server's state updates (netcode stage B2)
+        [[nodiscard]] const ClientReplicationStats &ReplicationStats() const noexcept { return _replicator.Stats(); }
         [[nodiscard]] NetworkWorld &World() noexcept { return _world; }
 
     private:
@@ -162,6 +169,7 @@ namespace N2Engine::Network
         Fingerprint _localFingerprint;
         std::optional<Fingerprint> _serverFingerprint;
         NetworkClientStats _stats;
+        ClientReplicator _replicator;
         NetworkClientState _state = NetworkClientState::Connecting;
         std::string _error;
         JoinRefusal _refusal = JoinRefusal::None;

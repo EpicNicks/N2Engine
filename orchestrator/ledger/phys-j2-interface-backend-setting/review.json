@@ -1,0 +1,20 @@
+{
+  "head": "660c3d3264e74469d9fffce9f3e38a3dd60159fc",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "engine/include/engine/physics/PhysicsBackendKind.hpp",
+      "line": 383,
+      "summary": "ChooseBackend falls back to PhysX without checking PhysX is in the build, so the logged warning says 'using physx instead' when nothing will start.",
+      "scenario": "Build without N2ENGINE_PHYSX_ENABLED, project physics.backend jolt, preset none/authoritative: Init logs 'using physx instead', then the Physics row says built without PhysX; the log contradicts the row (misleading only, no crash)."
+    },
+    {
+      "severity": "low",
+      "file": "engine/src/Application.cpp",
+      "line": 160,
+      "summary": "When the Jolt request comes from the host's ApplicationOptions::JOLT (no project setting), the fallback/refusal message and the Physics row still say 'physics.backend is jolt', naming a project setting the project never set.",
+      "scenario": "Host passes PhysicsBackend::JOLT, project has no physics.backend: the warning/row blames the project's physics.backend setting, sending the user to a setting that is absent (no host passes JOLT today)."
+    }
+  ],
+  "verdict": "clean"
+}

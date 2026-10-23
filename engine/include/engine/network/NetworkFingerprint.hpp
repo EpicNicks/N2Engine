@@ -43,8 +43,9 @@ namespace N2Engine::Network
      * that protects a player from a wrong build is the client's own.)
      *
      * The fingerprint covers: the engine version text; the content of the scene (SceneHash: HashSceneJson of the scene
-     * file's parsed JSON, so line endings and key order do not matter); the registered component type names and the
-     * prefab table (RegistryHash); the number of NetworkObjects in the scene. It does not cover Lua script sources,
+     * file's parsed JSON, so line endings and key order do not matter); the registered component type names, the
+     * replicated fields of each and how they are encoded, and the prefab table (RegistryHash); the number of
+     * NetworkObjects in the scene. It does not cover Lua script sources,
      * assets or the values of component fields: two peers whose scripts differ will agree here and still disagree
      * later. The wire version is a separate field of the hello message (see NetworkProtocol.hpp).
      */
@@ -64,7 +65,10 @@ namespace N2Engine::Network
     /// that is not valid UTF-8 is replaced, never an exception.
     [[nodiscard]] std::uint64_t HashSceneJson(const nlohmann::json &scene);
 
-    /// FNV-1a over the sorted names of every registered component type (ComponentRegistry) and `prefabs.Hash()`
+    /// FNV-1a over the sorted names of every registered component type (ComponentRegistry), for each the replicated fields
+    /// its schema lists with everything that decides their bytes on the wire (HashFieldFormat: name, kind, step, range,
+    /// enum options), and `prefabs.Hash()`. A server and a client that replicate other fields, or the same fields another
+    /// way, refuse each other (Registry).
     [[nodiscard]] std::uint64_t HashRegistry(const PrefabTable &prefabs);
 
     /// `text` cut to `maxLength` bytes with every byte outside printable ASCII (0x20 to 0x7E) replaced by '?': what

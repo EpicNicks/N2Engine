@@ -1,0 +1,12 @@
+Accepted by the user 2026-10-13:
+- Model has stacks (regions[id].groups[{tabs,active}]) instead of one tab list per region, because the right region must keep hierarchy/inspector/engine stacked as today (roadmap: up to three stacked groups); plus a closed[] list so a closed panel is not re-added on load
+- PanelDef gains defaultGroup, tabBar (auto|always), unmountWhenHidden and sizing (flex shares of the right stacks) to keep the default arrangement; singleton:false is refused
+- Added Window items Save layout as the default for new projects and Forget the saved default layout (the user-default key needed a writer); Reset layout shows the user default if saved, else the built-in layout
+- Hidden viewport decision: unmounted (renderer disposed, no frame requests), remounted when shown; console and text editors unmount when hidden as before; other panels stay mounted hidden
+- Console is now closable and has a close button; a lone panel with its own header shows no tab bar, so in a multi-tab stack the panel header duplicates the tab title
+- Closing the shown tab activates its left neighbour (before: the bottom bar fell back to the console)
+- ContextMenu (ui.tsx) now supports arrow/Home/End/Enter and keyboard focus so Move to is usable from the keyboard; mouse menus unchanged
+- The viewport has no tab bar while alone, so it cannot be dragged until another panel is tabbed with it
+- Project id comes from window.engine.getProjectInfo after connect (the renderer did not read it before); an invalid id means no per-project key is used
+- Review lows fixed: pagehide/beforeunload flush via LayoutController.flushOnUnload; stacks keyed by index; aria-controls omitted for unmounted hidden panels
+- CI failure was the viewport-target.test fixed 10 ms sleep flake on Windows (not a log line); replaced with polled waits

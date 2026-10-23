@@ -1,0 +1,13 @@
+{
+  "head": "1005765f1b2340c175db0f73bd78ad2678ae8a81",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "src/renderer/layout/layout-view.tsx",
+      "line": 301,
+      "summary": "Stacks are now keyed by index (key={i}); the model splices an emptied stack out of regions[r].groups and reopen inserts a new stack before others, so every later stack in the region shifts index and Preact remounts its panels (the earlier first-tab-key remount is fixed but traded for this one)",
+      "scenario": "Default right region [hierarchy],[inspector],[engine]: close Hierarchy (or move it to Left), then reopen it from Window: both times the Inspector and Engine stacks change key (1->0->1, 2->1->2) and their panels unmount and mount again, losing local state such as an in-progress inspector field edit"
+    }
+  ],
+  "verdict": "fixes-needed"
+}

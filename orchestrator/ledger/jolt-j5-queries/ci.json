@@ -1,0 +1,10 @@
+{
+  "name": "jolt-j5-queries",
+  "head": "bbc0ac6a9e0d311eb5d664c8ce9ad37ab1246a0f",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

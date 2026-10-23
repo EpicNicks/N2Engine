@@ -1,0 +1,21 @@
+{
+  "head": "b79a314d7a1a485b51e01cc7bcc5491f53a82ddf",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "engine/src/physics/CharacterController.cpp",
+      "line": 343,
+      "summary": "A slow approach to a climbable step relies on the step-up down cast reporting the floor at exactly its max distance (raise + skin): the flat slide parks the capsule a skin short of the edge, and a per-tick move under ~4 mm (about 0.25 m/s for r 0.5 and a 0.2 step) leaves the edge out of reach, so only a float-borderline floor hit accepts the step. If that hit is missed, no progress is ever made (no forward carry) and the character is stuck at the step for good",
+      "scenario": "ASlowMoveStillClimbsAStep (0.05 m/s): stop at d = 0.3842 + 0.02 = 0.4042 from the edge; over at 0.4034 > 0.4 so the edge contact (centre 0.4954) is below the floor contact (0.5), which is at exactly 0.32 = the cast length. It passes on all CI legs today. A cast of raise + skin + probe would remove the borderline. The same borderline acceptance also leaves the capsule closer than a skin to an edge (0.4 mm in ARaisedStepOffsetLetsItClimbTheTallerStep), which is not penetration"
+    },
+    {
+      "severity": "low",
+      "file": "engine/src/physics/CharacterController.cpp",
+      "line": 182,
+      "summary": "On Jolt, the behind probe for a contact on a box's rounded edge (convex radius 0.05) can land on that edge's own arc in its top-face normal region. A kerb of about 3 to 4.7 cm (r 0.5) is then climbable on Jolt and a wall on PhysX, so with stepOffset 0 the backends differ. The docs' '3 cm' band is exact only for PhysX",
+      "scenario": "Kerb h = 0.04, r 0.5, stepOffset 0: on Jolt the contact normal.y is (0.57 - h)/0.55 >= 0.951, contact.x >= 2.035, the probe at x >= 2.015 hits the arc with normal (0,1,0) within +-0.03, so it is ridden over. On PhysX the probe at 1.98 finds nothing, so it is a wall. Untested (AKerbIsNotClimbedWithoutAStepOffset uses 0.15, which is blocked on both)"
+    }
+  ],
+  "verdict": "clean",
+  "confirmedDelta": "master merge: only ReflectionTests.cpp builtins list conflicted (union), verified by orchestrator via merge-tree diff"
+}

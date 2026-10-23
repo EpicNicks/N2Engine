@@ -306,6 +306,82 @@ namespace N2Engine::Network
         }
     }
 
+    std::expected<StateUpdateView, DecodeError> DecodeStateUpdate(const std::span<const std::uint8_t> bytes)
+    {
+        if (bytes.empty())
+        {
+            return std::unexpected(DecodeError::Empty);
+        }
+        if (bytes[0] != kStateUpdateType)
+        {
+            return std::unexpected(DecodeError::UnknownType);
+        }
+        if (bytes.size() < kStateUpdateHeaderBytes)
+        {
+            return std::unexpected(DecodeError::Truncated);
+        }
+        ByteReader reader(bytes);
+        (void)reader.U8();
+        StateUpdateView view;
+        view.header.sequence = reader.U32();
+        view.header.entryCount = reader.U16();
+        view.entries = bytes.subspan(kStateUpdateHeaderBytes);
+        // An entry is at least a one byte id, a two byte hash, a one byte length and a one byte mask
+        constexpr std::size_t kMinEntryBytes = 5;
+        if (view.header.sequence == 0 || view.header.entryCount == 0 || view.header.entryCount > kMaxNetworkObjects ||
+            static_cast<std::size_t>(view.header.entryCount) * kMinEntryBytes > view.entries.size())
+        {
+            return std::unexpected(DecodeError::BadValue);
+        }
+        return view;
+    }
+
+    std::expected<StateAckMessage, DecodeError> DecodeStateAck(const std::span<const std::uint8_t> bytes)
+    {
+        if (bytes.empty())
+        {
+            return std::unexpected(DecodeError::Empty);
+        }
+        if (bytes[0] != kStateAckType)
+        {
+            return std::unexpected(DecodeError::UnknownType);
+        }
+        ByteReader reader(bytes);
+        (void)reader.U8();
+        StateAckMessage message;
+        message.latest = reader.U32();
+        message.bits = reader.U32();
+        if (const auto error = CheckEnd(reader))
+        {
+            return std::unexpected(*error);
+        }
+        if (message.latest == 0)
+        {
+            return std::unexpected(DecodeError::BadValue);
+        }
+        return message;
+    }
+
+    std::vector<std::uint8_t> EncodeStateUpdateHeader(const StateUpdateHeader &header)
+    {
+        std::array<std::uint8_t, kStateUpdateHeaderBytes> buffer{};
+        ByteWriter writer(buffer.data(), buffer.size());
+        writer.U8(kStateUpdateType);
+        writer.U32(header.sequence);
+        writer.U16(header.entryCount);
+        return std::vector<std::uint8_t>(buffer.data(), buffer.data() + writer.Size());
+    }
+
+    std::vector<std::uint8_t> Encode(const StateAckMessage &message)
+    {
+        std::array<std::uint8_t, 9> buffer{};
+        ByteWriter writer(buffer.data(), buffer.size());
+        writer.U8(kStateAckType);
+        writer.U32(message.latest);
+        writer.U32(message.bits);
+        return std::vector<std::uint8_t>(buffer.data(), buffer.data() + writer.Size());
+    }
+
     std::optional<std::uint16_t> PeekWireVersion(const std::span<const std::uint8_t> bytes)
     {
         if (bytes.size() < 3 || (bytes[0] != kTypeServerHello && bytes[0] != kTypeClientAccept))

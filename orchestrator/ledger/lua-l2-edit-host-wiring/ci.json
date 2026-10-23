@@ -1,0 +1,10 @@
+{
+  "name": "lua-l2-edit-host-wiring",
+  "head": "29422189619fbbee32d8e2721bbf135fb6364458",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

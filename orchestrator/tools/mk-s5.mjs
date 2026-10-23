@@ -1,0 +1,24 @@
+import fs from 'node:fs'
+const P = 'C:/Method Notes Obsidian/orchestrator/proposals/security-design-lua-editmode-and-preauth-slots.md'
+const it = {
+  name: 'sec-preauth-s5-docs',
+  repo: 'engine',
+  branch: 'docs-preauth-s5',
+  title: 'Pre-auth S-5: docs and deploy notes for the bounded pre-auth slots, preemption/takeover and busy (docs only, verified against the code)',
+  closes: null,
+  issue: `DOCS-ONLY item (no code change): PR S-5 of ${P} PART 2 (read 2.1-2.8, especially 2.4 and the 2.6 line for S-5). The code is merged: S-1 #168 (Connection refactor), S-2 #171 (policy classes), S-3 #176 (acceptor + 4 workers + session thread, --preauth-slots, Busy plain Error, coalesced pre-auth logs), S-4 #177 (preemption by a strictly higher role, same-user takeover, no-token newest-takes-over, ErrorCoded busy = protocol 1.13.0, loopback backoff REMOVED in favour of a concurrency cap, TCP keepalive). FIRST audit what S-3 and S-4 already documented (grep docs/ for preauth, pre-auth, busy, takeover, slots, rate-limit, rate limit, Hello timeout, keepalive, proxy; read docs/editor.html, docs/logging-and-editor.html (anchor #rate-limit-gaps), docs/testing.html, any deploy/docker/linux docs pages, README flags tables) and write ONLY what is missing or stale. Expected gaps, each to be CONFIRMED against the code (EditorServer.cpp, Host.cpp, the pre-auth policy classes, the CLI/option parsing; never copy neighbouring docs): (1) the stale sentence 'a peer can hold the thread for the Hello timeout' (and any similar claim about one slow peer blocking the host) in logging-and-editor.html#rate-limit-gaps and anywhere else: replace with what is true now, and list the REMAINING gaps honestly (e.g. rate-limit gaps that still exist); (2) the flags/options: --preauth-slots (range, default) and any rate/handshake/keepalive knobs that exist: exact names, ranges, defaults, in the host command-line reference wherever flags are listed; (3) behaviour BEHIND A PROXY / port-forward / docker bridge / SSH tunnel: the host sees the proxy's address, so every client looks like one (often loopback) address and per-address limits and the loopback concurrency cap apply to everyone together; say what an operator should do (and what the code actually supports; do not invent a forwarded-for header feature); (4) the busy / preemption / takeover semantics from the operator and user point of view (who preempts whom, same-user takeover wait, what the client sees: ErrorCoded busy with holder role when the client asked for errorCodes, plain Error otherwise), and the protocol 1.13.0 note if the protocol doc is missing it; (5) deploy notes in the Linux/docker docs if they describe connection limits (container resource sizing: 4 workers + session thread + acceptor). Keep each addition short and factual; match the surrounding docs' style and structure (look at how other callouts and tables are written); update docs/index.html design-decision rows only if an existing convention says S-3/S-4 style changes get one and it is missing. Every sentence must be verified against CODE (this has cost many review rounds); where something could not be verified say nothing rather than guess. Docs-only: CI skips the build legs. If you find a real code bug while verifying, do NOT fix it: report it in dev.json notes/needsUser.`,
+  allowedPaths: ['^docs/', '^README\\.md$'],
+  acceptance: [
+    'Stale pre-auth claims removed or corrected; remaining gaps listed honestly',
+    'Flags, proxy behaviour, busy/preemption/takeover and deploy sizing documented where missing, each verified against the code',
+    'Docs-only; all checks green',
+  ],
+  requiresDocs: true,
+  allowProtocol: false,
+  gate: null,
+  approved: true,
+  reviewer: 'opus',
+  notes: 'Reviewer: verify EVERY new or changed sentence against the code (flag names/ranges/defaults, who preempts whom, takeover wait, keepalive, what is logged), that no claimed behaviour is invented (proxy forwarded-for, per-address limits), no stale claim remains anywhere in docs/ or README, and the pages stay consistent with each other.',
+}
+fs.writeFileSync('C:/Method Notes Obsidian/orchestrator/items/' + it.name + '.json', JSON.stringify(it, null, 2) + '\n')
+console.log('ok')

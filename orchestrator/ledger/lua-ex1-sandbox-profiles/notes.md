@@ -1,0 +1,11 @@
+Accepted by the user 2026-10-13:
+- Empty prelude per the user decision of 2026-10-20: the prelude mechanism and its tests ship, no built-in contents (Vector3/Quaternion helpers left to E-X3).
+- EditorExtension also removes print and warn (no Editor.Log yet, E-X3 reinstalls print), loadstring (absent in 5.4 anyway) and string.dump, beyond the brief's load/dofile/loadfile/collectgarbage and four pattern functions.
+- EditorExtension string.rep of an empty string answers '' in Lua (same guard as the evaluator): the allocator cap cannot refuse it and the hook cannot interrupt it; results unchanged.
+- EditorExtension removes sol's bookkeeping globals (base, sol.<handler> entries; the exception-handler one is a light userdata whose tostring shows a binary address); the Declarations profile keeps them as the evaluator always had them (pre-existing exposure, listed in the allowlist and docs, not changed to keep zero behaviour change).
+- Builder API beyond the brief: SandboxOutcome/SandboxCounters, RunChunk, Arm/Disarm, PreludeOutcome, LiveStates; Create throws only on out-of-memory; a failing prelude is data and the sandbox must then not be used.
+- Evaluator exception path now closes the state in the catch (Close()) before reading the guard, instead of during unwinding; same observable results. LuaGuard.hpp untouched; shared text helpers moved to a private LuaSandboxText.hpp.
+- Wall-clock milliseconds are clamped to one day in Arm (overflow guard); the evaluator's own limits would have overflowed only above ~292 years.
+- EditorExtension: table.move/insert/remove are redone in Lua with stock semantics and no size bound (counted instructions end a huge range as a budget trip; review medium); concat/unpack/sort stay stock C (design 6.4) and remain abandon-deadline-bound; docs say so. Judgement call: not the evaluator's 65,536 bound, which could break legitimate extensions.
+- A zero SandboxBudget now takes SandboxOptions::loadBudget (header comment was right, code ignored it); FailureOutcome on a closed sandbox answers 'The sandbox is closed' as data.
+- CI fix: the huge-length insert/remove test cases now use a lying __len (a plain table with one far key has border 0 so never looped); no engine code change.

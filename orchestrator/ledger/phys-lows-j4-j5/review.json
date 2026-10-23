@@ -1,0 +1,4 @@
+{"head":"1375f980784c95d901828023a3e487fcd5193474","findings":[
+{"severity":"low","file":"tests/engine/physics/PhysicsEventTests.cpp","line":253,"summary":"Carried over unchanged (the dev disclosed it and left it as is): the J4 trigger test never changes a contact key, so it does not guard the presentPairs fix in FoldContacts","scenario":"Reverting the JoltBackend.cpp presentPairs change leaves the test green; the path where a shape is rebuilt while the contact is only speculative stays untested"},
+{"severity":"low","file":"engine/src/physics/QueryUtil.hpp","line":154,"summary":"Carried over unchanged (the dev disclosed it and left it as is): SortByPick is O(n^2), and Jolt's RaycastAll has no 1024 cap","scenario":"A Jolt RaycastAll through ~20k hits does ~4e8 operations where the old sort was n log n, which causes a frame-time spike"}
+],"verdict":"clean"}

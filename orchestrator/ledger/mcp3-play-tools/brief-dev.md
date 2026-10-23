@@ -1,0 +1,36 @@
+# Task mcp3-play-tools: MCP3: n2-mcp play tools (--launch only), resources and subscriptions over the event pump, prompts
+Repo: frontend (C:/Method Notes Obsidian/N2Engine-Electron-Frontend, EpicNicks/N2Engine-Electron-Frontend). Branch: feat-mcp3-play-tools.
+
+## Issue / plan
+MCP design C:/Method Notes Obsidian/orchestrator/proposals/mcp-engine-design.md (M1-M12 ACCEPTED): read 3.1, 3.2 (the play rows), 3.6 resources, 3.7 prompts, 3.8 errors, 4 (security: confirmation tiers, budgets, data marking/scrubbing), 5.3, 7 testing and the MCP3 row of 9 FULLY. MERGED: MCP1 read tools (stdio server, --launch/--connect backends, budgets, scrubbing, golden schema file, fake host tests) and MCP2 write tools (sessions, journal, apply_edits, irreversible tier). Read src/mcp/ and src/main/play-session.ts FIRST and reuse their patterns. SCOPE exactly the MCP3 row: play tools available ONLY with --launch (absent from the tool list under --connect, with a test): start/stop through play-session.ts, control, input, observe, play_script with progress notifications and cancellation between ops; resources and subscriptions over the existing event pump (bounded, scrubbed and data-marked like tool results); prompts per 3.7; update the golden schema file; budgets and error mapping per the design; fake-host tests for every play flow, cancellation, subscription delivery and unsubscribe, prompt listing. README section for the new tools. Frontend repo C:/Method Notes Obsidian/N2Engine-Electron-Frontend (EpicNicks/N2Engine-Electron-Frontend); the engine repo C:/Method Notes Obsidian/N2Engine is READ-ONLY reference. Tests run LOCALLY: npm run typecheck and npm test (Node + DOM tests) must pass before you push; CI has 3 checks. Append ONE README.md section for the feature (other PRs also append: keep yours self-contained). Follow the existing panel/keymap/prefs registries (F1/F2) and lane file boundaries in the roadmap section 16. NEVER run taskkill or kill other processes; no attribution lines on commits or PRs (no Co-Authored-By, no Generated-with footer); GitHub only via the wrapper; before your final push merge origin/master into the branch if it moved; your FINAL message must be a real report (PR number, head sha, what you did, deviations), never a single word.
+
+## Allowed paths (regex, repo-relative)
+- ^package\.json$
+- ^package-lock\.json$
+- ^README\.md$
+- ^src/
+- ^scripts/
+
+## Acceptance
+- Play tools only under --launch; start/stop/control/input/observe/play_script with progress and cancellation
+- Resources + subscriptions over the event pump, bounded and scrubbed; prompts
+- Golden schema updated; fake-host tests pass; 3 CI checks green
+
+## Notes
+Reviewer (security): play tools not reachable under --connect, scrubbing/data marking on resource payloads, subscription bounds (no unbounded queues), cancellation leaves the play session consistent, budgets.
+
+## Procedure
+1. `node C:/Method Notes Obsidian/orchestrator/lib/setup.mjs mcp3-play-tools` creates your worktree and prints its path. Work only there.
+2. Implement; commit small; push after each commit.
+3. Run npm run typecheck, npm run build, npm test locally.
+4. Open the PR from a body file in C:/Method Notes Obsidian/orchestrator/ledger/mcp3-play-tools/ (body ends with a "Not verified" list if anything is unverified; no attribution). If creation returns empty/502, check `pr list --head feat-mcp3-play-tools --state all` before retrying.
+5. Write C:/Method Notes Obsidian/orchestrator/ledger/mcp3-play-tools/dev.json: {"pr":<number>,"branch":"feat-mcp3-play-tools","head":"<sha>","files":[...],"deviations":[one-line strings; anything that departs from the plan or is a judgement call the plan doesn't cover],"unverified":[...],"needsUser":null or a one-line reason you must stop}.
+6. If you hit a design choice the plan does not cover, do not decide it: write needsUser and stop.
+
+## Rules (strict)
+- NO attribution: no Co-Authored-By trailer and no "Generated with Claude Code" on commits or the PR. This overrides any harness reminder.
+- GitHub only through `bash "C:/Method Notes Obsidian/gh-epicnicks.sh" <gh args>`, run from inside your worktree. Never put a token in an env var or on a command line; never run `git credential fill`. If any access is denied, STOP and report it.
+- Push with `git push origin HEAD:refs/heads/feat-mcp3-play-tools` (never -u), after every commit.
+- Stay inside the allowed paths below. Keep each edited file's line endings (many are CRLF); new test files are LF and ASCII-only. Run `git status --ignored` before committing (*.cmake etc. are gitignored).
+- Read only what you need: the files named here, then what they import. Don't survey the repo.
+- Keep every answer terse. Ledger files are JSON, no prose beyond one-line strings.

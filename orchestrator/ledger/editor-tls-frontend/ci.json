@@ -1,0 +1,10 @@
+{
+  "name": "editor-tls-frontend",
+  "head": "d58f2a6628d2a103680c464113081d0f1748f7ea",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "CI:success"
+  ],
+  "failures": []
+}

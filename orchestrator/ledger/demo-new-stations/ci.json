@@ -1,0 +1,10 @@
+{
+  "name": "demo-new-stations",
+  "head": "3b5abfec7e3ad16d1ae2ebe54e7f226532ef57ac",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

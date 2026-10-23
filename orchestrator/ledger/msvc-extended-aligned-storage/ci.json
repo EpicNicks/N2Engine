@@ -1,0 +1,10 @@
+{
+  "name": "msvc-extended-aligned-storage",
+  "head": "08c94f5110f3b2cfcf33fe79fc1cf6bbd2fce718",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

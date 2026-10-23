@@ -1,9 +1,8 @@
 // The N2Engine web player (stage 2 of issue #155; docs/web-build.html): runs a project folder in a browser tab with the
-// software renderer, single-threaded, and shows each frame on a 2D canvas. Built only under N2ENGINE_PLATFORM_WEB.
+// selected renderer, single-threaded. Built only under N2ENGINE_PLATFORM_WEB.
 //
-//  - The engine runs windowless (isHeadless + software renderer: no GLFW at all), so there is no GL context and no
-//    native window. Each frame is read back from the renderer and handed to the page's JavaScript (Module.n2Present),
-//    which puts it on the canvas. The page, not this file, owns the canvas; under node (the CI smoke) a mock stands in.
+//  - The engine runs windowless with no GLFW or GL context. Software frames go to Module.n2Present;
+//    WebGPU presents its offscreen texture through a GPU canvas pass. The page owns the canvas.
 //  - The browser calls Frame() through emscripten_set_main_loop: a blocking loop would freeze the tab. Frame() is one
 //    Application::RunFrame, the body of Application::Run, so the fixed-step accumulator behaves as on every platform.
 //  - Keyboard and mouse come from HTML5 events: keys and buttons go to an Input::InjectedKeys installed as the engine's
@@ -13,8 +12,8 @@
 // Arguments (Module.arguments, or callMain's): [--project DIR] (default /project, the preloaded folder),
 // [--frames N] (run N frames, then stop: the node smoke test, which also skips the DOM and takes its size from --size),
 // [--size WxH] (the render size when there is no canvas to measure), [--renderer software|webgpu] (default software;
-// parsed by WebRendererOption.hpp). Stage G4 of #155 links the WebGPU backend into the player, but
-// --renderer webgpu cannot start yet (the page hands its device in at stage G5) and the page passes no --renderer.
+// parsed by WebRendererOption.hpp). The shell probes WebGPU before Start and passes
+// the selected renderer and device; direct callers default to software.
 #include <emscripten.h>
 #include <emscripten/html5.h>
 
@@ -78,6 +77,12 @@ EM_JS(int, n2_canvas_rect, (double *out), {
     return 1;
 });
 
+// 0: paused for recovery, 1: ready, 2: replacement device needs resource rebuild.
+EM_JS(int, n2_gpu_status, (), {
+    var session = Module['n2GpuSession'];
+    return session ? session.status() : 1;
+});
+
 namespace
 {
     /// The most pixels wide a frame renders. The canvas is shown at its CSS size whatever this is (the browser scales it).
@@ -95,6 +100,7 @@ namespace
         Web::RenderSize size{};    // the size frames render at now
         std::vector<std::uint8_t> frame; // the last frame read back, top row first, RGBA8
         bool ended = false;
+        bool webgpu = false;
     };
 
     Player g_player;
@@ -218,7 +224,9 @@ namespace
         {
             return false;
         }
-        const Web::RenderSize wanted = Web::FitRenderSize(rect[2], rect[3], MaxRenderWidth);
+        const double scale = g_player.webgpu ? emscripten_get_device_pixel_ratio() : 1.0;
+        const Web::RenderSize wanted = Web::FitRenderSize(rect[2] * scale, rect[3] * scale,
+                                                        g_player.webgpu ? 2560 : MaxRenderWidth);
         if (wanted.width == 0 || wanted == g_player.size)
         {
             return true;
@@ -233,6 +241,8 @@ namespace
 
     void PresentFrame()
     {
+        // Application::RunFrame already called Present on the GPU renderer.
+        if (g_player.webgpu) return;
         auto *renderer = Application::GetInstance().GetWindow().GetRenderer();
         if (!renderer || g_player.size.width <= 0 || g_player.size.height <= 0)
         {
@@ -287,6 +297,22 @@ namespace
     void Frame()
     {
         Application &application = Application::GetInstance();
+        if (g_player.webgpu)
+        {
+            const int status = n2_gpu_status();
+            if (status == 0) return;
+            if (status == 2)
+            {
+                auto *renderer = application.GetWindow().GetRenderer();
+                if (!renderer || !renderer->Initialize(nullptr, g_player.size.width, g_player.size.height) ||
+                    !renderer->SetRenderTargetSize(g_player.size.width, g_player.size.height))
+                {
+                    n2_notify_failed("The graphics device could not be restored. Reload with ?renderer=software.");
+                    emscripten_cancel_main_loop();
+                    return;
+                }
+            }
+        }
         if (!FollowCanvasSize())
         {
             return; // no canvas yet or hidden: skip the frame, the loop goes on
@@ -381,6 +407,7 @@ int main(int argc, char *argv[])
         }
     }
 
+    g_player.webgpu = renderBackend == Config::ApplicationOptions::RenderBackend::WEBGPU;
     Application &application = Application::GetInstance();
     // Headless is the engine's windowless software path (Window::UsesNoWindow): no GLFW, frames read back and shown by
     // the page. On the web it does not send the sound to a loopback device: Application opens the browser's output
@@ -390,8 +417,7 @@ int main(int argc, char *argv[])
     const EngineHealth health = application.Init({
         .projectPath = projectDir.string(),
         .physicsBackend = Config::ApplicationOptions::PhysicsBackend::PHYSX,
-        // software unless --renderer webgpu: the engine then makes the WebGPU backend (Window's no-window path), whose
-        // Initialize fails in this stage, so Init reports no renderer and the player stops below with the reason
+        // The shell supplies the WebGPU device before selecting Window's no-window GPU path.
         .renderBackend = renderBackend,
         .isHeadless = true,
     });

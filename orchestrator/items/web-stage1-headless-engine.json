@@ -1,0 +1,34 @@
+{
+  "name": "web-stage1-headless-engine",
+  "repo": "engine",
+  "branch": "feat-web-stage1-headless-engine",
+  "title": "Web build stage 1: engine core headless in WebAssembly (single-threaded fallback, Emscripten filesystem), engine tests and software-renderer goldens under node (issue #155, stage 1)",
+  "closes": null,
+  "issue": "Issue #155 stage 1 (read the issue body with `bash \"C:/Method Notes Obsidian/gh-epicnicks.sh\" api repos/EpicNicks/N2Engine/issues/155 --jq .body` from inside the repo) and the merged stage 0 (docs/web-build.html, cmake/N2EngineWeb.cmake, the CI job `web (Emscripten, dev profile, node tests)`, what stage 0 excluded and why: engine core NOT built because it needs window/thread/filesystem source changes). Decisions already taken by the user (do NOT revisit): web PLAYER only; software renderer first; baseline single-threaded build needs NO cross-origin isolation or special headers; threads are a later optional second artifact. SCOPE OF STAGE 1: make the ENGINE CORE (scene, GameObject, components that need no GPU/window/audio, Lua scripting with sol2/Lua, serialization, physics-free subset (PhysX is OFF on web), the software renderer library target) build for Emscripten and run headless under node: (1) a single-threaded fallback wherever the engine uses std::thread/std::mutex/std::condition_variable (the logger's per-thread buffers, the software renderer's RenderThread, the Vulkan renderer is excluded): behind N2ENGINE_PLATFORM_WEB (or a runtime/compile-time `N2ENGINE_SINGLE_THREADED`), the software renderer must render on the calling thread with output identical to the threaded path (prove with the existing software-renderer goldens: they must pass under node bit-identically); (2) filesystem: std::filesystem and file IO under Emscripten's virtual filesystem (MEMFS; NODERAWFS only for tests if needed): scene/asset loading paths used by the engine tests must work; (3) exclude by #if/CMake: GLFW/window, OpenAL, Vulkan, PhysX, editor-server/TLS, FreeType if it needs a fetch (stage 0 forced it OFF: keep), ufbx if it does not build; (4) extend the existing web CI job (do NOT rename it) to also build and run the engine tests (engine_tests) and the software-renderer tests under node, with the Emscripten version pinned by stage 0; tests that cannot run on web (threads, GPU, window, audio, PhysX, sockets) must be excluded or GTEST_SKIP'ed by an explicit, documented list (prefer CMake-level exclusion of whole files over per-test skips; no test may be silently dropped on native builds); (5) native builds must be completely unchanged: every native CI leg stays green with identical behaviour; (6) docs: update docs/web-build.html (what is now built and tested, the single-threaded fallback, filesystem notes, the exclusion list with reasons, what is still missing: stages 2-7) and docs/testing.html CI paragraph. This stage will be big: if the engine core cannot be made to build within one coherent PR, do the largest coherent subset (e.g. engine core + scene + serialization + Lua + software renderer without window) and DOCUMENT precisely what remains; do not leave the build half-configured. Nothing builds locally and the Emscripten CI job is the first real test: expect fix rounds; keep every change small and guarded. Unverified items to list: everything the Emscripten run proves (compile, link, node test run), single-thread render equality (proved only by the goldens passing), the exclusion list's completeness.",
+  "allowedPaths": [
+    "^CMakeLists\\.txt$",
+    "^cmake/",
+    "^math/",
+    "^text/",
+    "^assetimport/",
+    "^engine/",
+    "^renderer/",
+    "^tests/",
+    "^scripts/",
+    "^docs/",
+    "^\\.github/workflows/tests\\.yml$",
+    "^external/"
+  ],
+  "acceptance": [
+    "All 10 existing checks unchanged and green; native builds behave identically",
+    "The web job also builds the engine core and software renderer and runs engine/renderer tests under node, with an explicit documented exclusion list",
+    "Single-threaded fallback renders identically (goldens pass bit-identically under node)",
+    "docs/web-build.html and docs/testing.html updated; what remains is stated"
+  ],
+  "requiresDocs": true,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "reviewer": "opus",
+  "notes": "Reviewer: no native behaviour change (every guard is web-only; diff of threaded paths), the single-threaded fallback is correct (no deadlocks, no dropped work, ordering preserved), test exclusions are explicit and justified and do not silently drop native tests, job name unchanged, docs match code. Unverified: the Emscripten run."
+}

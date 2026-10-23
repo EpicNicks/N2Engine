@@ -1,0 +1,10 @@
+{
+  "name": "sec-preauth-s3-structural",
+  "head": "0f65857706a902a33cf81250ee6499621c9ebf16",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

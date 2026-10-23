@@ -1,0 +1,24 @@
+{
+  "closes": null,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "requiresDocs": true,
+  "repo": "engine",
+  "name": "net-a5-lows",
+  "branch": "fix-net-a5-lows",
+  "title": "Netcode A5 follow-ups: SecureTransport drains the inner transport before its idle sweep; stale Disconnect wording in netcode.html",
+  "issue": "Follow-up of merged A5 (#210) and A4 lows (#207); the opus delta review found two LOW issues, accepted as a follow-up. Verify each on master first. (1) engine/src/network/n2net/SecureTransport.cpp (~lines 544-553): SecureTransport::Poll runs RunTimers (idle sweep) BEFORE inner_->Poll drains the socket: the sweep-then-drain order that #207 removed from UdpTransport. A caller stall longer than idleTimeoutMicros ends established sessions although their authenticated packets are queued (fails closed, robustness only). Fix: drain the inner transport first (processing and authenticating events), then run the timers against the time the Poll began (as UdpTransport::Poll does); keep pre-auth/handshake timeout semantics unchanged; add a test with a stall longer than the idle timeout and authenticated datagrams queued: the session survives; a session that sent nothing is still ended. (2) docs/netcode.html, the udp-peers 'Disconnect is local' bullet: 'This differs from the interface's wording for SimTransport' is stale since the interface text says it depends on the transport: reword to be true against the code. Also check docs/netcode.html for any other sentence about the order of idle sweep and drain in SecureTransport and fix it. Nothing builds locally for the engine; CI (12 checks) is the test; expect fix rounds; re-read every edit twice (CMake/YAML/C++ syntax); NEVER call a stateful function (RNG etc.) twice in one argument list or operator expression (unspecified evaluation order); NEVER run taskkill or kill other processes; verify every docs sentence against the CODE; no attribution lines on commits or PRs (no Co-Authored-By, no Generated-with footer); GitHub only via the wrapper; before your final push merge origin/master into the branch if it moved; your FINAL message must be a real report (PR number, head sha, what you did, deviations), never a single word.",
+  "allowedPaths": [
+    "^engine/",
+    "^tests/",
+    "^docs/"
+  ],
+  "acceptance": [
+    "SecureTransport::Poll drains then sweeps; stall test passes",
+    "netcode.html Disconnect wording true against the code",
+    "CI green"
+  ],
+  "reviewer": "sonnet",
+  "notes": "Reviewer: drain bounded as today, no authentication bypass introduced by the new order, test not flaky (deadline polling, no sleeps tuned to CI speed), docs true."
+}

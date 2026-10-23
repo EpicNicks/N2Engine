@@ -1,0 +1,13 @@
+{
+  "head": "30c86c3f74aa596397b4250ddc6a79872b893770",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "engine/src/scripting/DeclarationEvaluator.cpp",
+      "line": 214,
+      "summary": "table.remove with no position and a __len that answers math.mininteger loops in Lua from mininteger to mininteger-1 (which wraps to maxinteger), so the evaluation ends as budgetExceeded. Stock Lua's C loop (pos < size) does nothing there and returns t[size]. The run stays bounded (the loop is counted Lua code), so this is a departure from the 'stock semantics' claim only, and only a hostile __len reaches it.",
+      "scenario": "`table.remove(setmetatable({}, {__len = function() return math.mininteger end}))` gives budgetExceeded and no fields, where stock returns nil. Fix if wanted: run the shifting loop only when pos < size (as stock does), or treat a negative size as 0 for the loop bound."
+    }
+  ],
+  "verdict": "clean"
+}

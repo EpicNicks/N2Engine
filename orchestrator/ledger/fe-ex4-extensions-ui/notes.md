@@ -1,0 +1,12 @@
+Accepted by the user 2026-10-13:
+- Trust is stored in its own file extension-trust.json in the user data folder, not inside recent-projects.json (a plain array capped at ten paths would evict trust).
+- Not now is not remembered: the next open of that project asks again; a host restart never asks and a trusted folder gets the flag again.
+- Nested submenus are a drill-in level with a Back item (Right/Left keys) in the shared ContextMenu, not hover flyouts.
+- enabledWhen.componentType means every selected object has that component and something is selected (ignored for selection none): the design leaves it open.
+- A leading Tools path segment is dropped; with extensions on but no items the Tools button still shows with one disabled entry; a protocol 1.14 host shows its items disabled.
+- Failures go to the error banner and console, success is a dismissible notice under the toolbar plus console notes.
+- The banner button always asks (even for an already trusted folder), then restarts after the unsaved-changes question.
+- --editor-extensions-watch is not passed (watcher is E-X6, not built); form dialog does not close on outside click; mirrored host Admin log line for extensionOutput is dropped so a line shows once.
+- Trust key is the real path (lower-cased on macOS only; Windows relies on realpath.native canonical case).
+- Existing tests changed: console source list now includes extension; project settings section list test and the later-section test (registers Network at 70) updated for the Extensions section.
+- Merged origin/master (conflicts in README.md, console-store.ts resolved keeping both the regex filter and the Extension source); banner dismissal now keyed by host launch+project; README protocol headings corrected

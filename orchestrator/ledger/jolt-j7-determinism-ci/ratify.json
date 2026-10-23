@@ -1,0 +1,7 @@
+{
+  "name": "jolt-j7-determinism-ci",
+  "decision": "merge",
+  "reasons": [],
+  "relaxed": "behind master by 35 file(s), no code overlap with the PR's files (docs overlap: docs/physics.html, docs/testing.html), trial merge clean",
+  "merged": true
+}

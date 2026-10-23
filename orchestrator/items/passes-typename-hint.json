@@ -1,0 +1,23 @@
+{
+  "name": "passes-typename-hint",
+  "repo": "engine",
+  "branch": "feat-passes-typename-hint",
+  "title": "Text effect passes: typeName hint \"TextPass[]\" in the reflection schema",
+  "closes": null,
+  "issue": "Approved by the user 2026-10-10 (design A, part 1 of 2). The TextRenderer and UI::UIText member `effectPasses` (std::vector<Text::TextPass>) is registered with RegisterMember and so is a Json field with typeName \"json\" (FieldTraits default, engine/include/engine/serialization/FieldInfo.hpp; JSON shape in engine/include/engine/text/TextJson.hpp). Make the reflection schema report typeName \"TextPass[]\" for it, keeping kind Json and the stored/serialized JSON unchanged, so the editor can recognise the field and draw per-pass widgets. Smallest way: a FieldTraits specialization for std::vector<Text::TextPass> (kind Json, TypeName \"TextPass[]\"), or FieldBuilder if that is how typeName is overridden elsewhere; follow what the code already does. NO protocol.json change, no version bump, no new FieldKind (typeName is already a free string on the wire). Do not change scene serialization or the Lua API. Tests: a reflection test that both components report kind Json and typeName \"TextPass[]\" for effectPasses, and that a value still round-trips. Docs: one sentence plus the typeName value where the docs list reflection/inspector typeNames (docs/ search for typeName), and in docs/text.html Known limits: the inspector draws a pass list editor for this typeName.",
+  "allowedPaths": [
+    "^engine/",
+    "^docs/",
+    "^tests/"
+  ],
+  "acceptance": [
+    "Reflection test for the typeName, ASCII-only, compiles on all 4 CI jobs",
+    "All 4 Tests-workflow jobs green"
+  ],
+  "requiresDocs": true,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "reviewer": "sonnet",
+  "notes": "Keep it small: this is a one-to-three file change. If another component or a test snapshot lists typeNames and changes as a result, update it. If you find the typeName cannot be overridden without a protocol change, write needsUser and stop."
+}

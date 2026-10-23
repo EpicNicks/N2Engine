@@ -1,0 +1,6 @@
+{
+  "head": "ffa18df291dae9270a59342d03202ff8d0e62b59",
+  "findings": [],
+  "verdict": "clean",
+  "confirmedDelta": "update-branch merge of f689d369 with master 664fc933; tree identical to a clean merge-tree"
+}

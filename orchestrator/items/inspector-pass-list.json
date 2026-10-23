@@ -1,0 +1,22 @@
+{
+  "name": "inspector-pass-list",
+  "repo": "frontend",
+  "branch": "feat-inspector-pass-list",
+  "title": "Inspector: a pass-list editor for text effect passes",
+  "closes": null,
+  "issue": "Approved by the user 2026-10-10 (design A, part 2 of 2). In the inspector, a field whose kind is Json and whose `typeName` is \"TextPass[]\" (the engine sets this for TextRenderer/UIText `effectPasses` in the sibling engine item passes-typename-hint; against an older engine the field stays the raw Json textarea, which is fine) gets a `PassListEditor` instead of the Json textarea. The value is an array of {color:{r,g,b,a}, offset:{x,y}, width, softness, order}; missing keys take engine defaults (color black opaque, others 0). Each row shows colour, offset x/y, width, softness and order, with remove and move-up/move-down buttons; an \"Add pass\" button appends a default pass. Build rows from the existing ColorEditor, VectorEditor and NumberEditor (src/renderer/inspector-editors.tsx; RefListEditor is the closest list template). Every edit commits the whole array through the EditorProps commit(value, final) like other editors; number drags use the existing gesture handling so a drag is one undo step. `order` is an integer; values above 0 are clamped to 0 by the engine, so show a short hint under the field (orders above 0 are not supported yet) and clamp nothing in the UI. `width` and `softness` are not negative in the engine: set min 0 on those number inputs. Dispatch in FieldEditor (~line 804) on typeName, not on the field name. Tests (vitest): the editor renders N rows for N passes, add appends a default pass, remove and reorder produce the right array, an edit commits the whole array, a non-array or malformed value falls back to the Json textarea, and the dispatch picks PassListEditor only for typeName \"TextPass[]\". No engine-ref or protocol change.",
+  "allowedPaths": [
+    "^src/",
+    "^README.md$"
+  ],
+  "acceptance": [
+    "npm run typecheck, npm run build and npm test pass locally",
+    "Tests for the editor as listed in the plan"
+  ],
+  "requiresDocs": false,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "reviewer": "opus",
+  "notes": "No CI in this repo: local typecheck, build and tests stand in. If the inspector section of README.md describes field editors, add one line for the pass list. Cannot be checked against a live host from here: list \"not run against a live host\" under unverified."
+}

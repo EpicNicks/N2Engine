@@ -4,6 +4,8 @@
 //
 //   spawn <prefab> [<owner client id>]   -> "spawned id=<n>" or "spawn-failed <why>"
 //   despawn <net id>                     -> "despawned id=<n> ok=<0|1>"
+//   move <net id> <x> <y> <z>            -> "moved id=<n> ok=<0|1>" (sets the object's local position: a NetworkTransform
+//                                           replicates it to the clients)
 //   joined                               -> "joined count=<n> ids=<a,b,...>"
 //   quit                                 -> stops the server (a clean stop)
 //
@@ -19,6 +21,8 @@
 #include <vector>
 
 #include "NetTestCommon.hpp"
+#include "engine/GameObject.hpp"
+#include "engine/Positionable.hpp"
 #include "n2server/Server.hpp"
 
 using namespace N2Engine;
@@ -61,6 +65,29 @@ namespace
             words >> id;
             const bool ok = server.Despawn(Network::NetworkId{id});
             Answer("despawned id=" + std::to_string(id) + " ok=" + (ok ? "1" : "0"));
+        }
+        else if (word == "move")
+        {
+            std::uint32_t id = 0;
+            float x = 0.0f;
+            float y = 0.0f;
+            float z = 0.0f;
+            words >> id >> x >> y >> z;
+            bool ok = false;
+            if (Network::NetworkObject *const object = server.World().Find(Network::NetworkId{id}))
+            {
+                GameObject &gameObject = object->GetGameObject();
+                if (!gameObject.HasPositionable())
+                {
+                    gameObject.CreatePositionable();
+                }
+                if (Positionable *const positionable = gameObject.GetPositionable())
+                {
+                    positionable->SetLocalPosition(Math::Vector3(x, y, z));
+                    ok = true;
+                }
+            }
+            Answer("moved id=" + std::to_string(id) + " ok=" + (ok ? "1" : "0"));
         }
         else if (word == "joined")
         {

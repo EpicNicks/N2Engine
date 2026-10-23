@@ -1,0 +1,9 @@
+{
+  "name": "_selftest",
+  "decision": "hold",
+  "reasons": [
+    "PR is closed",
+    "no review.json",
+    "branch is behind master"
+  ]
+}

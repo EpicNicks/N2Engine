@@ -1,0 +1,13 @@
+{
+  "head": "7122c31b4de3638ab467cb2261ac9362f73652c1",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "editor-server/src/EditorServer.cpp",
+      "line": 3273,
+      "summary": "Carried from the previous review, still not fixed (dev deferred it on purpose): if a claimant hangs up in the last poll interval after the old session has already read _sessionReplaced (true), clearing the flag afterwards is too late and the old session skips the stop-on-disconnect.",
+      "scenario": "An editor-launched host with --exit-on-disconnect: a same-user reconnect claims the host and hangs up just as the old session finishes cleanup; the host keeps running with no client (window of at most one 100 ms poll)."
+    }
+  ],
+  "verdict": "clean"
+}

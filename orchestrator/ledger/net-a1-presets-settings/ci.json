@@ -1,0 +1,10 @@
+{
+  "name": "net-a1-presets-settings",
+  "head": "248286a9e18ef9696c199aff29e1517091a5677a",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

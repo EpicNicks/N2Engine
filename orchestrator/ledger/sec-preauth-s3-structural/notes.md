@@ -1,0 +1,15 @@
+Accepted by the user 2026-10-13:
+- Busy grace: an authenticated client waits up to 1 s (DefaultBusyGrace) for an ending session before Busy; not in the plan
+- Handshake bucket is off in the class and on in N2EditorHost (existing fake-peer fixtures make 6-12 connections from one address per second)
+- No-token host: second connection waits in a worker with no limit, holding a slot (a peer closing while waiting is unnoticed until hand-off)
+- Fake peers via SetPeerAddressProvider, not SetAcceptedSocketHook
+- Added test seams: SetAdmissionSummaryInterval, SetPreHandoffHook, PreAuthRefusedConnections/BusyRefusals/SessionHandoffs/PreAuthSlotsInUse/PreAuthAdmittedConnections
+- Refused/unparsable-Hello warning keeps the bounded wait (PostLogAndWait, 500 ms) so it precedes the refusal, but only for lines the coalescer admits (at most burst per window); suppressed ones neither log nor wait
+- Worker does not RecordSuccess; the replay does (Busy client does not clear address failures)
+- Two existing tests changed: EditorTlsServerTest slow-handshake sync (no pre-auth 'Editor connected' line) and PreHelloAccountingTest.EveryWayOutWithoutAHelloCountsAsAFailure (concurrent counting)
+- Behaviour change documented: second authenticated client gets plain Error Busy instead of waiting in the backlog
+- EINTR/WSAEINTR on a wait is retried (decided and fixed)
+- Scope item 9: pre-auth failure lines coalesced per KIND (global, not per address) with a burst of 10 per 10 s real time then one summary line, not strictly once per window (existing log tests count up to 7 refused Hellos in a row; the first lines operators look for stay)
+- Rate-limiter threshold lines, the Busy line and rare unexpected-error lines are not coalesced; a summary pending at Stop is lost with the closed queue
+- Added test seams: SetPreAuthLogCoalescing/GetPreAuthLogCoalescing, PreAuthLogLinesSuppressed, SetStopHook(StopReport: slots after joins/after cleanup, leftovers, join time)
+- Stop test changed: 1 s bound (was 3 s) and slot accounting read via the stop hook (the old PreAuthSlotsInUse()==0 after Stop could not fail); new TLS Stop test with a worker mid-handshake

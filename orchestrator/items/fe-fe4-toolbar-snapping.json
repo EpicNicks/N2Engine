@@ -1,0 +1,27 @@
+{
+  "closes": null,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "requiresDocs": false,
+  "repo": "frontend",
+  "allowedPaths": [
+    "^engine-ref\\.txt$",
+    "^package\\.json$",
+    "^package-lock\\.json$",
+    "^README\\.md$",
+    "^src/",
+    "^scripts/"
+  ],
+  "name": "fe-fe4-toolbar-snapping",
+  "branch": "feat-fe-fe4-toolbar-snapping",
+  "title": "Electron UI FE4: viewport toolbar (tool modes, local/world space, pivot, snapping toggles and increments) with prefs persistence and the shortcuts",
+  "issue": "Roadmap C:/Method Notes Obsidian/orchestrator/proposals/electron-ui-roadmap.md section 4 (Candidate 1: FE4 = viewport toolbar, modes, space/pivot, snapping settings, shortcuts), decisions U3 (shortcuts: W/E/R, Q select-only, X local/world, Z pivot/center) and U4 (snap defaults: translate 0.5, rotate 15 degrees, scale 0.1, RELATIVE (delta) snapping by default with an absolute-grid option for translate only, Ctrl inverts the snap toggle). FE3 (merged) put the tool mode on ViewportController with keymap actions gizmo.translate/rotate/scale/none and a text tool label, uses Ctrl snapping with constants (15 degrees, ratio step 0.1, move 0.5), world-axis rotate rings and local-axis scale handles: read FE3's code and README first (viewport-controller.ts, viewport-drag.ts, viewport-gizmo.ts, viewport-keys.ts, keymap.ts). SCOPE: (1) a viewport TOOLBAR (a registered part of the viewport panel, not a new panel) with: tool mode buttons (select/translate/rotate/scale, showing the active one, tooltips with the CURRENT chords from the keymap), space toggle (world/local) and pivot toggle (pivot/center) as the roadmap describes (implement what the roadmap lists for FE4; the translate gizmo's axes follow the space: local axes use the primary's rotation; rotate rings follow the space too if the roadmap says so), snap toggles per mode with increment inputs (translate, rotate, scale) and the relative/absolute translate option; Ctrl inverts the active snap during a drag; (2) keymap actions gizmo.space (X) and gizmo.pivot (Z) registered with their defaults (viewport scope), replacing the FE3 tool strip text label (keep it accessible); (3) settings persist through the F2 prefs store: user-scope for the toolbar choices per the roadmap (check whether snapping increments are user- or project-scope there), validated, safe to corrupt storage; (4) all maths for space/pivot/snapping in framework-free tested files: snap rounding with floating error, relative vs absolute translate, angle snap across wrap, scale ratio step, local-axis translate drags, pivot-center of a multi-selection (bounds centre via GetEntityBounds as the roadmap says), DOM tests for the toolbar (buttons, keyboard, persistence, disabled when the host is read-only), keymap tests; keep every existing test green; README viewport section updated and verified against the code. Frontend rules: requiresDocs is false (README only); run npm run typecheck and npm test locally before every push; no token in logs/storage; NEVER run taskkill or kill other processes; keep changes inside the files your lane owns (other frontend items are in flight: README.md and keymap/panel registrations will collide mechanically: keep each as a small separate hunk; the repo README is LF); no engine/protocol change unless this item says so. Read the named design sections and the decisions (all ACCEPTED by the user) FIRST. Merged and usable: F1 panel registry/layout, F2 prefs store + keymap, FE3 rotate/scale gizmos (mode on ViewportController, W/E/R/Q keymap actions), FE5 inspector local transform, FE6/FE7 filters, FE8 history panel, MCP1 n2-mcp (mcp/), the protocol 1.14.0 typed client.",
+  "acceptance": [
+    "Viewport toolbar with tool modes, local/world space, pivot/center and snap toggles/increments (relative default, absolute translate option, Ctrl inverts)",
+    "Keymap actions for space and pivot; prefs persistence; the FE3 label replaced accessibly",
+    "Maths unit-tested; DOM tests; typecheck, build, tests and frontend CI green; README updated"
+  ],
+  "reviewer": "opus",
+  "notes": "Reviewer: snap/space/pivot maths correctness and edge cases, drags still one edit group with cancel restoring, Ctrl inversion, read-only disabled, prefs validation, keymap integration, no regression of FE3 behaviour, tests meaningful, mediums count. Unverified: feel in a real viewport."
+}

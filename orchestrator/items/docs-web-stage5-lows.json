@@ -1,0 +1,21 @@
+{
+  "name": "docs-web-stage5-lows",
+  "repo": "engine",
+  "branch": "docs-web-stage5-lows",
+  "title": "Docs: correct the three accuracy lows left in docs/web-build.html after web stage 5 (test counts, cold-cache minutes, stage-6 threading statement)",
+  "closes": null,
+  "issue": "Docs-only item. Three known inaccuracies from the review of merged PR #184 (web stage 5) in docs/web-build.html, each to be verified against the CODE, CI configuration and measured CI logs before editing: (1) the 'The PhysX tests under node' section states engine_tests counts (1504 tests: 1490 passed, 14 skipped) that do not match the CI run at that head (1529 passed, 14 skipped, 1543 in all): do NOT hard-code counts that go stale: rewrite so the claim is about what is true and stable (e.g. which PhysX tests run under node and which are skipped and why) and, if counts are kept, say they are examples as of PR #184 and verify them from a current web CI log (use the wrapper: bash \"C:/Method Notes Obsidian/gh-epicnicks.sh\" api repos/EpicNicks/N2Engine/actions/... for the latest master web job; be gentle with the API, no log downloads beyond one job); (2) the design-decision callout says the cold-cache PhysX source build takes 'about four minutes of one job' but the CI bullet above it measures 102 s of PhysX build, 122 s of configure and 'about 2 minutes more on a cold cache': read both, check the workflow's cache key and the CI timings, and make the two statements agree and be true; (3) the page says a threaded stage-6 artifact 'would not define the macro' (N2ENGINE_SINGLE_THREADED), as if that alone would bring the PhysX workers back: in fact the web PhysX libraries are built WITHOUT -pthread and neither the .pin stamp nor the CI cache key records threading, so a threaded artifact needs a separately built, separately keyed threaded PhysX: say that (verify in cmake/PhysXWeb.cmake, cmake/PhysXWebPin.cmake, scripts/web-build-physx.sh and the workflow). Keep edits minimal, re-read the HTML (well-formed), no other changes. Also check docs/testing.html and docs/physics.html for the same stale counts or claims and fix only verifiably wrong text.",
+  "allowedPaths": [
+    "^docs/"
+  ],
+  "acceptance": [
+    "The three inaccuracies corrected and verified against code/CI; no stale hard-coded counts",
+    "HTML well-formed; docs-only; all checks green"
+  ],
+  "requiresDocs": true,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "reviewer": "sonnet",
+  "notes": "Reviewer: every changed sentence is true against the code and the CI configuration/logs, no stale numbers introduced, HTML well-formed, nothing else changed, mediums count."
+}

@@ -1,0 +1,24 @@
+{
+  "closes": null,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "requiresDocs": true,
+  "name": "sec-audit11-followup-lows",
+  "repo": "engine",
+  "branch": "fix-sec-audit11-followup-lows",
+  "title": "Audit 11 follow-ups: path redaction left-boundary bypass after \":\" or \".\" , escaped and URL-encoded separators, and the docs line about the working folder",
+  "issue": "Follow-up to merged #192 (editor-server/src/ClientText.cpp, tests/editor-server/ClientTextTests.cpp, docs/logging-and-editor.html 'net under the messages'; C:/Method Notes Obsidian/orchestrator/proposals/editor-host-security-audit-2026-10-15.md F10). The user accepted these as follow-ups. Read the #192 review in C:/Method Notes Obsidian/orchestrator/ledger/sec-audit11-sanitised-errors-adminonly-luaseed/review.json first. FIX: (1) StartsInsideName treats a host root right after ':' or '.' (or a slash run that is not file:// or the Windows long-path prefix) as 'inside a name' and leaves it unredacted, so 'open:C:\\\\proj\\\\assets\\\\a.txt' or 'key:/srv/game/x' can reach a remote client: tighten the rule so it only protects a root that is a path SEGMENT of the client's OWN res:// or user:// path (preceded by 'res://' or 'user://' + name chars etc.), and redacts a real host root after ':' '.' '=' quotes brackets and spaces; keep the earlier fix (a root is never replaced inside a client's own res:// path) with its test; (2) normalise escaped separators before matching: doubled backslashes (JSON-escaped 'C:\\\\\\\\proj'), forward/back mixed, and percent-encoded separators/roots (%5C, %2F, %3A) so the safety net matches them; redact to the same labels; (3) docs/logging-and-editor.html: the safety-net section must list exactly the roots the code uses (working folder only when it is not a drive/file-system root) and describe the boundary rule; (4) TESTS: negative controls for each bypass above (they must fail on the old code), the earlier left-boundary and drive-root tests stay green, a property-style test that no configured root survives in output for a corpus of wrappers (quotes, brackets, 'in X', 'file X', JSON-escaped, URL-encoded). Comment/code only inside ClientText.* and its tests plus the docs. Nothing builds locally for the engine; CI (11 checks) is the test; expect fix rounds; re-read every edit twice (CMake/YAML/C++ syntax); verify every docs sentence against the CODE; no attribution lines on commits; GitHub only via the wrapper.",
+  "allowedPaths": [
+    "^editor-server/",
+    "^tests/",
+    "^docs/"
+  ],
+  "acceptance": [
+    "Real host roots are redacted after \":\" \".\" \"=\" quotes and brackets; only the client's own res://user:// path segments are protected",
+    "Doubled/mixed/percent-encoded separators matched",
+    "Negative-control tests fail on the old code; docs true; all checks green"
+  ],
+  "reviewer": "sonnet",
+  "notes": "Reviewer: try to bypass the redaction with realistic wrappers; the protection of a client's own res:// path is not abused to hide a host root; normalisation cannot turn client text into a false positive that corrupts valid client paths; tests meaningful; mediums count."
+}

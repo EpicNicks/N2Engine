@@ -70,6 +70,13 @@ namespace N2Engine::Network
             Fail("the connection to the server failed (it timed out, or the server broke the protocol)");
         }
 
+        // The acknowledgement of the state applied this update (one per update, however many messages arrived)
+        if (_connection != nullptr && _state == NetworkClientState::Joined && !_disconnectPending &&
+            _replicator.AckPending())
+        {
+            (void)_connection->SendUnreliable(Encode(_replicator.TakeAck()));
+        }
+
         // Out while the connection is up, a refusal's reject included
         if (_connection != nullptr && _serverPeer != N2Net::kInvalidPeer &&
             (Live() || _state == NetworkClientState::Refused) && !_disconnectPending)
@@ -156,7 +163,22 @@ namespace N2Engine::Network
         }
         if (channel != N2Net::MessageChannel::ReliableOrdered)
         {
-            Fail("the server sent a message on the unreliable channel, which the world protocol does not use");
+            // The one thing the server sends on the unreliable channel is a state update
+            if (message.empty() || message[0] != kStateUpdateType)
+            {
+                Fail("the server sent a message on the unreliable channel that is not a state update");
+                return;
+            }
+            if (_state != NetworkClientState::Joined)
+            {
+                // Until the join state is in, the client may lack the objects the update is about; the server sends
+                // what is still needed again, because nothing was acknowledged
+                return;
+            }
+            if (_replicator.OnStateUpdate(_world, message) == ClientReplicator::Result::Malformed)
+            {
+                Fail("the server sent a malformed state update");
+            }
             return;
         }
 
@@ -272,6 +294,7 @@ namespace N2Engine::Network
         {
             ++_joinDespawns;
         }
+        _replicator.ForgetObject(despawn.id);
         const NetworkWorld::DespawnResult result = _world.Despawn(despawn.id);
         if (!result.found)
         {

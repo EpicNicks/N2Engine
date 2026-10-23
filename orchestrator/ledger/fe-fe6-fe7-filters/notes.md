@@ -1,0 +1,12 @@
+Accepted by the user 2026-10-13:
+- Source filter uses the existing entry source (host/game/editor) via a registry, not a log-line prefix: the engine has no prefix convention and the roadmap lists Host/Game/Editor; unknown ids count as host (label Host), not 'engine'
+- Level counts now follow the source and text filters (previously all lines); level toggles do not affect them
+- Invalid regex shows an inline message and filters nothing (judgement call); regex capped at 200 chars and 4096 input chars
+- Both a tree and a flat List mode implemented, as the roadmap toggle says; Ctrl+F added as keymap action hierarchy.search (keymap test list updated)
+- Hierarchy panel content made a flex column with the list as the scroller so the search bar stays fixed (index.html css)
+- Under a search Right/Left only navigate shown rows (no expand/collapse); creating an object clears the search
+- No docs/ change: that dir is engine-side and not in the allowed paths (README only, requiresDocs false)
+- ConsoleEntry.source widened from a union to string
+- Regex ReDoS: patterns with a repeated group holding a repeat (e.g. (a+)+) are refused with an inline error (heuristic, not a full guarantee), and the regex switch is never persisted as on
+- Selection is revealed (ancestors expanded) when the search ends, not on each click, so the expanded set stays untouched while searching
+- README CRLF restored (diff now ~19 lines)

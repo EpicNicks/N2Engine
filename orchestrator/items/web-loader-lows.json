@@ -1,0 +1,25 @@
+{
+  "name": "web-loader-lows",
+  "repo": "engine",
+  "branch": "fix-web-loader-lows",
+  "title": "Web loader: cancel the first response body on the streaming re-fetch; wrap only real module errors as moduleError (two lows from the stage 3 review)",
+  "closes": null,
+  "issue": "Two LOW findings from the review of merged PR #174 (web stage 3) in web/n2-loader.js; fix both, add node tests, touch nothing else. Read web/n2-loader.js, the existing node tests for the web player (find them; the CI web job runs them) and docs/web-build.html first. (1) The re-fetch after a failed streaming instantiate never cancels the first body: around n2-loader.js line ~229 the streaming path wraps the response (wrapped.body.locked is always true afterwards, so cancelling the original body is impossible). Fix: set an 'abandoned' flag when the streaming attempt fails and the loader falls back to re-fetching, and call controller.error() (or otherwise cancel the wrapping ReadableStream so the underlying reader is released and the network body is cancelled); no dangling reader, no double count in the progress callback, and the fallback result unchanged. (2) fromBytes ~line 205 wraps EVERY WebAssembly.instantiate rejection as moduleError (the user is told 'different builds, reload'), so an out-of-memory RangeError gets the wrong message. Wrap as moduleError ONLY when the error is a real module error (WebAssembly.CompileError / LinkError, or the loader's isModuleError predicate if one exists: find it) and let other errors (RangeError/OOM, network) propagate with their own correct user-facing message; check how the player/shell displays errors so an OOM gets a sensible message (add a short 'out of memory, close other tabs and reload' style message only if the shell already has a place for per-kind messages; do not redesign error UI). Tests: node tests with mocked fetch/WebAssembly/streams proving (1) the first body is cancelled/errored on re-fetch exactly once and the fallback still loads, (2) CompileError/LinkError -> moduleError, RangeError -> not moduleError; the tests must fail on the old code. Docs: only if docs/web-build.html describes the old behaviour; verify against the code. Nothing builds locally for the engine; the CI web job (node tests) is the test; you may run node locally for the web tests if node is available. Keep the change small.",
+  "allowedPaths": [
+    "^web/",
+    "^docs/web-build\\.html$",
+    "^tests/web/",
+    "^scripts/"
+  ],
+  "acceptance": [
+    "The first body is cancelled on the streaming re-fetch; fallback unchanged; tested",
+    "Only real module errors become moduleError; OOM RangeError propagates correctly; tested",
+    "All 10 checks green"
+  ],
+  "requiresDocs": false,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "reviewer": "sonnet",
+  "notes": "Reviewer: stream cancellation correctness (no double cancel, no unhandled rejection), error classification, tests are meaningful (fail on the old code), nothing else changed."
+}

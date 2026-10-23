@@ -1,0 +1,10 @@
+{
+  "name": "webgpu-g3b-lit-blend-text",
+  "head": "34e2bcc5e4d169bf309cc0ec32614f1c07ed5d51",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

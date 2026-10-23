@@ -1,0 +1,7 @@
+{
+  "name": "editor-tls",
+  "decision": "hold",
+  "reasons": [
+    "a token or private key appears in the diff"
+  ]
+}

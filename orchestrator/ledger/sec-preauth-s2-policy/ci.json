@@ -1,0 +1,10 @@
+{
+  "name": "sec-preauth-s2-policy",
+  "head": "976696011cb1d6b31170168fc2d4c1cc9fccfb9a",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

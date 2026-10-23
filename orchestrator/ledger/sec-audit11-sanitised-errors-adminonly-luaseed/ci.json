@@ -1,0 +1,10 @@
+{
+  "name": "sec-audit11-sanitised-errors-adminonly-luaseed",
+  "head": "9b77519b01007cbdafc5638521dfc585ac146b28",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

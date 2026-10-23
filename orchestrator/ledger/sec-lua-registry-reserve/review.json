@@ -1,0 +1,27 @@
+{
+  "head": "0ba2adba5b3ef778380389ce92779a9da93df2c0",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "docs/scripting-lua.html",
+      "line": 159,
+      "summary": "Main Registry references paragraph still out of sync with the code and the new callout: it says GuardedAccess 'reserves 16 slots first' (now a per-body count, 2 for method lookup/HasMethod/nil-ing), says 'No path of the engine can do that now' and 'What is still not protected is what the paragraph above lists', while the callout (line ~164) now lists binding references (require, make_object in GetComponent/AddComponent, Subscribe/AddOnClick arguments) that can still terminate on web/MSVC Debug; the duplicated ReleaseScript sentence from the previous review is still there.",
+      "scenario": "A reader of the main paragraph concludes no engine path can std::terminate at the cap on the web build and that every guarded body reserves 16 slots; both are contradicted by the callout and by LuaComponent.cpp (GuardedAccess(..., 2))."
+    },
+    {
+      "severity": "low",
+      "file": "tests/engine/scripting/LuaRegistryReserveTests.cpp",
+      "line": 472,
+      "summary": "AMetamethodThatRetiresTheInstanceWhileTheFieldsAreListedIsSurvived does not pin the regression it targets: EXPECT_FALSE(fields.empty()) is always true (DescribeFields always adds the scriptUUID field), and the old nullptr crash is only reached if Lua's lua_next visits 'a' before 'b', which is unspecified hash order.",
+      "scenario": "On a build where 'b' is visited before 'a', the old code (lua_gettop(_scriptInstance.lua_state()) after the retire) would also pass this test, because no definition is read after the retire; a future regression of the valid() check would go unnoticed. Asserting the field names, or adding more definitions after the retiring one, would make it deterministic."
+    },
+    {
+      "severity": "low",
+      "file": "docs/testing.html",
+      "line": 160,
+      "summary": "The LuaRegistryReserveTests.cpp row does not mention the new retire-during-DescribeFields test (the dev's own unverified list says the row was not added).",
+      "scenario": "docs/testing.html lists every scenario of LuaRegistryReserveTest except AMetamethodThatRetiresTheInstanceWhileTheFieldsAreListedIsSurvived, so the docs are out of sync with the test sources."
+    }
+  ],
+  "verdict": "fixes-needed"
+}

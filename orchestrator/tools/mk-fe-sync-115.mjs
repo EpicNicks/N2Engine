@@ -1,0 +1,21 @@
+import fs from 'node:fs'
+const D = 'C:/Method Notes Obsidian/orchestrator/items/'
+const FE = ['^engine-ref\\.txt$', '^package\\.json$', '^package-lock\\.json$', '^README\\.md$', '^src/', '^scripts/', '^mcp/']
+const it = {
+  name: 'frontend-protocol-1-15',
+  repo: 'frontend',
+  branch: 'feat-protocol-1-15-invoke',
+  title: 'Frontend: sync to protocol 1.15.0 (InvokeMenuItem 0x82, extensionOutput event, staleUiRevision and editGroupOpen error codes): typed client support only, no UI',
+  closes: null,
+  issue: `Engine PR #202 (E-X3, merged) shipped protocol 1.15.0 (additive minor on 1.14.0): command InvokeMenuItem 0x82 (Write class; request itemId string, selection (entity UUID array, bounded), params JSON, uiRevision u32; response ExtensionResult JSON {message?, select?[], warnings?[]} plus the edit result (revision, savedRevision, canUndo, canRedo, label)), the EditorEvent kind extensionOutput {extension, level, message} (Admin-only events), new errorCodes staleUiRevision and editGroupOpen (plus the 1.14.0 extensionsDisabled/extensionFailed/extensionFaulted), 0x83 still reserved. Read the engine repo (C:/Method Notes Obsidian/N2Engine, READ-ONLY): editor-server/protocol/protocol.json, docs/editor.html (the 'running a menu item' section), docs/logging-and-editor.html (1.15.0 protocol section), docs/scripting-lua.html, and the merged frontend 1.14.0 client work in src/protocol (engine-client.ts typed wrappers for ListEditorExtensions/GetEditorUi/ReloadEditorExtensions, error-code mapping, extensionsChanged event, capability helper) FIRST. SCOPE (typed client support ONLY; the Tools menu, FormDialog, trust prompt, launcher flag and the admin Extensions dialog are the NEXT item E-X4: do NOT build UI): (1) bump engine-ref.txt to the current engine master commit and run \`npm run sync-protocol\` so src/protocol/protocol.generated.ts and test-vectors.json are regenerated, NEVER hand-edited (the CI 'Generated protocol matches the pinned engine' check must stay green); fix tests asserting the protocol version (1.14.0 -> 1.15.0: engine-client-busy.test.ts, mcp/test/tools-read.test.ts and any others: grep for '1.14.0'); (2) engine-client: typed wrapper invokeMenuItem(itemId, selection, params, uiRevision) returning a typed ExtensionResult (parse defensively: unknown fields ignored, missing defaulted, bad shape => typed error, never a throw into the UI), typed errors for staleUiRevision and editGroupOpen distinct from forbidden/readOnly/busy/extension* (follow how the 1.14.0 codes are mapped), the extensionOutput event in the event model (an observable log store another item can subscribe to: bounded ring, level and extension fields, strings treated as UNTRUSTED text: never HTML), a capability gate (old hosts without 'editorExtensions' or a 1.14 host: invokeMenuItem reports 'unsupported' without sending); (3) tests: node unit tests with the fake host fixtures for the wrapper, both new error codes, the event, old-host behaviour and defensive parsing; keep every existing test green; typecheck, build and tests run locally before pushing; (4) README: the Protocol section (1.15.0) and a short note that the Tools menu UI is not built yet; verify against the code. Rules: requiresDocs false; no token in logs/storage; NEVER run taskkill; no UI changes; README additions as separate small hunks (other frontend PRs are in flight and README collides mechanically); your FINAL message must be a real report (PR number, head sha, deviations).`,
+  allowedPaths: FE,
+  acceptance: ['sync-protocol produces no diff against engine-ref.txt (CI passes); version assertions updated', 'Typed invokeMenuItem wrapper, the two new error codes, extensionOutput event store and capability gate; old hosts unaffected', 'Defensive parsing tested; no UI added; typecheck, build, tests and frontend CI green'],
+  requiresDocs: false,
+  allowProtocol: true,
+  gate: null,
+  approved: true,
+  reviewer: 'sonnet',
+  notes: 'Reviewer: no hand edits to generated files, old-host path sends nothing, defensive parsing cannot throw into the UI, extensionOutput text never reaches HTML unescaped, error codes mapped distinctly, no UI files touched, tests meaningful, mediums count.',
+}
+fs.writeFileSync(D + it.name + '.json', JSON.stringify(it, null, 2) + '\n')
+console.log('ok')

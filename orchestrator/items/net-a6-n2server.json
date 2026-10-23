@@ -1,0 +1,33 @@
+{
+  "closes": null,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "requiresDocs": true,
+  "repo": "engine",
+  "name": "net-a6-n2server",
+  "branch": "feat-net-a6-n2server",
+  "title": "Netcode A6: N2Server headless dedicated-server executable (ready line, tokens file, join-token CLI)",
+  "issue": "Design: C:/Method Notes Obsidian/orchestrator/proposals/netcode-runtime-design.md: row A6 of the stage table (line ~294), the N2Server paragraph (line ~141: --project, --scene, --bind/--port, ready line on stdout like the editor host [precedent docs/logging-and-editor.html ~line 299], --tokens-file, --max-clients, --relay RESERVED for C3, physics GPU forced off, no audio, no renderer), join tokens (line ~93), decisions N5, N11 (new executable, not a mode of N2EditorHost or lua_project), N12. Read the merged A1-A5 code first (n2net, n2security incl. TokenTable/join tokens, SecureTransport, UdpTransport, the A5 handshake) and how lua_project/the editor host start up and print their ready line. SCOPE: (1) new executable N2Server (CMake target, Linux + Windows, not in the web build): arguments --project, --scene, --bind, --port, --tokens-file, --max-clients, --log-*, same argument-parsing conventions as the other hosts; headless: renderer NONE, audio off, physics GPU forced off; loads the project and scene, runs the fixed-tick loop headless, listens on a SecureTransport over UdpTransport using the A5 handshake, FAIL-CLOSED bind rules like the editor host (refuse a non-loopback bind without a tokens file or explicit opt-in flag, mirroring the editor host's behaviour: read how it does it), prints the ready line on stdout once listening, clean shutdown on SIGINT/SIGTERM/console close; (2) the join-token generator CLI that A5 deferred to A6 (generate a token with a role player|spectator|admin, hash it like the editor's TokenTable, append to the tokens file; print the secret once, never log it; file permissions where the OS supports it); (3) at this stage the server accepts authenticated connections, enforces max-clients and the pre-auth/rate limits already in n2security, and logs connect/disconnect; NO replication or gameplay networking yet (that is track B); --relay is parsed but rejected as not implemented; (4) tests: unit tests for argument parsing and the token CLI; a smoke test that starts N2Server on loopback with a tokens file, waits for the ready line, connects a test client through the A5 handshake, then stops it, wired into ctest and the CI Linux leg (and Windows if the existing test harness runs executables there); (5) docs: a new docs/n2server.html (or a section in docs/netcode.html: pick what fits the docs layout) with flags, ready line, tokens, security notes, Linux service/Docker hints reusing the editor host's docs; update the docs/index.html design-decision table and docs/testing.html; verify every sentence against the code. Token handling is security-critical: never print or log secrets, compare in constant time (reuse TokenTable). Nothing builds locally for the engine; CI (12 checks) is the test; expect fix rounds; re-read every edit twice (CMake/YAML/C++ syntax); NEVER call a stateful function (RNG etc.) twice in one argument list or operator expression (unspecified evaluation order); NEVER run taskkill or kill other processes; verify every docs sentence against the CODE; no attribution lines on commits or PRs (no Co-Authored-By, no Generated-with footer); GitHub only via the wrapper; before your final push merge origin/master into the branch if it moved; your FINAL message must be a real report (PR number, head sha, what you did, deviations), never a single word.",
+  "allowedPaths": [
+    "^engine/",
+    "^net/",
+    "^tests/",
+    "^docs/",
+    "^CMakeLists\\.txt$",
+    "^cmake/",
+    "^\\.github/workflows/",
+    "^tools/",
+    "^n2server/",
+    "^apps/",
+    "^server/"
+  ],
+  "acceptance": [
+    "N2Server builds on Linux and Windows, headless, ready line, clean shutdown",
+    "Fail-closed bind and tokens file; join-token CLI prints the secret once and stores a hash",
+    "Smoke test: start, handshake a test client, stop, in CI; --relay rejected as not implemented",
+    "Docs verified against code; CI green"
+  ],
+  "reviewer": "opus",
+  "notes": "Reviewer (security): fail-closed bind, no secret in logs/args/ready line, tokens file handling and permissions, constant-time compare via TokenTable, max-clients and pre-auth limits enforced, shutdown paths, no accidental listening on 0.0.0.0 by default."
+}

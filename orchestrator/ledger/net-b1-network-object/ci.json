@@ -1,0 +1,10 @@
+{
+  "name": "net-b1-network-object",
+  "head": "f3c1838a3bd4eb9f8a9a56d1195f3ad63e9488c3",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

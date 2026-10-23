@@ -1,0 +1,10 @@
+{
+  "name": "fe-fe8-history-panel",
+  "head": "0557f63ed05f3d56900376c6e652c766a7f320e6",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "CI:success"
+  ],
+  "failures": []
+}

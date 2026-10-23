@@ -1,0 +1,11 @@
+Accepted by the user 2026-10-13:
+- New stations are a second list (scripts/DemoStations.lua, keys 8/9/0, HUD 'Demo N/3') not stations 8-10 of SmokeStations.lua, because LuaProjectSceneTest.SmokeHudShowsTheFirstStation (tests/engine, outside allowed paths) pins 'Station 1/7'.
+- Station 3 text effects already existed (outline/shadow/glow/softness); the new text station shows the same effects as AddEffectPass passes plus pass-order before/after and an order -300 pass behind the settings shadow.
+- Station 4 world canvas already existed; the new one adds trigger-vs-solid collider buttons (BoxCollider SetIsTrigger exists in Lua).
+- Changing the backend (K) rebuilds the emitters because a system reads its backend only at start; Auto->CPU->PhysX sign says 'CPU (PhysX asked: fell back)' when PhysX is not active.
+- No CI change and no new test: the existing LuaProjectSceneTest already runs scene.lua headless (now building the new stations); tests/lua_project has no CMake wiring and tests/engine is out of scope, so ParticleStation key handling is not exercised by CI.
+- physics.gpu left at default off in project.n2proj; docs say to set settings.physics.gpu to auto to enable it.
+- Merged master (PR #129): emitters now SetPbdMaterial Water/Sand/Smoke (plus the CPU tunings); docs/testing.html no longer says PhysX backend is unmerged or that there is no preset field.
+- Added a BoxCollider to the Particles Ground cube in scene.lua because the PhysX backend ignores the ground plane field and would let particles fall through.
+- fellBack in ParticleStation now ignores a nil GetActiveBackend (system not started yet).
+- Review medium fixed after the review: ParticleStation.lua added to BehaviourScriptsLoad (tests/engine/scripting/LuaSceneTests.cpp, one line; the allowed paths were widened to ^tests/engine/ for it). Not covered by CI: CycleBackend and the key handlers (would need a Lua method call or simulated key input); OnUpdate does run once headless.

@@ -1,0 +1,36 @@
+{
+  "name": "lua-ex1-sandbox-profiles",
+  "head": "a4e83e58e128afe0c50d71742cb81c224a8ee9bc",
+  "done": true,
+  "allGreen": false,
+  "runs": [
+    "Tests:failure"
+  ],
+  "failures": [
+    "[linux (Release, x86_64, Clang)] ",
+    "[  FAILED  ] LuaSandboxTest.TableMoveInsertAndRemoveOverAHugeRangeEndAsABudgetTrip (6 ms)",
+    "[  FAILED  ] 1 test, listed below:",
+    "[  FAILED  ] LuaSandboxTest.TableMoveInsertAndRemoveOverAHugeRangeEndAsABudgetTrip",
+    "[linux (Release, x86_64, GCC 14)] ",
+    "[  FAILED  ] LuaSandboxTest.TableMoveInsertAndRemoveOverAHugeRangeEndAsABudgetTrip (8 ms)",
+    "[  FAILED  ] 1 test, listed below:",
+    "[  FAILED  ] LuaSandboxTest.TableMoveInsertAndRemoveOverAHugeRangeEndAsABudgetTrip",
+    "[linux (Release, arm64, Clang)] ",
+    "[  FAILED  ] LuaSandboxTest.TableMoveInsertAndRemoveOverAHugeRangeEndAsABudgetTrip (8 ms)",
+    "[  FAILED  ] 1 test, listed below:",
+    "[  FAILED  ] LuaSandboxTest.TableMoveInsertAndRemoveOverAHugeRangeEndAsABudgetTrip",
+    "[windows (Debug, PhysX OFF, FreeType ON, ufbx ON, TLS ON)] ",
+    "[  FAILED  ] LuaSandboxTest.TableMoveInsertAndRemoveOverAHugeRangeEndAsABudgetTrip (19 ms)",
+    "[  FAILED  ] 1 test, listed below:",
+    "[  FAILED  ] LuaSandboxTest.TableMoveInsertAndRemoveOverAHugeRangeEndAsABudgetTrip",
+    "[windows (Release, PhysX ON)] ",
+    "[  FAILED  ] LuaSandboxTest.TableMoveInsertAndRemoveOverAHugeRangeEndAsABudgetTrip (8 ms)",
+    "[  FAILED  ] 1 test, listed below:",
+    "[  FAILED  ] LuaSandboxTest.TableMoveInsertAndRemoveOverAHugeRangeEndAsABudgetTrip",
+    "[windows (Debug, PhysX ON)] ",
+    "[  FAILED  ] LuaSandboxTest.TableMoveInsertAndRemoveOverAHugeRangeEndAsABudgetTrip (26 ms)",
+    "[  FAILED  ] 1 test, listed below:",
+    "[  FAILED  ] LuaSandboxTest.TableMoveInsertAndRemoveOverAHugeRangeEndAsABudgetTrip",
+    "[web (Emscripten, dev profile, node tests)] "
+  ]
+}

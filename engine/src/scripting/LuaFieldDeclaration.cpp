@@ -18,7 +18,7 @@ namespace N2Engine::Scripting
     }
 
     FieldInfo MakeLuaFieldInfo(const std::string &name, const std::string &declaredType,
-                               const LuaDefaultKind defaultKind)
+                               const LuaDefaultKind defaultKind, const bool replicated)
     {
         FieldInfo info;
         info.name = name;
@@ -83,6 +83,7 @@ namespace N2Engine::Scripting
             info.typeName = "Vector3";
         }
         // else Json (the FieldInfo's own default): whatever the data holds
+        info.replicated = replicated && IsLuaReplicableKind(info.kind);
         if (info.kind == FieldKind::Int)
         {
             // Stored as a JSON integer and injected as a Lua integer

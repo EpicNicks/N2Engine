@@ -1,0 +1,7 @@
+{
+ "head": "e84801bed89f21e8c0e31169e94fb56c510afe34",
+ "findings": [
+  {"severity": "low", "note": "README.md in the merge commit has LF line endings; both parents and master are CRLF, so the PR diff against master shows the whole file as changed (925 lines) although the content delta is only the MCP section. Content verified: nothing from master dropped (ignoring EOL, only the lines master itself changed differ), no conflict markers. Cosmetic diff noise, not blocking."}
+ ],
+ "verdict": "clean"
+}

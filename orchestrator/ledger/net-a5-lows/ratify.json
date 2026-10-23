@@ -1,0 +1,7 @@
+{
+  "name": "net-a5-lows",
+  "decision": "merge",
+  "reasons": [],
+  "relaxed": "behind master by 27 file(s), no code overlap with the PR's files, trial merge clean",
+  "merged": true
+}

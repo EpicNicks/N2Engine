@@ -15,6 +15,7 @@
 
 #include "engine/network/NetworkFingerprint.hpp"
 #include "engine/network/NetworkId.hpp"
+#include "engine/network/NetworkReplication.hpp"
 #include "engine/network/NetworkWorld.hpp"
 #include "engine/network/PrefabTable.hpp"
 #include "engine/network/n2net/Connection.hpp"
@@ -52,6 +53,14 @@ namespace N2Engine::Network
         std::uint64_t sceneHash = 0;
         /// The prefabs a spawn may name, frozen for this session (PrefabTable::Capture)
         PrefabTable prefabs;
+        /// How often the server sends the replicated fields (netcode stage B2), in times per second: the setting
+        /// network.authoritative.snapshotRate in a game. 0 turns state replication off; at most 240.
+        std::uint32_t stateSendRateHz = 30;
+        /// More state acknowledgements than this from one client in one second is a violation and the client is dropped.
+        /// A client sends at most one per update it applied state in, so this is a ceiling, not a rate anyone needs: above the most messages a client is sent in a second (4 per tick at 240 ticks).
+        std::uint32_t maxClientAcksPerSecond = 1024;
+        /// The bounds of the state messages (see ServerReplicationOptions)
+        ServerReplicationOptions replication;
     };
 
     /// Counters since the server was made. All are data: nothing here throws.
@@ -109,9 +118,14 @@ namespace N2Engine::Network
      * Single-threaded; call Update every frame with a monotonic microsecond clock.
      *
      * Authority: only this object creates or destroys anything. A client can send nothing but an accept or a reject,
-     * once each; a client that sends any other message (a Spawn and a Despawn included), a malformed one, an unexpected
-     * channel, or more than maxClientMessagesPerSecond, is dropped and nothing it sent has any effect. Spawn and Despawn
-     * are methods of this class for the game's server code, not messages anyone can send to it.
+     * once each, on the reliable channel, and state acknowledgements on the unreliable one; a client that sends any other
+     * message (a Spawn and a Despawn included), a malformed one, an unexpected channel, or more than
+     * maxClientMessagesPerSecond (acknowledgements: maxClientAcksPerSecond), is dropped and nothing it sent has any
+     * effect. Spawn and Despawn are methods of this class for the game's server code, not messages anyone can send to it.
+     * The same holds for field values (netcode stage B2): the server reads the replicated fields of its own objects and
+     * sends them (stateSendRateHz times a second, on the unreliable channel, as the difference to what each client
+     * acknowledged: see ServerReplicator); nothing a client sends is ever read as a value, so a client cannot write the
+     * replicated field of any object, its own included.
      *
      * The transport supplies authenticated peers (over an N2Server it is a SecureTransport: a peer exists once its
      * handshake succeeded). The server must not outlive the transport or the world, and the world must not be destroyed
@@ -165,6 +179,10 @@ namespace N2Engine::Network
         /// The ids of the clients that joined, ascending
         [[nodiscard]] std::vector<ClientId> JoinedClients() const;
 
+        /// What the state replication has sent and what the clients acknowledged
+        [[nodiscard]] const ServerReplicationStats &ReplicationStats() const noexcept { return _replicator.Stats(); }
+        [[nodiscard]] const ServerReplicator &Replicator() const noexcept { return _replicator; }
+
         /// True once the world's scene went away; the server then takes no more clients
         [[nodiscard]] bool WorldLost() const noexcept { return _worldLost; }
 
@@ -191,6 +209,8 @@ namespace N2Engine::Network
             std::uint64_t connectedAt = 0;
             std::uint64_t rateWindowStart = 0;
             std::uint32_t rateWindowCount = 0;
+            std::uint64_t ackWindowStart = 0;
+            std::uint32_t ackWindowCount = 0;
             bool dropping = false;
             std::string dropReason;
         };
@@ -200,16 +220,19 @@ namespace N2Engine::Network
         void OnPeerDisconnected(N2Net::PeerId peer);
         void OnDatagram(N2Net::PeerId peer, std::span<const std::uint8_t> data);
         void OnMessage(Client &client, N2Net::MessageChannel channel, std::span<const std::uint8_t> message);
+        void OnUnreliable(Client &client, std::span<const std::uint8_t> message);
         void OnAccept(Client &client, const Fingerprint &fingerprint);
         void SendJoinState(Client &client);
         bool Send(Client &client, const std::vector<std::uint8_t> &message);
         void Broadcast(const std::vector<std::uint8_t> &message);
         void FlushPendingDespawns();
+        void SendState();
         void RunTimers();
         void SendPackets();
         void ApplyDrops();
         void MarkDrop(Client &client, std::string reason, std::uint64_t NetworkServerStats::*counter);
         bool AllowMessage(Client &client);
+        bool AllowAck(Client &client);
         void NotifyLeft(const Client &client, std::string_view reason);
 
         N2Net::ITransport &_transport;
@@ -217,6 +240,8 @@ namespace N2Engine::Network
         NetworkServerOptions _options;
         Fingerprint _fingerprint;
         NetworkServerStats _stats;
+        ServerReplicator _replicator;
+        std::uint64_t _nextStateAt = 0;
         std::uint64_t _now = 0;
         bool _worldLost = false;
         ClientId _nextClientId = 1;

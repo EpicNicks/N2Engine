@@ -79,7 +79,8 @@ namespace Renderer
          * counting of every error the device reports (stage G2); meshes (with the in-frame UpdateMesh rule), textures
          * (RGBA8 or R8/RG8, sRGB, samplers, CPU-generated mipmaps), materials, a pipeline cache, a bind-group cache, a
          * per-draw uniform ring and the unlit shader with DrawMesh, IndexRange and DrawObjects (stage G3a); the lit and text
-         * shaders, the scene lighting and blending (stage G3b). There is no window and no swapchain: Present only warns.
+         * shaders, the scene lighting and blending (stage G3b). Native Present warns (no swapchain); browser Present
+         * sends the offscreen texture to the canvas pass (G5).
          *
          * What draws (stage G3b completed it): everything the software renderer draws, through the three built-in shaders: UNLIT, LIT
          * (aux textures, Blinn-Phong or PBR, the scene lighting of UpdateSceneLighting) and TEXT (the SDF shader with outline,
@@ -90,9 +91,9 @@ namespace Renderer
          * browser.
          *
          * Written against the C API (webgpu.h) alone, so the same files compile with Emscripten's emdawnwebgpu port (stage G4:
-         * the web player links the backend but still starts on the software renderer). The pieces that exist only natively
+         * the web player links the backend, with automatic selection and software fallback in G5). Native-only pieces
          * (the Vulkan backend request, the blocking waits) are marked in the source and compiled only natively: in the browser
-         * build Initialize fails after creating the instance (the page will hand the device in, stage G5) and ReadFramebuffer
+         * build Initialize imports the page's acquired device (or fails cleanly if absent) and ReadFramebuffer
          * is asynchronous. Built with N2ENGINE_RENDERER_WEBGPU=ON: natively CI-only (never selectable from the editor host,
          * lua_project or a project's settings, design decision W8); always in the web build, where --renderer webgpu of the
          * web player names it. All public methods may be called from any thread (one mutex).
@@ -125,7 +126,7 @@ namespace Renderer
 
             void BeginFrame() override;
             void EndFrame() override;
-            /// Nothing to present (no swapchain, no window): logs a warning to stderr the first time, once per renderer
+            /// Browser: a GPU pass into the page's canvas. Native: warns once (no swapchain).
             void Present() override;
 
             /// Custom shaders are not supported in v1: logs one warning and returns nullptr. The shaders are the built-ins

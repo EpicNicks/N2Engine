@@ -1,0 +1,1 @@
+{"pr":39,"branch":"feat-fe-fe8-history-panel","head":"92d1024768c1227d9766231d5f568e01ec1472b7","files":["README.md","src/renderer/edit-controller.ts","src/renderer/history-state.ts","src/test/edit-controller-jump.test.ts"],"deviations":[],"unverified":["npm run build not rerun; typecheck and 243 tests pass locally; CI not yet seen on this head"],"needsUser":null}

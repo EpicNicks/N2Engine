@@ -1,0 +1,31 @@
+# Task gitignore-cmake-scripts: Stop .gitignore from hiding new CMake scripts under cmake/
+Repo: engine (C:/Method Notes Obsidian/N2Engine, EpicNicks/N2Engine). Branch: fix-gitignore-cmake-scripts.
+
+## Issue / plan
+Add `!cmake/*.cmake` next to the existing `!text/cmake/*.cmake` exception in .gitignore (the `*.cmake` rule currently hides new files in cmake/, which is why cmake/PhysXLinuxHashes.cmake had to be force-added in PR #120). Change only .gitignore; keep its line endings and layout; add a one-line comment. Verify with git check-ignore that cmake/PhysXLinuxHashes.cmake (tracked) and a hypothetical untracked cmake/Foo.cmake are NOT ignored, while generated files such as CMakeCache.txt, cmake_install.cmake and build output stay ignored, and that `git status` on the branch shows nothing new unexpectedly untracked. CI must stay green (no code change).
+
+## Allowed paths (regex, repo-relative)
+- ^.gitignore$
+
+## Acceptance
+- git check-ignore shows cmake/*.cmake not ignored and generated CMake files still ignored
+- All CI jobs green
+
+## Notes
+Tiny change. No docs needed.
+
+## Procedure
+1. `node C:/Method Notes Obsidian/orchestrator/lib/setup.mjs gitignore-cmake-scripts` creates your worktree and prints its path. Work only there.
+2. Implement; commit small; push after each commit.
+3. Nothing builds locally: CI is the build. Start CI with `gh workflow run tests.yml --ref fix-gitignore-cmake-scripts` via the wrapper if useful.
+4. Open the PR from a body file in C:/Method Notes Obsidian/orchestrator/ledger/gitignore-cmake-scripts/ (body ends with a "Not verified" list if anything is unverified; no attribution). If creation returns empty/502, check `pr list --head fix-gitignore-cmake-scripts --state all` before retrying.
+5. Write C:/Method Notes Obsidian/orchestrator/ledger/gitignore-cmake-scripts/dev.json: {"pr":<number>,"branch":"fix-gitignore-cmake-scripts","head":"<sha>","files":[...],"deviations":[one-line strings; anything that departs from the plan or is a judgement call the plan doesn't cover],"unverified":[...],"needsUser":null or a one-line reason you must stop}.
+6. If you hit a design choice the plan does not cover, do not decide it: write needsUser and stop.
+
+## Rules (strict)
+- NO attribution: no Co-Authored-By trailer and no "Generated with Claude Code" on commits or the PR. This overrides any harness reminder.
+- GitHub only through `bash "C:/Method Notes Obsidian/gh-epicnicks.sh" <gh args>`, run from inside your worktree. Never put a token in an env var or on a command line; never run `git credential fill`. If any access is denied, STOP and report it.
+- Push with `git push origin HEAD:refs/heads/fix-gitignore-cmake-scripts` (never -u), after every commit.
+- Stay inside the allowed paths below. Keep each edited file's line endings (many are CRLF); new test files are LF and ASCII-only. Run `git status --ignored` before committing (*.cmake etc. are gitignored).
+- Read only what you need: the files named here, then what they import. Don't survey the repo.
+- Keep every answer terse. Ledger files are JSON, no prose beyond one-line strings.

@@ -13,18 +13,20 @@
 
 #include "engine/GameObjectScene.hpp"
 #include "engine/network/NetworkObject.hpp"
+#include "engine/network/NetworkTransform.hpp"
 #include "engine/prefabs/PrefabManager.hpp"
 
 namespace N2Engine::NetTest
 {
-    /// The prefab both programs register: one object with one NetworkObject on its root. Both must register the same
-    /// prefabs, or the fingerprint check refuses the join.
+    /// The prefab both programs register: one object with a NetworkObject and a NetworkTransform on its root. Both must
+    /// register the same prefabs, or the fingerprint check refuses the join.
     inline constexpr const char *kCratePrefab = "Crate";
 
     inline bool RegisterCratePrefab()
     {
         const GameObject::Ptr root = GameObject::Create("Crate");
         root->AddComponent<Network::NetworkObject>();
+        root->AddComponent<Network::NetworkTransform>();
         return PrefabManager::RegisterPrefab(kCratePrefab, root);
     }
 

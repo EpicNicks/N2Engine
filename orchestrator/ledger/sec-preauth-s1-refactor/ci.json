@@ -1,0 +1,11 @@
+{
+  "name": "sec-preauth-s1-refactor",
+  "head": "a9d81ff45602a4801508ee7ce45ff5ac5883bcc3",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success",
+    "Tests:success"
+  ],
+  "failures": []
+}

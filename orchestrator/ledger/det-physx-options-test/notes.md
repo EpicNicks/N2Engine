@@ -1,0 +1,11 @@
+Accepted by the user 2026-10-13:
+- Setting name physics.deterministic (bool) chosen by me; plan named no key.
+- With physics.gpu auto/on plus deterministic: GPU probe skipped, one warning, GPU status Disabled, CPU scene (not a refusal to start); judgement call, recorded as a design callout.
+- No ragdoll scene: the engine has no joints or ragdoll; the pile mixes boxes, spheres and capsules.
+- Added test-only seams PhysXBackend::SetWorkerThreadsForTesting, SceneUsesEnhancedDeterminism, DispatcherWorkerCount (needed for the 0 vs 4 thread experiment).
+- Bodies are created through the backend API with null Rigidbody/collider pointers (no GameObjects), collision callbacks never dispatched.
+- Edited .github/workflows/tests.yml (authorised by orchestrator): new step "PhysX determinism numbers" after Test in linux (Release, x86_64, Clang) and the Windows Release PhysX leg, running engine_tests --gtest_filter=*PhysXDeterminism* so [DETERMINISM] lines are in the job log; job summary now gets each line twice.
+- Renamed test-local struct Run->SimRun (collided with testing::Test::Run) and enum Scene->SceneKind (defensive vs N2Engine::Scene under using namespace).
+- Review fix: 1-ulp nudge now on the largest-magnitude initial coordinate (never 0), asserted to change exactly that coordinate bitwise in PhysX; bit-identical-steps now uses the full per-step state hash.
+- Post-merge compile fix: test drops using namespace N2Engine (ambiguous with MathRegistrar.hpp forward decls via ProjectSettings.hpp since #162); uses N2Engine::Logger and N2Engine::Math::Vector3/Quaternion.
+- Review fix: pile layout draws each lcg.Next() into a named local in fixed order (was unspecified arg-evaluation order; MSVC vs Clang built different piles); testing.html notes earlier pile numbers are not cross-platform comparable.

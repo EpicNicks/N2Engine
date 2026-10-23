@@ -1,0 +1,34 @@
+{
+  "repo": "engine",
+  "closes": null,
+  "requiresDocs": false,
+  "allowProtocol": false,
+  "reviewer": "opus",
+  "name": "linux-ci-leg",
+  "branch": "feat-linux-ci-leg",
+  "title": "Linux build leg: ubuntu CI job, winsock shim in the tests, first GCC/Clang compile fixes",
+  "issue": "Approved by the user 2026-10-10 (proposal: orchestrator/proposals/linux-host.md; answers: PhysX OFF on Linux for now with a later PhysX-for-Linux PR, x86_64 AND arm64 eventually, host stays loopback-bound behind an SSH tunnel/proxy, the ubuntu leg becomes a required check once green (the user sets branch protection), smoke test ported to one Python script for both OSes, install X11/Vulkan dev packages for now, Dockerfile AND systemd unit). Nothing can be built locally; CI is the build. Scope (PR A): (1) add an ubuntu-24.04 job to .github/workflows/tests.yml (name it `linux (Release, x86_64)`): apt install libvulkan-dev libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev python3 and a GCC 14 or Clang 18 toolchain (pick what ubuntu-24.04 provides; state the choice); cmake -S . -B build -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON; build the host and test targets (not necessarily test_project); ctest --output-on-failure with ALSOFT_DRIVERS=null. The host smoke test is NOT part of this PR (item linux-smoke-test). (2) a small shared tests header that gives the tests the socket names on both OSes (replaces the direct winsock use in tests/editor-server/EditorServerHardeningTests.cpp, HostOptionsTests.cpp, project/EditorProjectTests.cpp and any other tests/ file that fails on Linux). (3) the minimal source fixes the first GCC/Clang compile of engine/renderer/editor-server needs (missing includes, narrowing, MSVC-isms); no behaviour change on Windows. Expect several CI rounds: iterate until the ubuntu leg is green and the 3 Windows legs and protocol job stay green. Anything that cannot be fixed without a design decision (for example a renderer or GLFW refactor) is reported as needsUser, not worked around. Do not change the runtime behaviour of the host (SIGPIPE is item linux-runtime-fixes).",
+  "allowedPaths": [
+    "^editor-server/",
+    "^engine/",
+    "^renderer/",
+    "^math/",
+    "^text/",
+    "^assetimport/",
+    "^tests/",
+    "^lua_project/",
+    "^test_project/",
+    "CMakeLists\\.txt$",
+    "^cmake/",
+    "^\\.github/workflows/tests\\.yml$",
+    "^external/sol2/include/sol/sol.hpp$"
+  ],
+  "acceptance": [
+    "All Tests-workflow jobs green including the new ubuntu leg (ctest passes there)",
+    "No behaviour change on Windows",
+    "The first-compile fixes are listed in the PR body"
+  ],
+  "gate": null,
+  "approved": true,
+  "notes": "First compile of ~7000 server lines and the engine on GCC/Clang: the number of fix rounds is unknown. Give the ubuntu job a generous timeout (90 min like windows). If configure needs a package not in the apt list, add it and say so. Unverified: a real Linux host run (the smoke test comes later)."
+}

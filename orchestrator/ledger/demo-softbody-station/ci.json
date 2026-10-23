@@ -1,0 +1,29 @@
+{
+  "name": "demo-softbody-station",
+  "head": "353f23094a3ae2b9c3c92042baede07c9fc4ff4f",
+  "done": true,
+  "allGreen": false,
+  "runs": [
+    "Tests:failure"
+  ],
+  "failures": [
+    "[linux (Release, arm64, Clang)] ",
+    "[  FAILED  ] 0 tests, listed below:",
+    "[  FAILED  ] LuaProjectSceneTest: SetUpTestSuite or TearDownTestSuite",
+    "[linux (Release, x86_64, GCC 14)] ",
+    "[  FAILED  ] 0 tests, listed below:",
+    "[  FAILED  ] LuaProjectSceneTest: SetUpTestSuite or TearDownTestSuite",
+    "[windows (Debug, PhysX OFF, FreeType ON, ufbx ON, TLS ON)] ",
+    "[  FAILED  ] 0 tests, listed below:",
+    "[  FAILED  ] LuaProjectSceneTest: SetUpTestSuite or TearDownTestSuite",
+    "[windows (Debug, PhysX ON)] ",
+    "[  FAILED  ] 0 tests, listed below:",
+    "[  FAILED  ] LuaProjectSceneTest: SetUpTestSuite or TearDownTestSuite",
+    "[linux (Release, x86_64, Clang)] ",
+    "[  FAILED  ] 0 tests, listed below:",
+    "[  FAILED  ] LuaProjectSceneTest: SetUpTestSuite or TearDownTestSuite",
+    "[windows (Release, PhysX ON)] ",
+    "[  FAILED  ] 0 tests, listed below:",
+    "[  FAILED  ] LuaProjectSceneTest: SetUpTestSuite or TearDownTestSuite"
+  ]
+}

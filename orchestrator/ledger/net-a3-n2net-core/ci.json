@@ -1,0 +1,10 @@
+{
+  "name": "net-a3-n2net-core",
+  "head": "d29b316a4df57f8baadbee5b7b5c61116a00c944",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

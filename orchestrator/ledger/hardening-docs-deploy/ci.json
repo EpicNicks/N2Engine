@@ -1,0 +1,10 @@
+{
+  "name": "hardening-docs-deploy",
+  "head": "f42129e1add415ed90579813c2ce0c62a8f265d1",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}
