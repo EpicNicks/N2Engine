@@ -1,0 +1,10 @@
+{
+  "name": "det-simd-strictfp",
+  "head": "4291cf7379d327716cfa6d7ffa2fcd5b7018633c",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

@@ -409,9 +409,11 @@ TEST_F(VulkanTest, FrameCallsOutOfOrderAreHarmless)
 
 TEST_F(VulkanTest, EverythingThatWouldDrawFailsCleanly)
 {
-    // Stage B of #43 made the unlit shader, unlit materials and draws work (see VulkanUnlitDrawTests.cpp); what is
-    // still to come (lit: stage C, text: stage E, custom GLSL: not in v1) returns null/false and logs once, and a frame
-    // still renders. Meshes and textures (stage A) work: see VulkanResourceTests.cpp
+    // Stage B of #43 made the unlit shader, unlit materials and draws work (see VulkanUnlitDrawTests.cpp) and stage C the
+    // lit shader and lit materials (VulkanLightingTests.cpp) and stage E the text shader and text materials
+    // (VulkanTextShaderTests.cpp); what is not supported (custom GLSL: not in v1) returns null/false and logs once, and a
+    // frame still renders. Meshes and textures (stage A) work: see
+    // VulkanResourceTests.cpp
     Renderer::Common::MeshData mesh;
     mesh.vertices.resize(3);
     mesh.indices = {0, 1, 2};
@@ -428,14 +430,11 @@ TEST_F(VulkanTest, EverythingThatWouldDrawFailsCleanly)
     EXPECT_EQ(R().CreateMaterial(nullptr), nullptr);
     EXPECT_EQ(R().CreateMaterial(nullptr, nullptr), nullptr);
     EXPECT_EQ(R().CreateShaderProgram("void main(){}", "void main(){}"), nullptr);
-    EXPECT_EQ(R().GetStandardLitShader(), nullptr);
-    EXPECT_EQ(R().GetStandardTextShader(), nullptr);
     EXPECT_FALSE(R().IsValidShader(nullptr));
     EXPECT_FALSE(R().DestroyShaderProgram(nullptr));
     R().UseShaderProgram(nullptr);
 
-    // The unlit built-in works (when the build holds the compiled shaders); the lit and text ones exist but are not handed
-    // out, and a material of any shader but the unlit one is refused
+    // The unlit, lit and text built-ins work (when the build holds the compiled shaders)
     if (VulkanRenderer::HasBuiltInShaders())
     {
         Renderer::Common::IShader* const unlit = R().GetStandardUnlitShader();
@@ -444,13 +443,28 @@ TEST_F(VulkanTest, EverythingThatWouldDrawFailsCleanly)
         EXPECT_FALSE(R().DestroyShaderProgram(unlit)) << "the built-ins belong to the renderer";
         EXPECT_TRUE(R().IsValidShader(unlit));
         EXPECT_FALSE(unlit->LoadFromStrings("void main(){}", "void main(){}")) << "no custom GLSL in v1";
-        for (const auto which : {Renderer::Vulkan::ShaderInterface::BuiltInShader::Lit,
-                                 Renderer::Vulkan::ShaderInterface::BuiltInShader::Text})
+        Renderer::Common::IShader* const lit = R().GetStandardLitShader();
+        ASSERT_NE(lit, nullptr) << "stage C hands out the lit shader";
+        EXPECT_NE(lit, unlit);
+        EXPECT_EQ(lit, R().GetBuiltInShaderForTest(Renderer::Gpu::ShaderInterface::BuiltInShader::Lit));
+        EXPECT_TRUE(R().IsValidShader(lit));
+        EXPECT_FALSE(R().DestroyShaderProgram(lit)) << "the built-ins belong to the renderer";
+        EXPECT_TRUE(R().IsValidShader(lit));
+        EXPECT_FALSE(lit->LoadFromStrings("void main(){}", "void main(){}")) << "no custom GLSL in v1";
+        EXPECT_NE(R().CreateMaterial(lit), nullptr);
+        EXPECT_NE(R().CreateMaterial(lit, plainTexture), nullptr);
         {
-            Renderer::Common::IShader* const refused = R().GetBuiltInShaderForTest(which);
-            ASSERT_NE(refused, nullptr);
-            EXPECT_EQ(R().CreateMaterial(refused), nullptr);
-            EXPECT_EQ(R().CreateMaterial(refused, plainTexture), nullptr);
+            Renderer::Common::IShader* const text = R().GetStandardTextShader();
+            ASSERT_NE(text, nullptr) << "stage E hands out the text shader";
+            EXPECT_EQ(text, R().GetBuiltInShaderForTest(Renderer::Gpu::ShaderInterface::BuiltInShader::Text));
+            EXPECT_NE(text, unlit);
+            EXPECT_NE(text, lit);
+            EXPECT_TRUE(R().IsValidShader(text));
+            EXPECT_FALSE(R().DestroyShaderProgram(text)) << "the built-ins belong to the renderer";
+            EXPECT_TRUE(R().IsValidShader(text));
+            EXPECT_FALSE(text->LoadFromStrings("void main(){}", "void main(){}")) << "no custom GLSL in v1";
+            EXPECT_NE(R().CreateMaterial(text), nullptr);
+            EXPECT_NE(R().CreateMaterial(text, plainTexture), nullptr);
         }
         // Another renderer's shader is not this one's
         VulkanRenderer& other = NewRenderer();
@@ -465,6 +479,8 @@ TEST_F(VulkanTest, EverythingThatWouldDrawFailsCleanly)
     else
     {
         EXPECT_EQ(R().GetStandardUnlitShader(), nullptr) << "no compiled shaders in this build";
+        EXPECT_EQ(R().GetStandardLitShader(), nullptr) << "no compiled shaders in this build";
+        EXPECT_EQ(R().GetStandardTextShader(), nullptr) << "no compiled shaders in this build";
     }
     R().DestroyMesh(nullptr);
     R().DestroyTexture(nullptr);

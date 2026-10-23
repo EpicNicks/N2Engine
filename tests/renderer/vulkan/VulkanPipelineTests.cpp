@@ -12,7 +12,7 @@
 #include <renderer/common/RenderTypes.hpp>
 #include <renderer/common/TextureOptions.hpp>
 #include <renderer/vulkan/VulkanRenderer.hpp>
-#include <renderer/vulkan/VulkanShaderInterface.hpp>
+#include <renderer/common/GpuShaderInterface.hpp>
 
 #include "VulkanDrawTestUtil.hpp"
 #include "VulkanTestFixture.hpp"
@@ -35,7 +35,7 @@ using Renderer::Common::CullMode;
 using Renderer::Common::IndexRange;
 using Renderer::Common::TextureOptions;
 using Renderer::Vulkan::VulkanRenderer;
-using Renderer::Vulkan::ShaderInterface::BuiltInShader;
+using Renderer::Gpu::ShaderInterface::BuiltInShader;
 
 namespace
 {
@@ -334,17 +334,22 @@ TEST_F(VulkanDrawTest, ARendererInitializedAgainStartsCleanAndDrawsAgain)
     EXPECT_EQ(R().GetPipelineCountForTest(), 1u);
 }
 
-TEST_F(VulkanDrawTest, LitAndTextPipelinesAreMadeButTheirShadersAreNotHandedOut)
+TEST_F(VulkanDrawTest, LitAndTextAreHandedOutAndAllPipelinesAreMade)
 {
-    // Stage B compiles and pipeline-checks all three shaders; only unlit draws. Lit is turned on in stage C, text in E
-    EXPECT_EQ(R().GetStandardLitShader(), nullptr);
-    EXPECT_EQ(R().GetStandardTextShader(), nullptr);
+    // Stage C hands out the lit shader (unlit since stage B) and stage E the text shader: each is the renderer's built-in,
+    // valid, has materials, and its pipelines are made
+    EXPECT_NE(R().GetStandardLitShader(), nullptr);
+    EXPECT_EQ(R().GetStandardLitShader(), R().GetBuiltInShaderForTest(BuiltInShader::Lit));
+    EXPECT_NE(R().GetStandardTextShader(), nullptr);
+    EXPECT_EQ(R().GetStandardTextShader(), R().GetBuiltInShaderForTest(BuiltInShader::Text));
     for (const BuiltInShader shader : {BuiltInShader::Lit, BuiltInShader::Text})
     {
         Renderer::Common::IShader* builtIn = R().GetBuiltInShaderForTest(shader);
         ASSERT_NE(builtIn, nullptr);
         EXPECT_TRUE(R().IsValidShader(builtIn));
-        EXPECT_EQ(R().CreateMaterial(builtIn), nullptr) << "no material of it yet";
+        EXPECT_FALSE(R().DestroyShaderProgram(builtIn)) << "the built-ins belong to the renderer";
+        EXPECT_TRUE(R().IsValidShader(builtIn));
+        EXPECT_NE(R().CreateMaterial(builtIn), nullptr);
         EXPECT_TRUE(R().CreatePipelineForTest(shader, RenderState{}, false));
     }
 }

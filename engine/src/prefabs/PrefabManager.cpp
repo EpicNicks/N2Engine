@@ -1,9 +1,11 @@
+#include <algorithm>
 #include <exception>
 #include <format>
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include <math/UUID.hpp>
 
@@ -11,6 +13,7 @@
 #include "engine/Logger.hpp"
 #include "engine/prefabs/PrefabManager.hpp"
 #include "engine/prefabs/Prefab.hpp"
+#include "engine/serialization/JsonLimits.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
 
 using namespace N2Engine;
@@ -45,13 +48,10 @@ namespace
         return std::nullopt;
     }
 
-    // Gives every GameObject and component id in the prefab's GameObject JSON a fresh UUID (old -> new)
-    void CollectIds(const nlohmann::json &gameObject, UUIDMap &ids)
+    // Gives every GameObject and component id in the prefab's GameObject JSON a fresh UUID (old -> new). Walked with
+    // a stack on the heap, not recursion: prefab data can nest as deep as JsonLimits::MaxSceneJsonDepth.
+    void CollectIds(const nlohmann::json &root, UUIDMap &ids)
     {
-        if (!gameObject.is_object())
-        {
-            return;
-        }
         auto addId = [&ids](const nlohmann::json &owner)
         {
             if (!owner.is_object())
@@ -66,25 +66,36 @@ namespace
                 }
             }
         };
-        addId(gameObject);
-        if (const auto components = gameObject.find("components"); components != gameObject.end() && components->is_array())
+        std::vector<const nlohmann::json *> pending{&root};
+        while (!pending.empty())
         {
-            for (const auto &component : *components)
+            const nlohmann::json &gameObject = *pending.back();
+            pending.pop_back();
+            if (!gameObject.is_object())
             {
-                if (component.is_object())
+                continue;
+            }
+            addId(gameObject);
+            if (const auto components = gameObject.find("components");
+                components != gameObject.end() && components->is_array())
+            {
+                for (const auto &component : *components)
                 {
-                    if (const auto data = component.find("data"); data != component.end())
+                    if (component.is_object())
                     {
-                        addId(*data);
+                        if (const auto data = component.find("data"); data != component.end())
+                        {
+                            addId(*data);
+                        }
                     }
                 }
             }
-        }
-        if (const auto children = gameObject.find("children"); children != gameObject.end() && children->is_array())
-        {
-            for (const auto &child : *children)
+            if (const auto children = gameObject.find("children"); children != gameObject.end() && children->is_array())
             {
-                CollectIds(child, ids);
+                for (const auto &child : *children)
+                {
+                    pending.push_back(&child);
+                }
             }
         }
     }
@@ -94,40 +105,48 @@ namespace
     // anything outside the prefab becomes null: the template may be instantiated where that object isn't
     // (unless keepOutsideRefs: the instance is made where those objects are, and the resolver finds them).
     // Other UUID strings (assets, scripts) are not ids of the prefab and are left alone.
-    void Renumber(nlohmann::json &value, const UUIDMap &ids, const bool keepOutsideRefs)
+    // Walked with a stack on the heap, not recursion, as CollectIds is. Only values are changed in place, so the
+    // pointers kept in the stack stay valid.
+    void Renumber(nlohmann::json &root, const UUIDMap &ids, const bool keepOutsideRefs)
     {
-        if (value.is_string())
+        std::vector<nlohmann::json *> pending{&root};
+        while (!pending.empty())
         {
-            if (const auto canonical = CanonicalUUID(value))
+            nlohmann::json &value = *pending.back();
+            pending.pop_back();
+            if (value.is_string())
             {
-                if (const auto it = ids.find(*canonical); it != ids.end())
+                if (const auto canonical = CanonicalUUID(value))
                 {
-                    value = it->second;
+                    if (const auto it = ids.find(*canonical); it != ids.end())
+                    {
+                        value = it->second;
+                    }
                 }
+                continue;
             }
-            return;
-        }
-        if (value.is_object())
-        {
-            if (const auto ref = value.find("$ref"); ref != value.end() && ref->is_string() && !keepOutsideRefs)
+            if (value.is_object())
             {
-                const auto canonical = CanonicalUUID(*ref);
-                if (!canonical || !ids.contains(*canonical))
+                if (const auto ref = value.find("$ref"); ref != value.end() && ref->is_string() && !keepOutsideRefs)
                 {
-                    *ref = nullptr;
+                    const auto canonical = CanonicalUUID(*ref);
+                    if (!canonical || !ids.contains(*canonical))
+                    {
+                        *ref = nullptr;
+                    }
                 }
+                for (auto &item : value.items())
+                {
+                    pending.push_back(&item.value());
+                }
+                continue;
             }
-            for (auto &item : value.items())
+            if (value.is_array())
             {
-                Renumber(item.value(), ids, keepOutsideRefs);
-            }
-            return;
-        }
-        if (value.is_array())
-        {
-            for (auto &item : value)
-            {
-                Renumber(item, ids, keepOutsideRefs);
+                for (auto &item : value)
+                {
+                    pending.push_back(&item);
+                }
             }
         }
     }
@@ -188,6 +207,14 @@ std::shared_ptr<GameObject> Instantiate(const nlohmann::json &prefabJson, const 
         }
     }
 
+    // Refused before anything walks it: Deserialize recurses once per GameObject level. The text a prefab came from
+    // is checked where it is parsed; this covers a value built or kept some other way.
+    if (JsonLimits::SceneValueTooDeep(*rootJson))
+    {
+        Logger::Error(std::format("InstantiatePrefab: malformed prefab data: {}", JsonLimits::SceneJsonTooDeepMessage()));
+        return nullptr;
+    }
+
     // Renumber in the data, before anything is built: every id, every reference to one (pointer members
     // and Lua "$ref" fields alike) and so the saved form of the instance all use the new UUIDs. The
     // resolver then links references to the objects built here, never to the prefab's source objects.
@@ -196,7 +223,8 @@ std::shared_ptr<GameObject> Instantiate(const nlohmann::json &prefabJson, const 
     std::shared_ptr<GameObject> root;
     try
     {
-        nlohmann::json data = *rootJson;
+        // Copied without recursion (nlohmann's copy recurses once per JSON level)
+        nlohmann::json data = JsonLimits::IterativeCopy(*rootJson);
         UUIDMap ids;
         CollectIds(data, ids);
         Renumber(data, ids, outside != nullptr);
@@ -262,6 +290,29 @@ std::shared_ptr<GameObject> PrefabManager::InstantiateRegisteredPrefab(const std
         return nullptr;
     }
     // A copy: instantiating runs component code, which could register (and rehash) another prefab
-    const nlohmann::json data = it->second;
+    const nlohmann::json data = JsonLimits::IterativeCopy(it->second);
     return InstantiatePrefab(data);
+}
+
+std::vector<std::string> PrefabManager::GetRegisteredPrefabNames()
+{
+    std::vector<std::string> names;
+    names.reserve(Registry().size());
+    for (const auto &entry : Registry())
+    {
+        names.push_back(entry.first);
+    }
+    std::sort(names.begin(), names.end());
+    return names;
+}
+
+std::optional<nlohmann::json> PrefabManager::GetPrefabData(const std::string &prefabName)
+{
+    const auto &registry = Registry();
+    const auto it = registry.find(prefabName);
+    if (it == registry.end())
+    {
+        return std::nullopt;
+    }
+    return JsonLimits::IterativeCopy(it->second);
 }

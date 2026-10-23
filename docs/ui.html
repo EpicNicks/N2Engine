@@ -43,12 +43,14 @@
 <li><a href="resources.html">Resources &amp; paths</a></li>
 <li><a href="serialization.html">Serialization</a></li>
 <li><a href="math.html">Math &amp; SIMD</a></li>
+<li><a href="netcode.html">Netcode (n2net)</a></li>
 </ul>
 </div>
 <div>
 <h2>Scripting</h2>
 <ul>
 <li><a href="scripting-lua.html">Lua scripting</a></li>
+<li><a href="editor-extensions.html">Lua editor extensions</a></li>
 </ul>
 </div>
 <div>
@@ -57,6 +59,7 @@
 <li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
 <li><a href="editor.html">Editor projects</a></li>
 <li><a href="testing.html">Testing &amp; CI</a></li>
+<li><a href="web-build.html">Web build</a></li>
 </ul>
 </div>
 </nav>
@@ -196,7 +199,7 @@ rect     = (pivotPos - pivot * size, size)
 <ul>
 <li><strong>OpenGL</strong> draws the UI as described.</li>
 <li><strong>Software</strong> draws it too, now that each draw keeps the view and projection it was submitted with <span class="badge">PR #50</span> (the backend used to apply the frame's last view and projection to every draw). UI draws don't write depth, so they keep their submitted order. The software renderer has no blending, so semi-transparent UI is drawn opaque. A headless golden test checks that an <code>Image</code> fills its rect there (<code>SoftwareUIGoldenTest</code>) <span class="badge">PR #51</span>. <code>UIText</code> is alpha-tested there, like world text; golden tests check where its ink lands in the rect and that it draws over an <code>Image</code> in hierarchy order <span class="badge">PR #53</span>.</li>
-<li><strong>Vulkan</strong> has the unlit shader since stage B of <a href="https://github.com/EpicNicks/N2Engine/issues/43">#43</a> <span class="badge">PR #144</span>, so an <code>Image</code> has what it draws with, opaque until blending (stage D); text is not drawn until stage E (no text shader). No golden test covers the UI on Vulkan yet.</li>
+<li><strong>Vulkan</strong> has the unlit shader since stage B of <a href="https://github.com/EpicNicks/N2Engine/issues/43">#43</a> <span class="badge">PR #144</span> (and the lit shader since stage C <span class="badge">PR #148</span>), and blends like OpenGL since stage D <span class="badge">PR #158</span>, so an <code>Image</code> draws in the UI pass (identity view, overlay projection set mid-frame, <code>OverlayState</code>: no depth test or write, no culling, blended) and in a world canvas; since stage E <span class="badge">PR #165</span> a <code>UIText</code> draws there too, with the same SDF text shader as OpenGL's (antialiased and blended, <a href="application.html#vulkan-text">details</a>). The Image goldens (<code>AnImageFillsItsRect</code>, <code>APressedButtonDrawsItsImageWithThePressedTint</code>, a translucent Image over a scene mesh) run on Vulkan on lavapipe.</li>
 </ul>
 </div>
 <p>As with <code>IRenderable::Render</code>, <code>RenderUI</code> must not add, remove or destroy components or GameObjects immediately. <code>Destroy</code> is fine because it is deferred.</p>
@@ -210,7 +213,7 @@ rect     = (pivotPos - pivot * size, size)
 <ul>
 <li><strong>Upright.</strong> Imported images are stored bottom row first (their <code>flipY</code> setting, on by default), and the quad's v = 0 is the bottom of the rect, so the image's top-left pixel is at the rect's top-left. See <a href="meshes.html#uv-convention">the UV convention</a>.</li>
 <li><strong>Saved.</strong> The sprite is serialized as the asset's UUID (<code>"sprite"</code>, <code>null</code> for none), resolved on load through <code>Resources::LoadByUUID</code> like every <a href="serialization.html#asset-references">asset reference</a>. A project image keeps its UUID across runs; a texture made at runtime resolves only in the run that registered it.</li>
-<li><strong>Shared on the GPU.</strong> The texture is uploaded when the <code>Image</code> first draws, through <a href="meshes.html#gpu-cache"><code>GpuCache</code></a>: one GPU texture per (renderer, texture asset), shared by every <code>Image</code> showing that sprite on that renderer, with the asset's filter, wrap and mipmap settings. The last <code>Image</code> to let go destroys it. The share is given up in <code>OnDestroy</code>; when the sprite changes (<code>SetSprite</code> releases the old share at once; a sprite changed or cleared by loading a scene is released on the next draw); while a raw <code>SetTexture</code> texture hides the sprite; and when a different renderer draws the <code>Image</code>. A renderer that fails to create the sprite's texture (Vulkan, #43) isn't asked again for the same sprite every frame. With the default texture settings (<code>wrap</code> repeat, linear filter) the outer half texel of a sprite blends with its opposite edge, as on GL; set <code>"wrap": "clamp"</code> in the texture's <code>.meta</code> for UI art. The <a href="application.html#renderer-lifetime">lifetime-token</a> rules are the same as for its quad: a share on a destroyed renderer is dropped without calling it, and a renderer re-created at the old address gets a new texture.</li>
+<li><strong>Shared on the GPU.</strong> The texture is uploaded when the <code>Image</code> first draws, through <a href="meshes.html#gpu-cache"><code>GpuCache</code></a>: one GPU texture per (renderer, texture asset), shared by every <code>Image</code> showing that sprite on that renderer, with the asset's filter, wrap and mipmap settings. The last <code>Image</code> to let go destroys it. The share is given up in <code>OnDestroy</code>; when the sprite changes (<code>SetSprite</code> releases the old share at once; a sprite changed or cleared by loading a scene is released on the next draw); while a raw <code>SetTexture</code> texture hides the sprite; and when a different renderer draws the <code>Image</code>. A renderer that fails to create the sprite's texture (for example one over the device's size limit) isn't asked again for the same sprite every frame. With the default texture settings (<code>wrap</code> repeat, linear filter) the outer half texel of a sprite blends with its opposite edge, as on GL; set <code>"wrap": "clamp"</code> in the texture's <code>.meta</code> for UI art. The <a href="application.html#renderer-lifetime">lifetime-token</a> rules are the same as for its quad: a share on a destroyed renderer is dropped without calling it, and a renderer re-created at the old address gets a new texture.</li>
 <li><strong>A raw texture wins.</strong> When <code>SetTexture</code> has set a texture, it is drawn and the sprite isn't uploaded.</li>
 </ul>
 <p><code>SetTexture(ITexture*)</code> still takes a raw texture made with <code>IRenderer::CreateTexture</code>, for textures created at runtime on one renderer. The first row of the pixel data (v = 0) is drawn at the <em>bottom</em> of the rect, so image data stored top row first must be flipped before <code>CreateTexture</code> to show upright. The <code>Image</code> neither owns nor saves a raw texture. Whoever made it keeps it alive while the <code>Image</code> uses it, and calls <code>SetTexture(nullptr)</code> before destroying it.</p>
@@ -266,7 +269,7 @@ canvas-&gt;AddChild(label, false);
 <p>Nothing is clipped: text taller than the rect, or wider with <code>wrap</code> off, overflows it. <code>GetLayout(rect)</code> returns the layout relative to the anchor, <code>GetBoundsIn(rect)</code> the block in canvas space, and <code>GetCurrentRect()</code> the rect the last layout resolved (its <code>RectTransform</code>'s, or the rect it was last drawn in).</p>
 <p>Drawing:</p>
 <ul>
-<li>It draws with <code>IRenderer::GetStandardTextShader()</code> and the UI pass's state: no depth, no culling, blending on. On the software renderer, which can't blend, the text shader alpha-tests the glyphs instead, so text drawn over an <code>Image</code> covers it exactly where its glyphs are. Where the text shader is null (Vulkan until <a href="https://github.com/EpicNicks/N2Engine/issues/43">#43</a>) nothing is drawn, and one warning is logged per process.</li>
+<li>It draws with <code>IRenderer::GetStandardTextShader()</code> and the UI pass's state: no depth, no culling, blending on. On the software renderer, which can't blend, the text shader alpha-tests the glyphs instead, so text drawn over an <code>Image</code> covers it exactly where its glyphs are. OpenGL and the Vulkan renderer (stage E of <a href="https://github.com/EpicNicks/N2Engine/issues/43">#43</a> <span class="badge">PR #165</span>) antialias and blend instead: a glyph's edge pixel is the text colour mixed with the <code>Image</code> behind it. Where the text shader is null (a renderer or a build without it) nothing is drawn, and one warning is logged per process.</li>
 <li>The mesh is built relative to the anchor, and the model matrix (<code>UIText::ModelMatrixFor(anchor)</code>, a translation) moves it to the rect. So the layout and mesh are rebuilt only when the text, font, size, an alignment, spacing, <code>wrap</code> or, with <code>wrap</code> on, the rect's <em>width</em> changes. Moving the rect, or changing only its height, changes nothing but the model matrix. A rebuilt mesh is updated in place with <code>IRenderer::UpdateMesh</code>, or recreated where the backend can't.</li>
 <li>Each font's atlas is one texture per (renderer, font), shared with every <code>TextRenderer</code> and <code>UIText</code> drawing that font on that renderer and destroyed with its last user. The mesh, material and atlas share are created when the text first draws and released in <code>OnDestroy</code>. Like <code>Image</code>, it uses the renderer's <a href="application.html#renderer-lifetime">lifetime token</a>: a new renderer, or one re-created at the old address, gets new resources, and the old ones are destroyed only if their renderer still exists.</li>
 <li>Empty text, or text with only spaces, draws nothing.</li>

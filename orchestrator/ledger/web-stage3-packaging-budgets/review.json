@@ -1,0 +1,20 @@
+{
+  "head": "8bb1e35ae2a262cf0d3ad32d31c0f9cff1f0a53a",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "web/n2-loader.js",
+      "line": 229,
+      "summary": "The streaming re-fetch path never cancels the first download. `wrapped` was consumed by instantiateStreaming, so wrapped.body.locked is true and cancel() is never called. The first TransformStream can also keep calling count() after received[WASM] has been reset to 0.",
+      "scenario": "The host sends application/wasm and instantiateStreaming rejects for a reason other than Link/Compile (e.g. a RangeError for memory) while the engine keeps reading. Both bodies then download side by side, progress is counted twice, and the final checkLength(WASM, received[WASM]) can throw a false 'arrived with N bytes' error. The docs and dev.json say the first body is cancelled. Fix: set an 'abandoned' flag that the transform checks, and call controller.error() there; erroring the transform cancels the piped source and stops the counting. Not covered by any test."
+    },
+    {
+      "severity": "low",
+      "file": "web/n2-loader.js",
+      "line": 205,
+      "summary": "fromBytes turns every rejection from WebAssembly.instantiate into moduleError ('different builds ... Reload the page'), not only a LinkError or CompileError.",
+      "scenario": "On a low-memory device, instantiate rejects with a RangeError (out of memory). The person is told index.js and index.wasm are from different builds and to reload, which cannot help. Wrap only when isModuleError(error) is true; otherwise pass a LoadError with the real message."
+    }
+  ],
+  "verdict": "clean"
+}

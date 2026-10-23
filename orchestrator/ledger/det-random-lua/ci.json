@@ -1,0 +1,11 @@
+{
+  "name": "det-random-lua",
+  "head": "ab02911522097977215213c6627ef39c4a544843",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success",
+    "Tests:success"
+  ],
+  "failures": []
+}

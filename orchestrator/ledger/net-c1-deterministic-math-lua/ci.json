@@ -1,0 +1,10 @@
+{
+  "name": "net-c1-deterministic-math-lua",
+  "head": "df9fc4e694414d90379d6661599c290962c429d3",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

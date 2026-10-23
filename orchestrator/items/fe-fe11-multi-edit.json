@@ -1,0 +1,26 @@
+{
+  "closes": null,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "requiresDocs": false,
+  "repo": "frontend",
+  "name": "fe-fe11-multi-edit",
+  "branch": "feat-fe11-multi-edit",
+  "title": "Electron UI FE11: inspector multi-edit for several selected objects in one edit group",
+  "issue": "Electron UI roadmap C:/Method Notes Obsidian/orchestrator/proposals/electron-ui-roadmap.md (U1-U21 ACCEPTED): section 11 (the Inspector multi-edit (FE11) paragraph, including what it says about Lua components) FULLY and section 16 (inspector lane: FE5 -> FE11; FE5 merged). Read the inspector files (inspector-*.ts(x)), scene-state.ts, the edit-group handling in edit-controller.ts and the FE8 history panel FIRST. SCOPE as specified: with several objects selected show the common header fields (active, tag, layer, transform) and the component types present on ALL of them (matched by type, first of each type); mixed values show a dash; an edit sends SetComponentFields / SetEntityProperties / SetLocalTransform per object inside ONE edit group labelled 'Edit N objects' (one undo step; on any failure the group is aborted/rolled back the way the existing edit groups do it); Lua components per the section; role/read-only gating; Node + DOM tests (mixed display, one undo step, partial failure, selection change while editing). Frontend repo C:/Method Notes Obsidian/N2Engine-Electron-Frontend (EpicNicks/N2Engine-Electron-Frontend); the engine repo C:/Method Notes Obsidian/N2Engine is READ-ONLY reference. Tests run LOCALLY: npm run typecheck and npm test (Node + DOM tests) must pass before you push; CI has 3 checks. Append ONE README.md section for the feature (other PRs also append: keep yours self-contained). Follow the existing panel/keymap/prefs registries (F1/F2) and lane file boundaries in the roadmap section 16. NEVER run taskkill or kill other processes; no attribution lines on commits or PRs (no Co-Authored-By, no Generated-with footer); GitHub only via the wrapper; before your final push merge origin/master into the branch if it moved; your FINAL message must be a real report (PR number, head sha, what you did, deviations), never a single word.",
+  "allowedPaths": [
+    "^package\\.json$",
+    "^package-lock\\.json$",
+    "^README\\.md$",
+    "^src/",
+    "^scripts/"
+  ],
+  "acceptance": [
+    "Common fields and shared component types shown with mixed-value display",
+    "Edits applied to all objects in one edit group (one undo step), failure handled",
+    "Node + DOM tests pass; 3 CI checks green"
+  ],
+  "reviewer": "sonnet",
+  "notes": "Reviewer: edit-group open/close on every path (no group left open: the host refuses extension invokes while a group is open), partial failure, stale selection."
+}

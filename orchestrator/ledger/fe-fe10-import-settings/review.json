@@ -1,0 +1,21 @@
+{
+  "head": "d96eeb7c5a36b3d284afa8d220f8c2881b9a57da",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "src/renderer/assets-panel.tsx",
+      "line": 263,
+      "summary": "An invalid number draft in fields keeps Apply blocked after switching to the JSON view",
+      "scenario": "Type 'abc' in Base size, click Edit as JSON: the text shows valid settings but Apply is disabled (and applySettings refuses) until the textarea is edited or Revert is pressed, with the reason only in a tooltip"
+    },
+    {
+      "severity": "low",
+      "file": "src/renderer/assets-state.ts",
+      "line": 364,
+      "summary": "A draft that reads back equal in value but not in text (1.0 for 1) keeps the settings counted as edited",
+      "scenario": "Baseline scale 1, type '1.0': settings equal baseline yet fields is non-empty so Apply stays enabled and sends a no-op that makes the host drop and reimport the asset"
+    }
+  ],
+  "verdict": "clean",
+  "confirmedDelta": "update-branch merge of 38e545d1 with master 54409e7b; tree identical to a clean merge-tree"
+}

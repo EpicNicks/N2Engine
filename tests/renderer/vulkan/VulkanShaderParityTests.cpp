@@ -18,7 +18,7 @@
 #include <renderer/common/ITexture.hpp>
 #include <renderer/common/LightingMath.hpp>
 #include <renderer/common/RenderTypes.hpp>
-#include <renderer/vulkan/VulkanShaderInterface.hpp>
+#include <renderer/common/GpuShaderInterface.hpp>
 
 #include "engine/rendering/Material.hpp"
 #include "engine/rendering/Texture.hpp"
@@ -28,7 +28,7 @@
 // renderer/shaders/vulkan/ as TEXT. It ties together, for the three built-in shaders:
 //   - every uniform Material::ApplyUniforms sets for the shader GpuCache would pick (and every default
 //     OpenGLRenderer::CreateMaterial sets, and every uniform the GL shaders declare) has an entry in the interface table
-//     (VulkanShaderInterface.hpp) AND is declared as a member of the right block in the GLSL;
+//     (GpuShaderInterface.hpp) AND is declared as a member of the right block in the GLSL;
 //   - the table's std140 offsets, sizes and member order are the ones computed from the GLSL block declarations (a small
 //     std140 calculator: scalars, vectors, mat4, and the light structs and their arrays);
 //   - the vertex attribute locations of the GLSL are the table's and Common::Vertex's offsets, and what the vertex stage
@@ -43,7 +43,7 @@ using namespace N2Engine;
 using Rendering::Material;
 using Rendering::ShadingModel;
 using Rendering::Texture;
-namespace Vk = Renderer::Vulkan::ShaderInterface;
+namespace Vk = Renderer::Gpu::ShaderInterface;
 
 namespace
 {
@@ -940,4 +940,451 @@ TEST(VulkanShaderParityTest, TheUnlitPortIsTheGlShadersMaths)
         EXPECT_TRUE(Contains(unlit.text, line)) << "Vulkan: " << line;
     }
     EXPECT_TRUE(Contains(unlit.text, "if (uHasTexture != 0) {")) << "a bool is an int in a block";
+}
+
+// ====================================================================================================================
+// Stage C: the lighting block member by member (the light structs and their strides), what OpenGL's UpdateSceneLighting
+// sets, and the defaults OpenGL's CreateMaterial gives a lit material
+// ====================================================================================================================
+
+namespace
+{
+    struct StructTable
+    {
+        const char* glslName;  // the struct's name in lit.frag
+        const char* arrayName; // the lighting block member that is an array of it
+        std::span<const Vk::Member> members;
+        std::uint32_t stride;
+        std::uint32_t count;
+    };
+
+    std::vector<StructTable> LightStructTables()
+    {
+        return {
+            {"DirectionalLight", "uDirectionalLights", Vk::kDirectionalLightMembers, Vk::kDirectionalLightStride,
+             Vk::kDirectionalLightCount},
+            {"PointLight", "uPointLights", Vk::kPointLightMembers, Vk::kPointLightStride, Vk::kPointLightCount},
+            {"SpotLight", "uSpotLights", Vk::kSpotLightMembers, Vk::kSpotLightStride, Vk::kSpotLightCount},
+        };
+    }
+
+    /// The members of a GLSL struct at their std140 offsets from the start of the struct (each aligned to its own
+    /// alignment: a vec3 to 16, with a float allowed in the 4 bytes after it)
+    std::vector<PlacedMember> PlaceStruct(const std::vector<Member>& members, const Glsl& glsl, std::uint32_t& size,
+                                          bool& known)
+    {
+        std::vector<PlacedMember> placed;
+        std::uint32_t cursor = 0;
+        known = true;
+        for (const Member& member : members)
+        {
+            const Layout layout = Std140Layout(member.type, member.arrayCount, glsl);
+            if (!layout.known)
+            {
+                known = false;
+                break;
+            }
+            PlacedMember entry;
+            entry.name = member.name;
+            entry.type = member.type;
+            entry.arrayCount = member.arrayCount;
+            entry.offset = AlignUp(cursor, layout.alignment);
+            entry.size = layout.size;
+            cursor = entry.offset + entry.size;
+            placed.push_back(entry);
+        }
+        size = AlignUp(cursor, 16); // a std140 struct is a multiple of 16 bytes
+        return placed;
+    }
+
+    /// The part of `source` from the text `from` up to (not including) the text `to`
+    std::string Region(const std::string& source, const std::string& from, const std::string& to)
+    {
+        const std::size_t start = source.find(from);
+        if (start == std::string::npos)
+        {
+            return {};
+        }
+        const std::size_t end = source.find(to, start + from.size());
+        return end == std::string::npos ? std::string{} : source.substr(start, end - start);
+    }
+
+    Vk::UniformType TypeOfSetter(const std::string& setter)
+    {
+        if (setter == "Int") return Vk::UniformType::Int;
+        if (setter == "Float") return Vk::UniformType::Float;
+        if (setter == "Vec2") return Vk::UniformType::Vec2;
+        if (setter == "Vec3") return Vk::UniformType::Vec3;
+        return Vk::UniformType::Vec4;
+    }
+
+    const Vk::Uniform* FindLighting(const std::string& name)
+    {
+        for (const Vk::Uniform& uniform : Vk::kLitLighting)
+        {
+            if (uniform.name == name)
+            {
+                return &uniform;
+            }
+        }
+        return nullptr;
+    }
+
+    std::vector<float> NumbersIn(const std::string& arguments)
+    {
+        std::vector<float> numbers;
+        const std::regex number(R"(-?\d+(?:\.\d+)?f?)");
+        for (auto it = std::sregex_iterator(arguments.begin(), arguments.end(), number); it != std::sregex_iterator(); ++it)
+        {
+            numbers.push_back(std::stof((*it)[0].str()));
+        }
+        return numbers;
+    }
+
+    std::size_t ComponentCount(const Vk::UniformType type)
+    {
+        switch (type)
+        {
+        case Vk::UniformType::Vec2: return 2;
+        case Vk::UniformType::Vec3: return 3;
+        case Vk::UniformType::Vec4: return 4;
+        default: return 1;
+        }
+    }
+}
+
+TEST(VulkanShaderParityTest, TheLightStructsAreCheckedMemberByMemberAgainstTheGlslAtTheirStd140OffsetsAndStrides)
+{
+    const Glsl lit = ParseGlsl("shaders/vulkan/lit.frag");
+    const UniformBlock* lighting = lit.Block("Lighting");
+    ASSERT_NE(lighting, nullptr);
+
+    for (const StructTable& table : LightStructTables())
+    {
+        const auto it = lit.structs.find(table.glslName);
+        ASSERT_NE(it, lit.structs.end()) << table.glslName << " is declared in lit.frag";
+
+        std::uint32_t size = 0;
+        bool known = false;
+        const std::vector<PlacedMember> placed = PlaceStruct(it->second, lit, size, known);
+        ASSERT_TRUE(known) << table.glslName;
+        ASSERT_EQ(placed.size(), table.members.size()) << table.glslName << " has another number of members";
+        for (std::size_t i = 0; i < table.members.size(); ++i)
+        {
+            EXPECT_EQ(placed[i].name, std::string(table.members[i].name)) << table.glslName << " member " << i;
+            EXPECT_EQ(placed[i].offset, table.members[i].offset) << table.glslName << "." << table.members[i].name;
+            EXPECT_EQ(placed[i].type, std::string(GlslTypeOf(table.members[i].type)))
+                << table.glslName << "." << table.members[i].name;
+        }
+        // The array stride is the struct's size rounded to 16, and the table's stride and count are the block's array
+        EXPECT_EQ(size, table.stride) << table.glslName << " is " << table.stride << " bytes in std140";
+
+        const Vk::Uniform* array = FindLighting(table.arrayName);
+        ASSERT_NE(array, nullptr) << table.arrayName;
+        EXPECT_EQ(array->type, Vk::UniformType::Struct);
+        EXPECT_EQ(array->arrayCount, table.count) << table.arrayName;
+        EXPECT_EQ(array->size, table.stride * table.count) << table.arrayName << ": count x stride";
+        const auto declared = std::find_if(lighting->members.begin(), lighting->members.end(),
+                                           [&](const Member& member) { return member.name == table.arrayName; });
+        ASSERT_NE(declared, lighting->members.end()) << table.arrayName;
+        EXPECT_EQ(declared->type, std::string(table.glslName)) << table.arrayName << " is an array of that struct";
+        EXPECT_EQ(declared->arrayCount, table.count) << table.arrayName << "'s size in the GLSL";
+    }
+    std::uint32_t end = 0;
+    bool known = false;
+    PlaceBlock(*lighting, lit, end, known);
+    EXPECT_EQ(end, Vk::kLightingBlockSize);
+}
+
+TEST(VulkanShaderParityTest, EveryNameOpenGlsUpdateSceneLightingSetsHasAMatchingEntryOfTheRightTypeAndNoEntryIsLeftUnset)
+{
+    const std::string renderer = ReadFile("src/opengl/OpenGLRenderer.cpp");
+    const std::string region =
+        Region(renderer, "void OpenGLRenderer::UpdateSceneLighting(", "void OpenGLRenderer::ApplyRenderState");
+    ASSERT_FALSE(region.empty());
+    const std::string source = StripComments(region);
+
+    // Every shader->SetXxx("name", ...) or SetXxx(base + ".member", ...) in order, with the array name `base` seen last
+    const std::regex setting(
+        R"re(base\s*=\s*"(u[A-Za-z]+)\["|shader->Set(Int|Float|Vec2|Vec3|Vec4)\(\s*(base\s*\+\s*)?"([^"]+)")re");
+    std::map<std::string, std::set<std::string>> structMembersSet;
+    std::set<std::string> looseSet;
+    std::string base;
+    const std::vector<StructTable> tables = LightStructTables();
+    for (auto it = std::sregex_iterator(source.begin(), source.end(), setting); it != std::sregex_iterator(); ++it)
+    {
+        const std::smatch& match = *it;
+        if (match[1].matched)
+        {
+            base = match[1].str();
+            continue;
+        }
+        const Vk::UniformType type = TypeOfSetter(match[2].str());
+        const std::string name = match[4].str();
+        if (match[3].matched)
+        {
+            ASSERT_FALSE(base.empty()) << "a struct member is set before any array name: " << name;
+            ASSERT_EQ(name.front(), '.') << name;
+            const std::string member = name.substr(1);
+            const StructTable* found = nullptr;
+            for (const StructTable& table : tables)
+            {
+                if (base == table.arrayName)
+                {
+                    found = &table;
+                }
+            }
+            ASSERT_NE(found, nullptr) << base << " is not a light array of the lighting table";
+            const auto entry = std::find_if(found->members.begin(), found->members.end(),
+                                            [&](const Vk::Member& candidate) { return candidate.name == member; });
+            ASSERT_NE(entry, found->members.end()) << "GL sets " << base << "[i]." << member << ": no table entry";
+            EXPECT_EQ(entry->type, type) << base << "." << member << ": GL's setter and the table's type agree";
+            structMembersSet[base].insert(member);
+        }
+        else
+        {
+            const Vk::Uniform* entry = FindLighting(name);
+            ASSERT_NE(entry, nullptr) << "GL sets " << name << ": the lighting table has no entry";
+            EXPECT_EQ(entry->type, type) << name << ": GL's setter and the table's type agree";
+            looseSet.insert(name);
+        }
+    }
+
+    // Nothing the table has is left out of what GL sets: the loose members and every member of every light struct
+    for (const Vk::Uniform& uniform : Vk::kLitLighting)
+    {
+        if (uniform.type != Vk::UniformType::Struct)
+        {
+            EXPECT_TRUE(looseSet.contains(std::string(uniform.name))) << "GL never sets " << uniform.name;
+        }
+    }
+    for (const StructTable& table : tables)
+    {
+        for (const Vk::Member& member : table.members)
+        {
+            EXPECT_TRUE(structMembersSet[table.arrayName].contains(std::string(member.name)))
+                << "GL never sets " << table.arrayName << "[i]." << member.name;
+        }
+    }
+    EXPECT_GE(looseSet.size(), 6u);
+}
+
+TEST(VulkanShaderParityTest, EveryDefaultTheOpenGlRendererGivesALitMaterialIsInTheTableWithTheSameValueAndType)
+{
+    const std::string renderer = ReadFile("src/opengl/OpenGLRenderer.cpp");
+    const std::string region = StripComments(
+        Region(renderer, "if (shader == m_standardLitShader)", "else if (shader == m_standardUnlitShader)"));
+    ASSERT_FALSE(region.empty());
+
+    std::set<std::string> seen;
+    const std::regex setting(R"re(material->Set(Int|Float|Vec2|Vec3|Vec4)\(\s*"(u[A-Za-z]+)"\s*,([^;]*)\);)re");
+    for (auto it = std::sregex_iterator(region.begin(), region.end(), setting); it != std::sregex_iterator(); ++it)
+    {
+        const Vk::UniformType type = TypeOfSetter((*it)[1].str());
+        const std::string name = (*it)[2].str();
+        const std::string arguments = (*it)[3].str();
+        const Vk::Uniform* entry = Vk::FindMaterialUniform(Vk::BuiltInShader::Lit, name);
+        ASSERT_NE(entry, nullptr) << "the lit table has no entry for the default " << name;
+        EXPECT_EQ(entry->type, type) << name << ": GL's setter and the table's type agree";
+        seen.insert(name);
+        if (name == "uHasTexture")
+        {
+            continue; // depends on the texture given at creation (written by the BlockMaterial constructor)
+        }
+        const std::span<const Vk::MaterialDefault> defaults = Vk::kLitMaterialDefaults;
+        const auto entryDefault = std::find_if(defaults.begin(), defaults.end(),
+                                               [&](const Vk::MaterialDefault& candidate) { return candidate.name == name; });
+        ASSERT_NE(entryDefault, defaults.end()) << "no default value in the table for " << name;
+        const std::vector<float> numbers = NumbersIn(arguments);
+        const std::size_t components = ComponentCount(type);
+        ASSERT_EQ(numbers.size(), components) << name << ": " << arguments;
+        for (std::size_t i = 0; i < components; ++i)
+        {
+            EXPECT_FLOAT_EQ(entryDefault->values[i], numbers[i]) << name << " component " << i << " (GL's default)";
+        }
+    }
+    // The material's own constructor gives uAlbedo white
+    EXPECT_NE(ReadFile("src/opengl/OpenGLMaterial.cpp").find("SetColor(\"uAlbedo\", 1, 1, 1, 1)"), std::string::npos);
+
+    // The table's defaults are exactly GL's, plus uAlbedo (OpenGLMaterial's constructor)
+    for (const Vk::MaterialDefault& entry : Vk::kLitMaterialDefaults)
+    {
+        if (entry.name == "uAlbedo")
+        {
+            for (const float value : entry.values)
+            {
+                EXPECT_FLOAT_EQ(value, 1.0f);
+            }
+            continue;
+        }
+        EXPECT_TRUE(seen.contains(std::string(entry.name))) << "GL's CreateMaterial does not set " << entry.name;
+    }
+    // Every lit material member has a default: from the table, or uHasTexture from the texture given at creation
+    for (const Vk::Uniform& uniform : Vk::kLitMaterial)
+    {
+        EXPECT_TRUE(seen.contains(std::string(uniform.name)) || uniform.name == "uAlbedo")
+            << "GL gives " << uniform.name << " no default";
+    }
+}
+
+TEST(VulkanShaderParityTest, EveryDefaultTheOpenGlRendererGivesAnUnlitMaterialIsInTheTableWithTheSameValueAndType)
+{
+    const std::string renderer = ReadFile("src/opengl/OpenGLRenderer.cpp");
+    const std::string region = StripComments(
+        Region(renderer, "else if (shader == m_standardUnlitShader)", "else if (shader == m_standardTextShader)"));
+    ASSERT_FALSE(region.empty());
+    std::set<std::string> seen;
+    const std::regex setting(R"re(material->Set(Int|Float|Vec2|Vec3|Vec4)\(\s*"(u[A-Za-z]+)"\s*,([^;]*)\);)re");
+    for (auto it = std::sregex_iterator(region.begin(), region.end(), setting); it != std::sregex_iterator(); ++it)
+    {
+        const std::string name = (*it)[2].str();
+        const Vk::Uniform* entry = Vk::FindMaterialUniform(Vk::BuiltInShader::Unlit, name);
+        ASSERT_NE(entry, nullptr) << name;
+        EXPECT_EQ(entry->type, TypeOfSetter((*it)[1].str())) << name;
+        seen.insert(name);
+        if (name == "uAlphaCutoff")
+        {
+            const std::vector<float> numbers = NumbersIn((*it)[3].str());
+            ASSERT_EQ(numbers.size(), 1u);
+            EXPECT_FLOAT_EQ(numbers[0], 0.0f);
+        }
+    }
+    EXPECT_TRUE(seen.contains("uHasTexture"));
+    EXPECT_TRUE(seen.contains("uAlphaCutoff"));
+    for (const Vk::MaterialDefault& entry : Vk::kUnlitMaterialDefaults)
+    {
+        EXPECT_TRUE(entry.name == "uAlbedo" || seen.contains(std::string(entry.name))) << entry.name;
+    }
+}
+
+// ====================================================================================================================
+// The text shader (stage E of #43): what OpenGL gives a text material, what the engine's text drawing sets, and the maths
+// ====================================================================================================================
+
+TEST(VulkanShaderParityTest, EveryDefaultTheOpenGlRendererGivesATextMaterialIsInTheTableWithTheSameValueAndType)
+{
+    const std::string renderer = ReadFile("src/opengl/OpenGLRenderer.cpp");
+    const std::string region =
+        StripComments(Region(renderer, "else if (shader == m_standardTextShader)", "m_materials.try_emplace"));
+    ASSERT_FALSE(region.empty());
+
+    std::set<std::string> seen;
+    const std::regex setting(R"re(material->Set(Int|Float|Vec2|Vec3|Vec4)\(\s*"(u[A-Za-z]+)"\s*,([^;]*)\);)re");
+    for (auto it = std::sregex_iterator(region.begin(), region.end(), setting); it != std::sregex_iterator(); ++it)
+    {
+        const Vk::UniformType type = TypeOfSetter((*it)[1].str());
+        const std::string name = (*it)[2].str();
+        const Vk::Uniform* entry = Vk::FindMaterialUniform(Vk::BuiltInShader::Text, name);
+        ASSERT_NE(entry, nullptr) << "the text table has no entry for the default " << name;
+        EXPECT_EQ(entry->type, type) << name << ": GL's setter and the table's type agree";
+        seen.insert(name);
+
+        const std::span<const Vk::MaterialDefault> defaults = Vk::kTextMaterialDefaults;
+        const auto entryDefault = std::find_if(defaults.begin(), defaults.end(),
+                                               [&](const Vk::MaterialDefault& candidate) { return candidate.name == name; });
+        ASSERT_NE(entryDefault, defaults.end()) << "no default value in the table for " << name;
+        const std::vector<float> numbers = NumbersIn((*it)[3].str());
+        const std::size_t components = ComponentCount(type);
+        ASSERT_EQ(numbers.size(), components) << name << ": " << (*it)[3].str();
+        for (std::size_t i = 0; i < components; ++i)
+        {
+            EXPECT_FLOAT_EQ(entryDefault->values[i], numbers[i]) << name << " component " << i << " (GL's default)";
+        }
+    }
+    // The six effect uniforms, every one of them, as GL sets them for a text material
+    for (const char* name : {"uOutline", "uOutlineColor", "uSoftness", "uShadowColor", "uShadowOffset", "uShadowSoftness"})
+    {
+        EXPECT_TRUE(seen.contains(name)) << "GL's CreateMaterial does not set " << name << " for the text shader";
+    }
+    // The table's defaults are exactly GL's, plus uAlbedo (OpenGLMaterial's constructor: white)
+    for (const Vk::MaterialDefault& entry : Vk::kTextMaterialDefaults)
+    {
+        if (entry.name == "uAlbedo")
+        {
+            for (const float value : entry.values)
+            {
+                EXPECT_FLOAT_EQ(value, 1.0f);
+            }
+            continue;
+        }
+        EXPECT_TRUE(seen.contains(std::string(entry.name))) << "GL's CreateMaterial does not set " << entry.name;
+    }
+    // Every text material member has a default
+    for (const Vk::Uniform& uniform : Vk::kTextMaterial)
+    {
+        EXPECT_TRUE(seen.contains(std::string(uniform.name)) || uniform.name == "uAlbedo")
+            << "GL gives " << uniform.name << " no default";
+    }
+    EXPECT_EQ(Vk::kTextMaterial.size(), Vk::kTextMaterialDefaults.size());
+}
+
+TEST(VulkanShaderParityTest, EveryUniformTheEnginesTextDrawingSetsIsInTheTextTableWithTheSameType)
+{
+    // engine/src/rendering/TextDrawing.cpp sets the text material's values for every draw (the face, and each effect pass)
+    const std::string drawing = StripComments(ReadFile("../engine/src/rendering/TextDrawing.cpp"));
+    ASSERT_FALSE(drawing.empty()) << "N2_RENDERER_SOURCE_DIR is " << N2_RENDERER_SOURCE_DIR;
+
+    std::map<std::string, Vk::UniformType> set;
+    const std::regex setting(R"re(_material->Set(Float|Vec2|Vec3|Vec4|Color|Int)\(\s*"(u[A-Za-z]+)")re");
+    for (auto it = std::sregex_iterator(drawing.begin(), drawing.end(), setting); it != std::sregex_iterator(); ++it)
+    {
+        const std::string setter = (*it)[1].str();
+        set[(*it)[2].str()] = setter == "Color" ? Vk::UniformType::Vec4 : TypeOfSetter(setter);
+    }
+    ASSERT_GE(set.size(), 7u);
+    for (const auto& [name, type] : set)
+    {
+        const Vk::Uniform* entry = Vk::FindMaterialUniform(Vk::BuiltInShader::Text, name);
+        ASSERT_NE(entry, nullptr) << "TextDrawing sets " << name << ", which the text table lacks";
+        EXPECT_EQ(entry->type, type) << name << ": the engine's setter and the table's type agree";
+    }
+    for (const char* name : {"uAlbedo", "uOutline", "uOutlineColor", "uSoftness", "uShadowColor", "uShadowOffset",
+                             "uShadowSoftness"})
+    {
+        EXPECT_TRUE(set.contains(name)) << "TextDrawing no longer sets " << name;
+    }
+    // ...and nothing else: every text table entry is one the engine sets
+    for (const Vk::Uniform& uniform : Vk::kTextMaterial)
+    {
+        EXPECT_TRUE(set.contains(std::string(uniform.name))) << uniform.name << " is in the table but never set by the engine";
+    }
+}
+
+TEST(VulkanShaderParityTest, TheTextPortIsTheGlShadersMathsLineForLine)
+{
+    // From the `over` helper to the end of main: the same statements in the same order, comments and layout aside. The
+    // declarations above it differ by design (a std140 block with a binding instead of loose uniforms, in/out locations)
+    const std::string vulkan = StripComments(ReadFile("shaders/vulkan/text.frag"));
+    const std::string gl = StripComments(GlShaderSource(ReadFile("src/opengl/OpenGLRenderer.cpp"), "textFrag"));
+    ASSERT_FALSE(vulkan.empty());
+    ASSERT_FALSE(gl.empty());
+    const auto fromOver = [](const std::string& source)
+    {
+        const std::size_t at = source.find("vec4 over(");
+        return at == std::string::npos ? std::string{} : Normalised(source.substr(at));
+    };
+    const std::string vulkanMaths = fromOver(vulkan);
+    const std::string glMaths = fromOver(gl);
+    ASSERT_FALSE(vulkanMaths.empty());
+    ASSERT_FALSE(glMaths.empty());
+    EXPECT_EQ(vulkanMaths, glMaths) << "text.frag's maths differs from GL's textFrag";
+
+    // The constants the shader depends on, in both: the iso-line 0.5, the minimum ramp 1e-4, the discard below alpha 0.01,
+    // the smoothstep bounds, and the `over` order (the face over the outline, that over the shadow)
+    for (const char* needle :
+         {"0.5 * fwidth(sdf)", "1e-4", "smoothstep(0.5 - edgeWidth, 0.5 + edgeWidth, sdf)", "if (result.a < 0.01) {",
+          "float outlineEdge = 0.5 - uOutline;",
+          "result = over(result, vec4(uOutlineColor.rgb, uOutlineColor.a * outlineCoverage));",
+          "result = over(result, vec4(uShadowColor.rgb, uShadowColor.a * shadowCoverage));",
+          "smoothstep(max(outlineEdge - edgeWidth, 0.0), outlineEdge + edgeWidth, sdf)",
+          "texture(uTexture, fragTexCoord - uShadowOffset).r"})
+    {
+        EXPECT_TRUE(Contains(vulkan, needle)) << "Vulkan: " << needle;
+        EXPECT_TRUE(Contains(gl, needle)) << "GL: " << needle;
+    }
+    // The outline is composited before the shadow (so the shadow ends up under both)
+    ASSERT_NE(vulkanMaths.find("uOutlineColor.rgb"), std::string::npos);
+    ASSERT_NE(glMaths.find("uOutlineColor.rgb"), std::string::npos);
+    EXPECT_LT(vulkanMaths.find("uOutlineColor.rgb"), vulkanMaths.find("uShadowColor.rgb"));
+    EXPECT_LT(glMaths.find("uOutlineColor.rgb"), glMaths.find("uShadowColor.rgb"));
 }

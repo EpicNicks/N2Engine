@@ -3,6 +3,9 @@
 
 #include "engine/GameObject.hpp"
 #include "engine/prefabs/Prefab.hpp"
+#include "engine/prefabs/PrefabManager.hpp"
+#include "engine/serialization/JsonLimits.hpp"
+#include "DeepSceneJson.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
 #include "engine/serialization/MathSerialization.hpp"
@@ -998,4 +1001,72 @@ TEST(PrefabParseErrorTest, AllErrorsHaveStrings)
     EXPECT_FALSE(PrefabParseErrorToString(PrefabParseError::MissingRootObject).empty());
     EXPECT_FALSE(PrefabParseErrorToString(PrefabParseError::InvalidRootObject).empty());
     EXPECT_FALSE(PrefabParseErrorToString(PrefabParseError::InvalidName).empty());
+}
+
+// ============================================================================
+// Hierarchy depth cap (JsonLimits::MaxHierarchyDepth)
+// ============================================================================
+
+namespace
+{
+    std::size_t PrefabChainLevels(const std::shared_ptr<GameObject> &root)
+    {
+        std::size_t levels = 0;
+        for (std::shared_ptr<GameObject> current = root; current != nullptr;
+             current = current->GetChildCount() > 0 ? current->GetChild(0) : nullptr)
+        {
+            ++levels;
+        }
+        return levels;
+    }
+}
+
+TEST(PrefabDepthTest, PrefabJustUnderTheCapParsesAndInstantiates)
+{
+    for (const std::size_t levels : {JsonLimits::MaxHierarchyDepth - 1, JsonLimits::MaxHierarchyDepth})
+    {
+        const json data = json::parse(TestJson::PrefabText(levels));
+        const auto prefab = Prefab::Deserialize(data);
+        ASSERT_TRUE(prefab.has_value()) << levels;
+        EXPECT_EQ(PrefabChainLevels((*prefab)->GetRootObject()), levels);
+        EXPECT_EQ(JsonLimits::NestingDepth((*prefab)->Serialize()), 2 * levels + 1);
+
+        const auto instance = PrefabManager::InstantiatePrefab(data);
+        ASSERT_NE(instance, nullptr) << levels;
+        EXPECT_EQ(PrefabChainLevels(instance), levels);
+        EXPECT_NE(instance->GetUUID(), Math::UUID::ZERO);
+    }
+}
+
+TEST(PrefabDepthTest, PrefabOneLevelPastTheCapIsRefused)
+{
+    const json data = json::parse(TestJson::PrefabText(JsonLimits::MaxHierarchyDepth + 1));
+    const auto prefab = Prefab::Deserialize(data);
+    ASSERT_FALSE(prefab.has_value());
+    EXPECT_EQ(prefab.error(), PrefabParseError::InvalidRootObject);
+    EXPECT_EQ(PrefabManager::InstantiatePrefab(data), nullptr);
+}
+
+TEST(PrefabDepthTest, AModelsWorthOfNodesFitsUnderAFewSceneParents)
+{
+    // The importers allow 256 node levels (kMaxNodeDepth), and an imported model is instantiated as a prefab under
+    // the scene's own objects: 200 parents above it still load, save and load again
+    const auto instance = PrefabManager::InstantiatePrefab(json::parse(TestJson::PrefabText(256)));
+    ASSERT_NE(instance, nullptr);
+
+    const auto top = GameObject::Create("top");
+    auto current = top;
+    for (int level = 1; level < 200; ++level)
+    {
+        const auto parent = GameObject::Create("parent");
+        current->AddChild(parent, false);
+        current = parent;
+    }
+    current->AddChild(instance, false);
+    EXPECT_EQ(instance->GetParent(), current);
+    EXPECT_EQ(PrefabChainLevels(top), 200u + 256u);
+
+    const json saved = top->Serialize();
+    EXPECT_EQ(JsonLimits::NestingDepth(saved), 2 * (200u + 256u));
+    EXPECT_EQ(PrefabChainLevels(GameObject::Deserialize(saved)), 200u + 256u);
 }

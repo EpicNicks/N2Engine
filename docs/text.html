@@ -43,12 +43,14 @@
 <li><a href="resources.html">Resources &amp; paths</a></li>
 <li><a href="serialization.html">Serialization</a></li>
 <li><a href="math.html">Math &amp; SIMD</a></li>
+<li><a href="netcode.html">Netcode (n2net)</a></li>
 </ul>
 </div>
 <div>
 <h2>Scripting</h2>
 <ul>
 <li><a href="scripting-lua.html">Lua scripting</a></li>
+<li><a href="editor-extensions.html">Lua editor extensions</a></li>
 </ul>
 </div>
 <div>
@@ -57,6 +59,7 @@
 <li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
 <li><a href="editor.html">Editor projects</a></li>
 <li><a href="testing.html">Testing &amp; CI</a></li>
+<li><a href="web-build.html">Web build</a></li>
 </ul>
 </div>
 </nav>
@@ -349,11 +352,11 @@ const auto layout = font-&gt;Layout("Hello, world", options);
 <tbody>
 <tr><td>OpenGL</td><td>Drawn with the SDF shader above, blended.</td></tr>
 <tr><td>Software <span class="badge">PR #51</span></td><td>Drawn with the <a href="#text-shader-software">alpha-tested software text shader</a>: hard edges, opaque, writing depth. Works headless, which the <a href="#text-golden">golden-image tests</a> use.</td></tr>
-<tr><td>Vulkan</td><td>Not drawn: it has no text shader yet (stage E of <a href="https://github.com/EpicNicks/N2Engine/issues/43">#43</a>; the GLSL port is already compiled and pipeline-checked, <a href="application.html#vulkan-renderer">stage B</a> <span class="badge">PR #144</span>), so <code>GetStandardTextShader()</code> is null.</td></tr>
+<tr><td>Vulkan <span class="badge">PR #165</span></td><td>Drawn with the SDF shader above, as OpenGL draws it (a port of it, stage E of <a href="https://github.com/EpicNicks/N2Engine/issues/43">#43</a>, <a href="application.html#vulkan-text">details</a>): antialiased over about one screen pixel and <strong>blended</strong>, with the outline and shadow composited under the face in one draw, softness widening the ramp, and multi-pass effects drawing each pass with its own values; depth only as the draw's state says, so Transparent-queue text writes none. It is not alpha-tested like the software renderer's. Works headless on a software Vulkan driver (Mesa lavapipe), which the <a href="testing.html#vulkan-text-tests">Vulkan text tests</a> use; a text material without an atlas draws nothing.</td></tr>
 </tbody>
 </table>
 </div>
-<p>Where the text shader is null (Vulkan), the first <code>TextRenderer</code> to draw logs one warning, naming the renderer, for the whole process, and creates nothing.</p>
+<p>Where the text shader is null (a renderer without one, or a Vulkan build without the compiled shaders), the first <code>TextRenderer</code> to draw logs one warning, naming the renderer, for the whole process, and creates nothing.</p>
 
 <h3 id="text-golden">Golden-image tests <span class="badge">PR #51</span></h3>
 <p>Text pixels are tested in CI with the software renderer in <a href="application.html#sw-headless">headless mode</a>, which needs no window or GPU. Each test renders a frame, reads it back with <code>ReadFramebuffer</code> and checks its structure:</p>
@@ -365,7 +368,8 @@ const auto layout = font-&gt;Layout("Hello, world", options);
 <p class="callout-title">Design decision: golden images compare structure, not pixels <span class="badge">PR #51</span></p>
 <p>CI runs the tests in Debug and Release, whose float code differs (contraction, vectorisation, intermediate precision), and a distance sampled at an edge can land a hair either side of 0.5. An exact image or hash would fail on a one-pixel change no one could see, and would need re-baselining after every harmless rasterizer change; stored reference images would also be binaries in git. So the tests assert what matters and what is stable: counts and bounding boxes within a pixel or a few percent, colours exact (they are not interpolated across the edge), structure such as separated glyphs, and anything relative between two frames of the same run (which is deterministic). Nothing is compared against a file. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/1">#1</a>.</p>
 </div>
-<p class="src">Tests: <code>tests/renderer/software/SoftwareRendererGoldenTests.cpp</code>, <code>tests/engine/rendering/SoftwareTextGoldenTests.cpp</code></p>
+<p>The same cases run on the Vulkan renderer with OpenGL's expectations <span class="badge">PR #165</span>: an antialiased edge instead of a hard one (every pixel is the text colour blended with the background, read thresholded at half coverage for the structural checks), and Transparent-queue text writing no depth, so a quad drawn behind it afterwards covers it. <a href="testing.html#vulkan-text-tests">The rule and the cross-backend comparison</a>.</p>
+<p class="src">Tests: <code>tests/renderer/software/SoftwareRendererGoldenTests.cpp</code>, <code>tests/engine/rendering/SoftwareTextGoldenTests.cpp</code>; on Vulkan <code>tests/renderer/vulkan/VulkanTextShaderTests.cpp</code>, <code>VulkanTextGoldenTests.cpp</code></p>
 
 <h3 id="text-renderer-lua">From Lua and scene files</h3>
 <p><code>GameObject:AddComponent("TextRenderer")</code> returns a handle with <code>SetText</code>/<code>GetText</code>, <code>SetColor</code>/<code>GetColor</code>, <code>SetFontSize</code>, <code>SetMaxWidth</code>, <code>SetLineSpacing</code> and <code>SetLetterSpacing</code> (each with its getter), plus:</p>

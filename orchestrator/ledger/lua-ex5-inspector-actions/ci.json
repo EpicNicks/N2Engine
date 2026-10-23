@@ -1,0 +1,10 @@
+{
+  "name": "lua-ex5-inspector-actions",
+  "head": "f689d36971cc293cbf4a06e3ab8f61e633471f95",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

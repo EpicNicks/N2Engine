@@ -21,12 +21,15 @@
 #include "renderer/common/ITexture.hpp"
 #include "renderer/common/IMaterial.hpp"
 #include "renderer/common/RenderState.hpp"
-#include "renderer/vulkan/VulkanShaderInterface.hpp"
+#include "renderer/common/GpuShaderInterface.hpp"
 
 namespace Renderer
 {
     namespace Vulkan
     {
+        // The shader interface table is shared by the GPU backends (renderer/common/GpuShaderInterface.hpp)
+        namespace ShaderInterface = Gpu::ShaderInterface;
+
         struct GPUInfo
         {
             VkPhysicalDevice device;
@@ -114,16 +117,17 @@ namespace Renderer
         class VulkanTexture;  // a texture (private header)
 
         /**
-         * The Vulkan backend, stages 0, A and B of #43: initialisation, an offscreen colour and depth target, a frame that
+         * The Vulkan backend, stages 0, A, B, C, D and E of #43: initialisation, an offscreen colour and depth target, a frame that
          * clears it, readback, resizing and shutdown (stage 0); meshes and textures (stage A: GPU memory from
          * VulkanMemoryAllocator, staging uploads, samplers, blit mipmaps, deferred deletion); and the built-in shaders,
-         * the pipeline layout and cache, and unlit drawing (stage B). It renders ONLY offscreen (R8G8B8A8_UNORM colour,
+         * the pipeline layout and cache, and unlit drawing (stage B); lit and PBR materials and the scene lighting (stage C); blending, dynamic meshes and the UI pass (stage D); and the SDF text shader (stage E). It renders ONLY offscreen (R8G8B8A8_UNORM colour,
          * a depth target), with or without a window: there is no surface or swapchain yet, so Present puts nothing on a
          * window (stage F). Initialize(nullptr, w, h) works with no window and no display.
          *
-         * What draws: the unlit built-in shader (GetStandardUnlitShader) with DrawMesh, IndexRange and DrawObjects, with
-         * the depth, depth write and cull state of every RenderState and wireframe. Still to come: lit shading and
-         * lighting (stage C), blending (D), text (E) and a window (F). The shaders are the three built-ins only (custom
+         * What draws: the unlit, lit and text built-in shaders (GetStandardUnlitShader, GetStandardLitShader, GetStandardTextShader: lit is Blinn-Phong
+         * or PBR with emissive, occlusion, normal and metallic-roughness maps and up to 2 directional, 8 point and 4 spot
+         * lights from UpdateSceneLighting) with DrawMesh, IndexRange and DrawObjects, with the depth, depth write and cull
+         * state of every RenderState and wireframe. Blend and additive draw as on OpenGL (SRC_ALPHA / ONE_MINUS_SRC_ALPHA, additive SRC_ALPHA / ONE, the same factors for alpha, additive only with blend; stage D); draws stay in submission order and depth write is off whenever the draw's depthWrite or depthTest is off. Text is the OpenGL shader's port: antialiased over one pixel and blended per the draw's state, outline, softness and shadow composited under the face, multi-pass effects through the per-draw material snapshot, no atlas (or a destroyed one) draws nothing. Still to come: a window (F). The shaders are the three built-ins only (custom
          * GLSL is not supported: CreateShaderProgram returns nullptr), compiled to SPIR-V when the renderer is built (see
          * HasBuiltInShaders). All public methods may be called from any thread (one mutex).
          */
@@ -189,11 +193,16 @@ namespace Renderer
             /// the mesh unchanged, for nullptr, a pointer this renderer did not make, or data with no vertices
             bool UpdateMesh(Common::IMesh* mesh, const Common::MeshData& meshData) override;
 
-            /// A material of the unlit built-in shader (GetStandardUnlitShader): the OpenGL defaults (uAlbedo white,
-            /// uHasTexture 1 with a texture, uAlphaCutoff 0), values set by name (uAlbedo, uHasTexture, uAlphaCutoff; any
-            /// other name is logged once and ignored), the base texture and the AuxTexture slots. DrawMesh takes a
+            /// A material of a built-in shader (GetStandardUnlitShader, GetStandardLitShader, GetStandardTextShader): the
+            /// OpenGL defaults (uAlbedo white, uHasTexture 1 with a texture, uAlphaCutoff 0; text: uAlbedo white and the six
+            /// effect uniforms 0 (uOutline, uOutlineColor, uSoftness, uShadowColor, uShadowOffset, uShadowSoftness), its
+            /// texture is the SDF atlas and without one (or with a destroyed one) it draws nothing; lit also uMetallic 0, uSmoothness 0.5,
+            /// uEmissive 0, the uHas*Texture flags 0, uOcclusionStrength 1, uNormalScale 1, uPbr 0), values set by name (the
+            /// names of the shader's material block; any other name, or the wrong type, is logged once and ignored), the
+            /// base texture and the AuxTexture slots (an absent or destroyed one is a renderer-owned 1x1 default: white
+            /// base, black emissive, white occlusion, flat normal, white metallic-roughness). DrawMesh takes a
             /// snapshot of its values and textures, so a change after a draw does not affect that draw. nullptr for
-            /// a null shader, one this renderer did not make, or any shader but the unlit built-in (lit: stage C, text: E)
+            /// a null shader or one this renderer did not make
             Common::IMaterial* CreateMaterial(Common::IShader* shader) override;
             Common::IMaterial* CreateMaterial(Common::IShader* shader, Common::ITexture* texture) override;
             /// Ignores nullptr and any pointer this renderer did not make; Shutdown frees the rest
@@ -211,13 +220,19 @@ namespace Renderer
             /// The row-major view and projection of the draws that follow (until the next call): each draw copies the
             /// values current when it is made. Null arguments are ignored. Identity until set
             void SetViewProjection(const float* view, const float* projection) override;
+            /// Sets the scene lighting of the LIT draws that follow (until the next call), exactly as OpenGL does: a lit draw
+            /// uses the lighting set by the last call before it, whether called inside a frame (as the engine does, after
+            /// BeginFrame), outside one, or several times in one frame (a later call affects only later draws). At most
+            /// 2 directional, 8 point and 4 spot lights count (a spot light without an axis is skipped). The colour target
+            /// is UNORM, so linear lighting always makes the lit shader encode its output (uEncodeOutput) and
+            /// forceShaderEncode changes nothing. Before the first call a SceneLightingData{} seen from the origin is used
             void UpdateSceneLighting(const Common::SceneLightingData& lighting,
                                      const N2Engine::Math::Vector3& cameraPosition) override;
 
             using Common::IRenderer::DrawMesh; // the default-state overload
-            /// Draws the whole index buffer with the material's shader (unlit only so far) and this draw's depth test,
-            /// depth write and cull state; blend and additive are accepted and drawn opaque until stage D (logged
-            /// once). The draw is recorded into the open frame, in submission order, and takes a snapshot of the
+            /// Draws the whole index buffer with the material's shader (unlit or lit) and this draw's depth test,
+            /// depth write and cull state; blend and additive blend as OpenGL does (additive only together with
+            /// blend). The draw is recorded into the open frame, in submission order, and takes a snapshot of the
             /// material's values and of the view and projection. It is ignored (nothing drawn, no error) outside
             /// BeginFrame..EndFrame, for a null or foreign mesh, material or model matrix, for a mesh without indices
             /// (stage A gives it no index buffer), and when the build has no shaders (HasBuiltInShaders)
@@ -245,8 +260,12 @@ namespace Renderer
 
             /// The unlit built-in; nullptr when the build has no shaders (HasBuiltInShaders), logged once
             [[nodiscard]] Common::IShader* GetStandardUnlitShader() const override;
-            /// nullptr until stage C (the lit shader is built and pipeline-checked, but not handed out)
+            /// The lit built-in (Blinn-Phong or PBR with emissive, occlusion, normal and metallic-roughness maps); nullptr when
+            /// the build has no shaders (HasBuiltInShaders), logged once
             [[nodiscard]] Common::IShader* GetStandardLitShader() const override;
+            /// The SDF text built-in (a port of OpenGL's: antialiased, blended, outline/softness/shadow composited under
+            /// the face); nullptr when the build has no shaders (HasBuiltInShaders), logged once
+            [[nodiscard]] Common::IShader* GetStandardTextShader() const override;
             /// RGBA8, bottom row first, of the last frame (all black before the first). A size other than the
             /// target's is resampled, nearest, as the software renderer does. Writes nothing when not initialized or
             /// the target is gone.
@@ -295,8 +314,8 @@ namespace Renderer
             [[nodiscard]] uint32_t GetPendingDeletionCountForTest() const;
 
             // Test hooks for stage B
-            /// One of the three built-ins whether or not it is handed out (the lit and text ones are not yet): so a test can
-            /// check they are refused as the shader of a material. nullptr without shaders or before Initialize
+            /// One of the three built-ins whether or not it is handed out (all three are handed out when the build has shaders): so a test can check a
+            /// shader is valid. nullptr without shaders or before Initialize
             [[nodiscard]] Common::IShader* GetBuiltInShaderForTest(ShaderInterface::BuiltInShader shader) const;
             /// Makes (or finds) the pipeline for (shader, state, wireframe) now, as a draw would. False when there is no
             /// shader, or wireframe is asked for and the device cannot do it
@@ -318,6 +337,16 @@ namespace Renderer
             [[nodiscard]] uint32_t GetPipelineCreateAttemptCountForTest() const;
             /// The id of a live texture (unique for the renderer's lifetime, never reused); 0 for any other pointer
             [[nodiscard]] uint64_t GetTextureIdForTest(const Common::ITexture* texture) const;
+            /// A copy of the material's std140 block (kMaterialBlockRange bytes: the shader's block, then zeros) as a draw would
+            /// snapshot it now; false for a material that is not this renderer's
+            bool GetMaterialBlockForTest(const Common::IMaterial* material, std::vector<uint8_t>& bytes) const;
+            /// The 752-byte std140 lighting block the next lit draw will use (what the last UpdateSceneLighting built, or the
+            /// default before any)
+            [[nodiscard]] std::vector<std::uint8_t> GetLightingBlockForTest() const;
+            /// Replaces the texture id a material holds for a slot (0 the base texture, 1-4 the AuxTexture slots in enum
+            /// order), so a test can put a stale (pointer, id) pair into a material, which is what a texture made at the
+            /// address of a destroyed one looks like to the draw. False for a material that is not this renderer's or a bad slot
+            bool SetMaterialTextureIdForTest(Common::IMaterial* material, std::size_t slot, std::uint64_t id);
 
         private:
             static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;

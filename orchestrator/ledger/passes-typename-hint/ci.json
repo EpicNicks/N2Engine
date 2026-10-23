@@ -1,0 +1,10 @@
+{
+  "name": "passes-typename-hint",
+  "head": "0228a522ecafcb59154ea71d4f3b6f2054b06c74",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

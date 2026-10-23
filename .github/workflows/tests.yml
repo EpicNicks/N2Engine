@@ -6,7 +6,61 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  # One live run per pull request: a push to the PR (or an update-branch) cancels the run of the older head. Every other event
+  # (push to master, workflow_dispatch) gets a group of its own (the run id), so it is never cancelled and never replaced by
+  # a newer pending run, which a shared group without cancel-in-progress would do.
+  group: tests-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # Decides whether a pull request changes only documentation. docs_only is 'true' only on a pull_request whose changed files
+  # (merge base of the base branch and the PR head, renames counted as a delete plus an add) are ALL under docs/ or are *.md
+  # files in the repository root. Push (master) and workflow_dispatch always get 'false'. The jobs that build and test say
+  # `needs: changes` and skip on 'true'. If this job fails, those jobs are skipped (their needs failed) and this job shows
+  # red, so the run is red: a failure here never looks like success.
+  changes:
+    name: changes (docs-only check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Classify the changed files
+        id: classify
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          docs_only=false
+          if [ "$EVENT" = "pull_request" ]; then
+            files=$(mktemp)
+            git diff --name-only --no-renames -z "$BASE_SHA...$HEAD_SHA" > "$files"
+            total=0
+            other=0
+            while IFS= read -r -d '' f; do
+              total=$((total + 1))
+              case "$f" in
+                docs/*) ;;
+                */*) other=$((other + 1)); echo "not docs: $f" ;;
+                *.md) ;;
+                *) other=$((other + 1)); echo "not docs: $f" ;;
+              esac
+            done < "$files"
+            echo "changed files: $total, not docs: $other"
+            if [ "$total" -gt 0 ] && [ "$other" -eq 0 ]; then
+              docs_only=true
+            fi
+          fi
+          echo "docs_only=$docs_only"
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
   # No build: the checked-in generated clients and golden vectors must be what the generators make from protocol.json
   # today, and the generated TypeScript codecs must agree with the vectors (the C++ side is checked by
   # ProtocolVectorTest in the windows job)
@@ -42,11 +96,25 @@ jobs:
         run: python3 editor-server/protocol/tests/run_tests.py
 
   windows:
+    # A matrix job skipped by a job-level if reports ONE skipped check with an unexpanded name, not the three leg names, so
+    # this job always runs and each step skips itself on a docs-only pull request (the legs keep their names and report success
+    # after a few seconds on a runner).
     # Legs with the FreeType font backend or the ufbx FBX/OBJ importer say so in their name; the rest use stb_truetype and
     # glTF only
     name: windows (${{ matrix.config }}, PhysX ${{ matrix.physx }}${{ matrix.freetype == 'ON' && ', FreeType ON' || '' }}${{ matrix.ufbx == 'ON' && ', ufbx ON' || '' }}${{ matrix.tls == 'ON' && ', TLS ON' || '' }})
+    needs: changes
     runs-on: windows-latest
     timeout-minutes: 90
+    env:
+      # ccache (the same tool as the Linux legs): the cache is per leg (the prefix names the configuration and the options
+      # that change the compiled code), so the legs never share objects
+      CCACHE_KEY_PREFIX: ccache-windows-${{ matrix.config }}-physx${{ matrix.physx }}-tls${{ matrix.tls }}
+      CCACHE_DIR: ${{ github.workspace }}\.ccache
+      CCACHE_MAXSIZE: 1200M
+      CCACHE_COMPRESS: "1"
+      CCACHE_COMPILERCHECK: content
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
     strategy:
       fail-fast: false
       matrix:
@@ -56,6 +124,7 @@ jobs:
             freetype: "OFF"
             ufbx: "OFF"
             tls: "OFF"
+            strict: "OFF"
           # OFF keeps the no-physics build compiling and running (the engine then has no physics backend).
           # This leg also builds the optional FreeType font backend, so the text tests run against both
           # stb_truetype and FreeType (and compare them) without a fourth full build. It builds the optional ufbx
@@ -66,18 +135,23 @@ jobs:
             freetype: "ON"
             ufbx: "ON"
             tls: "ON"
+            strict: "OFF"
           # Release catches what Debug hides (NDEBUG, optimised SIMD paths) and confirms the forced sol2 safeties still hold in Release.
           # The PhysX release zip ships both debug/ and release/ libraries, so PhysX stays ON here.
+          # N2ENGINE_STRICT_FP=ON on the Release leg only (stage J7: its corpus hashes go to the `determinism` job); Debug stays as it was
           - config: Release
             physx: "ON"
             freetype: "OFF"
             ufbx: "OFF"
             tls: "OFF"
+            strict: "ON"
 
     steps:
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.docs_only != 'true'
 
       - name: Install Vulkan SDK
+        if: needs.changes.outputs.docs_only != 'true'
         uses: jakoch/install-vulkan-sdk-action@v1
         with:
           install_runtime: false
@@ -85,7 +159,7 @@ jobs:
           stripdown: true
 
       - name: Cache PhysX binaries
-        if: matrix.physx == 'ON'
+        if: needs.changes.outputs.docs_only != 'true' && (matrix.physx == 'ON')
         uses: actions/cache@v6
         with:
           path: external/PhysX/physx/bin
@@ -93,17 +167,140 @@ jobs:
           # version and hash are in cmake/PhysXWindowsHashes.cmake; CMake checks the stamp in the extracted tree.
           key: physx-bin-${{ runner.os }}-${{ hashFiles('cmake/PhysXWindowsHashes.cmake') }}
 
+      # ccache, pinned to one release and checked against its SHA-256 (the zip is not installed from a package feed). If the
+      # download or the check fails the step only warns: the Configure step uses ccache when it is on the PATH and builds
+      # without it otherwise.
+      - name: Install ccache
+        if: needs.changes.outputs.docs_only != 'true'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $version = '4.10.2'
+          $sha256 = '6252f081876a9a9f700fae13a5aec5d0d486b28261d7f1f72ac11c7ad9df4da9'
+          $zip = Join-Path $env:RUNNER_TEMP 'ccache.zip'
+          Invoke-WebRequest -Uri "https://github.com/ccache/ccache/releases/download/v$version/ccache-$version-windows-x86_64.zip" -OutFile $zip
+          $actual = (Get-FileHash -Path $zip -Algorithm SHA256).Hash
+          if ($actual -ne $sha256) { throw "ccache zip hash mismatch: $actual" }
+          $dest = Join-Path $env:RUNNER_TEMP 'ccache'
+          Expand-Archive -Path $zip -DestinationPath $dest
+          $bin = Join-Path $dest "ccache-$version-windows-x86_64"
+          & (Join-Path $bin 'ccache.exe') --version
+          Add-Content -Path $env:GITHUB_PATH -Value $bin
+
+      # The Ninja generator does not set up the compiler itself (the Visual Studio generator did): run the official
+      # vcvars64.bat of the newest installed Visual Studio and export what it changed (PATH, INCLUDE, LIB, ...) to the
+      # later steps, so CMake finds cl.exe, link.exe, rc.exe and the Windows SDK.
+      - name: Set up the Visual Studio x64 environment
+        if: needs.changes.outputs.docs_only != 'true'
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'No Visual Studio with the x64 C++ tools was found' }
+          $bat = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          if (-not (Test-Path $bat)) { throw "Missing $bat" }
+          $before = @{}
+          foreach ($e in Get-ChildItem Env:) { $before[$e.Name] = $e.Value }
+          $lines = cmd /c "`"$bat`" >nul && set"
+          if ($LASTEXITCODE -ne 0) { throw "vcvars64.bat failed ($LASTEXITCODE)" }
+          foreach ($line in $lines) {
+            if ($line -match '^([^=]+)=(.*)$') {
+              if ($before[$Matches[1]] -ne $Matches[2]) { Add-Content -Path $env:GITHUB_ENV -Value "$($Matches[1])=$($Matches[2])" }
+            }
+          }
+          Write-Host "Visual Studio: $vs"
+
+      # ccache: PRs only restore the cache that master pushes saved; a miss or a failure only means a cold build
+      - name: Restore ccache
+        id: ccache-restore
+        if: needs.changes.outputs.docs_only != 'true'
+        continue-on-error: true
+        uses: actions/cache/restore@v6
+        with:
+          path: .ccache
+          key: ${{ env.CCACHE_KEY_PREFIX }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ${{ env.CCACHE_KEY_PREFIX }}-
+
+      - name: Reset ccache statistics
+        if: needs.changes.outputs.docs_only != 'true'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          if (Get-Command ccache -ErrorAction SilentlyContinue) {
+            New-Item -ItemType Directory -Force -Path $env:CCACHE_DIR | Out-Null
+            ccache --zero-stats
+            ccache --show-config | Select-String -Pattern ' (cache_dir|max_size|base_dir|hash_dir|compiler_check) = '
+          } else {
+            Write-Host 'ccache is not installed: cold build without a compiler cache'
+          }
+
+      # Ninja Multi-Config keeps the build/bin/<Config>/ layout of the Visual Studio generator (the smoke tests and
+      # PlaySmokeTest.ps1 use it), but unlike that generator it accepts a compiler launcher. cl.exe is named explicitly
+      # (the runner also has MinGW and Strawberry Perl compilers on the PATH). CMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
+      # is /Z7 (debug info in the object file, no shared compiler PDB) for Debug only; the CMP0141 default makes it count
+      # in the fetched dependencies (OpenAL Soft, googletest, ...) whose own cmake_minimum_required is older than 3.25.
       - name: Configure
-        run: cmake -S . -B build -A x64 -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=${{ matrix.physx }} -DN2ENGINE_TEXT_FREETYPE=${{ matrix.freetype }} -DN2ENGINE_MODEL_UFBX=${{ matrix.ufbx }} -DN2ENGINE_EDITOR_TLS=${{ matrix.tls }} # newest installed Visual Studio
+        if: needs.changes.outputs.docs_only != 'true'
+        shell: pwsh
+        run: |
+          $launcher = @()
+          if (Get-Command ccache -ErrorAction SilentlyContinue) {
+            $launcher = @('-DCMAKE_C_COMPILER_LAUNCHER=ccache', '-DCMAKE_CXX_COMPILER_LAUNCHER=ccache')
+          }
+          cmake -S . -B build -G 'Ninja Multi-Config' -DCMAKE_CONFIGURATION_TYPES=${{ matrix.config }} -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl -DCMAKE_POLICY_DEFAULT_CMP0141=NEW '-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=$<$<CONFIG:Debug>:Embedded>' $launcher -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=${{ matrix.physx }} -DN2ENGINE_TEXT_FREETYPE=${{ matrix.freetype }} -DN2ENGINE_MODEL_UFBX=${{ matrix.ufbx }} -DN2ENGINE_EDITOR_TLS=${{ matrix.tls }} -DN2ENGINE_STRICT_FP=${{ matrix.strict }}
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build
+        if: needs.changes.outputs.docs_only != 'true'
         run: cmake --build build --config ${{ matrix.config }} --parallel
 
+      # The vendored Jolt Physics (N2ENGINE_USE_JOLT): its smoke test (the library alone) run directly, because ctest
+      # hides a passing test's output, so this leg's [JOLT-DETERMINISM] line (the state hash every leg must produce) is in this
+      # job's log and summary
+      - name: Jolt determinism numbers
+        if: needs.changes.outputs.docs_only != 'true'
+        shell: pwsh
+        run: |
+          & "./build/bin/${{ matrix.config }}/jolt_smoke_tests.exe" | Tee-Object -FilePath jolt-smoke.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Add-Content $env:GITHUB_STEP_SUMMARY ''
+          Add-Content $env:GITHUB_STEP_SUMMARY 'windows ${{ matrix.config }}, PhysX ${{ matrix.physx }}:'
+          Add-Content $env:GITHUB_STEP_SUMMARY ''
+          Select-String -Path jolt-smoke.log -Pattern '^\[JOLT-DETERMINISM\]' | ForEach-Object { Add-Content $env:GITHUB_STEP_SUMMARY ('    ' + $_.Line) }
+          Add-Content $env:GITHUB_STEP_SUMMARY ''
+
+      # The Jolt BACKEND (engine/src/physics/jolt) stepping one scene twice in a process: its [JOLT-BACKEND-DETERMINISM] lines
+      # (compiler, job system, declared level, and the state hashes after 60 and 240 steps) are in this job's log and summary.
+      # The hashes must be equal on every leg that builds the backend: a difference is a finding, never a number to loosen
+      - name: Jolt backend determinism numbers
+        if: needs.changes.outputs.docs_only != 'true'
+        shell: pwsh
+        env:
+          ALSOFT_DRIVERS: "null"
+        run: |
+          & "./build/bin/${{ matrix.config }}/engine_tests.exe" --gtest_filter='JoltBackendDeterminismTest.*' | Tee-Object -FilePath jolt-backend.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Add-Content $env:GITHUB_STEP_SUMMARY ''
+          Add-Content $env:GITHUB_STEP_SUMMARY 'windows ${{ matrix.config }}, PhysX ${{ matrix.physx }}:'
+          Add-Content $env:GITHUB_STEP_SUMMARY ''
+          Select-String -Path jolt-backend.log -Pattern '^\[JOLT-BACKEND-DETERMINISM\]' | ForEach-Object { Add-Content $env:GITHUB_STEP_SUMMARY ('    ' + $_.Line) }
+          Add-Content $env:GITHUB_STEP_SUMMARY ''
+
       - name: Test
-        run: ctest --test-dir build --build-config ${{ matrix.config }} --output-on-failure
+        if: needs.changes.outputs.docs_only != 'true'
+        run: ctest --test-dir build --build-config ${{ matrix.config }} --output-on-failure --timeout 600
         env:
           # Silent OpenAL output device; the runner has no sound card
           ALSOFT_DRIVERS: "null"
+
+      # ctest hides a passing test's output: run the PhysX determinism tests again directly (Release PhysX leg only), so
+      # their [DETERMINISM] lines (divergence steps, state hashes) appear in this job's log
+      - name: PhysX determinism numbers
+        if: needs.changes.outputs.docs_only != 'true' && matrix.config == 'Release' && matrix.physx == 'ON'
+        shell: pwsh
+        run: ./build/bin/Release/engine_tests.exe --gtest_filter='*PhysXDeterminism*'
 
       # The real editor host, end to end (tests/smoke/editor_host_smoke.py, Python 3 standard library only; the Linux leg
       # runs the same script). Creates a project as a launcher would (--create, which must not start the engine), starts
@@ -116,6 +313,7 @@ jobs:
       # open; one without the flag must keep running when its stdin is at end of file. A non-zero exit code catches
       # crashes during shutdown or static destruction.
       - name: Editor host smoke test
+        if: needs.changes.outputs.docs_only != 'true'
         shell: pwsh
         env:
           N2_SMOKE_CONFIG: ${{ matrix.config }}
@@ -127,7 +325,7 @@ jobs:
       # finishes a handshake, says Hello and gets ServerInfo; a restarted host presents the same certificate.
       # --exit-on-disconnect ends the host when the client leaves.
       - name: Editor host TLS smoke test
-        if: matrix.tls == 'ON'
+        if: needs.changes.outputs.docs_only != 'true' && (matrix.tls == 'ON')
         shell: pwsh
         env:
           N2_SMOKE_CONFIG: ${{ matrix.config }}
@@ -140,10 +338,60 @@ jobs:
       # ran, frames advance beside a busy client, pause, step, input, RenderFrame and Shutdown, that the edit host and its
       # scene file are untouched, and that --exit-on-disconnect and a missing snapshot end the child as documented.
       - name: Play child smoke test
+        if: needs.changes.outputs.docs_only != 'true'
         shell: pwsh
         env:
           N2_SMOKE_CONFIG: ${{ matrix.config }}
         run: ./tests/editor-server/PlaySmokeTest.ps1 -Config $env:N2_SMOKE_CONFIG
+
+      # The physics determinism corpus (stage J7), on the strict Release leg only: the same steps as the Linux legs. The hashes
+      # go to the `determinism` job as an artifact.
+      - name: Physics determinism corpus
+        if: needs.changes.outputs.docs_only != 'true' && matrix.config == 'Release' && matrix.physx == 'ON' && !cancelled()
+        shell: pwsh
+        env:
+          ALSOFT_DRIVERS: "null"
+          N2_DETERMINISM_LEG: windows-release
+          N2_DETERMINISM_HASHES_OUT: ${{ github.workspace }}\determinism-hashes.json
+        run: |
+          & "./build/bin/Release/engine_tests.exe" --gtest_filter='PhysicsDeterminismCorpusTest.*'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload the determinism hashes
+        if: needs.changes.outputs.docs_only != 'true' && matrix.config == 'Release' && matrix.physx == 'ON' && !cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: determinism-hashes-windows-release
+          path: determinism-hashes.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      # Runs after a failed build or test too (not when cancelled): the hit rate of this run, from zeroed statistics
+      - name: ccache statistics
+        if: needs.changes.outputs.docs_only != 'true' && !cancelled()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          if (Get-Command ccache -ErrorAction SilentlyContinue) {
+            $restored = '${{ steps.ccache-restore.outputs.cache-matched-key }}'
+            if (-not $restored) { $restored = 'none (cold build)' }
+            $stats = ccache -s | Out-String
+            $fence = '```'
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### ccache (${{ env.CCACHE_KEY_PREFIX }})`nrestored cache: $restored`n$fence`n$stats$fence"
+            Write-Host $stats
+          } else {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### ccache (${{ env.CCACHE_KEY_PREFIX }})`nccache was not installed: cold build, nothing to save"
+          }
+
+      # Only a push to master saves (never a pull request, never workflow_dispatch); master runs are never cancelled, so a
+      # partial cache from a cancelled run cannot be saved. Entries are immutable, so the key carries the run id.
+      - name: Save ccache
+        if: needs.changes.outputs.docs_only != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/master' && !cancelled()
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: .ccache
+          key: ${{ env.CCACHE_KEY_PREFIX }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   # The Linux build: the engine, renderer, editor host and unit tests with Clang 20 (apt.llvm.org) on the GCC 14 standard
   # library (libstdc++ 14). Clang 18, ubuntu-24.04's own, cannot use libstdc++ 14's std::expected (it needs the C++20
@@ -152,11 +400,19 @@ jobs:
   # FreeType, ufbx and TLS are ON so the optional backends compile here too. The editor host smoke tests run here too, the same Python script as on Windows. This is the required Linux check.
   linux:
     name: linux (Release, x86_64, Clang)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
       CC: clang-20
       CXX: clang++-20
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 1G
+      CCACHE_COMPRESS: "1"
+      CCACHE_COMPILERCHECK: content
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
     steps:
       - uses: actions/checkout@v7
 
@@ -166,7 +422,7 @@ jobs:
           sudo curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key -o /etc/apt/keyrings/apt.llvm.org.asc
           echo "deb [signed-by=/etc/apt/keyrings/apt.llvm.org.asc] http://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang-20 libstdc++-14-dev cmake ninja-build python3             libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers glslang-tools libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
+          sudo apt-get install -y --no-install-recommends clang-20 libstdc++-14-dev cmake ninja-build python3             libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers glslang-tools libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev ccache
 
       # The runners have no GPU: Mesa lavapipe (mesa-vulkan-drivers) is the Vulkan driver, so renderer_tests really run the
       # Vulkan renderer, with the Khronos validation layer (vulkan-validationlayers) on. Its ICD file is
@@ -187,14 +443,57 @@ jobs:
           # stamp, so a stale or foreign cache is re-downloaded, never trusted
           key: physx-bin-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/PhysXLinuxHashes.cmake') }}
 
+      # ccache: PRs only restore the cache that master pushes saved (a PR's own cache would not be readable by other PRs
+      # and would evict it); the cache is per leg and compiler, so the legs never share one. A miss or a failure here
+      # only means a cold build.
+      - name: Restore ccache
+        id: ccache-restore
+        continue-on-error: true
+        uses: actions/cache/restore@v6
+        with:
+          path: .ccache
+          key: ccache-linux-x86_64-clang20-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ccache-linux-x86_64-clang20-
+
+      - name: Reset ccache statistics
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          ccache --zero-stats
+          ccache --show-config | grep -E " (cache_dir|max_size|base_dir|hash_dir|compiler_check) = " || true
+
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
-        run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests -- -k 0
+        run: cmake --build build --parallel --target N2EditorHost N2Server math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client n2server_net_host n2server_net_client jolt_smoke_tests -- -k 0
+
+      # The vendored Jolt Physics tree is exactly upstream's v5.6.0 (the SHA-256 of every file, no extra file under Jolt/)
+      - name: Check the vendored Jolt Physics tree
+        run: bash scripts/check-jolt-vendor.sh
+
+      # The vendored Jolt Physics (N2ENGINE_USE_JOLT): its smoke test (the library alone) run directly, because ctest
+      # hides a passing test's output, so this leg's [JOLT-DETERMINISM] line (the state hash every leg must produce, the
+      # first cross-platform determinism data point) is in this job's log and summary
+      - name: Jolt determinism numbers
+        run: |
+          set -o pipefail
+          ./build/bin/jolt_smoke_tests | tee jolt-smoke.log
+          { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-DETERMINISM\]' jolt-smoke.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
+
+      # The Jolt BACKEND (engine/src/physics/jolt) stepping one scene twice in a process: its [JOLT-BACKEND-DETERMINISM] lines
+      # (compiler, job system, declared level, and the state hashes after 60 and 240 steps) are in this job's log and summary.
+      # The hashes must be equal on every leg that builds the backend: a difference is a finding, never a number to loosen
+      - name: Jolt backend determinism numbers
+        run: |
+          set -o pipefail
+          ./build/bin/engine_tests --gtest_filter='JoltBackendDeterminismTest.*' | tee jolt-backend.log
+          { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-BACKEND-DETERMINISM\]' jolt-backend.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          ALSOFT_DRIVERS: "null"
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure --timeout 600
         env:
           # A missing Vulkan device or validation layer fails the Vulkan renderer tests instead of skipping them, and the
           # device must be a CPU device (lavapipe), so a green run means they executed
@@ -202,6 +501,11 @@ jobs:
           N2_VULKAN_EXPECT_CPU_DEVICE: "1"
           # Silent OpenAL output device; the runner has no sound card
           ALSOFT_DRIVERS: "null"
+
+      # ctest hides a passing test's output: run the PhysX determinism tests again directly, so their [DETERMINISM] lines
+      # (divergence steps, state hashes) appear in this job's log
+      - name: PhysX determinism numbers
+        run: ./build/bin/engine_tests --gtest_filter='*PhysXDeterminism*'
 
       # The real host, end to end (tests/smoke/editor_host_smoke.py, standard library only): create a project, serve it
       # on the software renderer, and the --exit-on-* flags; then the --tls host, its certificate and key file mode.
@@ -216,16 +520,69 @@ jobs:
         env:
           ALSOFT_DRIVERS: "null"
           PYTHONDONTWRITEBYTECODE: "1"
+
+      # The physics determinism corpus (stage J7): ten scenes on Jolt, 600 ticks each, hashed every 60 ticks; the hashes are
+      # written to determinism-hashes.json and uploaded for the `determinism` job, which compares every leg with the others and
+      # with tests/golden/physics-determinism.json. ctest ran the same tests above (what they assert concerns this binary
+      # alone); this run is the one that writes the file. A failed corpus test fails this leg, and the file is uploaded anyway.
+      - name: Physics determinism corpus
+        if: ${{ !cancelled() }}
+        run: ./build/bin/engine_tests --gtest_filter='PhysicsDeterminismCorpusTest.*'
+        env:
+          ALSOFT_DRIVERS: "null"
+          N2_DETERMINISM_LEG: linux-x86_64-clang
+          N2_DETERMINISM_HASHES_OUT: ${{ github.workspace }}/determinism-hashes.json
+
+      - name: Upload the determinism hashes
+        if: "!cancelled()"
+        uses: actions/upload-artifact@v7
+        with:
+          name: determinism-hashes-linux-x86_64-clang
+          path: determinism-hashes.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      # Runs after a failed build or test too (not when cancelled): the hit rate of this run, from zeroed statistics
+      - name: ccache statistics
+        if: "!cancelled()"
+        continue-on-error: true
+        run: |
+          {
+            echo "### ccache (linux-x86_64-clang20)"
+            echo "restored cache: ${{ steps.ccache-restore.outputs.cache-matched-key || 'none (cold build)' }}"
+            echo '```'
+            ccache -s
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          ccache -s
+
+      # Only a push to master saves (never a pull request, never workflow_dispatch); master runs are never cancelled, so a
+      # partial cache from a cancelled run cannot be saved. Entries are immutable, so the key carries the run id.
+      - name: Save ccache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master' && !cancelled()
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: .ccache
+          key: ccache-linux-x86_64-clang20-${{ github.run_id }}-${{ github.run_attempt }}
 
   # The same Linux build and tests on arm64 (ubuntu-24.04-arm, aarch64): the math library's x86 SIMD paths are compiled out
   # there and the scalar versions run; PhysX runs its own aarch64 build. Not a required check yet.
   linux-arm64:
     name: linux (Release, arm64, Clang)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
     env:
       CC: clang-20
       CXX: clang++-20
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 1G
+      CCACHE_COMPRESS: "1"
+      CCACHE_COMPILERCHECK: content
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
     steps:
       - uses: actions/checkout@v7
 
@@ -235,7 +592,7 @@ jobs:
           sudo curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key -o /etc/apt/keyrings/apt.llvm.org.asc
           echo "deb [signed-by=/etc/apt/keyrings/apt.llvm.org.asc] http://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang-20 libstdc++-14-dev cmake ninja-build python3             libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers glslang-tools libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
+          sudo apt-get install -y --no-install-recommends clang-20 libstdc++-14-dev cmake ninja-build python3             libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers glslang-tools libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev ccache
 
       # The runners have no GPU: Mesa lavapipe (mesa-vulkan-drivers) is the Vulkan driver, so renderer_tests really run the
       # Vulkan renderer, with the Khronos validation layer (vulkan-validationlayers) on. Its ICD file is
@@ -256,14 +613,53 @@ jobs:
           # stamp, so a stale or foreign cache is re-downloaded, never trusted
           key: physx-bin-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/PhysXLinuxHashes.cmake') }}
 
+      # ccache: PRs only restore the cache that master pushes saved (a PR's own cache would not be readable by other PRs
+      # and would evict it); the cache is per leg and compiler, so the legs never share one. A miss or a failure here
+      # only means a cold build.
+      - name: Restore ccache
+        id: ccache-restore
+        continue-on-error: true
+        uses: actions/cache/restore@v6
+        with:
+          path: .ccache
+          key: ccache-linux-arm64-clang20-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ccache-linux-arm64-clang20-
+
+      - name: Reset ccache statistics
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          ccache --zero-stats
+          ccache --show-config | grep -E " (cache_dir|max_size|base_dir|hash_dir|compiler_check) = " || true
+
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/aarch64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/aarch64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
-        run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests -- -k 0
+        run: cmake --build build --parallel --target N2EditorHost N2Server math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client n2server_net_host n2server_net_client jolt_smoke_tests -- -k 0
+
+      # The vendored Jolt Physics (N2ENGINE_USE_JOLT): its smoke test (the library alone) run directly, because ctest
+      # hides a passing test's output, so this leg's [JOLT-DETERMINISM] line (the state hash every leg must produce, the
+      # first cross-platform determinism data point) is in this job's log and summary
+      - name: Jolt determinism numbers
+        run: |
+          set -o pipefail
+          ./build/bin/jolt_smoke_tests | tee jolt-smoke.log
+          { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-DETERMINISM\]' jolt-smoke.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
+
+      # The Jolt BACKEND (engine/src/physics/jolt) stepping one scene twice in a process: its [JOLT-BACKEND-DETERMINISM] lines
+      # (compiler, job system, declared level, and the state hashes after 60 and 240 steps) are in this job's log and summary.
+      # The hashes must be equal on every leg that builds the backend: a difference is a finding, never a number to loosen
+      - name: Jolt backend determinism numbers
+        run: |
+          set -o pipefail
+          ./build/bin/engine_tests --gtest_filter='JoltBackendDeterminismTest.*' | tee jolt-backend.log
+          { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-BACKEND-DETERMINISM\]' jolt-backend.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          ALSOFT_DRIVERS: "null"
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure --timeout 600
         env:
           # A missing Vulkan device or validation layer fails the Vulkan renderer tests instead of skipping them, and the
           # device must be a CPU device (lavapipe), so a green run means they executed
@@ -285,6 +681,51 @@ jobs:
         env:
           ALSOFT_DRIVERS: "null"
           PYTHONDONTWRITEBYTECODE: "1"
+
+      # The physics determinism corpus (stage J7): ten scenes on Jolt, 600 ticks each, hashed every 60 ticks; the hashes are
+      # written to determinism-hashes.json and uploaded for the `determinism` job, which compares every leg with the others and
+      # with tests/golden/physics-determinism.json. ctest ran the same tests above (what they assert concerns this binary
+      # alone); this run is the one that writes the file. A failed corpus test fails this leg, and the file is uploaded anyway.
+      - name: Physics determinism corpus
+        if: ${{ !cancelled() }}
+        run: ./build/bin/engine_tests --gtest_filter='PhysicsDeterminismCorpusTest.*'
+        env:
+          ALSOFT_DRIVERS: "null"
+          N2_DETERMINISM_LEG: linux-arm64-clang
+          N2_DETERMINISM_HASHES_OUT: ${{ github.workspace }}/determinism-hashes.json
+
+      - name: Upload the determinism hashes
+        if: "!cancelled()"
+        uses: actions/upload-artifact@v7
+        with:
+          name: determinism-hashes-linux-arm64-clang
+          path: determinism-hashes.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      # Runs after a failed build or test too (not when cancelled): the hit rate of this run, from zeroed statistics
+      - name: ccache statistics
+        if: "!cancelled()"
+        continue-on-error: true
+        run: |
+          {
+            echo "### ccache (linux-arm64-clang20)"
+            echo "restored cache: ${{ steps.ccache-restore.outputs.cache-matched-key || 'none (cold build)' }}"
+            echo '```'
+            ccache -s
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          ccache -s
+
+      # Only a push to master saves (never a pull request, never workflow_dispatch); master runs are never cancelled, so a
+      # partial cache from a cancelled run cannot be saved. Entries are immutable, so the key carries the run id.
+      - name: Save ccache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master' && !cancelled()
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: .ccache
+          key: ccache-linux-arm64-clang20-${{ github.run_id }}-${{ github.run_attempt }}
 
   # The Linux build with GCC 14 (the distribution compiler): the same build, tests and editor host smoke tests as the Clang
   # job (but with PhysX OFF, which keeps the no-physics Linux build compiling), so a GCC-built host is checked too. Not a required check (branch protection decides). GCC prints every lambda of
@@ -292,30 +733,77 @@ jobs:
   # carries a marked patch for that (see the "N2Engine local patch" in external/sol2/include/sol/sol.hpp).
   linux-gcc:
     name: linux (Release, x86_64, GCC 14)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
       CC: gcc-14
       CXX: g++-14
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 1G
+      CCACHE_COMPRESS: "1"
+      CCACHE_COMPILERCHECK: content
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
     steps:
       - uses: actions/checkout@v7
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-14 g++-14 cmake ninja-build python3             libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
+          sudo apt-get install -y --no-install-recommends gcc-14 g++-14 cmake ninja-build python3             libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev ccache
 
       # The one leg built with the Vulkan renderer compiled out (N2ENGINE_RENDERER_VULKAN=OFF): it installs no Vulkan
       # headers, loader or driver, so it proves the OFF configuration needs none, and the Vulkan tests do not exist here.
 
+      # ccache: PRs only restore the cache that master pushes saved (a PR's own cache would not be readable by other PRs
+      # and would evict it); the cache is per leg and compiler, so the legs never share one. A miss or a failure here
+      # only means a cold build.
+      - name: Restore ccache
+        id: ccache-restore
+        continue-on-error: true
+        uses: actions/cache/restore@v6
+        with:
+          path: .ccache
+          key: ccache-linux-x86_64-gcc14-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ccache-linux-x86_64-gcc14-
+
+      - name: Reset ccache statistics
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          ccache --zero-stats
+          ccache --show-config | grep -E " (cache_dir|max_size|base_dir|hash_dir|compiler_check) = " || true
+
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DN2ENGINE_RENDERER_VULKAN=OFF
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DN2ENGINE_RENDERER_VULKAN=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
-        run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests -- -k 0
+        run: cmake --build build --parallel --target N2EditorHost N2Server math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client n2server_net_host n2server_net_client jolt_smoke_tests -- -k 0
+
+      # The vendored Jolt Physics (N2ENGINE_USE_JOLT): its smoke test (the library alone) run directly, because ctest
+      # hides a passing test's output, so this leg's [JOLT-DETERMINISM] line (the state hash every leg must produce, the
+      # first cross-platform determinism data point) is in this job's log and summary
+      - name: Jolt determinism numbers
+        run: |
+          set -o pipefail
+          ./build/bin/jolt_smoke_tests | tee jolt-smoke.log
+          { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-DETERMINISM\]' jolt-smoke.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
+
+      # The Jolt BACKEND (engine/src/physics/jolt) stepping one scene twice in a process: its [JOLT-BACKEND-DETERMINISM] lines
+      # (compiler, job system, declared level, and the state hashes after 60 and 240 steps) are in this job's log and summary.
+      # The hashes must be equal on every leg that builds the backend: a difference is a finding, never a number to loosen
+      - name: Jolt backend determinism numbers
+        run: |
+          set -o pipefail
+          ./build/bin/engine_tests --gtest_filter='JoltBackendDeterminismTest.*' | tee jolt-backend.log
+          { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-BACKEND-DETERMINISM\]' jolt-backend.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          ALSOFT_DRIVERS: "null"
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure --timeout 600
         env:
           ALSOFT_DRIVERS: "null"
 
@@ -331,11 +819,58 @@ jobs:
           ALSOFT_DRIVERS: "null"
           PYTHONDONTWRITEBYTECODE: "1"
 
+      # The physics determinism corpus (stage J7): ten scenes on Jolt, 600 ticks each, hashed every 60 ticks; the hashes are
+      # written to determinism-hashes.json and uploaded for the `determinism` job, which compares every leg with the others and
+      # with tests/golden/physics-determinism.json. ctest ran the same tests above (what they assert concerns this binary
+      # alone); this run is the one that writes the file. A failed corpus test fails this leg, and the file is uploaded anyway.
+      - name: Physics determinism corpus
+        if: ${{ !cancelled() }}
+        run: ./build/bin/engine_tests --gtest_filter='PhysicsDeterminismCorpusTest.*'
+        env:
+          ALSOFT_DRIVERS: "null"
+          N2_DETERMINISM_LEG: linux-x86_64-gcc
+          N2_DETERMINISM_HASHES_OUT: ${{ github.workspace }}/determinism-hashes.json
+
+      - name: Upload the determinism hashes
+        if: "!cancelled()"
+        uses: actions/upload-artifact@v7
+        with:
+          name: determinism-hashes-linux-x86_64-gcc
+          path: determinism-hashes.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      # Runs after a failed build or test too (not when cancelled): the hit rate of this run, from zeroed statistics
+      - name: ccache statistics
+        if: "!cancelled()"
+        continue-on-error: true
+        run: |
+          {
+            echo "### ccache (linux-x86_64-gcc14)"
+            echo "restored cache: ${{ steps.ccache-restore.outputs.cache-matched-key || 'none (cold build)' }}"
+            echo '```'
+            ccache -s
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          ccache -s
+
+      # Only a push to master saves (never a pull request, never workflow_dispatch); master runs are never cancelled, so a
+      # partial cache from a cancelled run cannot be saved. Entries are immutable, so the key carries the run id.
+      - name: Save ccache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master' && !cancelled()
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: .ccache
+          key: ccache-linux-x86_64-gcc14-${{ github.run_id }}-${{ github.run_attempt }}
+
   # The container image (deploy/Dockerfile) on x86_64: builds it exactly as the Linux Clang job builds the host, checks the
   # runtime image has every shared library (the Dockerfile's ldd step), makes a project in a volume, starts the container
   # as its non-root user waits for the TLS ready line and checks that the host reports physics Running (PhysX is linked in statically). Not a required check. arm64 images are not built in CI.
   docker:
     name: docker (editor host image, x86_64)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -423,3 +958,423 @@ jobs:
           done
           docker logs n2tokens
           exit 1
+
+  # The web (WebAssembly) build, stages 0 to 5 of issue #155 and WebGPU G4/G5 (emdawnwebgpu, browser selection and presentation;
+  # node smokes use software): the math, text and asset-import libraries, the engine
+  # core (single-threaded; audio is Emscripten's OpenAL on WebAudio, which node lacks, so the tests see no audio device) and the software renderer, and their unit tests (math, text, assetimport,
+  # engine, renderer and web input tests, the software-renderer goldens among them), built with Emscripten and run under
+  # node; and the web player package (index.html, js, wasm, the asset pack, the loader and manifest.json), checked and run
+  # headless under node in all three profiles (dev, size, speed; stage 3), with the size budgets of web/budgets.json enforced. Not a required check. Emscripten is pinned to an exact release (EMSCRIPTEN_VERSION, installed
+  # with the official emsdk, no third-party action): a moving "latest" would let an upstream release break or change the
+  # build with no change in this repository. 4.0.10 was chosen as a 4.0 release with a recent LLVM/libc++ for C++23 (not yet proven: the first
+  # run of this job is the proof; bump the pin here and in docs/web-build.html if it is not enough). ccache is not used.
+  # The unit tests run on the dev profile only; the size and speed profiles build and check the player package (no tests:
+  # they would not add coverage, only minutes). The tests that cannot run on the web are excluded by an explicit list (tests/engine/CMakeLists.txt) or
+  # skip themselves; docs/web-build.html lists them with their reasons and describes the build.
+  web:
+    name: web (Emscripten, dev profile, node tests)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      EMSCRIPTEN_VERSION: 4.0.10
+    steps:
+      - uses: actions/checkout@v7
+
+      # emsdk is cloned at the release tag if it has one, otherwise at its default branch; either way `install` fetches
+      # exactly EMSCRIPTEN_VERSION (the emsdk repository only says where to download that release from). The emsdk
+      # node that comes with it is the one the tests run under.
+      - name: Install the Emscripten SDK
+        run: |
+          set -e
+          git clone --depth 1 --branch "$EMSCRIPTEN_VERSION" https://github.com/emscripten-core/emsdk.git "$HOME/emsdk" \
+            || git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
+          cd "$HOME/emsdk"
+          ./emsdk install "$EMSCRIPTEN_VERSION"
+          ./emsdk activate "$EMSCRIPTEN_VERSION"
+          . ./emsdk_env.sh
+          emcc --version | head -n 1
+          node --version
+          cmake --version | head -n 1
+          ninja --version
+
+      # Stage 5: PhysX for WebAssembly is compiled from source by the first configure (cmake/PhysXWeb.cmake runs
+      # scripts/web-build-physx.sh) into external/PhysX/physx/bin/emscripten.wasm32, which every profile reuses. The cache
+      # holds that folder (static libraries, patched headers, licence, stamp), keyed by the PhysX pin, the build recipe
+      # and the Emscripten release, so the build runs again only when one of them changes. Saved right after the configure
+      # (not at the end of the job) so a failing test run later still leaves the libraries cached.
+      - name: Restore the PhysX WebAssembly libraries
+        id: physx-web-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: external/PhysX/physx/bin/emscripten.wasm32
+          key: physx-web-emsdk-${{ env.EMSCRIPTEN_VERSION }}-${{ hashFiles('cmake/PhysXWebPin.cmake', 'scripts/web-build-physx.sh') }}
+
+      - name: Configure (dev profile)
+        run: |
+          set -e -o pipefail
+          . "$HOME/emsdk/emsdk_env.sh"
+          start=$(date +%s)
+          emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=dev -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_STRICT_FP=ON 2>&1 | tee configure-dev.log
+          echo "configure took $(( $(date +%s) - start )) s (PhysX cache hit: ${{ steps.physx-web-cache.outputs.cache-hit }})"
+          # PhysX failing to build turns it OFF with a warning in every other configuration; on the web that would only
+          # skip the physics tests, so the job insists that it is on
+          grep -q "PhysX enabled" configure-dev.log
+          cat external/PhysX/physx/bin/emscripten.wasm32/.pin
+          ls -l external/PhysX/physx/bin/emscripten.wasm32/lib
+
+      - name: Save the PhysX WebAssembly libraries
+        if: steps.physx-web-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: external/PhysX/physx/bin/emscripten.wasm32
+          key: ${{ steps.physx-web-cache.outputs.cache-primary-key }}
+
+      # Without the tests (only the GLFW and OpenAL headers are fetched): the size and speed profiles build the player
+      # package further down
+      - name: Configure (size and speed profiles)
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          for profile in size speed; do
+            emcmake cmake -S . -B "build-web-$profile" -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE="$profile" -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_USE_JOLT=ON
+          done
+
+      - name: Build
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          cmake --build build-web --target math_tests text_tests assetimport_tests engine_tests renderer_tests web_tests jolt_smoke_tests N2WebGpuReadbackTests -- -k 0
+
+      # CMake's Emscripten toolchain sets CMAKE_CROSSCOMPILING_EMULATOR to node, so ctest runs build-web/bin/<name>.js under node
+      - name: Test under node
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          ctest --test-dir build-web --output-on-failure -V
+
+      # The Jolt BACKEND under node (single-threaded: the web build has no pthreads): its [JOLT-BACKEND-DETERMINISM] lines in the
+      # job's log and summary, to be compared with the native legs'
+      - name: Jolt backend determinism numbers
+        run: |
+          set -e -o pipefail
+          . "$HOME/emsdk/emsdk_env.sh"
+          node build-web/bin/engine_tests.js --gtest_filter='JoltBackendDeterminismTest.*' | tee jolt-backend.log
+          { echo; echo "web (node):"; echo; grep '^\[JOLT-BACKEND-DETERMINISM\]' jolt-backend.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
+
+      # The physics determinism corpus (stage J7) under node (single-threaded; the dev profile, strict floating point): the same
+      # file and artifact as the native legs, compared by the `determinism` job. NODERAWFS makes the file a real one.
+      - name: Physics determinism corpus
+        if: ${{ !cancelled() }}
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          node build-web/bin/engine_tests.js --gtest_filter='PhysicsDeterminismCorpusTest.*'
+        env:
+          N2_DETERMINISM_LEG: web-node
+          N2_DETERMINISM_HASHES_OUT: ${{ github.workspace }}/determinism-hashes.json
+
+      - name: Upload the determinism hashes
+        if: "!cancelled()"
+        uses: actions/upload-artifact@v7
+        with:
+          name: determinism-hashes-web-node
+          path: determinism-hashes.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      # Only reports (raw and gzip sizes in the job summary); the budgets are checked on the package below
+      - name: Report artifact sizes
+        run: bash scripts/web-size-report.sh build-web/bin
+
+      # Stage 2 (issue #155): the web player and its package folder (build-web/web-package: index.html, index.js,
+      # index.wasm, index.data, static files only). Linking it also runs the packaging of lua_project's assets.
+      - name: Build the web package
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          cmake --build build-web --target web-package -- -k 0
+
+      # Checks the folder's contents (static files only, relative URLs, no worker script) and runs the player headless
+      # under node for 30 frames with the canvas mocked: every frame must arrive at the size asked for and show something.
+      # This is not a browser: the canvas, the input events and the page itself are checked by hand (docs/web-checklist.html).
+      - name: Smoke the web package under node
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          node scripts/web-package-smoke.mjs build-web/web-package 30 320x180
+
+      # The loader (web/n2-loader.js) under node with a mock fetch: right and wrong MIME type (one request), no manifest,
+      # a compressing host without a manifest, 404, truncated file, LinkError, a page older than its manifest
+      - name: Test the web loader under node
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          node scripts/web-loader-test.mjs
+          node scripts/web-gpu-test.mjs
+
+      # Stage 4: the audio unlock of the loader (web/n2-loader.js, createAudioUnlock) under node with a mock AudioContext
+      # and a mock document: resume once on the first gesture, listeners removed, failures tolerated, the hidden tab
+      - name: Test the web audio unlock under node
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          node scripts/web-audio-unlock-test.mjs
+
+      - name: Report web package sizes
+        run: bash scripts/web-size-report.sh build-web/web-package
+
+      # Stage 3: the package's sizes (manifest.json, written by the web-package target) against web/budgets.json, the one
+      # place the budgets live. The job fails when one is exceeded.
+      - name: Check the web package size budgets (dev)
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          node scripts/web-budget-check.mjs build-web/web-package dev
+
+      # Stage 3: the size and speed profiles, each a full rebuild of the engine, the renderer and the player (LTO, no tests),
+      # then the same package smoke (now with the .br/.gz siblings required) and the profile's budgets.
+      - name: Build and check the web package (size profile)
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          cmake --build build-web-size --target web-package -- -k 0
+          node scripts/web-package-smoke.mjs build-web-size/web-package 30 320x180 --precompressed
+          bash scripts/web-size-report.sh build-web-size/web-package
+          node scripts/web-budget-check.mjs build-web-size/web-package size
+
+      # Jolt Physics (N2ENGINE_USE_JOLT) IS linked into the player since the Jolt backend (PR #205): the player's budgets were raised
+      # for it. Two small programs of its own (cmake/jolt/probe) still give the library's weight in this profile (the .wasm of
+      # the probe minus the baseline's), and the probe, which runs the smoke test's scenario, must print the golden state hash
+      # (it exits non-zero otherwise)
+      - name: Measure Jolt Physics (size profile)
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          cmake --build build-web-size --target jolt_size_baseline jolt_size_probe -- -k 0
+          node build-web-size/bin/jolt_size_probe.js
+          node scripts/web-jolt-size-report.mjs build-web-size size
+
+      - name: Build and check the web package (speed profile)
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          cmake --build build-web-speed --target web-package -- -k 0
+          node scripts/web-package-smoke.mjs build-web-speed/web-package 30 320x180 --precompressed
+          bash scripts/web-size-report.sh build-web-speed/web-package
+          node scripts/web-budget-check.mjs build-web-speed/web-package speed
+
+      - name: Measure Jolt Physics (speed profile)
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          cmake --build build-web-speed --target jolt_size_baseline jolt_size_probe -- -k 0
+          node build-web-speed/bin/jolt_size_probe.js
+          node scripts/web-jolt-size-report.mjs build-web-speed speed
+
+      # WebGPU stage G4 (#155): the WebGPU backend is linked into the player of every profile (built against Emscripten's
+      # emdawnwebgpu port, cmake/EmdawnwebgpuPort.cmake, which emcc fetches at the first compile). G5 selects it in supporting
+      # browsers; the node smokes above run software. The proof that it is linked is the port's JavaScript in
+      # index.js: the call that makes a render pipeline on the browser's GPUDevice, which only the backend's pipeline cache reaches
+      - name: Check that the WebGPU backend is linked into the player (all profiles)
+        run: |
+          set -e
+          for dir in build-web build-web-size build-web-speed; do
+            if ! grep -q 'createRenderPipeline(' "$dir/web-package/index.js"; then
+              echo "$dir/web-package/index.js has no WebGPU backend (no createRenderPipeline call)"
+              exit 1
+            fi
+            echo "$dir: the WebGPU backend is linked into the player"
+          done
+
+  # The cross-leg determinism comparison of the Jolt backend (stage J7, docs/physics.html "Determinism proof in CI"). Every leg
+  # (windows Release, linux x86_64 Clang, linux arm64 Clang, linux x86_64 GCC 14, web under node) ran the physics scene corpus
+  # on a strict floating-point build and uploaded determinism-hashes-<leg>; this job needs all of them, downloads the files and
+  # compares them with each other and with tests/golden/physics-determinism.json (scripts/physics-determinism.py). It runs
+  # when a leg failed too (a missing or incomplete leg is a finding, never a silent skip), and not on a docs-only pull
+  # request. NOT a required check: make it required only after two weeks green (design P9; Settings, Branches, the master
+  # rule, add "determinism (cross-leg physics hashes)").
+  determinism:
+    name: determinism (cross-leg physics hashes)
+    needs: [changes, windows, linux, linux-arm64, linux-gcc, web]
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      # Proves the comparison can fail (a differing record, a missing record, scene or leg, a golden mismatch)
+      - name: Self-test the comparison
+        run: python3 scripts/physics-determinism.py self-test
+
+      # A leg that uploaded nothing leaves no folder here: the comparison names it as missing
+      - name: Download the legs' hashes
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: determinism-hashes-*
+          path: determinism-legs
+
+      # What the golden would hold, made from the Linux x86_64 Clang leg: download it from this run and commit it as
+      # tests/golden/physics-determinism.json only from a green run, in a pull request that says why (the first run has no
+      # golden, so this is how it is created)
+      - name: Make the golden candidate
+        continue-on-error: true
+        run: python3 scripts/physics-determinism.py golden --from determinism-legs/determinism-hashes-linux-x86_64-clang/determinism-hashes.json --out golden-candidate/physics-determinism.json
+
+      - name: Upload the golden candidate
+        if: "!cancelled()"
+        uses: actions/upload-artifact@v7
+        with:
+          name: physics-determinism-golden-candidate
+          path: golden-candidate/physics-determinism.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Compare the legs with each other and with the golden
+        run: python3 scripts/physics-determinism.py compare --legs-dir determinism-legs --expect windows-release,linux-x86_64-clang,linux-arm64-clang,linux-x86_64-gcc,web-node --golden tests/golden/physics-determinism.json
+
+  # WebGPU backend, stages G1/G5 (#155): the built-in WGSL files and the loader's exact canvas shader are validated by Tint (the
+  # WGSL compiler of Chrome and Edge) and by naga (Firefox's; Safari's WebKit compiler has no CI path), the pinned versions in scripts/install-wgsl-validators.sh
+  # (Tint: Dawn's prebuilt release binary, SHA-256 checked; naga-cli: its crates.io source package, SHA-256 checked, built with
+  # --locked). Not a required check, and it follows the docs-only skip like the jobs above. No build of the engine: a few
+  # minutes (the Tint download is seconds; a cold cache also installs the pinned Rust toolchain and builds naga, a few minutes, cached keyed on the install script).
+  wgsl:
+    name: wgsl (Tint, naga)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Restore the validators
+        uses: actions/cache@v6
+        with:
+          path: ~/wgsl-validators
+          key: wgsl-validators-${{ runner.os }}-${{ hashFiles('scripts/install-wgsl-validators.sh') }}
+
+      - name: Install Tint and naga (pinned, hash-checked)
+        run: bash scripts/install-wgsl-validators.sh "$HOME/wgsl-validators"
+
+      - name: Validate the WGSL shaders
+        run: |
+          set -e
+          export TINT="$HOME/wgsl-validators/tint/bin/tint" NAGA="$HOME/wgsl-validators/naga/bin/naga"
+          bash scripts/validate-wgsl.sh
+
+  # WebGPU backend, stage G2 (#155): the native test harness. The WebGPU renderer (renderer/src/webgpu/, built only with
+  # N2ENGINE_RENDERER_WEBGPU=ON, never selectable at run time) runs on the pinned prebuilt Dawn (cmake/DawnPrebuilt.cmake, the
+  # same release the "wgsl" job takes Tint from) over Mesa lavapipe, the CPU Vulkan driver the Linux legs use. Builds the renderer
+  # and the webgpu_tests program only (not the engine). Not a required check, and it follows the docs-only skip like the jobs above.
+  # No existing job changes: the option is OFF everywhere else. Cost: see docs/application.html#webgpu-backend (CI).
+  webgpu:
+    name: webgpu (Dawn, lavapipe)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CC: gcc-14
+      CXX: g++-14
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 1G
+      CCACHE_COMPRESS: "1"
+      CCACHE_COMPILERCHECK: content
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+    steps:
+      - uses: actions/checkout@v7
+
+      # The renderer's Dawn and the shader validators' Tint must be one revision: the two pins name the same Dawn release. So
+      # must the web build's emdawnwebgpu (stage G4: cmake/EmdawnwebgpuPort.cmake), so that both builds compile the backend
+      # against the same webgpu.h
+      - name: Dawn, Tint and emdawnwebgpu pins agree
+        run: |
+          set -eu
+          cmake_pin() { sed -n "s/^set($1 \"\(.*\)\")\$/\1/p" cmake/DawnPrebuilt.cmake; }
+          script_pin() { sed -n "s/^$1=\"\(.*\)\"\$/\1/p" scripts/install-wgsl-validators.sh; }
+          for pair in N2_DAWN_TAG:DAWN_TAG N2_DAWN_COMMIT:DAWN_COMMIT N2_DAWN_SHA256:DAWN_SHA256; do
+            a=$(cmake_pin "${pair%%:*}")
+            b=$(script_pin "${pair##*:}")
+            echo "${pair%%:*} = $a ; ${pair##*:} = $b"
+            test -n "$a"
+            test "$a" = "$b"
+          done
+          web_tag=$(sed -n "s/^set(N2_EMDAWNWEBGPU_TAG \"\(.*\)\")\$/\1/p" cmake/EmdawnwebgpuPort.cmake)
+          echo "N2_EMDAWNWEBGPU_TAG = $web_tag"
+          test "$web_tag" = "$(cmake_pin N2_DAWN_TAG)"
+
+      # Dawn's Vulkan backend needs a Vulkan loader and a driver at run time, not the headers: libvulkan1 and Mesa lavapipe
+      # (mesa-vulkan-drivers). The Vulkan renderer is compiled out of this job (N2ENGINE_RENDERER_VULKAN=OFF), so no libvulkan-dev.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-14 g++-14 cmake ninja-build python3 libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev ccache libvulkan1 mesa-vulkan-drivers
+
+      # The runners have no GPU: Mesa lavapipe is the Vulkan driver Dawn gets. Pin whichever ICD file is installed (so the loader
+      # cannot pick anything else), and fail here, not in the tests, when there is none.
+      - name: Select the lavapipe Vulkan driver
+        run: |
+          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)
+          test -n "$icd"
+          echo "Using $icd"
+          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
+
+      # ccache: PRs only restore the cache that master pushes saved; the cache is per job and compiler. A miss or a failure here
+      # only means a cold build.
+      - name: Restore ccache
+        id: ccache-restore
+        continue-on-error: true
+        uses: actions/cache/restore@v6
+        with:
+          path: .ccache
+          key: ccache-webgpu-x86_64-gcc14-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ccache-webgpu-x86_64-gcc14-
+
+      - name: Reset ccache statistics
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          ccache --zero-stats
+          ccache --show-config | grep -E " (cache_dir|max_size|base_dir|hash_dir|compiler_check) = " || true
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_RENDERER_VULKAN=OFF -DN2ENGINE_RENDERER_WEBGPU=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build build --parallel --target webgpu_tests -- -k 0
+
+      # -V: ctest hides a passing test's output, and the adapter line and the memory numbers are worth having in the log
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -V --timeout 600 -R webgpu_tests
+        env:
+          # No adapter fails the tests instead of skipping them, and the adapter must be a CPU one (lavapipe), so a green run
+          # means they executed on the pinned device
+          N2_REQUIRE_WEBGPU: "1"
+          N2_WEBGPU_EXPECT_CPU_DEVICE: "1"
+
+      # Runs after a failed build or test too (not when cancelled): the hit rate of this run, from zeroed statistics
+      - name: ccache statistics
+        if: "!cancelled()"
+        continue-on-error: true
+        run: |
+          {
+            echo "### ccache (webgpu-x86_64-gcc14)"
+            echo "restored cache: ${{ steps.ccache-restore.outputs.cache-matched-key || 'none (cold build)' }}"
+            echo '```'
+            ccache -s
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          ccache -s
+
+      # Only a push to master saves (never a pull request, never workflow_dispatch); master runs are never cancelled, so a
+      # partial cache from a cancelled run cannot be saved. Entries are immutable, so the key carries the run id.
+      - name: Save ccache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master' && !cancelled()
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: .ccache
+          key: ccache-webgpu-x86_64-gcc14-${{ github.run_id }}-${{ github.run_attempt }}

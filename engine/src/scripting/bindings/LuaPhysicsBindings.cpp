@@ -1,4 +1,6 @@
 #include "engine/scripting/bindings/LuaBindings.hpp"
+#include <math/Quaternion.hpp>
+#include <math/Vector3.hpp>
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/GameObject.hpp"
 #include "engine/physics/Rigidbody.hpp"
@@ -17,6 +19,8 @@
 #include <cmath>
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace N2Engine::Scripting::Bindings
@@ -89,35 +93,142 @@ namespace N2Engine::Scripting::Bindings
             return result;
         }
 
+        // One collider an overlap query found, as a plain table of checked handles
+        sol::table OverlapHitToLua(const Physics::OverlapHit &hit, lua_State *state)
+        {
+            sol::state_view lua(state);
+            sol::table result = lua.create_table();
+            if (hit.gameObject)
+            {
+                result["gameObject"] = GameObjectRef(*hit.gameObject);
+            }
+            if (hit.collider)
+            {
+                result["collider"] = ComponentToLua(*hit.collider, state);
+            }
+            if (hit.rigidbody)
+            {
+                result["rigidbody"] = RigidbodyRef(*hit.rigidbody);
+            }
+            return result;
+        }
+
+        // The default and the longest distance: one far beyond any scene but well below the float limit keeps the
+        // backends' internal arithmetic clear of overflow (a sweep is clamped further, to QueryRules::kMaxSweepDistance,
+        // by the backend)
+        constexpr float MaxLuaRayDistance = 1.0e9f;
+
+        // The distance argument of a query, or nothing for one that can't hit: a negative or NaN distance. Longer
+        // distances (math.huge included) are clamped to MaxLuaRayDistance.
+        std::optional<float> ReadDistance(const sol::optional<float> maxDistance)
+        {
+            const float distance = maxDistance.value_or(MaxLuaRayDistance);
+            if (!(distance >= 0.0f))
+            {
+                return std::nullopt;
+            }
+            return (std::min)(distance, MaxLuaRayDistance);
+        }
+
+        // The layer mask argument, cut to 32 bits so -1 means every layer; default: every layer but Ignore Raycast
+        uint32_t ReadLayerMask(const sol::optional<int64_t> layerMask)
+        {
+            const int64_t mask = layerMask.value_or(static_cast<int64_t>(Layers::DefaultRaycastMask));
+            return static_cast<uint32_t>(static_cast<uint64_t>(mask) & 0xFFFFFFFFu);
+        }
+
+        // An optional argument of the new queries: nil or missing is absent; anything given has to be of the right type.
+        // (A sol::optional reads a string or a table as absent, and the script would silently get the default.)
+        bool IsAbsent(const sol::object &argument)
+        {
+            const sol::type type = argument.get_type();
+            return type == sol::type::none || type == sol::type::lua_nil;
+        }
+
+        sol::optional<float> OptionalFloatArgument(const sol::object &argument, const char *query, const char *name)
+        {
+            if (IsAbsent(argument))
+            {
+                return sol::nullopt;
+            }
+            if (argument.get_type() != sol::type::number)
+            {
+                throw std::runtime_error(std::string(query) + ": " + name + " must be a number or nil");
+            }
+            return argument.as<float>();
+        }
+
+        sol::optional<int64_t> OptionalMaskArgument(const sol::object &argument, const char *query)
+        {
+            if (IsAbsent(argument))
+            {
+                return sol::nullopt;
+            }
+            if (argument.get_type() != sol::type::number)
+            {
+                throw std::runtime_error(std::string(query) + ": layerMask must be a number or nil");
+            }
+            return argument.as<int64_t>();
+        }
+
+        Math::Quaternion OptionalRotationArgument(const sol::object &argument, const char *query)
+        {
+            if (IsAbsent(argument))
+            {
+                return Math::Quaternion::Identity;
+            }
+            if (!argument.is<Math::Quaternion>())
+            {
+                throw std::runtime_error(std::string(query) + ": rotation must be a Quaternion or nil");
+            }
+            return argument.as<Math::Quaternion>();
+        }
+
+        bool IsUsableDirection(const Math::Vector3 &direction)
+        {
+            const float lengthSquared = direction.LengthSquared();
+            return lengthSquared > 0.0f && std::isfinite(lengthSquared);
+        }
+
+        // A radius or half extent a query can use: above zero and finite
+        bool IsUsableExtent(const float extent)
+        {
+            return extent > 0.0f && std::isfinite(extent);
+        }
+
         struct LuaRayQuery
         {
             float maxDistance;
             uint32_t layerMask;
         };
 
-        // The default and the longest distance: PhysX takes a finite distance ([0, inf)), and one far beyond
-        // any scene but well below the float limit keeps its internal arithmetic clear of overflow
-        constexpr float MaxLuaRayDistance = 1.0e9f;
-
-        // The optional arguments of Physics.Raycast/RaycastAll, or nothing for a query that can't hit: a zero
-        // or non-finite direction, or a negative or NaN distance. Longer distances (math.huge included) are
-        // clamped to MaxLuaRayDistance. The mask is cut to 32 bits, so -1 means every layer.
+        // The optional arguments of Physics.Raycast/RaycastAll (and of the casts), or nothing for a query that can't
+        // hit: a zero or non-finite direction, or a negative or NaN distance.
         std::optional<LuaRayQuery> ReadRayQuery(const Math::Vector3 &direction, const sol::optional<float> maxDistance,
                                                 const sol::optional<int64_t> layerMask)
         {
-            const float lengthSquared = direction.LengthSquared();
-            if (!(lengthSquared > 0.0f) || !std::isfinite(lengthSquared))
+            if (!IsUsableDirection(direction))
             {
                 return std::nullopt;
             }
-            const float distance = maxDistance.value_or(MaxLuaRayDistance);
-            if (!(distance >= 0.0f))
+            const std::optional<float> distance = ReadDistance(maxDistance);
+            if (!distance)
             {
                 return std::nullopt;
             }
-            const int64_t mask = layerMask.value_or(static_cast<int64_t>(Layers::DefaultRaycastMask));
-            return LuaRayQuery{(std::min)(distance, MaxLuaRayDistance),
-                               static_cast<uint32_t>(static_cast<uint64_t>(mask) & 0xFFFFFFFFu)};
+            return LuaRayQuery{*distance, ReadLayerMask(layerMask)};
+        }
+
+        // The array of hit tables an overlap query returns (empty for none)
+        sol::table OverlapResultToLua(const std::vector<Physics::OverlapHit> &hits, lua_State *state)
+        {
+            sol::state_view lua(state);
+            sol::table result = lua.create_table();
+            for (std::size_t i = 0; i < hits.size(); ++i)
+            {
+                result[i + 1] = OverlapHitToLua(hits[i], state);
+            }
+            return result;
         }
     }
 
@@ -231,6 +342,83 @@ namespace N2Engine::Scripting::Bindings
                     result[i + 1] = RaycastHitToLua(hits[i], state);
                 }
                 return result;
+            },
+            // Physics.SphereCast(origin, radius, direction, maxDistance?, layerMask?) -> the closest hit as for
+            // Physics.Raycast (the point is on the hit surface, the distance is the sphere centre's), or nil
+            "SphereCast", [](const Math::Vector3 &origin, const float radius, const Math::Vector3 &direction,
+                             const sol::object maxDistance, const sol::object layerMask,
+                             const sol::this_state state) -> sol::object
+            {
+                const auto query = ReadRayQuery(
+                    direction, OptionalFloatArgument(maxDistance, "Physics.SphereCast", "maxDistance"),
+                    OptionalMaskArgument(layerMask, "Physics.SphereCast"));
+                Physics::RaycastHit hit;
+                if (!query || !IsUsableExtent(radius) ||
+                    !Physics::Raycast::SphereCast(origin, radius, direction, hit, query->maxDistance, query->layerMask))
+                {
+                    return sol::make_object(state, sol::lua_nil);
+                }
+                return RaycastHitToLua(hit, state);
+            },
+            // Physics.CapsuleCast(point0, point1, radius, direction, maxDistance?, layerMask?) -> as SphereCast; the
+            // capsule is the segment point0-point1 (the centres of its end spheres) with `radius`; the distance is
+            // the capsule centre's
+            "CapsuleCast", [](const Math::Vector3 &point0, const Math::Vector3 &point1, const float radius,
+                              const Math::Vector3 &direction, const sol::object maxDistance,
+                              const sol::object layerMask, const sol::this_state state) -> sol::object
+            {
+                const auto query = ReadRayQuery(
+                    direction, OptionalFloatArgument(maxDistance, "Physics.CapsuleCast", "maxDistance"),
+                    OptionalMaskArgument(layerMask, "Physics.CapsuleCast"));
+                Physics::RaycastHit hit;
+                if (!query || !IsUsableExtent(radius) ||
+                    !Physics::Raycast::CapsuleCast(point0, point1, radius, direction, hit, query->maxDistance,
+                                                   query->layerMask))
+                {
+                    return sol::make_object(state, sol::lua_nil);
+                }
+                return RaycastHitToLua(hit, state);
+            },
+            // Physics.OverlapSphere(center, radius, layerMask?) -> every collider overlapping the sphere, each once,
+            // as an array of {gameObject, collider, rigidbody} tables in body-handle order (empty for none)
+            "OverlapSphere", [](const Math::Vector3 &center, const float radius,
+                                const sol::object layerMask, const sol::this_state state) -> sol::table
+            {
+                const uint32_t mask = ReadLayerMask(OptionalMaskArgument(layerMask, "Physics.OverlapSphere"));
+                std::vector<Physics::OverlapHit> hits;
+                if (IsUsableExtent(radius))
+                {
+                    Physics::Overlap::Sphere(center, radius, hits, mask);
+                }
+                return OverlapResultToLua(hits, state);
+            },
+            // Physics.OverlapBox(center, halfExtents, rotation?, layerMask?) -> as OverlapSphere; rotation defaults to
+            // Quaternion.Identity
+            "OverlapBox", [](const Math::Vector3 &center, const Math::Vector3 &halfExtents,
+                             const sol::object rotation, const sol::object layerMask,
+                             const sol::this_state state) -> sol::table
+            {
+                const Math::Quaternion turn = OptionalRotationArgument(rotation, "Physics.OverlapBox");
+                const uint32_t mask = ReadLayerMask(OptionalMaskArgument(layerMask, "Physics.OverlapBox"));
+                std::vector<Physics::OverlapHit> hits;
+                if (IsUsableExtent(halfExtents.x) && IsUsableExtent(halfExtents.y) && IsUsableExtent(halfExtents.z))
+                {
+                    Physics::Overlap::Box(center, halfExtents, turn, hits, mask);
+                }
+                return OverlapResultToLua(hits, state);
+            },
+            // Physics.OverlapCapsule(point0, point1, radius, layerMask?) -> as OverlapSphere, for the capsule of
+            // Physics.CapsuleCast
+            "OverlapCapsule", [](const Math::Vector3 &point0, const Math::Vector3 &point1, const float radius,
+                                 const sol::object layerMask, const sol::this_state state) -> sol::table
+            {
+                const uint32_t mask = ReadLayerMask(OptionalMaskArgument(layerMask, "Physics.OverlapCapsule"));
+                std::vector<Physics::OverlapHit> hits;
+                if (IsUsableExtent(radius))
+                {
+                    Physics::Overlap::Capsule(point0, point1, radius, hits, mask);
+                }
+                return OverlapResultToLua(hits, state);
             }
         );
 

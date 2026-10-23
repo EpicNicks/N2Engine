@@ -2,10 +2,17 @@
 
 #include <math/Vector3.hpp>
 #include <math/Quaternion.hpp>
+#include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <span>
+#include <string_view>
 #include <vector>
 
+#include "engine/physics/BodyState.hpp"
+#include "engine/physics/DeterminismLevel.hpp"
 #include "engine/physics/GpuStatus.hpp"
+#include "engine/physics/PhysicsFeatures.hpp"
 #include "engine/physics/PhysicsHandle.hpp"
 #include "engine/physics/PhysicsMaterial.hpp"
 
@@ -16,6 +23,8 @@ namespace N2Engine::Physics
     class Rigidbody;
     class ICollider;
     struct RaycastHit;
+    struct OverlapShape;
+    struct OverlapHit;
     enum class QueryTriggers : std::uint8_t; // Raycast.hpp
 
     class IPhysicsBackend
@@ -26,6 +35,50 @@ namespace N2Engine::Physics
         /// physics.gpu: call before Initialize (the scene is built there and its GPU flag is immutable). A backend
         /// without GPU support ignores it.
         virtual void SetGpuMode(GpuMode) {}
+        /// physics.deterministic: call before Initialize (the scene's flags are immutable once it exists). Asks for
+        /// the backend's reproducible-replay configuration; a backend without one ignores it. Default off, and off
+        /// changes nothing.
+        virtual void SetDeterministic(bool) {}
+
+        /// What this backend promises about reproducing its results, as configured now (see DeterminismLevel).
+        /// None by default: a backend declares more only when it can prove it. The network presets read it at
+        /// startup (the Deterministic preset needs CrossPlatform).
+        [[nodiscard]] virtual DeterminismLevel GetDeterminism() const { return DeterminismLevel::None; }
+        /// Whether the whole simulation can be saved and restored exactly (what rollback needs). False by default.
+        [[nodiscard]] virtual bool SupportsSnapshot() const { return false; }
+        /// Whether a body's full state (pose, velocities, sleep state) can be written back, including a dynamic
+        /// body (what client reconciliation needs). False by default.
+        [[nodiscard]] virtual bool SupportsSetState() const { return false; }
+        /// Which feature groups this backend implements (layers and the collision matrix, triggers, contact and trigger
+        /// events, scene queries; PhysicsFeatures.hpp). None by default, like the other declarations: a backend
+        /// declares a group only once it works. The Deterministic preset refuses to start unless every group is there.
+        [[nodiscard]] virtual PhysicsFeatureSet GetImplementedFeatures() const { return PhysicsFeatureSet::None(); }
+
+        /// Which backend this is: "physx" or "jolt" (the physics.backend setting's values, PhysicsBackendKind), or
+        /// "unknown" for a backend that does not say (the default, so mocks keep compiling). It is the name the Physics
+        /// and Network health rows give, and the start of the id the determinism fingerprint will carry.
+        [[nodiscard]] virtual std::string_view BackendId() const { return "unknown"; }
+
+        /// Reads a body's full state into `out`: pose, both velocities and whether it is asleep. False (and `out`
+        /// untouched) for a stale or invalid handle, a body that is not in the simulation (disabled), or a backend
+        /// without SupportsSetState (the default). A static body reports zero velocities and awake. Main thread,
+        /// between steps.
+        virtual bool GetBodyState(PhysicsBodyHandle /*body*/, BodyState & /*out*/) const { return false; }
+        /// Writes a body's full state back, including a dynamic body's pose (what a plain SetBodyTransform cannot do: it
+        /// only sets a kinematic target). False, with nothing changed, for the cases GetBodyState refuses and for a
+        /// state with a non-finite value or a rotation of no length (a rotation is normalised). Never call it while
+        /// the backend is stepping. What each body kind takes is up to the backend (PhysXBackend documents it); the
+        /// default does nothing and returns false.
+        virtual bool SetBodyState(PhysicsBodyHandle /*body*/, const BodyState & /*state*/) { return false; }
+
+        /// Snapshot hooks (what rollback needs; SupportsSnapshot says whether they work). SaveState replaces `out` with
+        /// the whole simulation's state, between steps only; RestoreState puts a saved state back into a simulation
+        /// that has the same bodies as at save time. Both return false for "unsupported" (the default).
+        virtual bool SaveState(std::vector<std::byte> & /*out*/) const { return false; }
+        virtual bool RestoreState(std::span<const std::byte> /*in*/) { return false; }
+        /// A canonical hash of the simulation state (bodies in handle order), for desync detection; nullopt for
+        /// "unsupported" (the default). Not 0 for unsupported: 0 is a legal hash.
+        [[nodiscard]] virtual std::optional<std::uint64_t> HashState() const { return std::nullopt; }
         /// What Initialize made of the GPU request: the SCENE (and probe) status, Disabled for a backend that never
         /// asks. It does not change when a feature that runs in the GPU scene (particles, soft bodies) fails, so
         /// Physics.IsGpuAvailable reflects the scene only; a feature's own status is GetParticlesGpuStatus and
@@ -175,7 +228,8 @@ namespace N2Engine::Physics
 
         // Queries: layerMask selects the layers hit (see Layers); 0 hits nothing. Raycast's wrappers default
         // it to Layers::DefaultRaycastMask. `triggers` (QueryTriggers::Ignore) skips trigger colliders; the
-        // wrappers default it to Collide.
+        // wrappers default it to Collide. Every backend follows QueryRules (Raycast.hpp): degenerate input finds
+        // nothing, a start inside a collider is a hit at distance 0, ties and lists are ordered by body handle.
         virtual bool Raycast(
             const Math::Vector3& origin,
             const Math::Vector3& direction,
@@ -199,5 +253,25 @@ namespace N2Engine::Physics
             RaycastHit& hit,
             float maxDistance,
             uint32_t layerMask) = 0;
+
+        /// Sweeps a capsule: the segment point0-point1 (the centres of its end spheres) with `radius`. The default
+        /// (a backend without it) finds nothing; both engine backends have it.
+        virtual bool CapsuleCast(
+            const Math::Vector3& point0,
+            const Math::Vector3& point1,
+            float radius,
+            const Math::Vector3& direction,
+            RaycastHit& hit,
+            float maxDistance,
+            uint32_t layerMask,
+            QueryTriggers triggers);
+
+        /// Replaces `hits` with every collider overlapping `shape` (each once, sorted by body handle, then collider
+        /// order) and returns how many. The default finds nothing; both engine backends have it.
+        virtual int Overlap(
+            const OverlapShape& shape,
+            std::vector<OverlapHit>& hits,
+            uint32_t layerMask,
+            QueryTriggers triggers);
     };
 }

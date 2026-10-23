@@ -1,0 +1,10 @@
+{
+  "name": "hardening-readonly",
+  "head": "eecfab2b9a352763d6b8c42f0c2a410ef0220f6a",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

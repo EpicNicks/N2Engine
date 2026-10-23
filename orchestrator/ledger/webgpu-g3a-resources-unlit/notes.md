@@ -1,0 +1,11 @@
+Accepted by the user 2026-10-13:
+- Queue writes need no 256-byte row alignment (spec: only buffer/texture copies do), so uploads are tightly packed and the alignment is handled in the readback copies (frame, mesh, texture level), which the tests exercise with padded rows (37x5, 70x2, 5x3)
+- No live WebGPU-vs-Vulkan frame diff: the Vulkan renderer is compiled out of the webgpu job, so WebGpuRendererUnlitDrawTests asserts the Vulkan goldens' structural values scene by scene instead; the cross-diff runs against the software renderer
+- Blend and additive are in the pipeline cache key but every pipeline is opaque (a draw asking for blending logs once); blending, lit, text and UpdateSceneLighting are G3b
+- Linear-filtered and vertex-colour scenes use strict 2/255 with nothing left out (measured largest difference 1/255) instead of the Vulkan lit class; triangle scenes use strict 2/255 with colour-based edges left out (13-15% of the image)
+- UpdateMesh policy beyond the design row: in place when not drawn in the open frame and the counts are unchanged, new buffers otherwise (the drawn-in-this-frame flag stays set for the frame)
+- CPU mips use equal-weight range averaging (2x2 box for halvings, overlapping ranges for odd sizes), so non-power-of-two chains differ from Vulkan's blit chain
+- CreateDevice now fails Initialize when the device limits are below what the draws need (uniform binding 192, 2 dynamic uniform buffers, 2 bind groups, 11 bindings, 5 textures and samplers per stage)
+- Replaced the G2 test EverythingThatWouldDrawFailsCleanlyAndWarnsOncePerCall with WhatStaysUnimplementedFailsCleanlyAndWarnsOncePerCall; reworded the shared CrossBackendDiff failure message from 'Vulkan' to 'the GPU renderer'
+- Added public test hooks to WebGpuRenderer (mesh/texture info and readback, counts, pipeline/bind-group/ring counters, SetMaterialTextureIdForTest, SetRingChunkBytesForTest)
+- Review low fixed: docs/application.html pipeline-failure sentence reworded (docs-only; negative cache only hit for a null handle)

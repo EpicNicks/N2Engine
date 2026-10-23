@@ -1103,6 +1103,9 @@ void SoftwareRenderer::Present()
                     (GLsizei)m_width, (GLsizei)m_height,
                     GL_RGBA, GL_UNSIGNED_BYTE, m_colorBuffer.data());
 
+    // The viewport keeps the size it had when the context was created: after a resize or maximize the quad would
+    // still cover only that old region, with black around it. m_width/m_height follow the framebuffer size.
+    glViewport(0, 0, (GLsizei)m_width, (GLsizei)m_height);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     // Draw fullscreen quad

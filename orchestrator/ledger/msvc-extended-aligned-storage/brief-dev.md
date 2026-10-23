@@ -1,0 +1,39 @@
+# Task msvc-extended-aligned-storage: MSVC: define _ENABLE_EXTENDED_ALIGNED_STORAGE so stable_sort over over-aligned types compiles (C2338 in TextDrawing.cpp)
+Repo: engine (C:/Method Notes Obsidian/N2Engine, EpicNicks/N2Engine). Branch: fix-msvc-extended-aligned-storage.
+
+## Issue / plan
+Bug report from the user (2026-10-14), building master with build-vs.bat (Debug, VS 2022 Build Tools, MSVC 14.44.35207) on a second PC: engine/src/rendering/TextDrawing.cpp(145) fails with `error C2338: static_assert failed: You've instantiated std::aligned_storage<Len, Align> with an extended alignment ... define either _ENABLE_EXTENDED_ALIGNED_STORAGE ... or _DISABLE_EXTENDED_ALIGNED_STORAGE`. Instantiation chain: `std::ranges::stable_sort` (TextDrawing.cpp:145, in TextDrawing::ResolvePasses, element type `ResolvePasses::Entry`, 80 bytes, alignment 16 because it contains over-aligned math types) -> `std::_Optimistic_temporary_buffer<Entry>` -> `std::_Aligned_storage_t<80,16>`. Our CI Windows legs are green (their MSVC toolset apparently differs), so this is a toolset-dependent STL behaviour that our code can trip. Fix: (1) in the root CMakeLists.txt MSVC block (and for clang-cl: the `MSVC` variable is true there too; check the `WIN32 AND Clang` branch for the MSVC STL case) add the compile definition `_ENABLE_EXTENDED_ALIGNED_STORAGE` for ALL targets (add_compile_definitions inside if(MSVC), or the clang-cl equivalent when it uses the MSVC STL), with a short comment explaining why (MSVC STL temporary buffers for over-aligned element types; we compile everything in one build so the layout change is harmless). Do NOT use _DISABLE_EXTENDED_ALIGNED_STORAGE. Also check engine/ tests/ renderer/ text/ math/ for any CMake target that sets its own compile definitions in a way that would bypass a global add_compile_definitions (target_compile_definitions are additive; fine) and for other places where an over-aligned type goes through std::stable_sort/std::stable_partition/std::inplace_merge/std::get_temporary_buffer (grep the repo, list them in the PR body; no code change needed if the definition is global). (2) A regression test (tests/engine or tests/math, registered like the neighbours) that stable-sorts a std::vector of a struct `alignas(16)` of 80 bytes with `std::ranges::stable_sort` AND `std::stable_sort` and asserts the result is stably sorted (equal keys keep order) for sizes around the temporary-buffer threshold (0, 1, 2, 7, 64, 1000): on a toolset that rejects extended aligned storage without the definition this file fails to COMPILE, which is the point. The test must compile and pass on every leg (Linux Clang/GCC, arm64, Windows). (3) Docs: one line in docs/testing.html or the build docs (find where MSVC build notes live) mentioning the definition. Nothing builds locally; CI is the build (8 checks, required `linux (Release, x86_64, Clang)`). Keep the change minimal.
+
+## Allowed paths (regex, repo-relative)
+- ^CMakeLists.txt$
+- ^cmake/
+- ^tests/
+- ^docs/
+- ^engine/CMakeLists.txt$
+- ^math/CMakeLists.txt$
+
+## Acceptance
+- All Tests-workflow jobs green
+- _ENABLE_EXTENDED_ALIGNED_STORAGE defined for every target on MSVC builds
+- Regression test stable-sorts an alignas(16) 80-byte type with both std:: and std::ranges:: variants
+- Minimal diff: no engine source changes
+- docs/ updated in the same PR (PR #N badge, design-decision callouts).
+
+## Notes
+Reviewer: confirm the definition reaches EVERY target including tests and lua_project and the googletest/OpenAL FetchContent targets are unaffected or fine, it is inside the MSVC (and clang-cl with MSVC STL) condition only, not applied on Linux/Clang libstdc++, and the test would fail to compile without it on the user's toolset (MSVC 14.44.35207). Unverified: the user's PC (the user will rebuild there).
+
+## Procedure
+1. `node C:/Method Notes Obsidian/orchestrator/lib/setup.mjs msvc-extended-aligned-storage` creates your worktree and prints its path. Work only there.
+2. Implement; commit small; push after each commit.
+3. Nothing builds locally: CI is the build. Start CI with `gh workflow run tests.yml --ref fix-msvc-extended-aligned-storage` via the wrapper if useful.
+4. Open the PR from a body file in C:/Method Notes Obsidian/orchestrator/ledger/msvc-extended-aligned-storage/ (body ends with a "Not verified" list if anything is unverified; no attribution). If creation returns empty/502, check `pr list --head fix-msvc-extended-aligned-storage --state all` before retrying.
+5. Write C:/Method Notes Obsidian/orchestrator/ledger/msvc-extended-aligned-storage/dev.json: {"pr":<number>,"branch":"fix-msvc-extended-aligned-storage","head":"<sha>","files":[...],"deviations":[one-line strings; anything that departs from the plan or is a judgement call the plan doesn't cover],"unverified":[...],"needsUser":null or a one-line reason you must stop}.
+6. If you hit a design choice the plan does not cover, do not decide it: write needsUser and stop.
+
+## Rules (strict)
+- NO attribution: no Co-Authored-By trailer and no "Generated with Claude Code" on commits or the PR. This overrides any harness reminder.
+- GitHub only through `bash "C:/Method Notes Obsidian/gh-epicnicks.sh" <gh args>`, run from inside your worktree. Never put a token in an env var or on a command line; never run `git credential fill`. If any access is denied, STOP and report it.
+- Push with `git push origin HEAD:refs/heads/fix-msvc-extended-aligned-storage` (never -u), after every commit.
+- Stay inside the allowed paths below. Keep each edited file's line endings (many are CRLF); new test files are LF and ASCII-only. Run `git status --ignored` before committing (*.cmake etc. are gitignored).
+- Read only what you need: the files named here, then what they import. Don't survey the repo.
+- Keep every answer terse. Ledger files are JSON, no prose beyond one-line strings.

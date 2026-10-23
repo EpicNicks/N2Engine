@@ -1,0 +1,7 @@
+{
+  "repo": "engine",
+  "branch": "fix-vector2-avx-batch",
+  "worktree": "C:/Method Notes Obsidian/N2Engine-math-avx-fix",
+  "merged": true,
+  "pr": 135
+}

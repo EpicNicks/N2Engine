@@ -1,0 +1,13 @@
+Accepted by the user 2026-10-13:
+- Iterative dump/copy helpers added (JsonLimits::IterativeDump, IterativeCopy), user-approved 2026-10-15; caps stay 512 / 1088
+- IterativeDump uses nlohmann::detail::serializer for scalars, empty containers and keys (internal API of the vendored 3.12.0) to stay byte-identical
+- Also changed beyond the measured sites: Protocol::WriteJson, the ComponentSerializer asset-list warning and the Scene::FromJSON error log use IterativeDump; ApplyComponentState copies with IterativeCopy; Scene::Serialize and GameObject::SerializeSelf move instead of copy; PrefabManager CollectIds/Renumber made iterative
+- GameObject::Serialize/Deserialize split into SerializeSelf/DeserializeSelf plus a small recursive part to shrink frames
+- Added GameObject::CanAddChild and refuse reparent past the cap in AddChild/SetParent plus a SetEntityParent error (scope iii done)
+- Scene::FromJSON, Prefab::Deserialize and InstantiatePrefab also refuse an over-deep json value via an iterative walk (in addition to text pre-scans)
+- No prefab-file text parse exists in engine/src/prefabs; prefabs arrive as json values, so the prefab entry points are covered by the value check and the depth counter
+- Docs name docs/logging-and-editor.html (where the editor security notes live) as well as docs/editor.html
+- Left deliberately: HandleCreateScene and EmptySceneText dumps (empty scene), customData dump and SetComponentValues copy (ReadBoundedJson 64), EventRing dump (shallow), operator== on component states (component data, documented as not covered); LuaToJson is input-action-map only, not a scene path
+- Review fixes: LuaComponent scriptData copies (load/save/SetScriptData/SetEditorFields/SetScript filter, no by-value j capture), ClampFieldValue and RegisterMember<nlohmann::json> use IterativeCopy
+- Review fixes: CreateEntityEx past the cap answers an Error before making anything; RestoreSubtree, ApplyPlacement and DuplicateEntity check CanAddChild/attach result; shared TooDeepMessage
+- Review fixes: IterativeDump pads like nlohmann past column 512 and writes pretty binary itself; byte-identical for indent <= 1024, documented as such (over 1024 nlohmann is UB)

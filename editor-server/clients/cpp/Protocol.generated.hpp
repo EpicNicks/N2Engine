@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.12.0";
+inline constexpr const char *ProtocolVersion = "1.16.0";
 
 enum class CommandType : uint8_t
 {
@@ -67,6 +67,11 @@ enum class CommandType : uint8_t
     GetProjectInfo = 0x70,
     SetProjectSettings = 0x71,
     SetStartupScene = 0x72,
+    ListEditorExtensions = 0x80,
+    GetEditorUi = 0x81,
+    ReloadEditorExtensions = 0x84,
+    InvokeMenuItem = 0x82,
+    InvokeInspectorAction = 0x83,
     Undo = 0x90,
     Redo = 0x91,
     BeginEditGroup = 0x92,
@@ -120,6 +125,9 @@ enum class ResponseType : uint8_t
     PlaySnapshot = 0xB0,
     PlayState = 0xB1,
     ErrorCoded = 0x1C,
+    EditorExtensions = 0x1D,
+    EditorUi = 0x1E,
+    ExtensionResult = 0x1F,
 };
 
 // Custom types
@@ -388,6 +396,22 @@ struct SetStartupSceneCmd
     std::string path;
 };
 
+struct InvokeMenuItemCmd
+{
+    std::string itemId;
+    std::string selection; // JSON: any
+    std::string params; // JSON: any
+    uint32_t uiRevision;
+};
+
+struct InvokeInspectorActionCmd
+{
+    std::string componentId;
+    std::string actionId;
+    std::string params; // JSON: any
+    uint32_t uiRevision;
+};
+
 struct BeginEditGroupCmd
 {
     std::string label;
@@ -595,6 +619,26 @@ struct ProjectInfoData
     std::string rootPath;
     std::string userDataPath;
     std::string project; // JSON: ProjectFile
+};
+
+struct EditorExtensionsData
+{
+    std::string info; // JSON: EditorExtensionsInfo
+};
+
+struct EditorUiData
+{
+    std::string ui; // JSON: EditorUiInfo
+};
+
+struct ExtensionResultData
+{
+    std::string label;
+    uint32_t revision;
+    bool canUndo;
+    bool canRedo;
+    uint32_t savedRevision;
+    std::string result; // JSON: ExtensionResultInfo
 };
 
 struct EditResultData

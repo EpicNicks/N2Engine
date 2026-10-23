@@ -1,0 +1,30 @@
+{
+  "repo": "engine",
+  "closes": null,
+  "requiresDocs": false,
+  "allowProtocol": false,
+  "reviewer": "opus",
+  "name": "linux-arm64",
+  "branch": "feat-linux-arm64",
+  "title": "arm64 build: conditional SIMD flags in math, ubuntu-24.04-arm CI leg",
+  "issue": "Approved by the user 2026-10-10 (proposal: orchestrator/proposals/linux-host.md; answers: PhysX OFF on Linux for now with a later PhysX-for-Linux PR, x86_64 AND arm64 eventually, host stays loopback-bound behind an SSH tunnel/proxy, the ubuntu leg becomes a required check once green (the user sets branch protection), smoke test ported to one Python script for both OSes, install X11/Vulkan dev packages for now, Dockerfile AND systemd unit). Nothing can be built locally; CI is the build. Scope: math/CMakeLists.txt hardcodes -msse2 -msse4.1 -mavx for non-MSVC. Make those x86_64-only (CMAKE_SYSTEM_PROCESSOR / compiler check), make the math headers' target-attribute switches and any SSE intrinsic use fall back to scalar (or NEON if the code already abstracts it, otherwise scalar) on aarch64 with identical results within the existing test tolerances, and add an ubuntu-24.04-arm leg to tests.yml mirroring the x86_64 leg. Windows and x86_64 behaviour unchanged. If the math tests encode bit-exact SIMD results that differ on scalar, report needsUser rather than loosening tests. Context update: #113 and #115 are merged. The required Linux job is `linux (Release, x86_64, Clang)` (Clang 20 from apt.llvm.org + libstdc++ 14, do not rename it); the new leg should be named `linux (Release, arm64, Clang)` on runs-on ubuntu-24.04-arm, mirror its steps (apt deps, configure with PhysX OFF, TLS ON, FreeType ON, ufbx ON, build, ctest with ALSOFT_DRIVERS=null, the two Python smoke steps with PYTHONDONTWRITEBYTECODE=1). apt.llvm.org supports arm64. The arm64 leg is NOT required at first (the user decides later); if it needs fixes in engine/renderer/editor-server for aarch64 (e.g. char signedness, intrinsics), make them minimally and list them. Allowed paths widened to engine/, renderer/, editor-server/, text/, assetimport/, external/ is NOT allowed.",
+  "allowedPaths": [
+    "^math/",
+    "^tests/",
+    "^engine/",
+    "^renderer/",
+    "^editor-server/",
+    "^text/",
+    "^assetimport/",
+    "CMakeLists.txt$",
+    "^cmake/",
+    "^.github/workflows/tests.yml$",
+    "^docs/"
+  ],
+  "acceptance": [
+    "All jobs green including the arm64 leg"
+  ],
+  "gate": null,
+  "approved": true,
+  "notes": "Draft: confirm the arm runner label is available for the repo (public repos get ubuntu-24.04-arm)."
+}

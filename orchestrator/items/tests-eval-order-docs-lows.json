@@ -1,0 +1,24 @@
+{
+  "closes": null,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "requiresDocs": true,
+  "repo": "engine",
+  "name": "tests-eval-order-docs-lows",
+  "branch": "fix-tests-eval-order-docs-lows",
+  "title": "Split multiple RNG calls out of single argument lists in two older test files; drop the hard-coded per-executable test counts from docs/web-build.html Stage 1",
+  "issue": "Two accepted lows. (1) EVALUATION ORDER: C++ leaves the evaluation order of function arguments unspecified, so a test that calls a stateful RNG two or three times in ONE argument list builds a different value sequence on MSVC and Clang (this already broke a PhysX determinism test once). Found on master: tests/engine/network/n2net/N2NetFuzzTests.cpp around lines 88 and 101, tests/engine/picking/PickAccelerationTests.cpp around line 59. Read both files, rewrite every such call so each RNG draw is its own statement in a fixed order (named locals), keeping what the tests check; then grep the WHOLE tests/ tree (and engine/ for good measure) for any other argument list or operator expression with two or more calls to the same stateful generator (rng(), dist(rng), Next(), Random*, std::uniform_*): fix every one found and list them in the PR body. (2) docs/web-build.html: the Stage 1 paragraph still lists hard-coded per-executable test counts that go stale with every PR: replace them with a description that does not hard-code counts (verify what the web leg actually runs from .github/workflows/tests.yml and the web scripts). Do not change behaviour anywhere else. Nothing builds locally for the engine; CI (12 checks) is the test; expect fix rounds; re-read every edit twice (CMake/YAML/C++ syntax); NEVER call a stateful function (RNG etc.) twice in one argument list or operator expression (unspecified evaluation order); NEVER run taskkill or kill other processes; verify every docs sentence against the CODE; no attribution lines on commits or PRs (no Co-Authored-By, no Generated-with footer); GitHub only via the wrapper; before your final push merge origin/master into the branch if it moved; your FINAL message must be a real report (PR number, head sha, what you did, deviations), never a single word.",
+  "allowedPaths": [
+    "^tests/",
+    "^engine/",
+    "^docs/"
+  ],
+  "acceptance": [
+    "No argument list or operator expression in tests/ calls a stateful RNG more than once",
+    "docs/web-build.html Stage 1 has no hard-coded test counts",
+    "All checks green"
+  ],
+  "reviewer": "sonnet",
+  "notes": "Reviewer: grep yourself for remaining multi-draw expressions; tests still check the same properties; docs true."
+}

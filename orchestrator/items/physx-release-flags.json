@@ -1,0 +1,21 @@
+{
+  "name": "physx-release-flags",
+  "repo": "engine",
+  "branch": "fix-physx-release-flags",
+  "title": "physx-linux workflow: create dependency releases as prereleases, never as the repo's latest release",
+  "closes": null,
+  "issue": "The user said (2026-10-13): make sure the releases are appropriately tagged because they are not engine releases. The repo convention is that every release is a prerelease (Box-Demo, physx-dependencies, and now physx-dependencies-linux-5.6.1 after the orchestrator edited it). In .github/workflows/physx-linux.yml the publish job creates the release with `gh release create ... --title ... --notes ...` (~l.249-252): add `--prerelease --latest=false`, change the title to `PhysX ${PHYSX_VERSION} for Linux (build dependency, not an engine release)`, and the notes to: `Build dependency, not an N2Engine release.` followed by one sentence that these are prebuilt static Release libraries of NVIDIA PhysX built by the PhysX Linux workflow and downloaded by the engine CMake with a pinned SHA256 (cmake/PhysXLinuxHashes.cmake), and that the archives carry the PhysX LICENSE.md. Also add the same wording as a comment above the step so the intent survives. Nothing else changes: no trigger, permission, action version or build step changes. Do NOT publish or dispatch anything. Verify by reading the file that the YAML still parses (python -c yaml via a quick check or careful inspection) and that the dry-run (pull_request path trigger) still runs and passes on CI.",
+  "allowedPaths": [
+    "^.github/workflows/physx-linux.yml$"
+  ],
+  "acceptance": [
+    "The PhysX Linux dry run still passes",
+    "The release-creation command uses --prerelease --latest=false and the dependency wording"
+  ],
+  "requiresDocs": false,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "reviewer": "sonnet",
+  "notes": "Tiny. The already-published release was fixed by hand (prerelease, not latest, renamed, new body)."
+}

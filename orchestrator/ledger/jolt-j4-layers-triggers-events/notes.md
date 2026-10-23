@@ -1,0 +1,16 @@
+Accepted by the user 2026-10-13:
+- Sensor strategy: chose per-sub-shape (one Jolt body, contacts made sensor contacts in the listener) over a second sensor body; spike was a reading of Jolt v5.6.0 source plus CI tests, not a measurement
+- Contact impulse (Q3): normalImpulse and Collision::impulse are Jolt's EstimateCollisionResponse estimate; relativeVelocity is pre-solve; tangentImpulse 0 on both
+- Kinematic vs static trigger: PhysX fires (found by test, old docs claimed otherwise and are corrected), so Jolt sets mCollideKinematicVsNonDynamic on kinematic bodies and filters solid non-dynamic pairs
+- Manifold reduction is off for a Jolt body with a trigger collider; body shape wrapped in OffsetCenterOfMassShape so mass/COM/inertia come from solid colliders
+- A body asleep while touching keeps its pair touching on Jolt (dormant) until an awake body does not find it; PhysX reports lost itself
+- Event side A: lower handle on Jolt collisions; Enter data comes from Jolt contact points (midpoint), solid pair reported inside 0.02 m speculative distance
+- Toggling SetIsTrigger on a touching collider ends and restarts its touches on Jolt
+- Per-collider friction/restitution now set per contact on Jolt (J3 doc row said per body)
+- Five query tests of LayerPhysicsTests end in visible GTEST_SKIP on Jolt until J5; PhysicsTests.cpp stays PhysX-only
+- ContactTracker is a class template instantiated for PxShape pointer and collider pointer; PhysX refilter logic stays in PhysXBackend and reads the tracker's maps
+- Feature declaration of phys-selection-lows (#211) is not on master: not set
+- Fix round: contact key (sub-shape ids) vs collider-pair tracker mismatch fixed in FoldContacts via a presentPairs set; a stale key's Removed no longer ends a touch that is still present under a new key
+- Fix round: Jolt solid Persisted reports are now buffered when the main thread does not track the contact (Impl::IsReported, concurrent reads of contacts during Update), so touches ended by SetIsTrigger/matrix changes begin again as Enter (data-less) like PhysX
+- Fix round: relativeVelocity counts kinematic bodies (not only dynamic), as PhysX
+- Fix round: LayerSetWhileTheBodyIsDisabled test now ends in a visible GTEST_SKIP on Jolt for its Raycast check (after the rest ran)

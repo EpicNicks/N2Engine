@@ -1,0 +1,14 @@
+Accepted by the user 2026-10-13:
+- Node path is selected by the module environment (no AudioContext in node makes Emscripten's alcOpenDevice return none), not by a build flag; N2ENGINE_WEB_AUDIO=stub exists as an extra option but CI does not build it.
+- Emscripten's port has no alcGetProcAddress (undefined symbol at link), so on the web AudioSystem::OpenLoopbackDevice is compiled as a documented refusal and IsLoopbackSupported() is false (plan option b).
+- Application::Init on the web opens the device output instead of the loopback even though the player is headless (needed for sound; behind N2ENGINE_PLATFORM_WEB and N2ENGINE_WEB_WEBAUDIO); device-open failures log at Info on the web so the existing 'Subsystem Audio failed' Warn is the one warning.
+- Added public AudioSystem::IsOutputSuspended() and RefuseWhileSuspended() (false natively): sounds asked for while the AudioContext is suspended are dropped, not queued (reason in docs); engine reads the context state through EM_JS on the port's AL object.
+- No JS mute hook and no visible 'click to enable sound' affordance: suspend() pauses rather than mutes and the gate with the status line is hidden once the game runs; the Start click is the gesture and the unlock covers the rest.
+- Smoke test cannot count the warning (engine log does not reach the node smoke output), so it asserts the player's audio health is failed via a new N2_WEB_AUDIO line printed only in smoke runs; the 'one warning' is by code reading.
+- Tests added to web_tests (tests/web/WebAudioTests.cpp) rather than engine_tests; AudioTests.cpp and LoopbackAudioTests.cpp stay excluded (no test in them can run under node).
+- budgets.json limits unchanged (measured growth under 1 percent, headroom still 12 to 13 percent); only its comment and the docs table record the new measurement.
+- lua_project has no audio asset, so the default package is silent; the checklist tells how to build a sound project with N2_WEB_PROJECT_DIR (no demo sound added, outside allowed paths).
+- Unlock listens to pointerdown, pointerup, keydown, touchend but acts only on HTML activation events (mouse pointerdown, non-mouse pointerup, touchend, keydown except Escape); others neither resume nor disarm.
+- Unlock keeps listeners while a gesture's resume is pending (not re-asked) or refused or resolved-but-not-running; disarms when no context needs a resume.
+- Retry cap counts only gesture refusals (the 4th disarms); reset by any successful resume, by every context found running/closed with nothing pending (any path, incl. browser self-resume), and by a new context; visible-tab resumes are not counted, not pending for gestures, and re-arm the listeners while the context is not running.
+- Application::Init loopback-vs-device choice now behind N2ENGINE_PLATFORM_WEB alone, so the stub config also logs one warning (native unchanged).

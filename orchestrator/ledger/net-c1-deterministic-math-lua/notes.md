@@ -1,0 +1,17 @@
+Accepted by the user 2026-10-13:
+- Lua ^ operator still uses libm pow: luai_numpow lives in external/lua, outside the allowed paths; documented, no math.pow shim (stock Lua 5.4 has none)
+- No Pow in Math:: (not needed: no math.pow in Lua 5.4 and no engine caller)
+- Series are truncated Taylor with Horner order (not minimax); float API is the double result rounded once
+- Kept std calls: Camera.cpp tan, Mesh.cpp sphere, ParticleEmitter.cpp (also cbrt), Tetrahedraliser.cpp cbrt, renderer/ (drawing only); enforced by a source-scan test with an audited list
+- Lua shims gated on determinism.luaSeed (same gate as the seeded hash), not on network.preset
+- Guard also runs in Authoritative mode (every network mode), none in None
+- Sin/Cos/Tan beyond |x|=2^20 use fmod(x, 2pi) reduction: defined and identical everywhere but only accurate to ~|x|*4e-17
+- engine-trig requirement is met via Math::IsContractionFree() (a measured probe) rather than a constant true; HealthTests expectations changed accordingly
+- Ordered.pairs order: array part, then numbers, strings, booleans ascending; error for tables/functions/userdata/threads
+- Fix round 8bd8d9d: CI failed only on accuracy bounds (exact-bit tables passed on every leg); the test's DD reference rounded k*pi/2-mid (fixed with exact TwoProduct) and the implementation truly exceeded its bounds (Asin 4.5, Atan2 4.06, Tan 3.24, Sin/Cos(big) 2.3)
+- Implementation improved, not bounds loosened: Cody-Waite reduction keeps a TwoSum tail passed to the sin/cos kernels, cos adds back the 1-r^2/2 rounding error, atan uses fdlibm reduction points (0,1/2,1,3/2,inf) with a t^45 series instead of sqrt halvings
+- Documented/tested bounds: Sin,Cos,Atan,Log,Log2 1 ulp; Exp 2; Tan,Atan2,Asin,Acos 3 (measured 0.81/0.84/0.80/0.76/1.23/2.1/1.5/2.0/2.08); none loosened vs the original 2/3/2/4
+- Log/Log2 rewritten to fdlibm's log(1+f)=f-hfsq+s(hfsq+R) order, Log2 with 1/ln2 as hi(0x3FF7154765200000)+lo and e added with its rounding error (fixes 2.75-2.9 ulp in the exponent-0 range found in review)
+- Exact-bit tables: 33 double entries regenerated over the fix rounds, no float entry; 27 closer to exact, 4 slightly further (Tan(0.1) 0.11->1.11, Tan(12345.678) 0.49->0.51, Tan(-0.7) 0.35->0.65, Log(0.01) 0.49->0.51 ulp), 2 above 2^20 (Cos/Tan of 1e9)
+- Accuracy measured offline with mpmath (160-bit) on a bit-exact Python transcription (constants parsed from the .cpp, validated against all 298 table entries); new dense test LogAndExpStayAccurateAtTheirReductionBoundaries; ldexp sweeps split into two statements (unspecified argument evaluation order)
+- Merged origin/master twice (2befc9be, df88d26b incl. #198/#199): docs/index.html and docs/testing.html conflicts resolved keeping both sides

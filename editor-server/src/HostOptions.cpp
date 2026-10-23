@@ -39,6 +39,22 @@ namespace N2Engine::Editor
         return value;
     }
 
+    std::optional<int> ParseWholeNumber(const std::string_view text, const int min, const int max)
+    {
+        // from_chars takes a leading '-' (and "-0"); these are durations, which have no sign
+        if (text.empty() || text.front() < '0' || text.front() > '9')
+        {
+            return std::nullopt;
+        }
+        int value = 0;
+        const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+        if (error != std::errc{} || end != text.data() + text.size() || value < min || value > max)
+        {
+            return std::nullopt;
+        }
+        return value;
+    }
+
     std::optional<HostRenderer> ParseRenderer(const std::string_view text)
     {
         if (text == "opengl")
@@ -50,6 +66,47 @@ namespace N2Engine::Editor
             return HostRenderer::Software;
         }
         return std::nullopt;
+    }
+
+    bool IsLoopbackBindAddress(const std::string_view text)
+    {
+        int fields = 0;
+        int first = -1;
+        size_t pos = 0;
+        while (true)
+        {
+            const size_t end = text.find('.', pos);
+            const std::string_view field = text.substr(pos, end == std::string_view::npos ? end : end - pos);
+            // 1 to 3 digits, no leading zero ("010" is not 10 to inet_pton, and not a spelling to trust here)
+            if (field.empty() || field.size() > 3 || (field.size() > 1 && field.front() == '0'))
+            {
+                return false;
+            }
+            int value = 0;
+            for (const char c : field)
+            {
+                if (c < '0' || c > '9')
+                {
+                    return false;
+                }
+                value = value * 10 + (c - '0');
+            }
+            if (value > 255)
+            {
+                return false;
+            }
+            if (fields == 0)
+            {
+                first = value;
+            }
+            ++fields;
+            if (end == std::string_view::npos)
+            {
+                break;
+            }
+            pos = end + 1;
+        }
+        return fields == 4 && first == 127;
     }
 
     std::expected<HostOptions, std::string> ParseHostArguments(const std::vector<std::string> &args)
@@ -86,9 +143,24 @@ namespace N2Engine::Editor
                 options.tls = true;
                 continue;
             }
+            if (arg == "--insecure-bind")
+            {
+                options.insecureBind = true;
+                continue;
+            }
             if (arg == "--read-only")
             {
                 options.readOnly = true;
+                continue;
+            }
+            if (arg == "--editor-extensions")
+            {
+                options.editorExtensions = true;
+                continue;
+            }
+            if (arg == "--editor-extensions-watch")
+            {
+                options.editorExtensionsWatch = true;
                 continue;
             }
             if (arg == "--no-rate-limit")
@@ -123,7 +195,9 @@ namespace N2Engine::Editor
             const bool takesValue = arg == "-p" || arg == "--port" || arg == "--bind" || arg == "--project" ||
                                     arg == "--renderer" || arg == "--token-env" || arg == "--tokens-file" ||
                                     arg == "--create" || arg == "--name" || arg == "--project-id" || arg == "--play" ||
-                                    arg == "--log-level" || arg == "--log-file";
+                                    arg == "--log-level" || arg == "--log-file" || arg == "--idle-timeout" ||
+                                    arg == "--write-timeout" || arg == "--max-session" ||
+                                    arg == "--preauth-slots";
             if (!takesValue)
             {
                 continue; // unknown arguments are ignored
@@ -174,6 +248,48 @@ namespace N2Engine::Editor
             else if (arg == "--play")
             {
                 options.playScene = value;
+            }
+            else if (arg == "--idle-timeout")
+            {
+                const std::optional<int> seconds = ParseWholeNumber(value, 0, HostOptions::MaxIdleTimeoutSeconds);
+                if (!seconds)
+                {
+                    return std::unexpected(std::format("Invalid --idle-timeout: {} (expected whole seconds from 0 to {}; "
+                                                       "0 turns it off)",
+                                                       value, HostOptions::MaxIdleTimeoutSeconds));
+                }
+                options.idleTimeoutSeconds = *seconds;
+            }
+            else if (arg == "--write-timeout")
+            {
+                const std::optional<int> seconds = ParseWholeNumber(value, 1, HostOptions::MaxWriteTimeoutSeconds);
+                if (!seconds)
+                {
+                    return std::unexpected(std::format("Invalid --write-timeout: {} (expected whole seconds from 1 to {})",
+                                                       value, HostOptions::MaxWriteTimeoutSeconds));
+                }
+                options.writeTimeoutSeconds = *seconds;
+            }
+            else if (arg == "--max-session")
+            {
+                const std::optional<int> minutes = ParseWholeNumber(value, 0, HostOptions::MaxSessionMinutesLimit);
+                if (!minutes)
+                {
+                    return std::unexpected(std::format("Invalid --max-session: {} (expected whole minutes from 0 to {}; "
+                                                       "0 is off)",
+                                                       value, HostOptions::MaxSessionMinutesLimit));
+                }
+                options.maxSessionMinutes = *minutes;
+            }
+            else if (arg == "--preauth-slots")
+            {
+                const std::optional<int> slots = ParseWholeNumber(value, 1, HostOptions::MaxPreAuthSlots);
+                if (!slots)
+                {
+                    return std::unexpected(std::format("Invalid --preauth-slots: {} (expected a whole number from 1 to {})",
+                                                       value, HostOptions::MaxPreAuthSlots));
+                }
+                options.preAuthSlots = *slots;
             }
             else if (arg == "--log-level")
             {
@@ -258,9 +374,48 @@ namespace N2Engine::Editor
         {
             return std::unexpected("--read-only and --create can't be combined: --create writes a project");
         }
+        if (options.editorExtensions && !options.playScene.empty())
+        {
+            return std::unexpected("--editor-extensions and --play can't be combined: a play host never loads editor "
+                                   "extensions");
+        }
+        if (options.editorExtensionsWatch && !options.editorExtensions)
+        {
+            return std::unexpected("--editor-extensions-watch needs --editor-extensions: it only watches the files that "
+                                   "flag loads");
+        }
         if (options.createPath.empty() && (givenName || givenId))
         {
             return std::unexpected(std::string(givenName ? "--name" : "--project-id") + " only goes with --create");
+        }
+
+        // Fail closed (S3, audit F5): a host that serves on a non-loopback address needs a token and TLS, or an explicit
+        // --insecure-bind. --create and --new-token don't serve; an unparsable address counts as non-loopback.
+        const bool serves = options.createPath.empty() && options.newTokenUser.empty();
+        // Editor extensions run project code on the host for whoever may invoke them, so a host that is reachable from
+        // other machines needs roles (a tokens file) for that. --insecure-bind does not lift this.
+        if (options.editorExtensions && serves && !IsLoopbackBindAddress(options.bindAddress) && options.tokensFile.empty())
+        {
+            return std::unexpected(std::format(
+                "--editor-extensions needs --tokens-file with --bind {}: that address is not loopback, and editor "
+                "extensions run project code on the host, so who may invoke them has to be a role (--insecure-bind does "
+                "not lift this)",
+                options.bindAddress));
+        }
+        if (serves && !options.insecureBind && !IsLoopbackBindAddress(options.bindAddress))
+        {
+            const bool hasToken = !options.tokenEnv.empty() || !options.tokensFile.empty();
+            if (!hasToken || !options.tls)
+            {
+                const char *missing = !hasToken && !options.tls ? "an access token and --tls"
+                                      : !hasToken              ? "an access token"
+                                                               : "--tls";
+                return std::unexpected(std::format(
+                    "--bind {} is not a loopback address and the host is missing {}: refusing to start. Add --tls with "
+                    "--token-env or --tokens-file (a build without TLS support can't), or pass --insecure-bind to "
+                    "accept the risk",
+                    options.bindAddress, missing));
+            }
         }
         return options;
     }
@@ -339,9 +494,14 @@ Usage: N2EditorHost [options]
 Options:
   -p, --port <port>         Server port (default: 9999; 0 lets the OS pick a free one)
   --bind <ipv4 address>     Address to listen on (default: 127.0.0.1)
-                            WARNING: without --tls the access token isn't encrypted; any other address
-                            lets whoever can reach it (and, without --token-env, anyone at all) control
-                            this host, including deleting scene files
+                            Any address outside 127.0.0.0/8 is refused at startup unless the host has a
+                            token (--token-env or --tokens-file) and --tls, or --insecure-bind is given
+                            (a build without TLS support needs --insecure-bind). A play host (--play) is
+                            always plaintext, so it needs --insecure-bind too. Whoever can reach the
+                            address (and, without a token, anyone at all) controls this host, including
+                            deleting scene files
+  --insecure-bind           Accept a non-loopback --bind without a token and --tls, and log the warnings.
+                            Unsafe: the access token can be read off the network, or there is none
   --project <path>          Project folder, holding project.n2proj (see --create): res:// assets
                             load from <path>/assets, and its startup scene opens
   --renderer <name>         opengl (default: a hidden window, needs a GPU) or
@@ -379,11 +539,56 @@ Options:
                             work, with or without --token-env. Commands nobody has classified are refused.
                             Can't be combined with --play (it runs the game and the project's Lua) or
                             --create (it writes a project)
+  --editor-extensions       Load the project's Lua editor extensions: the files <project>/editor/**/*.lua
+                            (a folder beside assets/, so no protocol write, require or play host reaches
+                            it). Each file runs in a sandbox state of its own with a time and memory budget,
+                            at start and on ReloadEditorExtensions only, never when a scene loads, and
+                            declares menu items with Editor.Extension{...}. A file that fails only marks
+                            itself failed. ListEditorExtensions and GetEditorUi list what loaded. OFF by
+                            default: it runs project code on this host, so it is a decision of whoever
+                            starts it. Can't be combined with --play, nor with a --bind outside 127.0.0.0/8
+                            unless --tokens-file is given (--insecure-bind does not lift that). Works with
+                            --read-only (the extensions are listed). Without --project there is nothing to load
+  --editor-extensions-watch Watch the project's editor/ folder (about once a second: modification time and
+                            size, then a content hash) and reload only the extension file that changed, or
+                            load one that was added and drop one that was removed; each change tells the
+                            clients with extensionsChanged. OFF by default. Needs --editor-extensions
   --no-rate-limit           Turn off the failed-Hello rate limiting. By default, with --token-env or
                             --tokens-file, an address that fails 3 Hellos is backed off (1 s, doubling to
-                            5 min; its connections are closed at once, before any TLS handshake), loopback
-                            as a whole is backed off after 10 failures in a minute, and with --tokens-file a
-                            user that fails 3 Hellos is backed off for up to 30 s. For test rigs only
+                            5 min; its connections are closed at once, before any TLS handshake), and with
+                            --tokens-file a user that fails 3 Hellos is backed off for up to 30 s (a Hello
+                            with the right token still gets in). Loopback has no backoff of its own (behind
+                            a proxy or an SSH tunnel that connects over loopback everyone is loopback, and
+                            a ban would lock out the client with the right token): it is bounded by --preauth-slots and the
+                            handshake rate. A connection that never finishes a Hello (idle for the 2 s Hello
+                            budget, closed early, a failed TLS handshake or one not done within its own
+                            5 s) counts as a failure for its address too, but not for loopback. For test
+                            rigs only
+  --idle-timeout <seconds>  Close a connection that has sent no request for this long once it is a session
+                            (after its Hello with a token; from the start without one). Every request,
+                            polled ones included, restarts it. Default: 300 (5 minutes); 0 turns it off.
+                            Without it one idle client keeps the host from everyone else
+  --write-timeout <seconds> Close a connection when a response makes no write progress for this long (the
+                            client isn't reading). Progress restarts it, so a slow reader isn't cut off.
+                            Default: 30; at least 1
+  --max-session <minutes>   Close a session older than this, whatever it does. Default: off (0)
+  --preauth-slots <n>       How many connections may be in their TLS handshake and Hello at once (and how
+                            many worker threads serve them), 1 to 16. Default: 4. At most 2 of them for
+                            one non-loopback address (loopback may use all: a proxy or an SSH tunnel on
+                            the same machine makes every peer loopback; the host sees the address a
+                            proxy or container presents). A connection that finds none free is closed
+                            at once, before TLS, with no line of its own (one summary line every 10 s).
+                            Handshakes are also limited to 20 a second in all and 5 a second per
+                            address. The authenticated session has its own thread: a peer that stalls
+                            in a slot (a silent connection, a stalled handshake) holds that slot for the
+                            handshake and Hello budgets (5 s and 2 s) and nothing else. One session at a
+                            time: a second authenticated client of the same user and role takes it over,
+                            and a client of a strictly higher role (admin over editor over viewer)
+                            preempts it (the old session ends as on a disconnect and the new client
+                            waits up to 3 s for that); any other second client waits up to 1 s for the
+                            session to end, then gets the error "The host is serving another session; try
+                            again later" (naming its role; ErrorCoded busy for a client that asked for
+                            error codes). Without a token the newest connection takes over
   --log-level <level>       The least severe level written to stderr (and --log-file): info (the default),
                             warn or error. Every line is "<UTC time> <LEVEL> <message>", one per event,
                             in every build type; the audit, rate-limit and tokens-reload lines are Info or Warn

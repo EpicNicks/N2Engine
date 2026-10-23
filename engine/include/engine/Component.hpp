@@ -82,6 +82,32 @@ namespace N2Engine
         /// never attached, so most have none.
         virtual void OnEditorFieldsChanged(std::span<const std::string> /*changed*/) {}
 
+        // Network replication (netcode stage B2, see docs/netcode.html): what the replication layer reads and writes
+
+        /// The component's JSON as Serialize() writes it, with the CURRENT value of every field in `replicated` (the
+        /// fields DescribeFields marked replicated). The default is Serialize(): a SerializableComponent's members are its
+        /// live values. A component whose live state is not what Serialize() writes (a LuaComponent keeps its script's
+        /// fields in the Lua instance) overrides it. Read on the server, once per send.
+        [[nodiscard]] virtual nlohmann::json SerializeReplicated(std::span<const FieldInfo> /*replicated*/) { return Serialize(); }
+
+        /// Sets the replicated fields `values` has keys for (shaped as SetEditorFields takes them, a container's fields
+        /// inside its key), on a client, from what the server sent: only the fields the server replicates are ever in
+        /// it. The default is SetEditorFields followed by OnEditorFieldsChanged with the keys. May throw
+        /// nlohmann::json::exception or std::invalid_argument for a value the component refuses: the caller catches.
+        virtual void ApplyReplicated(const nlohmann::json &values, ReferenceResolver *resolver)
+        {
+            SetEditorFields(values, resolver);
+            if (values.is_object())
+            {
+                std::vector<std::string> changed;
+                for (const auto &entry : values.items())
+                {
+                    changed.push_back(entry.key());
+                }
+                OnEditorFieldsChanged(changed);
+            }
+        }
+
         /// `removed` is being removed from its object (in a scene opened for editing: the editor can undo it, so
         /// nothing may keep a raw pointer to it). A component that holds a pointer to another component drops it
         /// when it is `removed`. A SerializableComponent does so for its RegisterComponentRef members.

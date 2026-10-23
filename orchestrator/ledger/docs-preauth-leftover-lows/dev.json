@@ -1,0 +1,1 @@
+{"pr":185,"branch":"docs-preauth-leftover-lows","head":"1abf83c7bb71f8f272d1d225955ab8dd635bcb97","files":["docs/logging-and-editor.html","docs/editor.html","editor-server/include/editor-server/PreAuthSlots.hpp","deploy/n2editorhost.service"],"deviations":[],"unverified":["CI not yet run on the new head","HTML well-formedness checked by reading the edits only"],"needsUser":null}

@@ -1,0 +1,78 @@
+# N2Server (netcode stage A6): the unit tests of its arguments and join-token generator, the test client of the smoke
+# test, and the smoke test itself (tests/smoke/n2server_smoke.py runs the real N2Server end to end on loopback).
+
+file(GLOB N2SERVER_TEST_SOURCES "N2Server*Tests.cpp")
+
+add_executable(n2server_tests ${N2SERVER_TEST_SOURCES})
+target_link_libraries(n2server_tests
+        PRIVATE
+        N2ServerCore
+        GTest::gtest
+        GTest::gtest_main
+)
+set_target_properties(n2server_tests PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+)
+if (MSVC)
+    target_compile_options(n2server_tests PRIVATE /W4)
+else()
+    target_compile_options(n2server_tests PRIVATE -Wall -Wextra)
+endif()
+add_test(NAME n2server_tests COMMAND n2server_tests)
+
+# The test client: joins a running N2Server through the A5 handshake (it links the library for the protocol id parser)
+add_executable(n2server_smoke_client SmokeClient.cpp)
+target_link_libraries(n2server_smoke_client PRIVATE N2ServerCore)
+set_target_properties(n2server_smoke_client PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+)
+if (MSVC)
+    target_compile_options(n2server_smoke_client PRIVATE /W4)
+else()
+    target_compile_options(n2server_smoke_client PRIVATE -Wall -Wextra)
+endif()
+# Building the client builds the server the smoke test starts
+add_dependencies(n2server_smoke_client N2Server)
+
+# The world-protocol loopback test (netcode stage B1): a test host (N2Server's RunServer with hooks: it registers a prefab
+# and runs spawn and despawn commands from stdin) and a headless test client (a NetworkClient over the secure handshake),
+# started as real processes on loopback by tests/smoke/n2server_net.py. Both run the engine, so they need what N2Server
+# needs (on Windows its PhysX DLLs, copied next to it, which the dependency on N2Server below guarantees).
+add_executable(n2server_net_host NetHost.cpp)
+target_link_libraries(n2server_net_host PRIVATE N2ServerCore)
+add_executable(n2server_net_client NetClient.cpp)
+target_link_libraries(n2server_net_client PRIVATE N2ServerCore)
+foreach(NET_TOOL n2server_net_host n2server_net_client)
+    set_target_properties(${NET_TOOL} PROPERTIES
+            CXX_STANDARD 23
+            CXX_STANDARD_REQUIRED ON
+            CXX_EXTENSIONS OFF
+    )
+    if (MSVC)
+        target_compile_options(${NET_TOOL} PRIVATE /W4)
+    else()
+        target_compile_options(${NET_TOOL} PRIVATE -Wall -Wextra)
+    endif()
+    add_dependencies(${NET_TOOL} N2Server)
+endforeach()
+
+# The smoke tests: Python 3 standard library only. Without an interpreter they are not registered (the unit tests above are).
+find_package(Python3 COMPONENTS Interpreter)
+if (Python3_FOUND)
+    add_test(NAME n2server_smoke
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/smoke/n2server_smoke.py
+            --server $<TARGET_FILE:N2Server> --client $<TARGET_FILE:n2server_smoke_client>)
+    set_tests_properties(n2server_smoke PROPERTIES TIMEOUT 600)
+
+    add_test(NAME n2server_net
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/smoke/n2server_net.py
+            --server $<TARGET_FILE:N2Server> --host $<TARGET_FILE:n2server_net_host>
+            --client $<TARGET_FILE:n2server_net_client>)
+    set_tests_properties(n2server_net PROPERTIES TIMEOUT 600)
+else()
+    message(STATUS "N2Server smoke tests not registered: no Python 3 interpreter found")
+endif()

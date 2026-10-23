@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <concepts>
 #include <cstddef>
 #include <format>
@@ -16,6 +17,7 @@
 #include "engine/Logger.hpp"
 
 #include "engine/serialization/FieldInfo.hpp"
+#include "engine/serialization/JsonLimits.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
 #include "engine/io/Resources.hpp"
 #include "engine/io/ResourceLoader.hpp"
@@ -123,6 +125,25 @@ namespace N2Engine
             return *this;
         }
 
+        /// Netcode stage B2: the server replicates this member to every client (only the server writes it; a client's
+        /// copy is overwritten by what the server sends). `step` above 0 sends a Float or a vector as whole steps (see
+        /// FieldInfo::replicationStep). A kind that cannot be replicated (a list, a component reference, Json) logs an
+        /// error and stays unreplicated. A client and a server must register the same replicated members: the set is part
+        /// of the registry fingerprint, so a mismatch refuses the join.
+        FieldBuilder &Replicated(const double step = 0.0)
+        {
+            FieldInfo &info = Info();
+            if (!IsReplicableKind(info.kind))
+            {
+                Logger::Error(std::format("Field '{}' is of kind {}, which cannot be replicated: it stays local", info.name,
+                                          FieldKindName(info.kind)));
+                return *this;
+            }
+            info.replicated = true;
+            info.replicationStep = (std::isfinite(step) && step > 0.0) ? step : 0.0;
+            return *this;
+        }
+
     private:
         FieldInfo &Info() { return (*_members)[_index].info; }
 
@@ -159,14 +180,28 @@ namespace N2Engine
                 // Serialize lambda
                 [&member, name](nlohmann::json &j)
                 {
-                    j[name] = member;
+                    if constexpr (std::is_same_v<T, nlohmann::json>)
+                    {
+                        j[name] = JsonLimits::IterativeCopy(member); // JSON data can nest deep: no recursive copy
+                    }
+                    else
+                    {
+                        j[name] = member;
+                    }
                 },
                 // Deserialize lambda
                 [&member, name](const nlohmann::json &j, ReferenceResolver *resolver)
                 {
                     if (j.contains(name))
                     {
-                        member = j[name].get<T>();
+                        if constexpr (std::is_same_v<T, nlohmann::json>)
+                        {
+                            member = JsonLimits::IterativeCopy(j[name]);
+                        }
+                        else
+                        {
+                            member = j[name].get<T>();
+                        }
                     }
                 },
                 MakeFieldInfo<T>(name));
@@ -435,7 +470,9 @@ namespace N2Engine
                     const nlohmann::json &array = j[name];
                     if (!array.is_array())
                     {
-                        Logger::Warn(std::format("Asset list '{}' isn't an array: {}", name, array.dump()));
+                        // Dumped without recursion: it is scene data, which can nest as deep as the scene cap
+                        Logger::Warn(std::format("Asset list '{}' isn't an array: {}", name,
+                                                 JsonLimits::IterativeDump(array)));
                         return;
                     }
                     assetRefs.reserve(array.size());

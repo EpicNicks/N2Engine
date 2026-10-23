@@ -1,7 +1,9 @@
 #pragma once
 
+#include "engine/physics/ContactTracker.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
 #include <vector>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 #include <functional>
@@ -21,6 +23,9 @@
 #include <extensions/PxDefaultSimulationFilterShader.h>
 #include <extensions/PxRigidBodyExt.h>
 #include <PxQueryReport.h>
+#ifdef N2ENGINE_PLATFORM_WEB
+#include "engine/physics/physx/PhysXLoggerErrorCallback.hpp"
+#endif
 
 // The PhysX Visual Debugger connection is Windows-only: a Linux (server) build never opens the PVD socket, even though
 // the PVD SDK library is linked, so the backend has no PxPvd there
@@ -76,6 +81,43 @@ namespace N2Engine::Physics
         ~PhysXBackend() override;
 
         void SetGpuMode(GpuMode mode) override { _gpuMode = mode; }
+        /// physics.deterministic: the scene gets PxSceneFlag::eENABLE_ENHANCED_DETERMINISM and the CPU dispatcher has
+        /// 0 worker threads (tasks run on the thread that calls Update). Not supported by GPU dynamics, so with
+        /// physics.gpu auto/on the GPU probe is skipped with one warning and the scene is the CPU scene.
+        void SetDeterministic(bool deterministic) override { _deterministic = deterministic; }
+        /// What a PhysXBackend declares for a physics.deterministic value and an optional worker-thread override
+        /// (SetWorkerThreadsForTesting): SameBinary when it is on and the dispatcher has 0 worker threads (the scene
+        /// then has enhanced determinism and is the CPU scene: PhysX supports neither together with GPU dynamics),
+        /// None otherwise. Never CrossPlatform: Windows and Linux use different PhysX binaries and their hashes
+        /// differ (see docs/physics.html). Static so Application::Init can ask before it creates a backend.
+        [[nodiscard]] static constexpr DeterminismLevel DeclaredDeterminism(
+            const bool deterministic, const std::optional<unsigned> workerThreadsOverride = std::nullopt)
+        {
+            return deterministic && workerThreadsOverride.value_or(0u) == 0u ? DeterminismLevel::SameBinary
+                                                                             : DeterminismLevel::None;
+        }
+        /// SameBinary or None as DeclaredDeterminism says for this backend's configuration; the same before and
+        /// after Initialize
+        [[nodiscard]] DeterminismLevel GetDeterminism() const override
+        {
+            return DeclaredDeterminism(_deterministic, _workerThreadsOverride);
+        }
+        /// What the PhysX backend supports of snapshot and set-state (static, like DeclaredDeterminism): set-state
+        /// only
+        static constexpr bool kSupportsSnapshot = false;
+        static constexpr bool kSupportsSetState = true;
+        /// False: nothing saves or restores the PhysX scene (SaveState, RestoreState and HashState stay unsupported)
+        [[nodiscard]] bool SupportsSnapshot() const override { return kSupportsSnapshot; }
+        /// True: GetBodyState and SetBodyState teleport a dynamic body and set its velocities and sleep state
+        [[nodiscard]] bool SupportsSetState() const override { return kSupportsSetState; }
+        /// Every feature group: layers and the collision matrix, triggers, contact and trigger events, scene queries
+        static constexpr PhysicsFeatureSet kImplementedFeatures = PhysicsFeatureSet::All();
+        [[nodiscard]] PhysicsFeatureSet GetImplementedFeatures() const override { return kImplementedFeatures; }
+        /// "physx"
+        [[nodiscard]] std::string_view BackendId() const override { return "physx"; }
+        /// For tests: the dispatcher worker-thread count to use instead of the one SetDeterministic implies (4 by
+        /// default, 0 when deterministic). Call before Initialize.
+        void SetWorkerThreadsForTesting(std::optional<unsigned> threads) { _workerThreadsOverride = threads; }
         /// The scene (probe) status only: a particle or soft-body failure is kept apart (below), so this stays Ready
         /// while the GPU scene runs and Physics.IsGpuAvailable does not flip when one feature gives up
         [[nodiscard]] GpuStatus GetGpuStatus() const override { return _gpuStatus; }
@@ -127,6 +169,22 @@ namespace N2Engine::Physics
             const Math::Vector3& position,
             const Math::Quaternion& rotation) override;
 
+        /// Pose, velocities and sleep state of a body that is in the scene (false for a stale handle or a disabled
+        /// body). A kinematic or static body reports zero velocities; a static one is never asleep.
+        bool GetBodyState(PhysicsBodyHandle handle, BodyState& out) const override;
+        /// What each kind takes (a non-finite value or a zero-length rotation is refused with nothing changed):
+        ///   dynamic    teleports with setGlobalPose, then setLinearVelocity and setAngularVelocity, all without
+        ///              waking (autowake false); then sleeping puts it to sleep (putToSleep, which also zeroes its
+        ///              velocities, so a sleeping body keeps none) and not sleeping wakes it (wakeUp: the wake counter
+        ///              is reset, so it does not fall asleep in the next step). PhysX applies the sleep change when the
+        ///              scene next steps, so GetBodyState's sleeping flag follows after the next Update.
+        ///   kinematic  only the pose, as a kinematic target (the body moves there in the next step, like
+        ///              SetBodyTransform); velocities and sleeping do not apply to it
+        ///   static     only the pose (setGlobalPose, which is not cheap: it re-inserts the actor in the broadphase)
+        /// Never call it from inside a PhysX callback or while Update runs; the engine's callbacks only queue events,
+        /// so game code never does.
+        bool SetBodyState(PhysicsBodyHandle handle, const BodyState& state) override;
+
         void AddSphereCollider(
             PhysicsBodyHandle body,
             ICollider* collider,
@@ -177,6 +235,10 @@ namespace N2Engine::Physics
         void SetColliderLayer(PhysicsBodyHandle body, ICollider* collider, int layer) override;
         void RefreshCollisionMatrix() override;
 
+        /// Test seam: called once per body that RefreshCollisionMatrix re-filters, in the order it does so, with
+        /// the object that owns the body's first collider. Pass an empty function to remove it.
+        void SetRefilterObserver(std::function<void(const GameObject&)> observer) { _refilterObserver = std::move(observer); }
+
         void AddForce(PhysicsBodyHandle body, const Math::Vector3& force) override;
         void AddImpulse(PhysicsBodyHandle body, const Math::Vector3& impulse) override;
         void SetVelocity(PhysicsBodyHandle body, const Math::Vector3& velocity) override;
@@ -218,9 +280,27 @@ namespace N2Engine::Physics
             float maxDistance,
             uint32_t layerMask) override;
 
+        bool CapsuleCast(
+            const Math::Vector3& point0,
+            const Math::Vector3& point1,
+            float radius,
+            const Math::Vector3& direction,
+            RaycastHit& hit,
+            float maxDistance,
+            uint32_t layerMask,
+            QueryTriggers triggers) override;
+
+        int Overlap(
+            const OverlapShape& shape,
+            std::vector<OverlapHit>& hits,
+            uint32_t layerMask,
+            QueryTriggers triggers) override;
+
     private:
         // Outside the PhysX guard so the inline GetGpuStatus compiles without PhysX too
         GpuMode _gpuMode = GpuMode::Off;
+        bool _deterministic = false;
+        std::optional<unsigned> _workerThreadsOverride;
         GpuStatus _gpuStatus{GpuState::Disabled, "physics.gpu is off"};
         // Per-feature failure state, apart from the scene status above: set when a feature that runs in the GPU
         // scene gives up (Failed with physics.gpu=on, else Unavailable), cleared by Initialize. The feature's health
@@ -231,6 +311,8 @@ namespace N2Engine::Physics
         /// the GPU refuses a body or transfer; nullptr otherwise (the SoftBodies then use the CPU backend). Created
         /// with the scene, released in Shutdown before the scene and the CUDA context.
         std::unique_ptr<SoftBodies::DeformableSoftBodyBackend> _softBodies;
+        // Outside the PhysX guard like _gpuMode: the inline SetRefilterObserver is declared in every build
+        std::function<void(const GameObject&)> _refilterObserver;
 
     public:
 #ifdef N2ENGINE_PHYSX_ENABLED
@@ -261,6 +343,10 @@ namespace N2Engine::Physics
         void FailSoftBodies(const std::string& reason);
         /// For tests: the scene has eENABLE_GPU_DYNAMICS set
         [[nodiscard]] bool SceneUsesGpuDynamics() const;
+        /// For tests: the scene has eENABLE_ENHANCED_DETERMINISM set
+        [[nodiscard]] bool SceneUsesEnhancedDeterminism() const;
+        /// For tests: the CPU dispatcher's worker-thread count (0 when there is none)
+        [[nodiscard]] unsigned DispatcherWorkerCount() const;
         /// For tests: the scene's broad phase is the GPU one
         [[nodiscard]] bool SceneUsesGpuBroadPhase() const;
         /// For tests: a CUDA context manager exists (physics.gpu auto/on with a working probe)
@@ -280,10 +366,19 @@ namespace N2Engine::Physics
         /// For diagnostics and tests. A dynamic body's centre of mass relative to the actor (the position
         /// of the mass pose; its rotation isn't returned). Zero for a static or unknown body.
         [[nodiscard]] Math::Vector3 GetCenterOfMass(PhysicsBodyHandle body) const;
+        /// For diagnostics and tests. How many shapes the body's actor holds, trigger shapes included (zero for an
+        /// unknown body). The typed physics tests read it through the same name on JoltBackend, where it counts the
+        /// solid colliders only: they compare it only for bodies without triggers.
+        [[nodiscard]] std::size_t GetShapeCount(PhysicsBodyHandle body) const;
 
     private:
         physx::PxDefaultAllocator _allocator;
+#ifdef N2ENGINE_PLATFORM_WEB
+        // The web build reports PhysX's errors through the engine Logger (PhysXLoggerErrorCallback.hpp)
+        PhysXLoggerErrorCallback _errorCallback;
+#else
         physx::PxDefaultErrorCallback _errorCallback;
+#endif
         physx::PxFoundation* _foundation = nullptr;
         physx::PxPhysics* _physics = nullptr;
         physx::PxScene* _scene = nullptr;
@@ -345,13 +440,6 @@ namespace N2Engine::Physics
         void ForgetPairsWithBody(PhysicsBodyHandle handle, bool shapesReleased);
         /// The GameObject a body belongs to: its Rigidbody's, else its first collider's
         [[nodiscard]] GameObject* GetBodyOwner(PhysicsBodyHandle handle) const;
-        /// Calls fn on each component (enabled or not, as in Unity; none while the object is inactive in the
-        /// hierarchy) of the body's GameObject, or of
-        /// fallbackOwner if the body is gone and that object survives (see PairOwners). Uses a snapshot
-        /// and re-checks ownership, so handlers can add or remove components (or destroy the body) safely
-        void DispatchToBody(PhysicsBodyHandle handle, const std::function<void(Component&)>& fn,
-                            const std::weak_ptr<GameObject>& fallbackOwner = {});
-
         BodyData* GetBodyData(PhysicsBodyHandle handle);
         [[nodiscard]] const BodyData* GetBodyData(PhysicsBodyHandle handle) const;
 
@@ -390,77 +478,15 @@ namespace N2Engine::Physics
         std::unordered_map<ChangeType, std::function<void()>> _pendingChanges;
         Math::Vector3 _currentGravity{0.0f, -9.81f, 0.0f};
 
-        struct CollisionPair
-        {
-            PhysicsBodyHandle bodyA;
-            PhysicsBodyHandle bodyB;
-
-            bool operator==(const CollisionPair& other) const
-            {
-                return (bodyA == other.bodyA && bodyB == other.bodyB) ||
-                       (bodyA == other.bodyB && bodyB == other.bodyA);
-            }
-        };
-
-        struct CollisionPairHash
-        {
-            size_t operator()(const CollisionPair& pair) const
-            {
-                const size_t h1 = std::hash<uint32_t>()(pair.bodyA.index) ^
-                            (std::hash<uint32_t>()(pair.bodyA.generation) << 1);
-                const size_t h2 = std::hash<uint32_t>()(pair.bodyB.index) ^
-                            (std::hash<uint32_t>()(pair.bodyB.generation) << 1);
-                // Order-independent, like operator==: (A, B) and (B, A) must land in the same bucket
-                return std::min(h1, h2) ^ (std::max(h1, h2) << 1);
-            }
-        };
-
-        // The GameObjects that owned each body when a pair was ended by removing a body or collider. A
-        // side whose body is gone by dispatch (destroyed, or re-created by SetBodyType / adding or removing
-        // a Rigidbody) still gets its Exit through its GameObject, unless that is being destroyed. With the
-        // re-created body's later Enter, Enter and Exit stay balanced on both sides.
-        struct PairOwners
-        {
-            std::weak_ptr<GameObject> a;
-            std::weak_ptr<GameObject> b;
-        };
-
-        struct CollisionEvent
-        {
-            CollisionPair pair;
-            Collision* data = nullptr; // collider/otherCollider are pair.bodyA's and pair.bodyB's
-            PairOwners owners;         // only for forgotten pairs
-        };
-
-        struct TriggerEvent
-        {
-            CollisionPair pair;
-            ICollider* colliderA = nullptr; // on pair.bodyA
-            ICollider* colliderB = nullptr; // on pair.bodyB
-            PairOwners owners;              // only for forgotten pairs
-        };
-
-        // Events are per body pair, but PhysX reports touches per shape pair. Each body pair maps to
-        // the shape pairs currently touching (oriented to the key's bodyA/bodyB): Enter fires when the
-        // first starts touching and Exit when the last stops, so a compound body touching through two
-        // shapes no longer exits while one is still in contact.
-        struct ShapePair
-        {
-            const physx::PxShape* onA;
-            const physx::PxShape* onB;
-        };
-        using TouchMap = std::unordered_map<CollisionPair, std::vector<ShapePair>, CollisionPairHash>;
-
-        std::vector<CollisionEvent> _newCollisions;
-        TouchMap _collisionTouches;
-        std::vector<CollisionEvent> _endedCollisions;
-        std::vector<TriggerEvent> _newTriggers;
-        TouchMap _triggerTouches;
-        std::vector<TriggerEvent> _endedTriggers;
-        // Ended by removing a body or collider rather than reported by PhysX; dispatched before the
-        // step's Enter events
-        std::vector<CollisionEvent> _forgottenCollisions;
-        std::vector<TriggerEvent> _forgottenTriggers;
+        // The touch bookkeeping and event delivery (Enter/Stay/Exit per body pair) are the ContactTracker's, shared with
+        // the Jolt backend; this backend feeds it from onContact/onTrigger and settles re-filtered pairs (below). Its
+        // shape key is the PxShape.
+        using Tracker = ContactTracker<const physx::PxShape*>;
+        using ShapePair = Tracker::ShapePair;
+        using TouchMap = Tracker::TouchMap;
+        using CollisionEvent = Tracker::CollisionEvent;
+        using TriggerEvent = Tracker::TriggerEvent;
+        Tracker _tracker;
 
         // ===== Layer re-filtering =====
         // resetFiltering makes PhysX report every pair of a re-filtered shape as lost, and the pairs the
@@ -497,49 +523,23 @@ namespace N2Engine::Physics
         /// Forgets deferred "lost" reports involving a shape that's going away
         void DropDeferred(const physx::PxShape* shape);
 
-        /// Dispatches and clears a queue of ended pairs (OnCollisionExit / OnTriggerExit to both sides)
-        void DispatchCollisionExits(std::vector<CollisionEvent>& queue);
-        void DispatchTriggerExits(std::vector<TriggerEvent>& queue);
-
-        /// @returns true if this is the body pair's first touching shape pair
-        static bool AddTouch(TouchMap& touches, const CollisionPair& pair,
-                             const physx::PxShape* shapeOnA, const physx::PxShape* shapeOnB);
-        /// @returns true if the body pair has no touching shape pairs left
-        static bool RemoveTouch(TouchMap& touches, const CollisionPair& pair,
-                                const physx::PxShape* shapeOnA, const physx::PxShape* shapeOnB);
         /// Drops a shape that's being removed from every touch list (PhysX's later "lost" event for it
         /// refers to a removed shape and is ignored). A body pair left with nothing queues its Exit.
         void ForgetShape(const physx::PxShape* shape);
         /// The collider that owns a shape (stored in the shape's userData)
         static ICollider* ColliderOf(const physx::PxShape* shape);
-        /// The collider if it's still registered on the body, else null (a handler may have removed it)
-        [[nodiscard]] ICollider* LiveCollider(PhysicsBodyHandle body, ICollider* collider) const;
-        /// Records who owns each body of a pair that's being forgotten
-        [[nodiscard]] PairOwners OwnersOf(const CollisionPair& pair) const;
-        /// The GameObject and Rigidbody to report for one side of a pair: the body's, or if the body is gone,
-        /// the recorded owner's (with no Rigidbody)
-        void DescribeSide(PhysicsBodyHandle handle, const std::weak_ptr<GameObject>& fallbackOwner,
-                          GameObject*& gameObject, Rigidbody*& rigidbody) const;
-
-        Collision CreateCollisionData(
-            const CollisionPair& pair,
-            const Collision& baseData,
-            bool isForBodyA,
-            const PairOwners& owners = {});
-
-        Trigger CreateTriggerData(
-            const CollisionPair& pair,
-            ICollider* colliderA,
-            ICollider* colliderB,
-            bool isForBodyA,
-            const PairOwners& owners = {});
-
         /// Fills a query hit from scratch (no field of a reused RaycastHit survives), reporting the collider
         /// that owns the hit shape. Raycast and sweep hits both carry a location and an actor/shape.
         void FillRaycastHit(
             RaycastHit& hit,
             const physx::PxLocationHit& location,
             const physx::PxActorShape& actorShape) const;
+        /// The body handle and the collider's place on the body (registration order) of a hit shape: what the order of
+        /// QueryRules is made of. False for a shape that is not a live collider of this backend (it is left out).
+        bool LocateQueryHit(
+            const physx::PxActorShape& actorShape,
+            PhysicsBodyHandle& handle,
+            std::size_t& colliderOrder) const;
 #endif
     };
 }

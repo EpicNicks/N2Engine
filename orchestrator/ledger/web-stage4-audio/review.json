@@ -1,0 +1,13 @@
+{
+  "head": "7a011f3bb2dd71d2c0e598db460a9289edea1e1b",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "web/n2-loader.js",
+      "line": 392,
+      "summary": "succeeded() resets `failures` for any context's successful resume, including a non-gesture visible-tab resume of another context. So a running context next to a forever-refusing one restarts the cap on every hide/show cycle. This is documented ('any successful resume') and bounded by user actions (at most 4 gesture tries per cycle), so it is not an endless loop.",
+      "scenario": "Context B runs and context A is suspended and refuses every resume. After 4 gesture refusals the listeners are gone. The user switches tabs and back, B's visible resume succeeds, failures goes to 0, and update() re-arms for A. A then gets 4 more tries, and this repeats every cycle. Optional fix: reset only when the resumed context is the one that was refusing, or only in update() when nothing needs a resume."
+    }
+  ],
+  "verdict": "clean"
+}

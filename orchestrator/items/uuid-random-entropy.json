@@ -1,0 +1,26 @@
+{
+  "name": "uuid-random-entropy",
+  "repo": "engine",
+  "branch": "fix-uuid-random-entropy",
+  "title": "UUID::Random: one seeded generator per thread with real entropy (closes #140)",
+  "closes": "#140",
+  "issue": "GitHub issue #140 (read it first via the gh wrapper: api repos/EpicNicks/N2Engine/issues/140). `UUID::Random()` (math/src/math/UUID.cpp, around lines 82-104) constructs a NEW std::mt19937_64 on every call, seeded from ONE 32-bit std::random_device value, so a UUID has ~32 bits of entropy and two calls collide whenever random_device repeats a value; every Base::Asset (Component, GameObject) draws one in its constructor. This caused a flaky CI failure (PrefabInstantiateTest.ReferencesOutsideThePrefabAreKeptWhenTheSceneIsGiven on the GCC 14 leg: two components got the same UUID). Fix: (1) one generator per thread: `static thread_local std::mt19937_64`, seeded ONCE per thread from a std::seed_seq of several random_device words (e.g. 8 x 32 bit) mixed with a high-resolution time stamp, the thread id hash and an address (ASLR), so a random_device that returns a constant (broken RDSEED) cannot produce identical streams in two threads or two runs; keep the UUID v4 version/variant bits exactly as today (read the current code and keep the byte layout and string format); alternatively, if a portable OS source is easy and well-tested in this codebase, fill the 16 bytes from getrandom (Linux)/BCryptGenRandom (Windows) with the seeded generator as a fallback: choose the simpler one that is correct on Windows MSVC, Linux x86_64/arm64 and macOS-free CI, and say which you chose. No behaviour change for UUID parsing/printing/ordering/hashing. (2) Tests (tests/math, registered like the neighbours; every leg): generating 200k UUIDs on one thread yields all unique; 8 threads x 25k UUIDs in parallel are globally unique; the version/variant bits are valid on every UUID (as the current tests check, extend if they do not); two threads' first UUIDs differ; thread-local state does not break when threads start and exit repeatedly. Make the test fast (< 1 s). Do NOT add tests that depend on the machine's entropy quality. (3) Docs: docs/math.html (around line 380, the UUID section) must describe the new generation honestly (per-thread generator, how it is seeded, that it is not cryptographically secure). (4) PR body: say it closes #140 and quote the root cause. Nothing builds locally; CI is the build (8 checks, required `linux (Release, x86_64, Clang)`).",
+  "allowedPaths": [
+    "^math/",
+    "^tests/math/",
+    "^docs/math.html$",
+    "^docs/testing.html$"
+  ],
+  "acceptance": [
+    "All Tests-workflow jobs green",
+    "UUID::Random uses a per-thread generator seeded once from a multi-word seed_seq mixed with time/thread/address (or an OS source); byte layout and string format unchanged",
+    "Uniqueness tests (200k single-thread, 8x25k multi-thread) pass fast on every leg",
+    "docs/math.html updated; PR closes #140"
+  ],
+  "requiresDocs": true,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "reviewer": "sonnet",
+  "notes": "Reviewer: confirm the v4 bits and format are unchanged (existing UUID tests untouched and passing), the thread_local seeding is correct (seed once per thread, no per-call construction), no data races, the tests cannot flake, and the doc matches. Unverified: whether the original failure was a runner RDSEED issue (hypothesis)."
+}

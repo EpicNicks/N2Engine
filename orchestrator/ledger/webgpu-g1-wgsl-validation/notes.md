@@ -1,0 +1,12 @@
+Accepted by the user 2026-10-13:
+- Sampler bindings are derived as table binding + kSamplerCount (6-10), documented and parity-checked; the shared table is unchanged
+- lit.wgsl samples all five textures up front under material-flag conditions (before discard and the loops) instead of where the GLSL sampled, for WGSL uniformity
+- Added a non-required job 'wgsl (Tint, naga)' (an 11th check): Tint from Dawn prebuilt release v20261016.190333 (sha256 pinned), naga-cli 30.0.1 via cargo install --locked from the sha256-pinned crate; 60 s cold
+- Tint is validated via SPIR-V+spirv-val per entry point and a WGSL round trip only (the Linux release has no MSL/HLSL writers); naga also writes SPIR-V/Metal/HLSL/WGSL
+- naga accepts the non-uniform-sample negative control, so only Tint is required to reject it
+- Embedded header is written by CMake at configure time with platform line ends; the test compares ignoring CR
+- RecordingMaterial is duplicated in the new test rather than shared with the Vulkan test
+- Tint/naga CI-only, not shipped: noted in THIRD_PARTY_NOTICES
+- Safari/WebKit WGSL compiler has no CI path
+- Fix round: negative controls now match the tool message (error / uniform) and Tint runs them with --ep fs_main --validate; Rust 1.99.1 pinned via rustup for the naga build; docs say naga does not reject the uniformity control
+- Review round 2 (one low): docs and job comment now say the cold-cache cost includes the Rust toolchain install, with the 60 s figure labelled as measured before the pin

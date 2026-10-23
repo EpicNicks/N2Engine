@@ -1,0 +1,29 @@
+{
+  "closes": null,
+  "allowProtocol": true,
+  "gate": null,
+  "approved": true,
+  "requiresDocs": false,
+  "repo": "frontend",
+  "name": "fe-ex5-inspector-sections",
+  "branch": "feat-ex5-inspector-sections",
+  "title": "Lua extensions E-X5 frontend: sync to protocol 1.16.0 and inspector sections with InvokeInspectorAction",
+  "issue": "Engine PR #209 (E-X5, merged) shipped protocol 1.16.0 (additive minor on 1.15.0): command InvokeInspectorAction 0x83 (Write class; componentId, actionId, params JSON, uiRevision; response ExtensionResult plus the edit result) and the inspector sections carried by GetEditorUi. Design: C:/Method Notes Obsidian/orchestrator/proposals/lua-editor-extensions.md (D1-D12 approved; read the Inspector sections paragraph near line 314, the command table near line 291, the role table near 234). Read FIRST in the engine repo (READ-ONLY): editor-server/protocol/protocol.json, docs/editor.html, docs/logging-and-editor.html (1.16.0 section), docs/scripting-lua.html, and the merged frontend E-X3/E-X4 work (src/protocol engine-client typed wrappers, the Tools menu, FormDialog, trust prompt, extension console) so the new code follows it. SCOPE: (1) bump engine-ref.txt to the current engine master commit and run npm run sync-protocol (generated files never hand-edited; CI Generated-protocol check stays green); update tests asserting the protocol version (grep 1.15.0, including mcp/ tests); (2) engine-client: typed invokeInspectorAction(componentId, actionId, params, uiRevision) returning the typed ExtensionResult (defensive parsing, typed errors never thrown into the UI, same staleUiRevision/editGroupOpen/forbidden handling and capability gate as invokeMenuItem, reports unsupported on old hosts without sending); (3) inspector UI: under a component whose type matches a section's componentType in inspector-panel.tsx render the section label, read-only fields (static or labelled values) and buttons; a button opens its FormDialog (when it declares params) and sends InvokeInspectorAction; hidden/disabled for roles that lack Write; results (message/select/warnings) handled exactly like menu-item results; ALL extension strings are UNTRUSTED text rendered as text, never HTML; refresh on the extensionsChanged event and on stale ui revision; (4) tests: node unit tests with fake host fixtures for the wrapper, errors, gate and defensive parsing; DOM tests for section rendering, button flow, role gating, stale revision; keep every existing test green; (5) README section. Do not touch the engine repo. Frontend repo C:/Method Notes Obsidian/N2Engine-Electron-Frontend (EpicNicks/N2Engine-Electron-Frontend); the engine repo C:/Method Notes Obsidian/N2Engine is READ-ONLY reference. Tests run LOCALLY: npm run typecheck, npm run build and npm test must pass before you push; CI has 3 checks. NEVER run taskkill or kill other processes; no attribution lines on commits or PRs (no Co-Authored-By, no Generated-with footer); GitHub only via bash \"C:/Method Notes Obsidian/gh-epicnicks.sh\" run inside the repo; README additions as ONE small self-contained section (other frontend PRs append too); before your final push merge origin/master into the branch if it moved; your FINAL message must be a real report (PR number, head sha, what you did, deviations), never a single word.",
+  "allowedPaths": [
+    "^engine-ref.txt$",
+    "^package.json$",
+    "^package-lock.json$",
+    "^README.md$",
+    "^src/",
+    "^scripts/",
+    "^mcp/"
+  ],
+  "acceptance": [
+    "sync-protocol produces no diff against engine-ref.txt; version assertions updated to 1.16.0",
+    "Typed invokeInspectorAction with errors and capability gate; old hosts unaffected",
+    "Inspector sections render read-only fields and buttons; button flow with form, role gating, stale revision, untrusted text as text",
+    "typecheck, build, tests and frontend CI green"
+  ],
+  "reviewer": "opus",
+  "notes": "Reviewer (security/protocol): extension text never rendered as HTML, role gating matches the table, no UI action reachable without Write, defensive parsing, generated files untouched by hand."
+}

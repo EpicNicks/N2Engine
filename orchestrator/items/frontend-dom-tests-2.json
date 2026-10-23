@@ -1,0 +1,26 @@
+{
+  "name": "frontend-dom-tests-2",
+  "repo": "frontend",
+  "branch": "feat-dom-tests-welcome-store",
+  "title": "DOM tests PR 2: store-driven welcome behaviour over a shared fakeStoreApi",
+  "closes": null,
+  "issue": "Approved plan: C:/Method Notes Obsidian/orchestrator/proposals/frontend-dom-tests.md (section 4 item 3 and section 6 PR 2; read it first). The harness (src/test-dom/setup.ts, helpers.tsx, renderWithApp) already exists from PR #27 and the frontend now also has write-guard/read-only code (PR #28), so re-read the current src/test-dom and src/test/store.test.ts first. Scope: (1) extract `fakeStoreApi()` from src/test/store.test.ts into a shared helper under src/test/ (e.g. src/test/fake-store-api.ts) as a PURE MOVE with identical behaviour; store.test.ts imports it; extend it only additively if a DOM test needs a method. (2) Add a renderWithStore (or an option of renderWithApp) in src/test-dom/helpers.tsx that builds a REAL EditorStore over fakeStoreApi() so signals drive the DOM. (3) Tests in src/test-dom for the Welcome screen (src/renderer/welcome.tsx) driven by the real store: the Recent Projects list renders the recent entries and its Remove button removes one (store/api call asserted, list updates); Open Project is disabled when hostLocation.problem is set and enabled otherwise; recent remotes behave the same way if the component shows them; empty states. Assert real behaviour (calls and resulting DOM), not just that things render. (4) README testing note: mention the shared fake and the store-driven helper. Run npm run typecheck, npm run build and npm test locally (all must pass); open a PR, wait for the repo CI. Do NOT change production code under src/main, src/preload or src/renderer unless a test reveals a real bug: then stop and report needsUser. No new dependencies.",
+  "allowedPaths": [
+    "^src/test-dom/",
+    "^src/test/",
+    "^README.md$",
+    "^package.json$"
+  ],
+  "acceptance": [
+    "typecheck, build, npm test and frontend CI green",
+    "fakeStoreApi shared (pure move); store tests unchanged in behaviour",
+    "Welcome store-driven tests assert recent list/remove and Open Project disabled state",
+    "No production code changed"
+  ],
+  "requiresDocs": false,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "reviewer": "sonnet",
+  "notes": "Frontend repo has CI now. Reviewer: confirm the extraction is a pure move, tests assert behaviour not just render, no production file changed."
+}

@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>N2Engine</title>
+<style>
+  :root { color-scheme: dark; --bg: #101216; --fg: #e6e8ec; --muted: #9aa3b2; --accent: #4f8cff; --error: #ff6b6b; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 16px/1.4 system-ui, sans-serif; }
+  #stage { position: fixed; inset: 0; }
+  canvas { display: block; width: 100%; height: 100%; background: #000; outline: none; }
+  #gate { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+          gap: 12px; background: rgba(16, 18, 22, 0.92); text-align: center; padding: 16px; }
+  #gate h1 { margin: 0; font-size: 1.5rem; }
+  #status { margin: 0; color: var(--muted); min-height: 1.4em; }
+  progress { width: min(320px, 80vw); height: 8px; accent-color: var(--accent); }
+  progress[hidden] { display: none; }
+  button { font: inherit; padding: 10px 28px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; }
+  button:disabled { background: #3a4252; color: var(--muted); cursor: default; }
+  #error { display: none; position: fixed; left: 16px; right: 16px; bottom: 16px; max-height: 40%; overflow: auto;
+           padding: 12px 16px; border: 1px solid var(--error); border-radius: 6px; background: #1c1214; color: var(--error); }
+  #error pre { margin: 8px 0 0; white-space: pre-wrap; color: var(--fg); font-size: 0.8rem; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="canvas" tabindex="0"></canvas></div>
+<div id="gate">
+  <h1>N2Engine</h1>
+  <p id="status">Loading the engine...</p>
+  <progress id="progress" max="1" hidden></progress>
+  <button id="start" type="button" disabled>Click to start</button>
+</div>
+<div id="error" role="alert"></div>
+
+<script src="n2-loader.js"></script>
+<script>
+(function () {
+  'use strict';
+  var canvas = document.getElementById('canvas');
+  var gate = document.getElementById('gate');
+  var statusLine = document.getElementById('status');
+  var startButton = document.getElementById('start');
+  var progressBar = document.getElementById('progress');
+  var errorBox = document.getElementById('error');
+  var logLines = [];
+  var failed = false;
+  var renderer = 'software';
+  var gpuSession = null;
+  var started = false;
+
+  function useSoftwareCanvas() {
+    // Canvas context types are exclusive, so software needs a fresh element.
+    var fresh = canvas.cloneNode(false);
+    canvas.parentNode.replaceChild(fresh, canvas);
+    canvas = fresh;
+    canvas.addEventListener('contextmenu', function (event) { event.preventDefault(); });
+    gpuSession = null;
+    renderer = 'software';
+    if (engine) { engine.canvas = canvas; engine.n2GpuSession = null; }
+  }
+
+  function gpuFailure(reason) {
+    if (!started) {
+      log('WebGPU unavailable before Start: ' + reason);
+      useSoftwareCanvas();
+      return;
+    }
+    if (gpuSession) gpuSession.stop();
+    showError('The graphics device was lost: ' + reason);
+    var button = document.createElement('button');
+    button.textContent = 'Continue with the software renderer';
+    button.onclick = function () {
+      var url = new URL(window.location.href);
+      url.searchParams.set('renderer', 'software');
+      window.location.href = url.href;
+    };
+    errorBox.appendChild(button);
+  }
+
+  function showError(message) {
+    failed = true;
+    errorBox.style.display = 'block';
+    errorBox.textContent = '';
+    var title = document.createElement('strong');
+    title.textContent = 'The game stopped: ' + message;
+    errorBox.appendChild(title);
+    var log = document.createElement('pre');
+    log.textContent = logLines.join('\n');
+    errorBox.appendChild(log);
+    gate.style.display = 'none';
+  }
+
+  function log(text) {
+    logLines.push(text);
+    if (logLines.length > 100) logLines.shift();
+  }
+
+  // Audio (stage 4): the engine's AudioContext (Emscripten's OpenAL) is created inside the Start click below, which is a
+  // gesture, but a browser may still keep it suspended, and suspends it again while the tab is hidden. This remembers every
+  // context made from here on, resumes them on the first click, key press or touch, and suspends and resumes them with the
+  // tab (n2-loader.js, createAudioUnlock). No sound, or a failed context, is not an error here: the engine reports it.
+  if (typeof N2Loader === 'object' && typeof N2Loader.createAudioUnlock === 'function') {
+    N2Loader.createAudioUnlock({
+      onEvent: function (name, detail) { log('loader: ' + name + (detail && detail.reason ? ' (' + detail.reason + ')' : '')); }
+    }).install();
+  }
+
+  window.addEventListener('error', function (event) { showError(event.message || 'script error'); });
+  window.addEventListener('unhandledrejection', function (event) {
+    showError(String(event.reason && event.reason.message ? event.reason.message : event.reason));
+  });
+  // Right click is the game's: no browser menu over the canvas
+  canvas.addEventListener('contextmenu', function (event) { event.preventDefault(); });
+
+  // The player (web/player/WebPlayer.cpp) hands each finished frame here: RGBA8, top row first, width x height
+  var context = null;
+  function present(pixels, width, height) {
+    if (!context) context = canvas.getContext('2d', { alpha: false });
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    // pixels is a view of the WebAssembly memory: the image is made from it at once, before the memory can grow
+    context.putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.length), width, height), 0, 0);
+  }
+
+  var engine = null;
+  var moduleSettings = {
+    noInitialRun: true,
+    canvas: canvas,
+    print: function (text) { console.log(text); log(text); },
+    printErr: function (text) { console.warn(text); log(text); },
+    onAbort: function (reason) { showError('the engine aborted (' + reason + ')'); },
+    n2Present: present,
+    n2Stopped: function () {
+      if (gpuSession) gpuSession.stop();
+      gate.style.display = 'flex';
+      statusLine.textContent = 'The game has ended. Reload the page to play again.';
+      startButton.style.display = 'none';
+    },
+    n2Failed: function (message) { if (renderer === 'webgpu') gpuFailure(message); else showError(message); }
+  };
+
+  function megabytes(bytes) { return (bytes / 1048576).toFixed(1); }
+
+  // Download progress, against the sizes in manifest.json (total is 0 when the manifest is missing: then no bar, just a count)
+  function onProgress(p) {
+    if (p.total > 0) {
+      progressBar.hidden = false;
+      progressBar.max = p.total;
+      progressBar.value = p.loaded;
+      statusLine.textContent = 'Downloading ' + megabytes(p.loaded) + ' of ' + megabytes(p.total) + ' MB...';
+    } else {
+      statusLine.textContent = 'Downloading ' + megabytes(p.loaded) + ' MB...';
+    }
+  }
+
+  // index.js is added by emcc where the script placeholder is, below (an async script, so the load event waits for it).
+  // n2-loader.js (next to this page) fetches manifest.json, index.data and index.wasm with progress and clear errors, and
+  // falls back to ArrayBuffer instantiation when the host serves .wasm with the wrong MIME type. The package step adds
+  // ?v=<hash> to both script URLs, so a new build's page never runs an older cached index.js or loader.
+  window.addEventListener('load', function () {
+    if (typeof createN2Player !== 'function') {
+      showError('index.js did not load (is it next to this page?)');
+      return;
+    }
+    if (typeof N2Loader !== 'object') {
+      showError('n2-loader.js did not load (is it next to this page?)');
+      return;
+    }
+    // The ?v= this page loaded index.js with (written by scripts/web-package-finalize.mjs): the loader reports a page
+    // older than the build's manifest.json
+    var indexScript = document.querySelector('script[src*="index.js"]');
+    var indexVersion = indexScript && /[?&]v=([0-9a-f]+)/.exec(indexScript.getAttribute('src') || '');
+    var loader = N2Loader.create({
+      indexJsVersion: indexVersion ? indexVersion[1] : null,
+      onProgress: onProgress,
+      onEvent: function (name, detail) { log('loader: ' + name + (detail && detail.reason ? ' (' + detail.reason + ')' : '')); }
+    });
+    var probe = N2Loader.createGpuProbe();
+    // Device acquisition and the asset/wasm downloads run concurrently. The
+    // shared session object is filled before Start, after the module is ready.
+    var gpuReady = probe.acquire().then(function (result) {
+      log('renderer: ' + result.reason);
+      if (!result.device) return;
+      try {
+        gpuSession = N2Loader.createGpuSession({ device: result.device, canvas: canvas, gpu: navigator.gpu,
+          probe: probe, onFailure: gpuFailure, onEvent: log });
+        renderer = 'webgpu';
+      } catch (error) {
+        result.device.destroy();
+        log('WebGPU canvas setup failed: ' + String(error.message || error));
+        useSoftwareCanvas();
+      }
+    });
+    Promise.all([loader.run(createN2Player, moduleSettings), gpuReady]).then(function (results) {
+      engine = results[0];
+      engine.canvas = canvas;
+      engine.n2GpuSession = gpuSession;
+      if (failed) return;
+      progressBar.hidden = true;
+      statusLine.textContent = 'Ready.';
+      startButton.disabled = false;
+      startButton.focus();
+    }).catch(function (error) {
+      showError(String(error && error.message ? error.message : error));
+    });
+  });
+
+  // A click is the user gesture browsers require before a page may start audio: the engine starts here, so its audio
+  // output is created inside this click (see createAudioUnlock above for a browser that suspends it anyway)
+  startButton.addEventListener('click', function () {
+    if (!engine || failed) return;
+    if (gpuSession && gpuSession.status() === 0) return;
+    gate.style.display = 'none';
+    canvas.focus();
+    try {
+      started = true;
+      engine.callMain(['--renderer', renderer]);
+    } catch (error) {
+      // callMain's own unwinding for a main that does not return is handled inside it; anything else is a failure
+      showError(String(error && error.message ? error.message : error));
+    }
+  });
+})();
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "name": "gitignore-cmake-scripts",
+  "head": "55b4f65bfc5548ff4d080097326ff14f8988a3e6",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

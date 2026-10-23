@@ -1,0 +1,10 @@
+{
+  "name": "vulkan-pr0-core",
+  "head": "bff0594a670d08a4dda2341be5d4185954636bc7",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

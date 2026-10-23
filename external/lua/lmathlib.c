@@ -20,6 +20,7 @@
 
 #include "lauxlib.h"
 #include "lualib.h"
+#include "n2seed.h"  /* N2Engine local patch */
 
 
 #undef PI
@@ -628,6 +629,13 @@ static void setseed (lua_State *L, Rand64 *state,
 static void randseed (lua_State *L, RanState *state) {
   lua_Unsigned seed1 = (lua_Unsigned)time(NULL);
   lua_Unsigned seed2 = (lua_Unsigned)(size_t)L;
+  { /* N2Engine local patch: a configured seed is what math.randomseed(seed) would give (see n2seed.h) */
+    unsigned long long fixed;
+    if (n2lua_getseed(&fixed)) {
+      seed1 = (lua_Unsigned)fixed;
+      seed2 = 0;
+    }
+  }
   setseed(L, state->s, seed1, seed2);
 }
 

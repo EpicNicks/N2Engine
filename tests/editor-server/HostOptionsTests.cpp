@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
@@ -77,7 +78,7 @@ TEST(HostOptionsTest, ParsesEveryOption)
 {
     const auto parsed = ParseHostArguments({"--port", "0", "--bind", "0.0.0.0", "--project", "C:/Games/My Game",
                                             "--renderer", "software", "--token-env", "N2_EDITOR_TOKEN",
-                                            "--exit-on-disconnect", "--exit-on-stdin-eof"});
+                                            "--exit-on-disconnect", "--exit-on-stdin-eof", "--tls"});
     ASSERT_TRUE(parsed) << parsed.error();
     EXPECT_EQ(parsed->port, 0);
     EXPECT_EQ(parsed->bindAddress, "0.0.0.0");
@@ -444,7 +445,9 @@ TEST(HostOptionsTest, TlsIsAFlagAndOffByDefault)
     EXPECT_FALSE(defaults->tls);
 
     // Not a value-taking option: the next argument is still parsed on its own
-    const auto parsed = ParseHostArguments({"--tls", "--port", "1234", "--bind", "0.0.0.0"});
+    // A non-loopback bind needs a token with --tls (or --insecure-bind), so this one has a token
+    const auto parsed =
+        ParseHostArguments({"--tls", "--port", "1234", "--bind", "0.0.0.0", "--token-env", "N2_EDITOR_TOKEN"});
     ASSERT_TRUE(parsed) << parsed.error();
     EXPECT_TRUE(parsed->tls);
     EXPECT_EQ(parsed->port, 1234);
@@ -474,6 +477,174 @@ TEST(HostOptionsTest, NoRateLimitIsAFlagAndOffByDefault)
     EXPECT_TRUE(last->noRateLimit);
 
     EXPECT_NE(HostUsage().find("--no-rate-limit"), std::string_view::npos);
+}
+
+// ==================== --idle-timeout, --write-timeout, --max-session ====================
+
+TEST(HostOptionsTest, ConnectionLimitsDefaultToTheServersDefaults)
+{
+    const auto parsed = ParseHostArguments({});
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_EQ(parsed->idleTimeoutSeconds, 300);
+    EXPECT_EQ(parsed->writeTimeoutSeconds, 30);
+    EXPECT_EQ(parsed->maxSessionMinutes, 0) << "no maximum session age unless asked for";
+    // HostOptions spells the defaults out (to keep EditorServer.hpp out of its header); they must stay the server's
+    EXPECT_EQ(std::chrono::seconds(parsed->idleTimeoutSeconds), EditorServer::DefaultIdleTimeout);
+    EXPECT_EQ(std::chrono::seconds(parsed->writeTimeoutSeconds), EditorServer::DefaultWriteTimeout);
+    EXPECT_EQ(std::chrono::seconds(HostOptions::DefaultIdleTimeoutSeconds), EditorServer::DefaultIdleTimeout);
+    EXPECT_EQ(std::chrono::seconds(HostOptions::DefaultWriteTimeoutSeconds), EditorServer::DefaultWriteTimeout);
+}
+
+TEST(HostOptionsTest, ParseWholeNumberTakesDigitsInsideTheRangeAndNothingElse)
+{
+    EXPECT_EQ(ParseWholeNumber("0", 0, 10), 0);
+    EXPECT_EQ(ParseWholeNumber("10", 0, 10), 10);
+    EXPECT_EQ(ParseWholeNumber("007", 0, 10), 7);
+    EXPECT_FALSE(ParseWholeNumber("11", 0, 10));
+    EXPECT_FALSE(ParseWholeNumber("0", 1, 10)) << "below the minimum";
+    for (const char *bad : {"", "-1", "-0", "+5", " 5", "5 ", "5x", "1.5", "1e3", "0x5", "abc", "99999999999"})
+    {
+        EXPECT_FALSE(ParseWholeNumber(bad, 0, 1000000)) << "'" << bad << "'";
+    }
+}
+
+TEST(HostOptionsTest, IdleTimeoutTakesWholeSecondsAndZeroTurnsItOff)
+{
+    const auto five = ParseHostArguments({"--idle-timeout", "5"});
+    ASSERT_TRUE(five) << five.error();
+    EXPECT_EQ(five->idleTimeoutSeconds, 5);
+
+    const auto off = ParseHostArguments({"--idle-timeout", "0", "--port", "1234"});
+    ASSERT_TRUE(off) << off.error();
+    EXPECT_EQ(off->idleTimeoutSeconds, 0);
+    EXPECT_EQ(off->port, 1234);
+
+    const auto biggest = ParseHostArguments({"--idle-timeout", std::to_string(HostOptions::MaxIdleTimeoutSeconds)});
+    ASSERT_TRUE(biggest) << biggest.error();
+    EXPECT_EQ(biggest->idleTimeoutSeconds, HostOptions::MaxIdleTimeoutSeconds);
+
+    const auto later = ParseHostArguments({"--idle-timeout", "5", "--idle-timeout", "9"});
+    ASSERT_TRUE(later) << later.error();
+    EXPECT_EQ(later->idleTimeoutSeconds, 9);
+}
+
+TEST(HostOptionsTest, WriteTimeoutTakesWholeSecondsOfAtLeastOne)
+{
+    const auto ten = ParseHostArguments({"--write-timeout", "10"});
+    ASSERT_TRUE(ten) << ten.error();
+    EXPECT_EQ(ten->writeTimeoutSeconds, 10);
+
+    const auto one = ParseHostArguments({"--write-timeout", "1"});
+    ASSERT_TRUE(one) << one.error();
+    EXPECT_EQ(one->writeTimeoutSeconds, 1);
+
+    // A write with no deadline is what the flag exists to prevent: there is no 0 for "off"
+    const auto zero = ParseHostArguments({"--write-timeout", "0"});
+    ASSERT_FALSE(zero);
+    EXPECT_NE(zero.error().find("--write-timeout"), std::string::npos) << zero.error();
+}
+
+TEST(HostOptionsTest, MaxSessionTakesWholeMinutesAndZeroIsOff)
+{
+    const auto hour = ParseHostArguments({"--max-session", "60"});
+    ASSERT_TRUE(hour) << hour.error();
+    EXPECT_EQ(hour->maxSessionMinutes, 60);
+
+    const auto off = ParseHostArguments({"--max-session", "0"});
+    ASSERT_TRUE(off) << off.error();
+    EXPECT_EQ(off->maxSessionMinutes, 0);
+}
+
+TEST(HostOptionsTest, ConnectionLimitsRefuseGarbageNegativeAndTooLargeValues)
+{
+    const std::vector<std::pair<std::string, int>> flags{{"--idle-timeout", HostOptions::MaxIdleTimeoutSeconds},
+                                                         {"--write-timeout", HostOptions::MaxWriteTimeoutSeconds},
+                                                         {"--max-session", HostOptions::MaxSessionMinutesLimit}};
+    for (const auto &[flag, largest] : flags)
+    {
+        for (const std::string &bad : {std::string{"abc"}, std::string{"-1"}, std::string{"-0"}, std::string{"+5"},
+                                       std::string{"1.5"}, std::string{" 5"}, std::string{"5 "}, std::string{"1e3"},
+                                       std::string{""}, std::string{"99999999999"}, std::to_string(largest + 1)})
+        {
+            const auto parsed = ParseHostArguments({flag, bad});
+            ASSERT_FALSE(parsed) << flag << " " << bad;
+            EXPECT_NE(parsed.error().find(flag), std::string::npos) << parsed.error();
+        }
+
+        const auto missing = ParseHostArguments({flag});
+        ASSERT_FALSE(missing) << flag;
+        EXPECT_EQ(missing.error(), flag + " is missing a value");
+
+        // Another option is not its value
+        const auto swallowed = ParseHostArguments({flag, "--port", "0"});
+        ASSERT_FALSE(swallowed) << flag;
+        EXPECT_EQ(swallowed.error(), flag + " is missing a value");
+    }
+}
+
+TEST(HostOptionsTest, TheUsageNamesTheConnectionLimits)
+{
+    const std::string_view usage = HostUsage();
+    for (const char *option : {"--idle-timeout", "--write-timeout", "--max-session"})
+    {
+        EXPECT_NE(usage.find(option), std::string_view::npos) << option;
+    }
+    EXPECT_NE(usage.find("Default: 300"), std::string_view::npos) << "the idle default is documented";
+    EXPECT_NE(usage.find("Default: 30;"), std::string_view::npos) << "the write default is documented";
+}
+
+// ==================== --preauth-slots ====================
+
+TEST(HostOptionsTest, PreAuthSlotsDefaultToTheServersDefault)
+{
+    const auto parsed = ParseHostArguments({});
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_EQ(parsed->preAuthSlots, 4);
+    // HostOptions spells the numbers out (to keep EditorServer.hpp out of its header); they must stay the server's
+    EXPECT_EQ(static_cast<size_t>(parsed->preAuthSlots), EditorServer::DefaultPreAuthSlots);
+    EXPECT_EQ(static_cast<size_t>(HostOptions::DefaultPreAuthSlots), EditorServer::DefaultPreAuthSlots);
+    EXPECT_EQ(static_cast<size_t>(HostOptions::MaxPreAuthSlots), EditorServer::MaxPreAuthSlots);
+}
+
+TEST(HostOptionsTest, PreAuthSlotsTakeAWholeNumberFromOneToSixteen)
+{
+    for (const int slots : {1, 2, 4, 15, 16})
+    {
+        const auto parsed = ParseHostArguments({"--preauth-slots", std::to_string(slots), "--port", "1234"});
+        ASSERT_TRUE(parsed) << slots << ": " << parsed.error();
+        EXPECT_EQ(parsed->preAuthSlots, slots);
+        EXPECT_EQ(parsed->port, 1234) << "the next option is still parsed";
+    }
+    const auto later = ParseHostArguments({"--preauth-slots", "2", "--preauth-slots", "9"});
+    ASSERT_TRUE(later) << later.error();
+    EXPECT_EQ(later->preAuthSlots, 9);
+}
+
+TEST(HostOptionsTest, PreAuthSlotsRefuseGarbageAndValuesOutsideTheRange)
+{
+    for (const std::string &bad : {std::string{"0"}, std::string{"17"}, std::string{"-1"}, std::string{"+4"},
+                                   std::string{"abc"}, std::string{"1.5"}, std::string{" 4"}, std::string{"4 "},
+                                   std::string{""}, std::string{"99999999999"}})
+    {
+        const auto parsed = ParseHostArguments({"--preauth-slots", bad});
+        ASSERT_FALSE(parsed) << "'" << bad << "'";
+        EXPECT_NE(parsed.error().find("--preauth-slots"), std::string::npos) << parsed.error();
+    }
+
+    const auto missing = ParseHostArguments({"--preauth-slots"});
+    ASSERT_FALSE(missing);
+    EXPECT_EQ(missing.error(), "--preauth-slots is missing a value");
+    const auto swallowed = ParseHostArguments({"--preauth-slots", "--port", "0"});
+    ASSERT_FALSE(swallowed);
+    EXPECT_EQ(swallowed.error(), "--preauth-slots is missing a value");
+}
+
+TEST(HostOptionsTest, TheUsageNamesThePreAuthSlots)
+{
+    const std::string_view usage = HostUsage();
+    EXPECT_NE(usage.find("--preauth-slots <n>"), std::string_view::npos);
+    EXPECT_NE(usage.find("Default: 4"), std::string_view::npos) << "the default is documented";
+    EXPECT_NE(usage.find("The host is serving another session"), std::string_view::npos) << "the Busy answer is documented";
 }
 
 // ==================== --read-only ====================
@@ -684,4 +855,311 @@ TEST(HostOptionsTest, ABuildWithoutTlsRefusesATokensFileAndCantMakeATokenButATls
     EXPECT_EQ(RunHost(tokens), 1);
     EXPECT_EQ(RunHost(newToken), 1);
     EXPECT_EQ(RunNewToken(newToken), 1);
+}
+
+// ==================== --insecure-bind and the fail-closed non-loopback bind (S3, audit F5) ====================
+
+namespace
+{
+    constexpr const char *NonLoopbackBinds[] = {"0.0.0.0", "192.0.2.10"};
+
+    [[nodiscard]] std::vector<std::string> BindArgs(const std::string &address, const std::vector<std::string> &more)
+    {
+        std::vector<std::string> args = {"--bind", address};
+        args.insert(args.end(), more.begin(), more.end());
+        return args;
+    }
+}
+
+TEST(HostOptionsTest, NonLoopbackBindWithNoTokenAndNoTlsIsRefused)
+{
+    for (const char *address : NonLoopbackBinds)
+    {
+        const auto parsed = ParseHostArguments(BindArgs(address, {}));
+        ASSERT_FALSE(parsed) << address;
+        EXPECT_NE(parsed.error().find(address), std::string::npos);
+        EXPECT_NE(parsed.error().find("missing an access token and --tls"), std::string::npos) << parsed.error();
+        EXPECT_NE(parsed.error().find("--insecure-bind"), std::string::npos);
+        EXPECT_NE(parsed.error().find("--token-env or --tokens-file"), std::string::npos);
+    }
+}
+
+TEST(HostOptionsTest, NonLoopbackBindWithATokenEnvButNoTlsIsRefused)
+{
+    for (const char *address : NonLoopbackBinds)
+    {
+        const auto parsed = ParseHostArguments(BindArgs(address, {"--token-env", "N2_EDITOR_TOKEN"}));
+        ASSERT_FALSE(parsed) << address;
+        EXPECT_NE(parsed.error().find("missing --tls"), std::string::npos) << parsed.error();
+        EXPECT_NE(parsed.error().find("--insecure-bind"), std::string::npos);
+    }
+}
+
+TEST(HostOptionsTest, NonLoopbackBindWithATokensFileButNoTlsIsRefused)
+{
+    for (const char *address : NonLoopbackBinds)
+    {
+        const auto parsed = ParseHostArguments(BindArgs(address, {"--tokens-file", "tokens.json"}));
+        ASSERT_FALSE(parsed) << address;
+        EXPECT_NE(parsed.error().find("missing --tls"), std::string::npos) << parsed.error();
+    }
+}
+
+TEST(HostOptionsTest, NonLoopbackBindWithTlsButNoTokenIsRefused)
+{
+    for (const char *address : NonLoopbackBinds)
+    {
+        const auto parsed = ParseHostArguments(BindArgs(address, {"--tls"}));
+        ASSERT_FALSE(parsed) << address;
+        EXPECT_NE(parsed.error().find("missing an access token:"), std::string::npos) << parsed.error();
+    }
+}
+
+TEST(HostOptionsTest, NonLoopbackBindWithTlsAndATokenEnvIsAccepted)
+{
+    for (const char *address : NonLoopbackBinds)
+    {
+        const auto parsed = ParseHostArguments(BindArgs(address, {"--tls", "--token-env", "N2_EDITOR_TOKEN"}));
+        ASSERT_TRUE(parsed) << address << ": " << parsed.error();
+        EXPECT_EQ(parsed->bindAddress, address);
+        EXPECT_FALSE(parsed->insecureBind);
+    }
+}
+
+TEST(HostOptionsTest, NonLoopbackBindWithTlsAndATokensFileIsAccepted)
+{
+    for (const char *address : NonLoopbackBinds)
+    {
+        const auto parsed = ParseHostArguments(BindArgs(address, {"--tokens-file", "tokens.json", "--tls"}));
+        ASSERT_TRUE(parsed) << address << ": " << parsed.error();
+    }
+}
+
+TEST(HostOptionsTest, InsecureBindAcceptsEveryRefusedCombination)
+{
+    const std::vector<std::vector<std::string>> refused = {
+        {}, {"--token-env", "N2_EDITOR_TOKEN"}, {"--tokens-file", "tokens.json"}, {"--tls"}};
+    for (const char *address : NonLoopbackBinds)
+    {
+        for (const auto &more : refused)
+        {
+            auto args = BindArgs(address, more);
+            ASSERT_FALSE(ParseHostArguments(args)) << address;
+            // After the other options or before them: the order doesn't matter
+            args.push_back("--insecure-bind");
+            const auto after = ParseHostArguments(args);
+            ASSERT_TRUE(after) << address << ": " << after.error();
+            EXPECT_TRUE(after->insecureBind);
+            args.pop_back();
+            args.insert(args.begin(), "--insecure-bind");
+            EXPECT_TRUE(ParseHostArguments(args));
+        }
+    }
+}
+
+TEST(HostOptionsTest, InsecureBindIsAFlagThatTakesNoValue)
+{
+    const auto defaults = ParseHostArguments({});
+    ASSERT_TRUE(defaults);
+    EXPECT_FALSE(defaults->insecureBind);
+
+    const auto parsed = ParseHostArguments({"--insecure-bind", "--port", "1234", "--bind", "0.0.0.0"});
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_TRUE(parsed->insecureBind);
+    EXPECT_EQ(parsed->port, 1234);
+    EXPECT_EQ(parsed->bindAddress, "0.0.0.0");
+
+    // The last argument too: nothing is swallowed as its value
+    const auto last = ParseHostArguments({"--bind", "0.0.0.0", "--insecure-bind"});
+    ASSERT_TRUE(last) << last.error();
+    EXPECT_EQ(last->bindAddress, "0.0.0.0");
+}
+
+TEST(HostOptionsTest, ThePlayHostWithANonLoopbackBindNeedsInsecureBind)
+{
+    // A play host is always plaintext, so the rule refuses it; there is no separate --play rule
+    for (const char *address : NonLoopbackBinds)
+    {
+        EXPECT_FALSE(ParseHostArguments(BindArgs(address, {"--play", "scene.json"}))) << address;
+        EXPECT_FALSE(ParseHostArguments(BindArgs(address, {"--play", "scene.json", "--token-env", "T"}))) << address;
+        const auto allowed = ParseHostArguments(BindArgs(address, {"--play", "scene.json", "--insecure-bind"}));
+        ASSERT_TRUE(allowed) << address << ": " << allowed.error();
+        EXPECT_EQ(allowed->playScene, "scene.json");
+    }
+    EXPECT_TRUE(ParseHostArguments({"--play", "scene.json"}));
+}
+
+TEST(HostOptionsTest, LoopbackBindsNeedNeitherATokenNorTls)
+{
+    EXPECT_TRUE(ParseHostArguments({}));
+    for (const char *address : {"127.0.0.1", "127.1.2.3", "127.255.255.255"})
+    {
+        const auto parsed = ParseHostArguments(BindArgs(address, {}));
+        ASSERT_TRUE(parsed) << address << ": " << parsed.error();
+        EXPECT_FALSE(parsed->insecureBind);
+    }
+}
+
+TEST(HostOptionsTest, CreateNewTokenAndHelpAreNotRefusedForANonLoopbackBind)
+{
+    // None of them serves
+    EXPECT_TRUE(ParseHostArguments(BindArgs("0.0.0.0", {"--create", "C:/Games/New"})));
+    EXPECT_TRUE(ParseHostArguments(BindArgs("0.0.0.0", {"--new-token", "alice", "editor"})));
+    const auto help = ParseHostArguments(BindArgs("0.0.0.0", {"--help"}));
+    ASSERT_TRUE(help);
+    EXPECT_TRUE(help->showHelp);
+}
+
+TEST(HostOptionsTest, AnUnparsableBindAddressFollowsTheNonLoopbackRule)
+{
+    // Start still rejects these; here none of them may pass as loopback
+    for (const char *address : {"", "localhost", "127.0.0.1 ", "127.0.0.1.", "127.0.0.1x", "127.0.0", "127.0.0.0.1",
+                                "0127.0.0.1", "127.00.0.1", "127.0.0.256", "::1", "-127.0.0.1", "0x7f.0.0.1",
+                                "2130706433", "127.0.0.1/8", "1.127.0.1", "0.0.0.0"})
+    {
+        EXPECT_FALSE(IsLoopbackBindAddress(address)) << '"' << address << '"';
+        EXPECT_FALSE(ParseHostArguments(BindArgs(address, {}))) << '"' << address << '"';
+        EXPECT_TRUE(ParseHostArguments(BindArgs(address, {"--insecure-bind"}))) << '"' << address << '"';
+    }
+    EXPECT_TRUE(IsLoopbackBindAddress("127.0.0.1"));
+    EXPECT_TRUE(IsLoopbackBindAddress("127.1.2.3"));
+    EXPECT_TRUE(IsLoopbackBindAddress("127.0.0.0"));
+}
+
+TEST(HostOptionsTest, TheLastBindIsTheOneJudged)
+{
+    EXPECT_FALSE(ParseHostArguments({"--bind", "127.0.0.1", "--bind", "0.0.0.0"}));
+    EXPECT_TRUE(ParseHostArguments({"--bind", "0.0.0.0", "--bind", "127.0.0.1"}));
+}
+
+TEST(HostOptionsTest, RunHostExitsOneForARefusedBindBeforeTheEngineStarts)
+{
+    // The real entry point: the refusal is exit code 1 and returns at once (a host that got past it would start the
+    // engine and serve, so this test would hang)
+    char program[] = "N2EditorHost";
+    char bind[] = "--bind";
+    char address[] = "0.0.0.0";
+    char *argv[] = {program, bind, address, nullptr};
+    EXPECT_EQ(RunHost(3, argv), 1);
+}
+
+TEST(HostOptionsTest, TheUsageNamesInsecureBind)
+{
+    const std::string_view usage = HostUsage();
+    EXPECT_NE(usage.find("--insecure-bind"), std::string_view::npos);
+    EXPECT_NE(usage.find("127.0.0.0/8"), std::string_view::npos);
+}
+
+// ==================== --editor-extensions ====================
+
+TEST(HostOptionsTest, EditorExtensionsIsAFlagAndOffByDefault)
+{
+    const auto defaults = ParseHostArguments({});
+    ASSERT_TRUE(defaults) << defaults.error();
+    EXPECT_FALSE(defaults->editorExtensions) << "project code on the host is never on unless the operator says so";
+
+    // Not a value-taking option: the next argument is still parsed on its own, in either order
+    const auto parsed = ParseHostArguments({"--editor-extensions", "--port", "1234", "--project", "proj"});
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_TRUE(parsed->editorExtensions);
+    EXPECT_EQ(parsed->port, 1234);
+    EXPECT_EQ(parsed->projectPath, "proj");
+
+    const auto last = ParseHostArguments({"--project", "proj", "--editor-extensions"});
+    ASSERT_TRUE(last) << last.error();
+    EXPECT_TRUE(last->editorExtensions);
+}
+
+TEST(HostOptionsTest, EditorExtensionsWatchIsOffByDefaultAndNeedsEditorExtensions)
+{
+    const auto defaults = ParseHostArguments({});
+    ASSERT_TRUE(defaults) << defaults.error();
+    EXPECT_FALSE(defaults->editorExtensionsWatch);
+    const auto only = ParseHostArguments({"--editor-extensions"});
+    ASSERT_TRUE(only) << only.error();
+    EXPECT_FALSE(only->editorExtensionsWatch) << "--editor-extensions alone does not watch";
+
+    // A flag without a value, in either order
+    const auto both = ParseHostArguments({"--editor-extensions", "--editor-extensions-watch", "--port", "1234"});
+    ASSERT_TRUE(both) << both.error();
+    EXPECT_TRUE(both->editorExtensions);
+    EXPECT_TRUE(both->editorExtensionsWatch);
+    EXPECT_EQ(both->port, 1234);
+    const auto reversed = ParseHostArguments({"--editor-extensions-watch", "--editor-extensions"});
+    ASSERT_TRUE(reversed) << reversed.error();
+    EXPECT_TRUE(reversed->editorExtensionsWatch);
+
+    // Without the flag that loads extensions there is nothing to watch: refused, with the reason
+    const auto alone = ParseHostArguments({"--editor-extensions-watch"});
+    ASSERT_FALSE(alone);
+    EXPECT_NE(alone.error().find("--editor-extensions-watch needs --editor-extensions"), std::string::npos) << alone.error();
+    EXPECT_FALSE(ParseHostArguments({"--editor-extensions-watch", "--project", "proj"}));
+
+    // --play refuses --editor-extensions, so the watcher cannot reach a play host either
+    EXPECT_FALSE(ParseHostArguments({"--editor-extensions", "--editor-extensions-watch", "--play", "snapshot.json"}));
+}
+
+TEST(HostOptionsTest, EditorExtensionsIsRefusedWithPlayInEitherOrder)
+{
+    const auto play = ParseHostArguments({"--editor-extensions", "--play", "snapshot.json"});
+    ASSERT_FALSE(play);
+    EXPECT_NE(play.error().find("--editor-extensions and --play can't be combined"), std::string::npos) << play.error();
+    const auto playFirst = ParseHostArguments({"--play", "snapshot.json", "--port", "1234", "--editor-extensions"});
+    ASSERT_FALSE(playFirst);
+    EXPECT_NE(playFirst.error().find("--editor-extensions and --play"), std::string::npos) << playFirst.error();
+
+    // Each alone still parses
+    EXPECT_TRUE(ParseHostArguments({"--play", "snapshot.json"}));
+    EXPECT_TRUE(ParseHostArguments({"--editor-extensions"}));
+}
+
+TEST(HostOptionsTest, EditorExtensionsOnAnOpenBindNeedsATokensFile)
+{
+    // Not loopback and no tokens file: refused, and the message says what to add
+    const auto open = ParseHostArguments({"--editor-extensions", "--bind", "0.0.0.0"});
+    ASSERT_FALSE(open);
+    EXPECT_NE(open.error().find("--editor-extensions needs --tokens-file"), std::string::npos) << open.error();
+
+    // --insecure-bind lifts the fail-closed bind rule, not this one
+    const auto insecure = ParseHostArguments({"--editor-extensions", "--bind", "0.0.0.0", "--insecure-bind"});
+    ASSERT_FALSE(insecure);
+    EXPECT_NE(insecure.error().find("--tokens-file"), std::string::npos) << insecure.error();
+
+    // One admin token is no roles: --token-env does not satisfy it either
+    const auto tokenEnv = ParseHostArguments({"--editor-extensions", "--bind", "0.0.0.0", "--token-env", "N2_TOKEN", "--tls"});
+    ASSERT_FALSE(tokenEnv);
+    EXPECT_NE(tokenEnv.error().find("--tokens-file"), std::string::npos) << tokenEnv.error();
+
+    // The order of the arguments does not matter
+    EXPECT_FALSE(ParseHostArguments({"--bind", "10.0.0.5", "--editor-extensions"}));
+
+    // With a tokens file (and the rest the bind rule asks for) it is allowed
+    const auto roles = ParseHostArguments(
+        {"--editor-extensions", "--bind", "0.0.0.0", "--tokens-file", "tokens.json", "--tls"});
+    ASSERT_TRUE(roles) << roles.error();
+    EXPECT_TRUE(roles->editorExtensions);
+    EXPECT_TRUE(ParseHostArguments(
+        {"--editor-extensions", "--bind", "0.0.0.0", "--tokens-file", "tokens.json", "--insecure-bind"}));
+
+    // On loopback no tokens are needed, as for every other flag
+    EXPECT_TRUE(ParseHostArguments({"--editor-extensions", "--bind", "127.0.0.1"}));
+    EXPECT_TRUE(ParseHostArguments({"--editor-extensions", "--bind", "127.5.5.5"}));
+}
+
+TEST(HostOptionsTest, EditorExtensionsIsAllowedWithReadOnly)
+{
+    const auto parsed = ParseHostArguments({"--editor-extensions", "--read-only", "--project", "proj"});
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_TRUE(parsed->editorExtensions);
+    EXPECT_TRUE(parsed->readOnly);
+}
+
+TEST(HostOptionsTest, TheUsageNamesEditorExtensions)
+{
+    const std::string_view usage = HostUsage();
+    EXPECT_NE(usage.find("--editor-extensions"), std::string_view::npos);
+    EXPECT_NE(usage.find("<project>/editor/**/*.lua"), std::string_view::npos);
+    EXPECT_NE(usage.find("OFF by"), std::string_view::npos) << "the default is documented";
+    EXPECT_NE(usage.find("--play"), std::string_view::npos);
+    EXPECT_NE(usage.find("--tokens-file"), std::string_view::npos);
 }

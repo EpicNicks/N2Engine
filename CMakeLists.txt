@@ -23,15 +23,88 @@ endif()
 
 option(N2ENGINE_BUILD_TESTS "Build unit tests" ON)
 option(N2ENGINE_USE_PHYSX "Use PhysX physics backend" ON)
+# ON builds the vendored Jolt Physics (external/JoltPhysics) as the static library Jolt::Jolt, always cross-platform
+# deterministic (cmake/jolt/CMakeLists.txt), links it into the engine (the Jolt physics backend, selected by the project
+# setting physics.backend) and, with the tests, builds its smoke test (tests/jolt). OFF (the default) builds none of it
+# and the engine has no Jolt backend.
+option(N2ENGINE_USE_JOLT "Build the vendored Jolt Physics library and the engine's Jolt physics backend" OFF)
 # OFF compiles the Vulkan renderer out: the build then needs no Vulkan headers or loader, and --renderer vulkan / the
 # VULKAN render backend fail with a clear message. ON (the default) needs the Vulkan SDK (Windows) or libvulkan-dev (Linux).
 option(N2ENGINE_RENDERER_VULKAN "Build the Vulkan renderer backend" ON)
+# ON builds the WebGPU renderer backend (#155, stage G2) against a pinned prebuilt Dawn (cmake/DawnPrebuilt.cmake). OFF by
+# default and CI-ONLY natively: it is the native test harness of the backend the web player uses, Linux x86_64 only, and it is
+# not selectable at run time (not from the editor host, lua_project or a project's settings: design decision W8). It needs a
+# Vulkan driver at run time (Mesa lavapipe in CI) but no Vulkan headers to build. It is always ON for the web build (stage G4),
+# whose WebGPU comes from Emscripten's emdawnwebgpu port of the same Dawn release (cmake/EmdawnwebgpuPort.cmake).
+option(N2ENGINE_RENDERER_WEBGPU "Build the WebGPU renderer backend on Dawn (CI test harness only, Linux x86_64)" OFF)
+
+# ON builds every target with the strict floating-point profile: the same source then compiles to the same float
+# operations (no fused multiply-add contraction, no fast-math), which a later deterministic mode checks at startup
+# through Math::IsStrictFp() / N2_STRICT_FP. OFF (the default) changes no flag. It does not make results equal across
+# compilers or architectures by itself (see docs/math.html, "Strict floating-point build").
+option(N2ENGINE_STRICT_FP "Build all targets with the strict floating-point profile (no FP contraction, no fast-math)" OFF)
+
+if(N2ENGINE_STRICT_FP)
+    # Reject flags that defeat the profile, whether they come from the command line, the environment or a toolchain file
+    set(_n2_forbidden_fp_flags "-ffast-math" "-Ofast" "-march=native" "-mtune=native" "/fp:fast" "/fp:contract")
+    set(_n2_flag_vars CMAKE_C_FLAGS CMAKE_CXX_FLAGS)
+    foreach(_n2_config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+        list(APPEND _n2_flag_vars CMAKE_C_FLAGS_${_n2_config} CMAKE_CXX_FLAGS_${_n2_config})
+    endforeach()
+    foreach(_n2_var IN LISTS _n2_flag_vars)
+        foreach(_n2_flag IN LISTS _n2_forbidden_fp_flags)
+            if("${${_n2_var}}" MATCHES "${_n2_flag}")
+                message(FATAL_ERROR "N2ENGINE_STRICT_FP=ON forbids ${_n2_flag} (found in ${_n2_var}: ${${_n2_var}})")
+            endif()
+        endforeach()
+    endforeach()
+
+    if(MSVC)
+        # cl and clang-cl: /fp:precise stated explicitly (it is also the default), never /fp:contract or /fp:fast
+        add_compile_options(/fp:precise)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            # clang-cl still contracts under /fp:precise unless told not to
+            add_compile_options(-ffp-contract=off)
+        endif()
+    else()
+        # GCC defaults to -ffp-contract=fast and Clang to on: both may fuse a * b + c into one rounding as soon as a
+        # target has an FMA instruction. Set on ALL targets (the headers' inline math is compiled into every one)
+        add_compile_options(-ffp-contract=off)
+    endif()
+    # Every target, so any translation unit can ask (math/MathRegistrar.cpp answers Math::IsStrictFp())
+    add_compile_definitions(N2_STRICT_FP)
+    message(STATUS "Strict floating-point profile enabled (N2ENGINE_STRICT_FP)")
+endif()
+
+# == Web (Emscripten) platform ==
+# Derived from the toolchain (`emcmake cmake ...`), never set by hand. Native configurations only get the variable
+# set to OFF here; everything web-specific is behind it. See cmake/N2EngineWeb.cmake and docs/web-build.html.
+if(EMSCRIPTEN OR CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    set(N2ENGINE_PLATFORM_WEB ON)
+else()
+    set(N2ENGINE_PLATFORM_WEB OFF)
+endif()
+
+if(N2ENGINE_PLATFORM_WEB)
+    include(${CMAKE_SOURCE_DIR}/cmake/N2EngineWeb.cmake)
+    # PhysX (stage 5) is built from source for WebAssembly below (cmake/PhysXWeb.cmake); -DN2ENGINE_USE_PHYSX=OFF gives
+    # a web build with no physics backend
+    message(STATUS "Web: Vulkan renderer off (no Vulkan in the browser)")
+    set(N2ENGINE_RENDERER_VULKAN OFF)
+    # The shell probes WebGPU before Start and selects software when unavailable.
+    message(STATUS "Web: WebGPU renderer compiled in (emdawnwebgpu); automatic browser selection with software fallback")
+    set(N2ENGINE_RENDERER_WEBGPU ON)
+    message(STATUS "Web: no GLFW window or GL context (external/web-stubs stands in for GLFW; the player shows frames on a canvas and reads input from the page), audio is Emscripten's OpenAL on WebAudio (N2ENGINE_WEB_AUDIO, or a no-op stub); the editor host (sockets, TLS), test_project and lua_project are not built")
+endif()
 
 # == PhysX setup ==
 set(N2ENGINE_PHYSX_AVAILABLE OFF)
 
 if(N2ENGINE_USE_PHYSX)
-    if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    if(N2ENGINE_PLATFORM_WEB)
+        # Static CPU-only libraries compiled for WebAssembly from the pinned source (scripts/web-build-physx.sh)
+        include(${CMAKE_SOURCE_DIR}/cmake/PhysXWeb.cmake)
+    elseif(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         message(WARNING
                 "PhysX is not supported with MinGW/GCC on Windows. "
                 "Disabling PhysX. Use MSVC or clang-cl for PhysX support."
@@ -238,6 +311,20 @@ else()
     message(STATUS "PhysX disabled - no physics backend active")
 endif()
 
+# == Jolt Physics (vendored; linked into the engine by engine/CMakeLists.txt) ==
+if(N2ENGINE_USE_JOLT)
+    add_subdirectory(cmake/jolt)
+endif()
+
+# == Mbed TLS (vendored; native builds only) ==
+# n2_mbedcrypto (crypto only) for every native build: the netcode's handshake and packet sealing, and the token hashes
+# (n2security). With N2ENGINE_EDITOR_TLS also n2_mbedtls_tls (X.509 and TLS) for the editor host's --tls. The web build
+# skips both: it has no UDP transport, and a browser transport gets its security from the browser.
+option(N2ENGINE_EDITOR_TLS "Build TLS support (--tls) for the editor host (Mbed TLS, vendored in external/mbedtls)" OFF)
+if(NOT N2ENGINE_PLATFORM_WEB)
+    add_subdirectory(cmake/mbedtls)
+endif()
+
 file(GLOB LUA_SOURCES
         ${CMAKE_SOURCE_DIR}/external/lua/*.c
 )
@@ -258,11 +345,24 @@ endif()
 add_subdirectory(math)
 add_subdirectory(text)
 add_subdirectory(assetimport)
+if(N2ENGINE_PLATFORM_WEB)
+    # Headers-only GLFW and OpenAL plus a no-op stand-in for GLFW (and, with N2ENGINE_WEB_AUDIO=stub, for OpenAL; by
+    # default OpenAL::OpenAL is Emscripten's own OpenAL on WebAudio): the renderer and the engine link them
+    add_subdirectory(external/web-stubs)
+endif()
 add_subdirectory(renderer)
 add_subdirectory(engine)
+if(N2ENGINE_PLATFORM_WEB)
+    # The web player and its package folder (stage 2): web/CMakeLists.txt
+    add_subdirectory(web)
+endif()
+if(NOT N2ENGINE_PLATFORM_WEB)
 add_subdirectory(test_project)
 add_subdirectory(lua_project)
 add_subdirectory(editor-server)
+# The dedicated game server (netcode stage A6): UDP sockets and the crypto library, so not part of the web build
+add_subdirectory(n2server)
+endif()
 
 if(TARGET test_project AND N2ENGINE_PHYSX_AVAILABLE)
     target_include_directories(test_project PRIVATE ${PHYSX_INCLUDE_DIR})
@@ -271,6 +371,7 @@ if(TARGET test_project AND N2ENGINE_PHYSX_AVAILABLE)
     # N2ENGINE_PHYSX_ENABLED comes from the engine target (PUBLIC)
 endif()
 
+if(NOT N2ENGINE_PLATFORM_WEB)
 add_library(dummy_target INTERFACE)
 target_include_directories(dummy_target INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/dummy_include)
 
@@ -288,6 +389,7 @@ FetchContent_Declare(
         GIT_TAG 1.24.0
 )
 FetchContent_MakeAvailable(OpenAL)
+endif()
 
 # == Tests ==
 if(N2ENGINE_BUILD_TESTS)
@@ -297,6 +399,10 @@ if(N2ENGINE_BUILD_TESTS)
             URL https://github.com/google/googletest/archive/refs/tags/v1.17.0.zip
     )
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    if(N2ENGINE_PLATFORM_WEB)
+        # No pthreads in the single-threaded web baseline: googletest then uses no thread-safety code
+        set(gtest_disable_pthreads ON CACHE BOOL "" FORCE)
+    endif()
     FetchContent_MakeAvailable(googletest)
 
     enable_testing()

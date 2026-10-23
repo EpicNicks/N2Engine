@@ -1,0 +1,23 @@
+{
+  "closes": null,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "requiresDocs": false,
+  "repo": "frontend",
+  "name": "fe-ex5-test-title",
+  "branch": "fix-ex5-test-title",
+  "title": "Frontend: test title still said protocol 1.15.0 after the 1.16.0 sync",
+  "issue": "Follow-up of merged frontend E-X5 (#54): src/test/engine-client-extensions.test.ts (~line 138) has a test title that says \"the client is at 1.15.0\" while its assertion was bumped to 1.16.0: fix the title (and grep src/ and mcp/ tests for any other leftover \"1.15.0\" in titles or comments describing the current protocol version; leave historical statements about 1.15.0 features alone). Tiny item: one commit. Frontend repo C:/Method Notes Obsidian/N2Engine-Electron-Frontend (EpicNicks/N2Engine-Electron-Frontend); the engine repo is READ-ONLY reference. npm run typecheck and npm test must pass locally before you push; CI has 3 checks. NEVER run taskkill; no attribution lines on commits or PRs; GitHub only via bash \"C:/Method Notes Obsidian/gh-epicnicks.sh\" run inside the repo; merge origin/master into the branch if it moved before your final push; your FINAL message must be a real report (PR number, head sha, what you did, deviations).",
+  "allowedPaths": [
+    "^src/",
+    "^mcp/",
+    "^README\\.md$"
+  ],
+  "acceptance": [
+    "No test title or comment names the wrong current protocol version",
+    "typecheck, tests and 3 CI checks green"
+  ],
+  "reviewer": "sonnet",
+  "notes": "Reviewer: only titles/comments changed, no assertion changed."
+}

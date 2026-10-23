@@ -1,0 +1,1 @@
+const fs=require("fs");const [n,h]=process.argv.slice(2);const f="C:/Method Notes Obsidian/orchestrator/ledger/"+n+"/dev.json";const d=JSON.parse(fs.readFileSync(f,"utf8"));d.head=h;fs.writeFileSync(f,JSON.stringify(d,null,2));console.log("head set",h.slice(0,7))

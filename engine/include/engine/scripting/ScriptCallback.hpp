@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+#include <exception>
 #include <format>
 #include <functional>
 #include <memory>
@@ -11,6 +13,7 @@
 
 #include "engine/Logger.hpp"
 #include "engine/scripting/LuaHandles.hpp"
+#include "engine/scripting/LuaRuntime.hpp"
 
 namespace N2Engine::Scripting
 {
@@ -63,23 +66,59 @@ namespace N2Engine::Scripting
     /// Wraps a Lua function for storage in a C++ event. If a component script registered it, the
     /// callback is skipped once that component is destroyed, instead of running with freed
     /// `self.component`/`self.gameObject`. Errors are logged, never thrown into the event dispatch.
+    /// Each call is an entry into Lua with a budget of its own (LuaBudgetScope). A callback that runs out of
+    /// instructions or memory is logged once and then switched off, so it can't burn the budget on every event.
     template <typename... Args>
     std::function<void(Args...)> MakeScriptCallback(sol::protected_function callback, std::string eventName)
     {
-        return [callback = std::move(callback), owner = ScriptLifetimeScope::Current(),
-                eventName = std::move(eventName)](Args... args)
+        // Shared, so the event's copies of this std::function (EventHandler copies its callbacks for each dispatch)
+        // copy a pointer: copying a sol::protected_function makes two registry references, allocations outside any
+        // protected call that could fail at the memory cap before the try below is reached
+        return [callback = std::make_shared<sol::protected_function>(std::move(callback)),
+                owner = ScriptLifetimeScope::Current(),
+                eventName = std::move(eventName), faulted = std::make_shared<bool>(false)](Args... args)
         {
-            if (owner && !*owner)
+            if ((owner && !*owner) || *faulted)
             {
-                return; // the script that subscribed belongs to a destroyed component
+                return; // the script that subscribed belongs to a destroyed component, or the callback was switched off
             }
 
-            const sol::protected_function_result result = callback(Detail::ToLuaArg(args)...);
-            if (!result.valid())
+            const LuaBudgetScope budget;
+            const std::uint64_t panicsBefore = LuaRuntime::Instance().PanicCount();
+            std::string message;
+            try
             {
-                const sol::error err = result;
-                Logger::Error(std::format("{} callback error: {}", eventName, err.what()));
+                const sol::protected_function_result result = (*callback)(Detail::ToLuaArg(args)...);
+                if (result.valid())
+                {
+                    return;
+                }
+                // The budget error from the runtime's state when it is spent (the scope above is still open), a
+                // memory error from the call's status, not from an error object that can be displaced, and the text
+                // read without converting (ErrorText)
+                message = LuaRuntime::Instance().LimitAwareError(LuaRuntime::ErrorText(result),
+                                                                 result.status() == sol::call_status::memory);
             }
+            catch (const std::exception &e)
+            {
+                // sol pushes the arguments (a handle is a userdata) before its protected call: at the memory cap that
+                // allocation fails down the panic path, and sol throws. It must not leave into the event dispatch.
+                LuaRuntime::Instance().RecoverAfterPanic(panicsBefore);
+                message = LuaRuntime::Instance().LimitAwareError(e.what());
+            }
+            catch (...)
+            {
+                LuaRuntime::Instance().RecoverAfterPanic(panicsBefore);
+                message = LuaRuntime::Instance().LimitAwareError("unknown error");
+            }
+
+            if (LuaRuntime::IsLimitError(message))
+            {
+                *faulted = true;
+                Logger::Error(std::format("{} callback aborted: {}. It is switched off.", eventName, message));
+                return;
+            }
+            Logger::Error(std::format("{} callback error: {}", eventName, message));
         };
     }
 }

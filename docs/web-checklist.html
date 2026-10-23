@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Web checklist · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="particles.html">Particles</a></li>
+<li><a href="soft-bodies.html">Soft bodies</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+<li><a href="netcode.html">Netcode (n2net)</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+<li><a href="editor-extensions.html">Lua editor extensions</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="editor.html">Editor projects</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+<li><a href="web-build.html">Web build</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Web player checklist <span class="badge">PR #170</span> <span class="badge">PR #181</span></h1>
+<p class="lead">What to check by hand in a real browser for the web player, which CI cannot do: the CI job builds the package and runs it headless under node with a mocked canvas, so nothing about a browser (the canvas, the events, the page, hosting, speed) has been seen. Report which steps pass, the browser and its version, and the text of anything in the page's error box or the DevTools console.</p>
+
+<div class="callout open-question">
+<p class="callout-title">Not verified until this is done</p>
+<p>Every item below is unverified: that the page loads, that frames reach the canvas the right way up and in the right colours, that keyboard, mouse and wheel reach the game, that resizing and the pointer mapping are right, that the folder works from a subdirectory and with a wrong <code>.wasm</code> MIME type, and that the software renderer is fast enough in a tab. Stage 4 adds audio: that sound is heard, that the page's unlock starts it after the first input per browser, that the hidden tab silences and restores it, and that a blocked or missing Web Audio leaves a quiet game (<a href="#audio">step 8</a>).</p>
+</div>
+
+<h2 id="requirements">Requirements</h2>
+<ul>
+<li>A recent desktop Chrome or Edge, and Firefox (and Safari if you have it). Nothing else: no GPU feature, no special flags.</li>
+<li>The package folder from CI or a local build (<a href="web-build.html#hosting">Building and hosting the package</a>): <code>index.html</code>, <code>index.js</code>, <code>index.wasm</code>, <code>index.data</code>. To build it yourself: Emscripten 4.0.10, then <code>emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=speed</code> and <code>cmake --build build-web --target web-package</code>.</li>
+<li>Any static file server. The simplest: <code>cd build-web/web-package &amp;&amp; python -m http.server 8080</code>.</li>
+</ul>
+
+<h2 id="webgpu">WebGPU (G5): selection, drawing and recovery</h2>
+<p>Run these checks on available Chrome/Edge, Firefox, Safari and mobile devices, recording browser, OS and renderer. Mock tests do not establish browser compatibility.</p>
+<p>A local headless Chrome/Edge run has exercised the G5 browser smoke (automatic selection, HiDPI, resize, forced loss/recovery and software fallback). It does not close this checklist across devices. See <a href="web-build.html#webgpu-browser-smoke">the reproducible command and verification limits</a>.</p>
+<ul>
+<li>On HTTPS or localhost, load normally and with <code>?renderer=webgpu</code>. On a supported device the scene should draw with WebGPU. Compare with <code>?renderer=software</code>: orientation, colours, lighting, text, transparency and particles should agree with the intended GPU rendering semantics. Software text and blending have known differences.</li>
+<li>Verify software fallback with <code>?renderer=software</code>, an unavailable GPU adapter, a browser without WebGPU, plain HTTP on a non-local host, and an insecure iframe ancestor. Check that Start still works without a reload loop.</li>
+<li>Resize, maximize, change display scaling, and test HiDPI and fullscreen. WebGPU follows devicePixelRatio with a 2560-pixel width cap; software caps at 1280. Check pointer picking and UI alignment at both resolutions.</li>
+<li>While playing, simulate device loss using browser graphics diagnostics. Frames should pause, then resume after one device replacement with scene resources restored. On a failed or second loss, click <strong>Continue with the software renderer</strong>; the URL should select software and the game should start after reload.</li>
+<li>Hide/show the tab, embed on a different HTTPS origin, and run for several minutes. Record first-frame delay, frame rate and memory growth. Confirm there are no uncaptured WebGPU validation errors.</li>
+</ul>
+
+<h2 id="load">1. It loads</h2>
+<ul>
+<li>Open <code>http://localhost:8080/</code> with DevTools open (Console and Network). Expected: the dark page says "Loading the engine...", then "Ready." and the <strong>Click to start</strong> button turns on. Network shows <code>index.js</code>, <code>index.wasm</code> and <code>index.data</code>, all relative to the page, all 200.</li>
+<li>No red errors in the Console (the audio system should not warn here: with Web Audio working it has no failure to report; an "Audio failed" warning means the browser gave no audio output, see step 8).</li>
+<li>Note the time from opening the page to "Ready." and the transferred sizes (a first, uncached load).</li>
+</ul>
+
+<h2 id="canvas">2. The canvas shows the scene</h2>
+<ul>
+<li>Click <strong>Click to start</strong>. Expected: the page-covering gate goes away and the canvas shows the <code>lua_project</code> scene (station 1: a lit cube, a sphere and a floor on a dark background, and the demo's text). The picture is the right way up (the floor at the bottom) and the colours are right (not red and blue swapped).</li>
+<li>Things move: the scene animates (spinning objects, particles). The cube and the sphere do <strong>not</strong> fall: there is no physics in the web build.</li>
+<li>Note the frame rate you see (a counter in the demo's HUD if it has one, or DevTools Performance) at your window size.</li>
+</ul>
+
+<h2 id="input">3. Keyboard, mouse and wheel</h2>
+<ul>
+<li>Keyboard: keys 1 to 7 move the camera between stations (as in the native <code>lua_project</code>); the arrow keys and Space do not scroll the page.</li>
+<li>Mouse: moving the pointer and clicking in the scene work as in the native player (for example the UI station: hover and click). Check that the pointer's position matches what is drawn under it: click on a corner and on the centre of a UI element and see that the hit is where the cursor is. Repeat after resizing the window (step 4) and in a window larger than 1280 pixels wide, where the canvas is scaled.</li>
+<li>Right and middle buttons: right click does not open a browser menu over the canvas; holding the right or middle button is seen by the game (the scene's mouse-button demo, if any).</li>
+<li>Wheel: scrolling over the canvas is seen by the game (zoom or the scroll demo) and does not scroll the page; one notch is about one unit in both Chrome and Firefox.</li>
+<li>Focus: hold a movement key, switch to another tab or window and release it there, then come back: the key must not be stuck down.</li>
+<li>F5 reloads, F12 opens DevTools, Ctrl+R and Ctrl+L still work while the game runs.</li>
+<li>Escape quits the game (the scene's Quit action): the page shows "The game has ended. Reload the page to play again." and the console shows no error.</li>
+</ul>
+
+<h2 id="resize">4. Resize</h2>
+<ul>
+<li>Drag the window narrower, wider and to a very different shape (tall and narrow, then wide and short). Expected: the picture keeps its shape (not stretched: the camera's aspect follows), it fills the window, and nothing flickers or stays at the old size.</li>
+<li>Maximise and restore, and use the browser's zoom (Ctrl +/-). Expected: the same.</li>
+<li>Make the window small enough that the canvas is a few pixels, then large again: no crash and no error box.</li>
+</ul>
+
+<h2 id="hosting">5. Hosting</h2>
+<ul>
+<li><strong>Subdirectory.</strong> Copy the package into a subfolder of another folder, serve the parent, and open <code>http://localhost:8080/some/deeper/path/</code> (and the same with <code>index.html</code> at the end). Expected: identical behaviour, with every request under that path (Network).</li>
+<li><strong>No special headers.</strong> The server above sends none: that is the test. In the Console, <code>crossOriginIsolated</code> is <code>false</code> and the game still runs.</li>
+<li><strong>Wrong MIME type.</strong> Serve <code>.wasm</code> as <code>text/plain</code> (a one-line server that sets that type, or the Network panel's overrides). Expected: the game still starts. (<code>n2-loader.js</code> falls back to <code>ArrayBuffer</code> instantiation; the Network panel shows <code>index.wasm</code> requested once, and CI has only tested this under node.)</li>
+<li><strong>Download progress and errors (stage 3).</strong> With the Network panel's throttling on a slow connection, load the page. Expected: a bar and "Downloading x of y MB" that rise to the total, then "Ready.". Then rename <code>index.wasm</code> and reload: the error box names <code>index.wasm</code> and the 404. Restore it, rebuild (or change a byte) and reload: the new files, <code>index.js</code> and <code>n2-loader.js</code> included, are requested with a new <code>?v=</code> and not taken from the cache. With the host serving <code>index.html</code> without <code>Cache-Control: no-cache</code>, an old cached page that meets a new build shows "This page is an older copy than the build on the server ... Reload the page" rather than a link error.</li>
+<li><strong>Precompressed copies (stage 3).</strong> Behind a server set up as in the <a href="web-build.html#hosting-recipes">recipes</a>, <code>index.wasm</code> arrives with <code>Content-Encoding: br</code> (or <code>gzip</code>) and the game runs. On a server that does neither it arrives plain and the game runs.</li>
+<li><strong>Another host.</strong> If you can, upload the folder to a real static host (GitHub Pages, any bucket) and open it there. Expected: the same. Opening <code>index.html</code> from disk (<code>file://</code>) is <em>not</em> expected to work: browsers do not let a page fetch its own <code>.wasm</code> from there.</li>
+<li><strong>Embedded.</strong> Put the page in an <code>&lt;iframe&gt;</code> of a page on another origin or port. Expected: it loads and runs (click into the frame first so it gets the keyboard).</li>
+</ul>
+
+<h2 id="errors">6. Error display (optional)</h2>
+<ul>
+<li>Delete <code>index.data</code> from the served folder and reload: the page must say something went wrong (the error box with a message) rather than stay on "Loading the engine..." forever.</li>
+<li>Delete <code>index.wasm</code> and reload: the same.</li>
+</ul>
+
+<h2 id="performance">7. Performance (a note, not a pass or fail)</h2>
+<p>The software renderer runs on one thread in the tab. Note, for the <code>dev</code>, <code>size</code> and <code>speed</code> profiles if you build them, the frame rate at about 1280x720 on your machine, and whether the tab stays responsive (the page can still be scrolled in DevTools, other tabs are fine). The render size is capped at 1280 pixels wide whatever the window; if that feels too soft or too slow, say which way.</p>
+
+<h2 id="audio">8. Audio (stage 4) <span class="badge">PR #181</span></h2>
+<p><strong>Everything in this section is unverified</strong>: CI has no browser and no sound device (it checks only that the player links Emscripten's OpenAL, that start-up with no <code>AudioContext</code> leaves the audio status failed under node, and that the loader's unlock script works against a mock). Background and the rules: <a href="web-build.html#audio">Web build: Audio</a>.</p>
+<p><strong>You need a project with sound.</strong> <code>lua_project</code> has no audio asset, so the default package is silent and a step below that says "hear" cannot pass with it. Build the package with <code>-DN2_WEB_PROJECT_DIR=/path/to/a/project</code> (it needs <code>project.n2proj</code> and <code>assets/scene.lua</code>) whose scene has: (a) a looping <code>AudioSource</code> with play on awake (music or a tone); (b) a few short <code>AudioSource</code>s that a Lua script plays on a key (<code>source:Play()</code>; Lua cannot assign a clip, so the clips are set in the scene data); (c) one spatial source away from the camera; (d) an <code>AudioListener</code> on the camera. A <code>.wav</code>, <code>.ogg</code>, <code>.mp3</code> or <code>.flac</code> in <code>assets/</code> works (<a href="audio.html#clips">AudioClip and loaders</a>). Open DevTools (Console) first.</p>
+<ul>
+<li><strong>Before any input.</strong> Load the page and do <em>not</em> click or press anything. Expected: no sound and no errors in the Console (the page is not in a state to play; the "Click to start" button is the first input). Note any warning text.</li>
+<li><strong>Sound after the first click.</strong> Click <strong>Click to start</strong>. Expected: the looping source (a) is heard within about a second, and the Console shows no error. Note per browser whether it played at once or only after a further click or key press.</li>
+<li><strong>Sound asked for too early is dropped, not piled up.</strong> Only if you can start a sound before the Start click (for example by a project that autostarts, or by editing <code>shell.html</code> to call <code>callMain</code> on <code>load</code>): reload without any input. Expected: nothing is heard and nothing is logged as an error (the log has one Info line about a dropped sound); then click or press a key: sounds started after that play, and the earlier ones do <strong>not</strong> all burst out at once. Report what you hear: this is the documented "dropped" behaviour (<a href="web-build.html#audio-gesture">The user-gesture rule</a>).</li>
+<li><strong>The unlock script.</strong> Open DevTools, Elements, Event Listeners, and look at <code>document</code>. Right after the Start click, with no further input, <code>pointerdown</code>, <code>pointerup</code>, <code>keydown</code> and <code>touchend</code> listeners from <code>n2-loader.js</code> are expected to be there: they are added for every context the engine creates, whatever its state, and stay until the first gesture after the context exists (the Start click itself came before the context, so it does not count). Then click the page once (or press a key, or tap) and look again. Expected: those four are gone (the gesture found the context running, or resumed it); a <code>visibilitychange</code> listener stays. On a touch device the listeners stay through a touch that only goes down, and are removed by the lift (<code>pointerup</code>/<code>touchend</code>); they also stay while the context is not running after a gesture's <code>resume()</code> (still pending, refused, or resolved but <code>interrupted</code>), and after the tab comes back visible until the context runs again (the next tap retries; the listeners are removed after the fourth refusal of a gesture's resume, counted since the last time every context was found running, the last successful resume, or the last new context).</li>
+<li><strong>Hidden tab.</strong> Switch to another tab for a few seconds, then come back. Expected: silence while hidden, and the sound continues when visible, with no click needed in Chrome and Firefox; if a browser keeps it silent until you click or press a key, note which browser (the unlock listens again after a refused resume). No errors in the Console.</li>
+<li><strong>Volume.</strong> With a script calling <code>Audio.SetMasterVolume(0.2)</code> (and <code>1</code> again) on a key, and a mixer group change if the project has one: the loudness changes. There is no mute button in the page.</li>
+<li><strong>Looping and short sounds.</strong> The loop is seamless (no gap or click at the loop point, a known difference between WebAudio and OpenAL Soft is worth noting if heard). Each key plays its short sound once and it ends (a played-out source returns to the pool: pressing the key 100 times does not go silent).</li>
+<li><strong>Many simultaneous sources.</strong> Trigger far more than 32 sounds at once (32 sources are pre-allocated; more are created on demand, and a mixer group's concurrency limit can refuse sounds, as natively). Expected: no crash, no hang and no error box; note whether the sound stays clean or crackles, and the tab's CPU use.</li>
+<li><strong>Spatial.</strong> Move the camera (or the listener) toward and away from the spatial source (c): it gets louder and quieter and pans left and right. Note whether a very distant sound is ever fully cut off (the web build has no cut-off at the maximum distance: expected not).</li>
+<li><strong>Escape / end of game.</strong> Quit the game with its Quit action. Expected: the sound stops, no error in the Console.</li>
+<li><strong>Failure path.</strong> In a browser (or a profile) with Web Audio blocked or disabled, or with <code>window.AudioContext</code> and <code>webkitAudioContext</code> set to <code>undefined</code> in the Console before clicking Start: the game starts with no sound, shows its picture, does not hang, and there is no error box. The engine should log one warning, <code>Subsystem Audio failed: No WebAudio output ...</code> (by reading the code; CI could not count it, because the engine's log did not appear in the node smoke output, so also report whether any engine log line reaches the Console at all).</li>
+</ul>
+<p><strong>Browser notes.</strong> Chrome and Edge: a context created inside the Start click should be running at once; a click on the page counts as the gesture. Firefox: same; its autoplay policy can also block audio until a gesture, which the unlock handles; note any "The AudioContext was not allowed to start" console message (it is a warning, not a failure, if sound plays after the first input). Safari (desktop and iOS): the least certain. A context may start <code>suspended</code> or <code>interrupted</code> and may only be resumed inside a gesture handler: if sound never starts, note that, and whether a second click, a key press or a touch start it. iOS also silences Web Audio when the ringer switch is off. Report the browser and its version for each result.</p>
+
+<h2 id="physics">9. Physics (stage 5) <span class="badge">PR #184</span></h2>
+<p><strong>Everything in this section is unverified</strong>: CI runs the engine's physics tests and a stack of 200 boxes under node (the same WebAssembly, no browser), and prints what that costs there. Nothing has run in a browser, so what you note down here is the evidence. Background and the build: <a href="web-build.html#physx">Web build: PhysX on the web</a>.</p>
+<p>The default package (<code>lua_project</code>) has two stations that use physics. Station 1 (key <code>1</code>): a blue cube and a red sphere above a static floor, which fall when the game starts (the sphere is offset so it lands on the cube's edge). Station 9 (key <code>9</code>): a world-space panel with two buttons, one behind a trigger volume (a yellow frame) and one behind a solid block, which a click's ray is tested against. Open DevTools (Console) first.</p>
+<ul>
+<li><strong>Physics starts.</strong> Reload, click <strong>Click to start</strong>. Expected: no Console line saying <code>Failed to initialize PhysX backend!</code>, <code>Physics will be disabled</code> or <code>Physics backend not available - Rigidbody disabled</code>, and no line starting <code>PhysX </code> with <code>invalid</code>, <code>internal error</code>, <code>out of memory</code> or <code>abort</code> (the web build writes PhysX's own errors and warnings to the engine log, <code>PhysX &lt;kind&gt;: &lt;message&gt; (&lt;file&gt;:&lt;line&gt;)</code>). Copy any <code>PhysX warning</code> or <code>PhysX performance warning</code> line. As in step 8, also report whether any engine log line reaches the Console at all: if none does, this step cannot show a failure and the next ones carry it.</li>
+<li><strong>Bodies fall and collide.</strong> Station 1 starts as the game starts, so reload and look from the click. Expected: the cube and the sphere fall, the sphere hits the cube's edge and rolls off, both come to rest on the floor, and nothing falls through the floor, stays frozen in the air or keeps jittering once at rest. Note roughly how long they take to settle (a few seconds) and whether it looks the same in each browser.</li>
+<li><strong>Raycast (the pointer ray).</strong> Press <code>9</code>. Click button <strong>A</strong>: its counter goes up (the trigger volume in front of it never blocks the ray). Click button <strong>B</strong>: its counter stays at 0 (the solid block in front of it takes the hit). This is the physics query (<code>Raycast</code> with trigger and layer filtering) running through the WebAssembly PhysX.</li>
+<li><strong>Performance on a stack of N bodies.</strong> The default project has no big stack, so make a copy of <code>lua_project</code> and add this to its <code>assets/scene.lua</code>, just before the final <code>for _, gameObject in ipairs(roots) do</code> loop (it builds N boxes in 5 by 5 layers above the floor of station 1; change <code>STACK_N</code> to 50, 200 and 500 for three builds or three edits):
+<pre><code>local STACK_N = 200
+for i = 1, STACK_N do
+    local box = GameObject.Create("StackBox" .. i)
+    box:CreatePositionable()
+    box:GetPositionable():SetPosition(Vector3(((i - 1) % 5) * 1.2 - 2.4, -4.0 + math.floor((i - 1) / 25) * 1.2, (math.floor((i - 1) / 5) % 5) * 1.2 - 2.4))
+    box:AddComponent("CubeRenderer"):SetColor(Color.Blue)
+    box:AddComponent("BoxCollider"):SetSize(Vector3.One)
+    local body = box:AddComponent("Rigidbody")
+    body:SetBodyType(BodyType.Dynamic)
+    body:SetGravityEnabled(true)
+    table.insert(roots, box)
+end</code></pre>
+Build the package with <code>-DN2_WEB_PROJECT_DIR=/path/to/the/copy</code> (the <code>speed</code> profile is the one to judge), press <code>1</code> and look at the stack. Expected: the boxes settle into a pile on the floor without exploding or sinking. Note, per N and per browser, the frame rate (DevTools, Performance, or the browser's own FPS meter) and whether the tab stays responsive. CI's number for orientation only: under node the 200-box scene costs 0.8 ms per physics step (the dev profile, not a browser, and the renderer is not included); the physics step is not the only cost per frame, since the software renderer draws every box. Say which N first drops under 30 frames per second, and if the stack is much slower than the same scene without bodies (delete the <code>Rigidbody</code> lines to compare), say so: that is the measurement that decides whether the scalar PhysX is fast enough (<a href="web-build.html#physx-simd">Scalar math</a>).</li>
+<li><strong>Memory.</strong> With the 500-box stack running, note the tab's memory (the browser's task manager, or DevTools, Memory). Expected: it grows while the scene is built and then stays flat; a steady climb while the boxes lie still is a leak and worth reporting. On a phone or tablet, note whether the tab survives the 500-box scene at all.</li>
+<li><strong>Quit.</strong> Press Escape: the game ends as in step 3, with no error in the Console.</li>
+</ul>
+<p>Report: browser and version, the results above, the frame rates per N, and any <code>PhysX</code> lines from the Console.</p>
+
+<h2 id="report">What to report</h2>
+<ul>
+<li>For each step: pass, fail, or not tried, with the browser and its version.</li>
+<li>Anything in the error box, and the Console text around it.</li>
+<li>Load time and frame rate (steps 1, 2 and 7), for step 8 each browser's result with its version, and for step 9 the frame rate per number of boxes and any <code>PhysX</code> line from the Console.</li>
+</ul>
+<p>Background: <a href="web-build.html#player">The web player</a>, <a href="web-build.html#hosting">Building and hosting the package</a>, <a href="web-build.html#output-contract">Output contract</a>.</p>
+
+<div class="page-footer">
+<span>Describes the web player of PR #170, with its audio from PR #181 and its physics from PR #184.</span>
+<a href="web-build.html">Back to Web build</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>

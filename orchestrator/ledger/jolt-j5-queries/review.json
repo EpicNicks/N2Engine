@@ -1,0 +1,28 @@
+{
+  "head": "0341e666e75878a45d3d84493b16ae85e3c3f054",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "engine/src/physics/QueryUtil.hpp",
+      "line": 99,
+      "summary": "RaycastAll orders by exact float distance with no kQueryTieTolerance, unlike the single-hit pick, so near-equal hits are ordered by float noise",
+      "scenario": "Two colliders whose entry distances differ by a few ulps (e.g. 4.5 vs 4.5000005 from an offset compound collider): Raycast::Single picks the lower handle (tie), RaycastAll()[0] is the other body, and PhysX and Jolt can round the two the opposite way and return different RaycastAll orders"
+    },
+    {
+      "severity": "low",
+      "file": "engine/src/physics/physx/PhysXBackend.cpp",
+      "line": 181,
+      "summary": "Every PhysX single-hit query (Raycast::Single/Any, SphereCast, CapsuleCast) now runs a second touching scene query and value-initialises a 1024-entry hit buffer on the heap",
+      "scenario": "Picking and world-space UI call Raycast::Single every frame: each call now does two PhysX scene queries plus a ~tens-of-KB allocation and zeroing even when there is no tie; a perf regression versus the old single blocking query"
+    },
+    {
+      "severity": "low",
+      "file": "docs/index.html",
+      "line": 289,
+      "summary": "The Design decisions table in index.html has no row for physics.html#design-jolt-queries (a 'for you to accept' callout), and the merge rewrote its decisions (5) and (6) (layer read from ColliderSpec::layer; Collide hits triggers on Jolt)",
+      "scenario": "A reader of the index's decision list does not see that the J5 query decisions exist or that (5)/(6) changed at the J4 merge; pre-existing gap in the reviewed head, now carrying changed decisions"
+    }
+  ],
+  "verdict": "clean",
+  "confirmedDelta": "2-line compile fix (_tracker.DescribeSide/LiveCollider in PhysXBackend::Overlap) verified by orchestrator diff vs reviewed head 47f3080"
+}

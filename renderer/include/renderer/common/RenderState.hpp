@@ -27,7 +27,7 @@ namespace Renderer::Common
         bool depthWrite = true;
         CullMode cull = CullMode::Back;
         /// Alpha blending (SRC_ALPHA, ONE_MINUS_SRC_ALPHA). The software renderer has no blending and
-        /// ignores this flag: every software draw is opaque.
+        /// ignores this flag: every software draw is opaque. The Vulkan renderer blends exactly like OpenGL.
         bool blend = false;
         /// With blend: add the source (SRC_ALPHA, ONE) instead of mixing it with what is behind (fire, sparks).
         /// The software renderer, which can't blend at all, ignores it too.

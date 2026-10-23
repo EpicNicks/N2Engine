@@ -1,0 +1,10 @@
+{
+  "name": "vulkan-prc-materials-lighting",
+  "head": "7aaf34bef11f2b35f3719331a06a8c5742cfa20e",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

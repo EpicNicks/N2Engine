@@ -36,30 +36,20 @@ file(GLOB_RECURSE EDITOR_SERVER_SOURCES
 list(FILTER EDITOR_SERVER_SOURCES EXCLUDE REGEX "/Main\.cpp$")
 
 # TLS for the editor port (--tls): Mbed TLS, vendored unmodified under external/mbedtls, is optional (like the text
-# library's FreeType and the asset importer's ufbx). OFF leaves it out entirely: the host then refuses --tls and behaves
-# exactly as before. Its sources are compiled into N2EditorServer itself (as C), so no extra target has to be installed
-# or exported; EditorTls.cpp is the only file that includes its headers, and no mbedtls type reaches a public header.
-option(N2ENGINE_EDITOR_TLS "Build TLS support (--tls) for the editor host (Mbed TLS, vendored in external/mbedtls)" OFF)
-if(N2ENGINE_EDITOR_TLS)
-    file(GLOB N2_MBEDTLS_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/external/mbedtls/library/*.c")
-endif()
-
+# library's FreeType and the asset importer's ufbx). The option is declared in the root CMakeLists.txt. OFF leaves X.509
+# and TLS out entirely: the host then refuses --tls and behaves exactly as before. The library is built once for the
+# whole tree by cmake/mbedtls/: n2_mbedcrypto (crypto only, in every native build: n2security uses it) and, with the
+# option, n2_mbedtls_tls (X.509 and TLS) on top of it, both with one configuration (threading on, std::mutex callbacks
+# that n2security installs). EditorTls.cpp is the only file here that includes its headers, and no mbedtls type reaches
+# a public header.
 add_library(N2EditorServer STATIC
     ${EDITOR_SERVER_SOURCES}
-    ${N2_MBEDTLS_SOURCES}
 )
 
 if(N2ENGINE_EDITOR_TLS)
-    target_include_directories(N2EditorServer PRIVATE
-        ${CMAKE_SOURCE_DIR}/external/mbedtls/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/mbedtls-config
-    )
-    # Threading on (std::mutex callbacks, see mbedtls-config/): the library stays unmodified, the extra config is
-    # added with its user-config hook. The tests, which include the same headers, get the same definitions.
-    target_compile_definitions(N2EditorServer PRIVATE N2ENGINE_EDITOR_TLS=1
-        MBEDTLS_USER_CONFIG_FILE="n2_mbedtls_user_config.h")
-    # Winsock for the sockets (already linked below) and BCrypt, which Mbed TLS takes its entropy from on Windows
-    target_link_libraries(N2EditorServer PRIVATE $<$<PLATFORM_ID:Windows>:bcrypt>)
+    # n2_mbedtls_tls brings the include directories and MBEDTLS_USER_CONFIG_FILE (PUBLIC there), and BCrypt on Windows
+    target_link_libraries(N2EditorServer PRIVATE n2_mbedtls_tls)
+    target_compile_definitions(N2EditorServer PRIVATE N2ENGINE_EDITOR_TLS=1)
     message(STATUS "Editor host: TLS enabled (--tls; Mbed TLS, vendored)")
 endif()
 
@@ -73,6 +63,9 @@ target_link_libraries(N2EditorServer
     engine
     renderer
     MathCore::math
+    # PeerAddress, RateLimiter, TokenBucket, PreAuthSlots and the token files (shared with the netcode); its crypto
+    # (InitializeCrypto) is what EditorTls.cpp calls for the library's one-time setup
+    n2security
     PRIVATE
     $<$<PLATFORM_ID:Windows>:ws2_32>
 )

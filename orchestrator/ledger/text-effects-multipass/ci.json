@@ -1,0 +1,10 @@
+{
+  "name": "text-effects-multipass",
+  "head": "577dd1f442c0857a568f886a67bb130ee075536d",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

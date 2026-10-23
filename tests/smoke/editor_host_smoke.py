@@ -271,9 +271,102 @@ def scenario_create(hosts, work):
     check("N2EditorHost ready" not in not_project.stdout.decode("utf-8", "replace"),
           "--project on a plain folder printed a ready line")
 
+    # A non-loopback --bind with no token and no --tls is refused before the engine starts (exit 1, S3 / audit F5)
+    open_bind = hosts.run(["--bind", "0.0.0.0", "--port", "0", "--project", str(project)])
+    err = open_bind.stderr.decode("utf-8", "replace")
+    say("--bind 0.0.0.0 with no token and no --tls (exit %d): %s" % (open_bind.returncode, err))
+    check(open_bind.returncode == 1, "--bind 0.0.0.0 with no token and no --tls exited with %d, expected 1" % open_bind.returncode)
+    check("--insecure-bind" in err and "0.0.0.0" in err, "The --bind refusal didn't name the address and --insecure-bind")
+    check("N2EditorHost ready" not in open_bind.stdout.decode("utf-8", "replace"), "The refused --bind printed a ready line")
+
     # One more asset: the host's ResourceLoader writes its .meta under .import/ at startup
     (project / "assets" / "startup.mat").write_text("{}")
     return project, project_id
+
+
+# The rows of EngineHealth in the order Application::Init reports them; Network is the row PR #187 added
+HEALTH_ROWS = ["Window", "Renderer", "Physics", "Particles", "SoftBodies", "Audio", "Scripting", "Network"]
+
+
+def health_rows(payload):
+    """EngineHealth (0x09) as a list of (name, state, detail), in the host's order."""
+    reader = f.Reader(payload, 1)
+    rows = []
+    for _ in range(reader.u32()):
+        name, state, detail = reader.string(), reader.string(), reader.string()
+        rows.append((name, state, detail))
+    return rows
+
+
+def set_network_block(project, network):
+    """Sets settings.network of the project's project.n2proj (None removes the block)."""
+    path = project / "project.n2proj"
+    data = json.loads(read_text(path))
+    settings = data.setdefault("settings", {})
+    if network is None:
+        settings.pop("network", None)
+    else:
+        settings["network"] = network
+    path.write_bytes(json.dumps(data, indent=2).encode("utf-8"))
+
+
+def network_host_health(hosts, project, name, network, version):
+    """A fresh host on the project with settings.network set to `network`: its health rows (the host then exits)."""
+    set_network_block(project, network)
+    proc = hosts.start(name, ["--port", "0", "--project", str(project), "--renderer", "software",
+                              "--exit-on-disconnect"])
+    port = int(wait_ready_line(proc, what="Editor host (%s)" % name).group(1))
+    conn = f.connect(port)
+    conn.expect(f.HELLO, f.hello_payload("CI smoke test", version, ""), f.SERVER_INFO, "Hello (%s)" % name)
+    rows = health_rows(conn.expect(f.GET_ENGINE_HEALTH, b"", f.ENGINE_HEALTH, "GetEngineHealth (%s)" % name))
+    conn.close()
+    check_exit_zero(proc, 30, "Editor host (%s, client left)" % name)
+    for row_name, state, detail in rows:
+        say("  %s: %s: %s (%s)" % (name, row_name, state, detail))
+    return rows
+
+
+def scenario_network_presets(hosts, work, version):
+    """network.preset end to end (PR #187), each on a fresh host: a project without the block and one with preset none
+    report the same health, row for row; authoritative differs only in its Network row; deterministic is refused
+    (exit 1, no ready line, the refusal on stderr) both as the host that edits and as a --play child."""
+    project = work / "n2-network-project"
+    shutil.rmtree(project, ignore_errors=True)
+    created = hosts.run(["--create", str(project), "--name", "Network Smoke"])
+    check(created.returncode == 0, "--create of the network project exited with %d" % created.returncode)
+
+    baseline = network_host_health(hosts, project, "network-no-block", None, version)
+    check([row[0] for row in baseline] == HEALTH_ROWS,
+          "EngineHealth rows are %s, expected %s" % ([row[0] for row in baseline], HEALTH_ROWS))
+    network = baseline[-1]
+    check(network[1] == "Disabled" and network[2].startswith("Preset none"),
+          "Without a network block the Network row is %s (%s), expected Disabled, Preset none" % (network[1], network[2]))
+
+    none = network_host_health(hosts, project, "network-none", {"preset": "none"}, version)
+    check(none == baseline, "preset none changed the health report: %s, without the block: %s" % (none, baseline))
+
+    authoritative = network_host_health(hosts, project, "network-authoritative", {"preset": "authoritative"}, version)
+    check([row for row in authoritative if row[0] != "Network"] == [row for row in baseline if row[0] != "Network"],
+          "preset authoritative changed rows other than Network: %s" % authoritative)
+    network = authoritative[-1]
+    check(network[0] == "Network" and network[1] == "Disabled" and network[2].startswith("Preset authoritative"),
+          "The authoritative Network row is %s" % (network,))
+    # The preset drives Application::SetSimulationMode; the row reports the mode the application runs in
+    check(network[2].endswith("; simulation mode authoritative"),
+          "The authoritative Network row doesn't report simulation mode authoritative: %s" % network[2])
+    check("simulation mode" not in baseline[-1][2], "The none Network row reports a simulation mode: %s" % baseline[-1][2])
+    say("network.preset: no block and none report the same health; authoritative differs only in its Network row")
+
+    set_network_block(project, {"preset": "deterministic"})
+    for what, extra in (("host", []), ("--play child", ["--play", "res://scenes/Main.scene"])):
+        refused = hosts.run(["--port", "0", "--project", str(project), "--renderer", "software"] + extra, timeout=120)
+        out = refused.stdout.decode("utf-8", "replace")
+        err = refused.stderr.decode("utf-8", "replace")
+        say("deterministic %s (exit %d): %s" % (what, refused.returncode, err.strip()[-400:]))
+        check(refused.returncode == 1, "A refused deterministic %s exited with %d, expected 1" % (what, refused.returncode))
+        check("N2EditorHost ready" not in out, "A refused deterministic %s printed a ready line" % what)
+        check("refused to start" in err, "A refused deterministic %s did not say so on stderr" % what)
+    say("network.preset deterministic: the host and the --play child are refused before they serve")
 
 
 def scenario_host(hosts, work, config, version, expect_physics):
@@ -446,6 +539,8 @@ def scenario_host(hosts, work, config, version, expect_physics):
     for problem in ("Assets directory not found", "ResourceUUID not initialized", "Couldn't open the startup scene"):
         check(problem not in log, "Host log reports: " + problem)
     check(token not in log, "The host logged its access token")
+
+    scenario_network_presets(hosts, work, version)
 
     # ---- Host 2: the default renderer (no GPU here, so no window), --exit-on-disconnect, no token ----
     proc2 = hosts.start("host-exit-on-disconnect", ["--port", "0", "--exit-on-disconnect"])

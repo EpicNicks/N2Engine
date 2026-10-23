@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cerrno>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -44,8 +45,10 @@
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/scripting/LuaScript.hpp"
 #include "engine/scripting/LuaScriptTemplate.hpp"
+#include "engine/scripting/ScriptDeclarationCache.hpp"
 #include "engine/serialization/ComponentRegistry.hpp"
 #include "engine/serialization/FieldInfo.hpp"
+#include "engine/serialization/JsonLimits.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
 
 #include "renderer/common/FrameRows.hpp"
@@ -53,9 +56,11 @@
 
 #include "editor-server/EditorServer.hpp"
 #include "editor-server/EditorTls.hpp"
+#include "editor-server/ExtensionHost.hpp"
 #include "editor-server/Protocol.hpp"
 #include "editor-server/Commands.hpp"
 #include "editor-server/Serialization.hpp"
+#include "editor-server/ServerLog.hpp"
 
 #ifdef _WIN32
 #define NOMINMAX
@@ -68,9 +73,9 @@
 using NativeSocket = SOCKET;
 #else
 #include <sys/socket.h>
-#include <sys/select.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <cerrno>
 #include <csignal>
@@ -86,17 +91,34 @@ namespace N2Engine::Editor
 
     namespace
     {
-#ifdef MSG_NOSIGNAL
-        // A write to a connection the client already dropped is an error return, never a SIGPIPE that kills the host
-        constexpr int SendFlags = MSG_NOSIGNAL;
-#else
-        constexpr int SendFlags = 0;
-#endif
-
         // Sockets are kept as int (as before); an invalid SOCKET converts to -1
         constexpr int NoSocket = -1;
-        // How often a waiting network thread checks whether the server is stopping
-        constexpr long PollIntervalMicroseconds = 100 * 1000;
+
+        // The kinds of pre-auth failure whose lines are coalesced (AdmitPreAuthLine): each has its own window, and the
+        // name is what its summary line calls it
+        constexpr std::string_view PreAuthTlsStartFailed = "TLS session not started";
+        constexpr std::string_view PreAuthTlsFailed = "TLS handshake failed";
+        constexpr std::string_view PreAuthTlsTimedOut = "TLS handshake timed out";
+        constexpr std::string_view PreAuthHelloTimedOut = "no Hello in time";
+        constexpr std::string_view PreAuthNotHello = "command before Hello";
+        constexpr std::string_view PreAuthOversized = "oversized frame before Hello";
+        constexpr std::string_view PreAuthUnparsable = "unparsable Hello";
+        constexpr std::string_view PreAuthTokenRefused = "Hello refused: wrong token";
+        constexpr std::string_view PreAuthVersionRefused = "Hello refused: protocol version";
+        constexpr std::string_view PreAuthWriteStalled = "write stalled before Hello";
+
+        /// Makes a connected socket non-blocking, so no single send or recv can outlast the deadline its caller waits on
+        /// (the TLS session does the same for its own sockets)
+        bool SetSocketNonBlocking(const int socket)
+        {
+#ifdef _WIN32
+            u_long enable = 1;
+            return ioctlsocket(static_cast<SOCKET>(socket), FIONBIO, &enable) == 0;
+#else
+            const int flags = fcntl(socket, F_GETFL, 0);
+            return flags >= 0 && fcntl(socket, F_SETFL, flags | O_NONBLOCK) == 0;
+#endif
+        }
 
         /// The TCP peer of an accepted socket (getpeername), whichever family the listener produced; Unknown when it
         /// fails (the peer may already have gone) or isn't IP
@@ -183,21 +205,27 @@ namespace N2Engine::Editor
             std::ifstream stream(file, std::ios::binary);
             if (!stream)
             {
-                return std::unexpected("can't read " + Utf8(file));
+                // A stable reason and nothing of the host's: the caller names the file as its client knows it (a res://
+                // path), and this text may reach a remote client (audit F10)
+                const int code = errno;
+                return std::unexpected(std::string(code == EACCES ? "permission denied"
+                                                   : code == ENOENT ? "file not found"
+                                                                    : "the file can't be read"));
             }
             std::ostringstream text;
             text << stream.rdbuf();
             if (stream.bad())
             {
-                return std::unexpected("can't read " + Utf8(file));
+                return std::unexpected(std::string("the file can't be read"));
             }
             return std::move(text).str();
         }
 
-        /// A scene's JSON as its file holds it: indented by 2, ending in a newline (diffs well under version control)
+        /// A scene's JSON as its file holds it: indented by 2, ending in a newline (diffs well under version control).
+        /// Dumped without recursion (the same text as nlohmann's dump): a scene can nest as deep as its cap.
         std::string SceneFileText(const nlohmann::json &scene)
         {
-            return scene.dump(2, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
+            return JsonLimits::IterativeDump(scene, 2, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
         }
 
         // ==================== Assets ====================
@@ -262,6 +290,61 @@ namespace N2Engine::Editor
         std::string NotFoundMessage(const char *what, const std::string &entityId)
         {
             return std::format("{} not found: {}", what, EditorServer::SanitizeForLog(entityId));
+        }
+
+        /// What a client is told of an exception a component's deserialiser threw. nlohmann's say what is wrong with the
+        /// client's own JSON, so they stay (they name no host path); any other is the engine's own text: a remote client is
+        /// told only that the component refused the value, and the text goes to the log (audit F10, ClientText)
+        std::string EditExceptionText(const std::exception &error)
+        {
+            if (dynamic_cast<const nlohmann::json::exception *>(&error) != nullptr)
+            {
+                return EditorServer::SanitizeForLog(error.what(), 300);
+            }
+            return ClientText::Failure("", "the component refused the value", EditorServer::SanitizeForLog(error.what(), 300));
+        }
+
+        /// A response frame as a remote client may see it: an Error's or ErrorCoded's message with the host's folders
+        /// replaced (ClientText::Redact). The frame of a local client, and any other kind, is returned as it is. This is
+        /// the net under the sites that build their messages with care: whatever one of them lets through that names the
+        /// project's folders is caught here.
+        std::vector<uint8_t> RedactErrorFrame(std::vector<uint8_t> frame)
+        {
+            if (ClientText::IsLocal() || frame.empty())
+            {
+                return frame;
+            }
+            const uint8_t type = frame[0];
+            if (type != static_cast<uint8_t>(ResponseType::Error) && type != static_cast<uint8_t>(ResponseType::ErrorCoded))
+            {
+                return frame;
+            }
+            try
+            {
+                BufferReader reader(frame);
+                (void)reader.ReadU8();
+                const std::span<const uint8_t> body = reader.ReadBytes(reader.ReadU32());
+                BufferWriter out;
+                if (type == static_cast<uint8_t>(ResponseType::Error))
+                {
+                    WriteError(out, ClientText::Redact(std::string(body.begin(), body.end())));
+                }
+                else
+                {
+                    BufferReader payload(body);
+                    std::string message = payload.ReadString();
+                    const std::string code = payload.ReadString();
+                    WriteErrorCoded(out, ClientText::Redact(std::move(message)), code);
+                }
+                return out.Release();
+            }
+            catch (...)
+            {
+                // A frame that isn't what it says it is: the generic Error, never what it held
+                BufferWriter out;
+                WriteError(out, "Command failed");
+                return out.Release();
+            }
         }
 
         /// The UUID string of an object's parent, or empty for a root
@@ -684,7 +767,7 @@ namespace N2Engine::Editor
             }
             catch (const std::exception &error)
             {
-                return std::unexpected(EditorServer::SanitizeForLog(error.what(), 300));
+                return std::unexpected(EditExceptionText(error));
             }
 
             // A reference the copy didn't keep (an asset that isn't there or isn't of the field's type, a component
@@ -732,7 +815,7 @@ namespace N2Engine::Editor
                 restore.SetFallback(&sceneReferences);
                 component.Deserialize(before, &restore);
                 restore.ResolveAll();
-                return std::unexpected(EditorServer::SanitizeForLog(error.what(), 300));
+                return std::unexpected(EditExceptionText(error));
             }
 
             nlohmann::json after = component.Serialize();
@@ -838,15 +921,21 @@ namespace N2Engine::Editor
         }
 
         /// JSON kept as text in a step: a parsed nlohmann::json costs several times its text, which the history's byte
-        /// limit would not see, so a step holds the text (as a snapshot does) and parses it when it runs
+        /// limit would not see, so a step holds the text (as a snapshot does) and parses it when it runs. Dumped
+        /// without recursion: a step can hold a whole subtree, as deep as the hierarchy cap.
         std::shared_ptr<const std::string> DumpJson(const nlohmann::json &value)
         {
             return std::make_shared<const std::string>(
-                value.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
+                JsonLimits::IterativeDump(value, -1, ' ', false, nlohmann::json::error_handler_t::replace));
         }
 
         std::expected<nlohmann::json, std::string> ParseStored(const std::string &text)
         {
+            // What a step saved is the host's own text, but a deep tree is refused here too, before it is parsed
+            if (JsonLimits::SceneJsonTooDeep(text))
+            {
+                return std::unexpected("What the edit saved can't be read back: " + JsonLimits::SceneJsonTooDeepMessage());
+            }
             nlohmann::json value = nlohmann::json::parse(text, nullptr, false);
             if (value.is_discarded())
             {
@@ -1029,6 +1118,15 @@ namespace N2Engine::Editor
             LocalTransformState transform;
         };
 
+        /// The answer when a tree would nest past the hierarchy cap (the same cap a load enforces): AddChild and
+        /// SetParent refuse such a move with only a warning, so a command checks CanAddChild first and says this
+        std::string TooDeepMessage(const std::string &childName, const std::string &parentName)
+        {
+            return std::format("Can't make '{}' a child of '{}': the hierarchy would nest more than {} levels deep",
+                               EditorServer::SanitizeForLog(childName), EditorServer::SanitizeForLog(parentName),
+                               JsonLimits::MaxHierarchyDepth);
+        }
+
         PlacementState PlacementOf(const GameObject &gameObject)
         {
             return {ParentIdOf(gameObject), gameObject.GetSiblingIndex(), LocalTransformOf(gameObject)};
@@ -1061,6 +1159,10 @@ namespace N2Engine::Editor
             }
             if ((*entity)->GetParent() != parent)
             {
+                if (parent != nullptr && !parent->CanAddChild(*entity))
+                {
+                    return std::unexpected(TooDeepMessage((*entity)->GetName(), parent->GetName()));
+                }
                 // The local transform is put back below, so the world transform needn't be kept
                 (*entity)->SetParent(parent, false);
                 if ((*entity)->GetParent() != parent)
@@ -1249,7 +1351,7 @@ namespace N2Engine::Editor
             }
             catch (const std::exception &error)
             {
-                return std::unexpected(EditorServer::SanitizeForLog(error.what(), 300));
+                return std::unexpected(EditExceptionText(error));
             }
             if (restored == nullptr)
             {
@@ -1258,7 +1360,16 @@ namespace N2Engine::Editor
 
             if (parent != nullptr)
             {
+                // Its parent may have been moved deeper since: the rebuilt tree is dropped, not left in no scene
+                if (!parent->CanAddChild(restored))
+                {
+                    return std::unexpected(TooDeepMessage(restored->GetName(), parent->GetName()));
+                }
                 parent->AddChild(restored, false);
+                if (restored->GetParent() != parent)
+                {
+                    return std::unexpected(std::string("The object couldn't be put back under its parent"));
+                }
             }
             else
             {
@@ -1352,7 +1463,7 @@ namespace N2Engine::Editor
             }
             catch (const std::exception &error)
             {
-                return std::unexpected(EditorServer::SanitizeForLog(error.what(), 300));
+                return std::unexpected(EditExceptionText(error));
             }
             if ((*entity)->AddComponent(std::move(component)) == nullptr)
             {
@@ -1401,7 +1512,7 @@ namespace N2Engine::Editor
             resolver.SetFallback(&sceneReferences);
             // Deserialize sets the active flag without telling the component (OnActiveFlagChanged), which SetActive does
             // as SetComponentFields did: so the flag is taken out of what is deserialised and set after it
-            nlohmann::json withoutActive = state;
+            nlohmann::json withoutActive = JsonLimits::IterativeCopy(state); // component data can nest deep
             std::optional<bool> active;
             if (withoutActive.is_object())
             {
@@ -1423,7 +1534,7 @@ namespace N2Engine::Editor
             }
             catch (const std::exception &error)
             {
-                return std::unexpected(EditorServer::SanitizeForLog(error.what(), 300));
+                return std::unexpected(EditExceptionText(error));
             }
             return EffectFor({entityId});
         }
@@ -1469,7 +1580,7 @@ namespace N2Engine::Editor
         {
             try
             {
-                _events.PushLog(level, message, EventRing::NowUnixMilliseconds());
+                _events.PushLog(level, message, EventRing::NowUnixMilliseconds(), Logger::CurrentSensitivity());
             }
             catch (...)
             {
@@ -1502,7 +1613,7 @@ namespace N2Engine::Editor
             WSADATA wsaData;
             if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
             {
-                Logger::Error("WSAStartup failed");
+                ServerLog::Error("WSAStartup failed");
                 return false;
             }
         }
@@ -1520,14 +1631,14 @@ namespace N2Engine::Editor
         addr.sin_port = htons(static_cast<uint16_t>(port));
         if (inet_pton(AF_INET, bindAddress.c_str(), &addr.sin_addr) != 1)
         {
-            Logger::Error("Invalid bind address (expected an IPv4 address): " + bindAddress);
+            ServerLog::Error("Invalid bind address (expected an IPv4 address): " + bindAddress);
             return false;
         }
 
         _listenSocket = static_cast<int>(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
         if (_listenSocket == INVALID_SOCKET)
         {
-            Logger::Error("Failed to create socket");
+            ServerLog::Error("Failed to create socket");
             _listenSocket = -1;
             return false;
         }
@@ -1541,15 +1652,17 @@ namespace N2Engine::Editor
 
         if (bind(_listenSocket, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
         {
-            Logger::Error("Failed to bind to " + bindAddress + ":" + std::to_string(port));
+            ServerLog::Error("Failed to bind to " + bindAddress + ":" + std::to_string(port));
             CLOSE_SOCKET(_listenSocket);
             _listenSocket = -1;
             return false;
         }
 
-        if (listen(_listenSocket, 1) < 0)
+        // A backlog of the workers plus four: the acceptor drains it at once (accept does no handshake), so it only has to
+        // absorb a burst; a connection past it is refused by the kernel
+        if (listen(_listenSocket, static_cast<int>(_preAuthSlotOptions.totalSlots) + 4) < 0)
         {
-            Logger::Error("Failed to listen");
+            ServerLog::Error("Failed to listen");
             CLOSE_SOCKET(_listenSocket);
             _listenSocket = -1;
             return false;
@@ -1569,24 +1682,133 @@ namespace N2Engine::Editor
             _rateLimiter.emplace(_rateLimitPolicy, _rateLimitClock);
         }
 
+        // Every run starts with empty slots and an empty bucket, and nothing in either queue
+        _slots.emplace(_preAuthSlotOptions);
+        _handshakeBucket.reset();
+        if (_handshakeRate.has_value())
+        {
+            _handshakeBucket.emplace(*_handshakeRate, _handshakeClock);
+        }
+        _bucketReported = {};
+        _lastAdmissionSummary = std::chrono::steady_clock::now();
+        _preAuthLog.emplace(_preAuthLogOptions);
+        {
+            const std::lock_guard lock(_jobMutex);
+            _jobs.clear();
+        }
+        {
+            const std::lock_guard lock(_sessionMutex);
+            _handoff.reset();
+            _sessionRunning = false;
+            _claimId = 0;
+            _closeConnection.store(false);
+            _sessionReplaced.store(false);
+        }
+        // A host without any token has no Hello: every client is an admin with no name, and the newest takes over
+        _arbiter.emplace(!RequiresAccessToken());
+
         _commands.Reopen();
         _running = true;
-        _serverThread = std::thread(&EditorServer::ServerLoop, this, _listenSocket);
-        Logger::Info("Editor server listening on " + bindAddress + ":" + std::to_string(_port));
+        try
+        {
+            _sessionThread = std::thread(&EditorServer::SessionLoop, this);
+            const size_t workers = _slots->Options().totalSlots;
+            _workers.reserve(workers);
+            for (size_t i = 0; i < workers; ++i)
+            {
+                _workers.emplace_back(&EditorServer::PreAuthWorkerLoop, this);
+            }
+            _serverThread = std::thread(&EditorServer::ServerLoop, this, _listenSocket);
+        }
+        catch (const std::system_error &e)
+        {
+            // A thread that can't start: undo what did start, so the host fails to listen instead of half serving
+            ServerLog::Error(std::string("Failed to start the editor server's threads: ") + e.what());
+            Stop();
+            return false;
+        }
+        ServerLog::Info("Editor server listening on " + bindAddress + ":" + std::to_string(_port));
+        ServerLog::Info(std::format("Pre-auth limits: {} slot(s) (at most {} per non-loopback address; loopback may use all), "
+                                 "{}; one session at a time: {} (a taking-over client waits up to {} ms for the old "
+                                 "session to end); any other second client waits up to {} ms and gets \"{}\"",
+                                 _slots->Options().totalSlots, _slots->Options().perAddressSlots,
+                                 _handshakeRate.has_value()
+                                     ? std::format("handshake rate {}/s in all and {}/s per address",
+                                                   _handshakeBucket->Options().globalPerSecond,
+                                                   _handshakeBucket->Options().perAddressPerSecond)
+                                     : std::string("no handshake rate limit"),
+                                 _arbiter->NoTokenHost()
+                                     ? "the newest connection takes over (no access token)"
+                                     : "the same user's newest connection takes the session over, a higher role preempts it",
+                                 _takeoverWait.count(), _busyGrace.count(), BusyError));
         return true;
     }
 
     void EditorServer::Stop()
     {
-        // The network thread never blocks on a socket for long (see WaitUntilReady), so clearing _running
+        // The network thread never blocks on a socket for long (see Connection::WaitUntilReady), so clearing _running
         // stops it within one poll interval. Closing the queue wakes it if it is waiting for a command's
-        // result. Sockets are only closed once it has exited: closing or shutting down a socket another
-        // thread is blocked on doesn't reliably wake it (shutdown doesn't on Windows, close doesn't on Linux).
+        // result. A socket is only closed by the thread that owns it (as its connection ends) or, for what is left, here
+        // once every thread has exited: closing or shutting down a socket another thread is blocked on doesn't reliably
+        // wake it (shutdown doesn't on Windows, close doesn't on Linux).
         _running = false;
         _commands.Close();
+        // Wake what waits on a condition variable (the workers for a job, the session thread for a hand-off, an offer for
+        // the session to end): each also wakes on its own every PollInterval and looks at _running, so a notification
+        // only makes it quicker. The lock is taken so a waiter that has just checked the flag is already waiting.
+        {
+            const std::lock_guard lock(_jobMutex);
+        }
+        _jobCv.notify_all();
+        {
+            const std::lock_guard lock(_sessionMutex);
+        }
+        _sessionCv.notify_all();
 
+        // Joins: the acceptor first (nothing new arrives), then the workers, then the session thread. No thread waits on
+        // another without also watching _running, so none of these can block for more than a poll interval (and a
+        // session's wait for the main thread ends because the queue is closed).
+        const auto joinsBegan = std::chrono::steady_clock::now();
         if (_serverThread.joinable())
             _serverThread.join();
+        for (std::thread &worker : _workers)
+        {
+            if (worker.joinable())
+                worker.join();
+        }
+        _workers.clear();
+        if (_sessionThread.joinable())
+            _sessionThread.join();
+        StopReport report;
+        report.joinTime = std::chrono::steady_clock::now() - joinsBegan;
+        report.slotsHeldAfterJoins = _slots.has_value() ? _slots->InUse() : 0;
+
+        // Connections still waiting in the queue or the hand-off slot: closed now that no thread uses a socket. Their
+        // slots are released as they go.
+        {
+            std::deque<PreAuthJob> leftovers;
+            {
+                const std::lock_guard lock(_jobMutex);
+                leftovers.swap(_jobs);
+            }
+            report.leftoverConnections += leftovers.size();
+            leftovers.clear();
+        }
+        {
+            std::optional<HandOff> leftover;
+            {
+                const std::lock_guard lock(_sessionMutex);
+                leftover.swap(_handoff);
+                _sessionRunning = false;
+            }
+            report.leftoverConnections += leftover.has_value() ? 1 : 0;
+            leftover.reset();
+        }
+        report.slotsHeldAfterCleanup = _slots.has_value() ? _slots->InUse() : 0;
+        if (_stopHook)
+        {
+            _stopHook(report);
+        }
 
         if (_listenSocket != -1)
         {
@@ -1611,6 +1833,8 @@ namespace N2Engine::Editor
         FlushAutosave();
         // Asset files changed outside the editor (a no-op unless a client is connected and the interval has passed)
         (void)PollAssetsIfDue();
+        // The extension files changed outside the editor (a no-op unless --editor-extensions-watch is on)
+        (void)PollEditorExtensionsIfDue();
         return processed;
     }
 
@@ -1637,23 +1861,44 @@ namespace N2Engine::Editor
         (void)_commands.Enqueue([message = std::move(message), isWarning]
         {
             if (isWarning)
-                Logger::Warn(message);
+                ServerLog::Warn(message);
             else
-                Logger::Info(message);
+                ServerLog::Info(message);
             return CommandQueue::Response{};
         });
+    }
+
+    void EditorServer::PostLogAndWait(std::string message, const bool isWarning)
+    {
+        std::future<CommandQueue::Response> written = _commands.Enqueue([message = std::move(message), isWarning]
+        {
+            if (isWarning)
+                ServerLog::Warn(message);
+            else
+                ServerLog::Info(message);
+            return CommandQueue::Response{};
+        });
+        const auto giveUpAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+        while (_running && std::chrono::steady_clock::now() < giveUpAt)
+        {
+            // Ready also when the queue was closed (the task was dropped, which breaks its promise)
+            if (written.wait_for(std::chrono::milliseconds(5)) == std::future_status::ready)
+            {
+                return;
+            }
+        }
     }
 
     bool EditorServer::SetAccessToken(std::string token)
     {
         if (_running)
         {
-            Logger::Warn("The editor server's access token can't change while it is running");
+            ServerLog::Warn("The editor server's access token can't change while it is running");
             return false;
         }
         if (!_tokensFile.empty())
         {
-            Logger::Warn("The editor server has a tokens file, which can't be combined with a single access token");
+            ServerLog::Warn("The editor server has a tokens file, which can't be combined with a single access token");
             return false;
         }
         _accessToken = std::move(token);
@@ -1709,6 +1954,20 @@ namespace N2Engine::Editor
         return _tokens;
     }
 
+    bool EditorServer::HelloTokenIsValid(const std::vector<uint8_t> &payload) const
+    {
+        try
+        {
+            BufferReader reader(payload);
+            const HelloCmd cmd = HelloCmd::Deserialize(reader);
+            return Authenticate(cmd.token, cmd.user).has_value();
+        }
+        catch (...)
+        {
+            return false; // a malformed Hello authenticates nobody
+        }
+    }
+
     std::optional<EditorServer::ConnectionIdentity> EditorServer::Authenticate(const std::string_view token,
                                                                                 const std::string_view user) const
     {
@@ -1748,6 +2007,13 @@ namespace N2Engine::Editor
             return identity;
         }
         return identity;
+    }
+
+    bool EditorServer::SeesEveryEvent() const
+    {
+        // The role is bound by Hello on a host with authentication; a host without it has no roles, and its one local
+        // user has always read everything
+        return !RequiresAccessToken() || CurrentIdentity().role == TokenRole::Admin;
     }
 
     EditorServer::ConnectionIdentity EditorServer::CurrentIdentity() const
@@ -1803,21 +2069,43 @@ namespace N2Engine::Editor
 
     void EditorServer::CheckIdentityAgainstTokens()
     {
-        const ConnectionIdentity identity = CurrentIdentity();
-        if (!identity.fromTokensFile)
-        {
-            return;
-        }
+        // The table first, then the identity's lock: the identity is read and the close flag set in one step, so the
+        // verdict is about the session that holds the identity now and can't land on the next one (BeginSessionState and
+        // EndSessionState clear the identity and the flag under the same lock). Lock order: identity, never the reverse.
         const std::shared_ptr<const TokenTable> tokens = CurrentTokens();
-        const TokenEntry *entry = tokens ? tokens->Find(identity.user) : nullptr;
-        if (entry != nullptr && entry->role == identity.role && TokenHashesEqual(entry->hash, identity.hash))
+        ConnectionIdentity identity;
         {
-            return;
+            const std::lock_guard lock(_identityMutex);
+            if (!_identity.fromTokensFile)
+            {
+                return;
+            }
+            identity = _identity;
+            const TokenEntry *entry = tokens ? tokens->Find(identity.user) : nullptr;
+            if (entry != nullptr && entry->role == identity.role && TokenHashesEqual(entry->hash, identity.hash))
+            {
+                return;
+            }
+            _closeConnection.store(true);
         }
-        _closeConnection.store(true);
         PostLog(std::format("Closing the connection of user={} role={}: the reloaded tokens file no longer grants it",
                             identity.user, TokenRoleName(identity.role)),
                 true);
+    }
+
+    void EditorServer::BeginSessionState()
+    {
+        // The close request is NOT cleared here: a takeover or preemption may have asked this session to end since the
+        // session thread took it (SessionLoop clears the request, under the lock that request is made under, before that)
+        const std::lock_guard lock(_identityMutex);
+        _identity = ConnectionIdentity{};
+    }
+
+    void EditorServer::EndSessionState()
+    {
+        const std::lock_guard lock(_identityMutex);
+        _identity = ConnectionIdentity{};
+        _closeConnection.store(false);
     }
 
     void EditorServer::ServiceTokens()
@@ -1852,11 +2140,61 @@ namespace N2Engine::Editor
         return std::format("forbidden: role {} is not allowed to run {}", TokenRoleName(role), CommandName(commandType));
     }
 
+    bool EditorServer::IsAdminOnlySettingsBlock(const std::string_view block)
+    {
+        return block == "determinism";
+    }
+
+    bool EditorServer::IsLocalClient() const
+    {
+        return !HasTokensFile() && !_callerRemote.load() && !_sessionRemote.load();
+    }
+
+    std::vector<ClientText::HostRoot> EditorServer::HostRoots() const
+    {
+        std::vector<ClientText::HostRoot> roots;
+        if (_project)
+        {
+            // The assets folder is what res:// names; the rest of the project is "<project>". The res:// folder is the
+            // same one SetProject gives the event ring (EventRing::SetHostRoots), so an error frame and a public log
+            // line spell a project file the same way. The ring gets only that one: it writes every root it knows as
+            // res://, and the other folders here are not res://.
+            roots.push_back({_project->root / "assets", "res://"});
+            roots.push_back({_project->root, "<project>"});
+        }
+        if (!_scenesDirectory.empty())
+        {
+            roots.push_back({_scenesDirectory, "<scenes>"});
+        }
+        if (const std::filesystem::path userData = IO::ResourceLoader::Instance().GetUserDataRoot(); !userData.empty())
+        {
+            roots.push_back({userData, "user://"});
+        }
+        std::error_code error;
+        if (const std::filesystem::path current = std::filesystem::current_path(error);
+            !error && !current.empty() && !current.relative_path().empty())
+        {
+            // Not when the working folder is the top of a drive or of the file system ("C:\", "/"): that would match
+            // nearly anything (RedactHostPaths skips such a folder too)
+            roots.push_back({current, "<host>"});
+        }
+        return roots;
+    }
+
+    std::string EditorServer::ClientPath(const std::filesystem::path &file) const
+    {
+        if (IsLocalClient())
+        {
+            return Utf8(file);
+        }
+        return _project ? ClientText::RelativeTo(file, _project->root) : std::string{};
+    }
+
     bool EditorServer::SetRateLimiting(const bool enabled)
     {
         if (_running)
         {
-            Logger::Warn("The editor server's rate limiting can't change while it is running");
+            ServerLog::Warn("The editor server's rate limiting can't change while it is running");
             return false;
         }
         _rateLimiting = enabled;
@@ -1867,7 +2205,7 @@ namespace N2Engine::Editor
     {
         if (_running)
         {
-            Logger::Warn("The editor server's rate limit policy can't change while it is running");
+            ServerLog::Warn("The editor server's rate limit policy can't change while it is running");
             return false;
         }
         _rateLimitPolicy = policy;
@@ -1878,7 +2216,7 @@ namespace N2Engine::Editor
     {
         if (_running)
         {
-            Logger::Warn("The editor server's rate limit clock can't change while it is running");
+            ServerLog::Warn("The editor server's rate limit clock can't change while it is running");
             return false;
         }
         _rateLimitClock = std::move(clock);
@@ -1889,7 +2227,7 @@ namespace N2Engine::Editor
     {
         if (_running)
         {
-            Logger::Warn("The editor server's peer address provider can't change while it is running");
+            ServerLog::Warn("The editor server's peer address provider can't change while it is running");
             return false;
         }
         _peerAddressProvider = std::move(provider);
@@ -1922,29 +2260,23 @@ namespace N2Engine::Editor
         return "?";
     }
 
-    void EditorServer::LogRateLimitOutcome(const RateLimiter::FailureOutcome &outcome, const std::string_view user)
+    void EditorServer::LogRateLimitOutcome(const RateLimiter::FailureOutcome &outcome, const std::string_view user,
+                                           const PeerAddress &peer)
     {
         // One line per backoff that starts, never per refused connection; no token, only the peer and the user's name
         if (outcome.address.has_value())
         {
             PostLog(std::format("Rate limit: {} is backed off for {} ms after {} failed Hellos; its connections are "
-                                "closed until then", RateLimitSubject(_peer), outcome.address->duration.count(),
+                                "closed until then", RateLimitSubject(peer), outcome.address->duration.count(),
                                 outcome.address->failures),
-                    true);
-        }
-        if (outcome.loopback.has_value())
-        {
-            PostLog(std::format("Rate limit: all of loopback is backed off for {} ms after burst {} of failed Hellos "
-                                "(the last from peer={}); its connections are closed until then",
-                                outcome.loopback->duration.count(), outcome.loopback->failures, _peer.ToString()),
                     true);
         }
         if (outcome.user.has_value())
         {
             PostLog(std::format("Rate limit: user={} is backed off for {} ms after {} failed Hellos naming it, from any "
-                                "address; a Hello naming it is refused until then (last from peer={})",
+                                "address; a Hello naming it is still checked (the right token gets in and clears it, a wrong one is counted) (last from peer={})",
                                 LoggableClaimedUser(user), outcome.user->duration.count(), outcome.user->failures,
-                                _peer.ToString()),
+                                peer.ToString()),
                     true);
         }
     }
@@ -1953,11 +2285,270 @@ namespace N2Engine::Editor
     {
         if (_running || timeout <= std::chrono::milliseconds::zero())
         {
-            Logger::Warn("The editor server's Hello timeout can't change while it is running, or be zero or negative");
+            ServerLog::Warn("The editor server's Hello timeout can't change while it is running, or be zero or negative");
             return false;
         }
         _helloTimeout = timeout;
         return true;
+    }
+
+    bool EditorServer::SetTlsHandshakeTimeout(const std::chrono::milliseconds timeout)
+    {
+        if (_running || timeout <= std::chrono::milliseconds::zero())
+        {
+            ServerLog::Warn("The editor server's TLS handshake timeout can't change while it is running, or be zero or "
+                         "negative");
+            return false;
+        }
+        _tlsHandshakeTimeout = timeout;
+        return true;
+    }
+
+    bool EditorServer::SetIdleTimeout(const std::chrono::milliseconds timeout)
+    {
+        if (_running || timeout < std::chrono::milliseconds::zero())
+        {
+            ServerLog::Warn("The editor server's idle timeout can't change while it is running, or be negative");
+            return false;
+        }
+        _idleTimeout = timeout;
+        return true;
+    }
+
+    bool EditorServer::SetWriteTimeout(const std::chrono::milliseconds timeout)
+    {
+        if (_running || timeout <= std::chrono::milliseconds::zero())
+        {
+            ServerLog::Warn("The editor server's write timeout can't change while it is running, or be zero or negative");
+            return false;
+        }
+        _writeTimeout = timeout;
+        return true;
+    }
+
+    bool EditorServer::SetMaxSessionAge(const std::chrono::milliseconds age)
+    {
+        if (_running || age < std::chrono::milliseconds::zero())
+        {
+            ServerLog::Warn("The editor server's maximum session age can't change while it is running, or be negative");
+            return false;
+        }
+        _maxSessionAge = age;
+        return true;
+    }
+
+    bool EditorServer::SetConnectionClock(ConnectionClock clock)
+    {
+        if (_running)
+        {
+            ServerLog::Warn("The editor server's connection clock can't change while it is running");
+            return false;
+        }
+        _connectionClock = std::move(clock);
+        return true;
+    }
+
+    bool EditorServer::SetAcceptedSocketHook(AcceptedSocketHook hook)
+    {
+        if (_running)
+        {
+            ServerLog::Warn("The editor server's accepted-socket hook can't change while it is running");
+            return false;
+        }
+        _acceptedSocketHook = std::move(hook);
+        return true;
+    }
+
+    bool EditorServer::SetPreAuthSlots(const size_t slots)
+    {
+        if (_running || slots < 1 || slots > MaxPreAuthSlots)
+        {
+            ServerLog::Warn(std::format("The editor server's pre-auth slots can't change while it is running, and must be "
+                                     "from 1 to {}",
+                                     MaxPreAuthSlots));
+            return false;
+        }
+        _preAuthSlotOptions.totalSlots = slots;
+        return true;
+    }
+
+    bool EditorServer::SetPreAuthSlotsPerAddress(const size_t slots)
+    {
+        if (_running || slots < 1)
+        {
+            ServerLog::Warn("The editor server's pre-auth slots per address can't change while it is running, and must be at "
+                         "least 1");
+            return false;
+        }
+        _preAuthSlotOptions.perAddressSlots = slots;
+        return true;
+    }
+
+    bool EditorServer::SetHandshakeRateLimit(std::optional<TokenBucketOptions> options, TokenBucket::Clock clock)
+    {
+        if (_running)
+        {
+            ServerLog::Warn("The editor server's handshake rate limit can't change while it is running");
+            return false;
+        }
+        _handshakeRate = std::move(options);
+        _handshakeClock = std::move(clock);
+        return true;
+    }
+
+    bool EditorServer::SetBusyGrace(const std::chrono::milliseconds grace)
+    {
+        if (_running || grace < std::chrono::milliseconds::zero())
+        {
+            ServerLog::Warn("The editor server's busy grace can't change while it is running, or be negative");
+            return false;
+        }
+        _busyGrace = grace;
+        return true;
+    }
+
+    bool EditorServer::SetTakeoverWait(const std::chrono::milliseconds wait)
+    {
+        if (_running || wait < std::chrono::milliseconds::zero())
+        {
+            ServerLog::Warn("The editor server's takeover wait can't change while it is running, or be negative");
+            return false;
+        }
+        _takeoverWait = wait;
+        return true;
+    }
+
+    bool EditorServer::SetSessionStartHook(SessionStartHook hook)
+    {
+        if (_running)
+        {
+            ServerLog::Warn("The editor server's session start hook can't change while it is running");
+            return false;
+        }
+        _sessionStartHook = std::move(hook);
+        return true;
+    }
+
+    bool EditorServer::SetSessionEndHook(SessionEndHook hook)
+    {
+        if (_running)
+        {
+            ServerLog::Warn("The editor server's session end hook can't change while it is running");
+            return false;
+        }
+        _sessionEndHook = std::move(hook);
+        return true;
+    }
+
+    bool EditorServer::SetAdmissionSummaryInterval(const std::chrono::milliseconds interval)
+    {
+        if (_running || interval <= std::chrono::milliseconds::zero())
+        {
+            ServerLog::Warn("The editor server's admission summary interval can't change while it is running, or be zero or "
+                         "negative");
+            return false;
+        }
+        _admissionSummaryInterval = interval;
+        return true;
+    }
+
+    bool EditorServer::SetPreHandoffHook(PreHandoffHook hook)
+    {
+        if (_running)
+        {
+            ServerLog::Warn("The editor server's pre-hand-off hook can't change while it is running");
+            return false;
+        }
+        _preHandoffHook = std::move(hook);
+        return true;
+    }
+
+    bool EditorServer::SetPreAuthLogCoalescing(const LogCoalescerOptions options)
+    {
+        if (_running)
+        {
+            ServerLog::Warn("The editor server's pre-auth log coalescing can't change while it is running");
+            return false;
+        }
+        // Clamped as the coalescer clamps them, so the getter says what a run uses
+        _preAuthLogOptions = LogCoalescer(options).Options();
+        return true;
+    }
+
+    uint64_t EditorServer::PreAuthLogLinesSuppressed() const
+    {
+        return _running && _preAuthLog.has_value() ? _preAuthLog->TotalSuppressed() : 0;
+    }
+
+    bool EditorServer::SetStopHook(StopHook hook)
+    {
+        if (_running)
+        {
+            ServerLog::Warn("The editor server's stop hook can't change while it is running");
+            return false;
+        }
+        _stopHook = std::move(hook);
+        return true;
+    }
+
+    bool EditorServer::AdmitPreAuthLine(const std::string_view kind)
+    {
+        // _preAuthLog is made by Start before any thread and only replaced by the next Start, after every join
+        if (!_preAuthLog.has_value())
+        {
+            return true;
+        }
+        LogCoalescer::Decision decision = _preAuthLog->Record(kind);
+        if (decision.closed.has_value())
+        {
+            PostLog(LogCoalescer::Describe(*decision.closed, _preAuthLog->Options().burst), true);
+        }
+        return decision.write;
+    }
+
+    void EditorServer::PostPreAuthLogSummaries(const bool all)
+    {
+        if (!_preAuthLog.has_value())
+        {
+            return;
+        }
+        const std::vector<LogCoalescer::Summary> summaries = all ? _preAuthLog->TakeAll() : _preAuthLog->TakeClosed();
+        for (const LogCoalescer::Summary &summary : summaries)
+        {
+            PostLog(LogCoalescer::Describe(summary, _preAuthLog->Options().burst), true);
+        }
+    }
+
+    size_t EditorServer::PreAuthSlotsInUse() const
+    {
+        // _slots is made by Start and never replaced while the server runs; before that there is nothing in use
+        return _running && _slots.has_value() ? _slots->InUse() : 0;
+    }
+
+    uint64_t EditorServer::PreAuthAdmittedConnections() const
+    {
+        return _running && _slots.has_value() ? _slots->TotalCounters().admitted : 0;
+    }
+
+    std::chrono::steady_clock::time_point EditorServer::ConnectionNow() const
+    {
+        return _connectionClock ? _connectionClock() : std::chrono::steady_clock::now();
+    }
+
+    void EditorServer::CountUnfinishedHello(const PeerAddress &peer)
+    {
+        if (!_rateLimiter.has_value())
+        {
+            return;
+        }
+        try
+        {
+            LogRateLimitOutcome(_rateLimiter->RecordUnfinishedHello(peer), {}, peer);
+        }
+        catch (...)
+        {
+            // A table that can't grow is not worth ending the connection loop for
+        }
     }
 
     std::expected<void, std::string> EditorServer::EnableTls(const std::filesystem::path &directory)
@@ -1984,7 +2575,7 @@ namespace N2Engine::Editor
     {
         if (_running)
         {
-            Logger::Warn("Whether the editor server stops on disconnect can't change while it is running");
+            ServerLog::Warn("Whether the editor server stops on disconnect can't change while it is running");
             return false;
         }
         _stopOnDisconnect = stop;
@@ -2024,7 +2615,29 @@ namespace N2Engine::Editor
 
     std::vector<std::string> EditorServer::Capabilities()
     {
-        return {};
+        return {"editorExtensions"};
+    }
+
+    bool EditorServer::EnableEditorExtensions(std::filesystem::path projectRoot)
+    {
+        if (_running || _playMode)
+        {
+            ServerLog::Warn("The editor server's editor extensions can't be enabled while it is running or playing");
+            return false;
+        }
+        _extensions = std::make_unique<ExtensionHost>(std::move(projectRoot));
+        // Loaded here, before any client: the extensions are read at host start and on ReloadEditorExtensions only
+        _extensions->Load();
+        _extensions->SetChangedCallback([this](const uint32_t uiRevision)
+        {
+            _events.Push("extensionsChanged", nlohmann::json{{"uiRevision", uiRevision}});
+        });
+        return true;
+    }
+
+    int EditorServer::ShutdownEditorExtensions(const std::chrono::milliseconds maxWait)
+    {
+        return _extensions ? _extensions->Shutdown(maxWait) : 0;
     }
 
     bool EditorServer::TokensMatch(std::string_view accessToken, std::string_view token)
@@ -2044,171 +2657,858 @@ namespace N2Engine::Editor
         return static_cast<CommandType>(commandType) == CommandType::Hello;
     }
 
+    void EditorServer::LogAdmissionSummary(const bool force)
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (!force && now - _lastAdmissionSummary < _admissionSummaryInterval)
+        {
+            return;
+        }
+        _lastAdmissionSummary = now;
+        if (!_slots.has_value())
+        {
+            return;
+        }
+        const PreAuthSlots::Counters slotCounts = _slots->TakeCounters();
+        uint64_t overRate = 0;
+        if (_handshakeBucket.has_value())
+        {
+            const TokenBucket::Counters total = _handshakeBucket->TotalCounters();
+            overRate = (total.refusedGlobal - _bucketReported.refusedGlobal) +
+                       (total.refusedAddress - _bucketReported.refusedAddress);
+            _bucketReported = total;
+        }
+        const uint64_t refused = slotCounts.refusedFull + slotCounts.refusedPerAddress + overRate;
+        if (refused == 0)
+        {
+            return;
+        }
+        // One line for all of them: a refused connection writes nothing of its own (a flood would otherwise fill the
+        // main thread's log queue, which has no bound)
+        PostLog(std::format("Pre-auth limits: closed {} connection(s) at accept without a word since the last report: {} "
+                            "with every slot taken, {} past an address's share of the slots, {} over the handshake rate",
+                            refused, slotCounts.refusedFull, slotCounts.refusedPerAddress, overRate),
+                true);
+    }
+
     void EditorServer::ServerLoop(int listenSocket)
     {
-        // A connection closed for its peer's backoff is not worth a line (nor the "Waiting" line it would bring back):
-        // the backoff's start was logged once
-        bool quiet = false;
+        // The acceptor. It never blocks on a client: it takes the connection off the listener, decides in microseconds
+        // whether it may have a slot, and hands it to a pre-auth worker. A connection refused here is closed at once and
+        // writes no log line of its own ("Waiting" is written once, and again when a session ends).
+        PostLog("Waiting for editor connection...");
         while (_running)
         {
-            if (!quiet)
-            {
-                PostLog("Waiting for editor connection...");
-            }
-            quiet = false;
-
             int clientSocket = NoSocket;
-            if (WaitUntilReady(listenSocket, false))
             {
-                clientSocket = static_cast<int>(accept(listenSocket, nullptr, nullptr));
+                // A Connection around the listener only to wait on it (the same slices and stop check as any wait, and the
+                // tokens file service every slice: this thread is the one that reloads it); it is never closed here. The
+                // wait ends after a second on the real clock, so the summary line below is written on time when quiet.
+                Connection listener(listenSocket, MakeConnectionEnv(EnvKind::Listener));
+                const auto sliceEnd = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+                if (listener.WaitUntilReady(false, sliceEnd))
+                {
+                    clientSocket = static_cast<int>(accept(listenSocket, nullptr, nullptr));
+                    if (clientSocket == NoSocket && _running)
+                    {
+                        PostLog("Accept failed: " + std::to_string(SOCKET_ERROR_CODE), true);
+                        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // don't spin on a broken listener
+                    }
+                }
+                else if (_running && std::chrono::steady_clock::now() < sliceEnd)
+                {
+                    // The wait failed before its time was up: the listener is broken
+                    PostLog("Waiting for a connection failed: " + std::to_string(SOCKET_ERROR_CODE), true);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
             }
+            LogAdmissionSummary(false);
+            PostPreAuthLogSummaries(false);
             if (clientSocket == NoSocket)
             {
-                if (_running)
-                {
-                    PostLog("Accept failed: " + std::to_string(SOCKET_ERROR_CODE), true);
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // don't spin on a broken listener
-                }
                 continue;
             }
 
-            // Who connected, before anything costly. A peer that is backed off for failed Hellos is closed right here: no
-            // TLS handshake, no Hello, nothing read from it. One with failures on record gets the shorter budget.
-            _peer = PeerAddress{};
+            // Nothing may escape this thread (that would terminate the host): a connection that can't be admitted (say, no
+            // memory for its job) is dropped, closed by its job, and the loop accepts the next
             try
             {
-                _peer = _peerAddressProvider ? _peerAddressProvider(clientSocket) : ReadSocketPeer(clientSocket);
+                AdmitAcceptedSocket(clientSocket);
             }
             catch (...)
             {
-                // An address nobody could read is Unknown, which is a peer like any other
+                PostLog("Dropping an editor connection after an unexpected error at accept", true);
             }
-            const std::string peerText = _peer.ToString();
-            std::chrono::milliseconds helloBudget = _helloTimeout;
-            if (_rateLimiter.has_value())
+        }
+        LogAdmissionSummary(true);
+        PostPreAuthLogSummaries(true);
+    }
+
+    void EditorServer::AdmitAcceptedSocket(const int clientSocket)
+    {
+        // The connection is somebody's to close from here on: whichever way this iteration ends, the job (and its slot,
+        // once it has one) goes out of scope and closes the socket before it frees the slot
+        PreAuthJob job;
+        job.connection.reset(new Connection(clientSocket, ConnectionEnv{}));
+        Connection &connection = *job.connection;
+
+        // Every send and recv on the connection must be able to give way to a deadline: a blocking send() of a large
+        // frame to a client that isn't reading would otherwise sit in the kernel for ever, past any deadline
+        if (!SetSocketNonBlocking(clientSocket))
+        {
+            PostLog("Dropping an editor connection: its socket couldn't be made non-blocking (error " +
+                        std::to_string(SOCKET_ERROR_CODE) + ")",
+                    true);
+            return;
+        }
+        if (_acceptedSocketHook)
+        {
+            _acceptedSocketHook(clientSocket);
+        }
+
+        // Who connected, before anything costly. A peer that is backed off for failed Hellos is closed right here: no
+        // TLS handshake, no Hello, nothing read from it. One with failures on record gets the shorter budget.
+        try
+        {
+            connection.peer = _peerAddressProvider ? _peerAddressProvider(clientSocket) : ReadSocketPeer(clientSocket);
+        }
+        catch (...)
+        {
+            // An address nobody could read is Unknown, which is a peer like any other
+        }
+        std::chrono::milliseconds helloBudget = _helloTimeout;
+        std::chrono::milliseconds handshakeBudget = _tlsHandshakeTimeout;
+        if (_rateLimiter.has_value())
+        {
+            const RateLimiter::Admission admission = _rateLimiter->AdmitConnection(connection.peer);
+            if (!admission.allowed)
             {
-                const RateLimiter::Admission admission = _rateLimiter->AdmitConnection(_peer);
-                if (!admission.allowed)
+                ++_rateLimitedConnections;
+                return;
+            }
+            if (admission.suppressed > 0)
+            {
+                PostLog(std::format("Rate limit: {} may connect again; {} connection(s) were closed during its backoff",
+                                    RateLimitSubject(connection.peer), admission.suppressed));
+            }
+            if (admission.priorOffender)
+            {
+                helloBudget = std::min(helloBudget, _rateLimiter->Policy().priorOffenderBudget);
+                handshakeBudget = std::min(handshakeBudget, _rateLimiter->Policy().priorOffenderBudget);
+            }
+        }
+
+        // A pre-auth slot, or the connection is closed at once (no TLS, no line: it is counted for the summary). The
+        // slot is taken before the handshake token, so a refusal for lack of a slot spends none of the rate budget.
+        job.slot = _slots->TryAcquire(connection.peer);
+        if (!job.slot)
+        {
+            ++_preAuthRefusedConnections;
+            return;
+        }
+        // The handshake rate: the excess is closed before TLS (the slot goes back with the connection)
+        if (_handshakeBucket.has_value() && !_handshakeBucket->TryTake(connection.peer))
+        {
+            ++_preAuthRefusedConnections;
+            return;
+        }
+
+        connection.env = MakeConnectionEnv(EnvKind::PreAuth, connection.peer.ToString());
+        job.helloBudget = helloBudget;
+        job.handshakeBudget = handshakeBudget;
+        // The tokens file is looked at before the connection's Hello is checked, so a token revoked since the last
+        // connection can't be used (this thread is the one that reloads)
+        ReloadTokens(false);
+
+        // At most one job per slot, so the queue holds at most as many as there are workers
+        {
+            const std::lock_guard lock(_jobMutex);
+            _jobs.push_back(std::move(job));
+        }
+        _jobCv.notify_one();
+    }
+
+    void EditorServer::PreAuthWorkerLoop()
+    {
+        while (_running)
+        {
+            PreAuthJob job;
+            {
+                std::unique_lock lock(_jobMutex);
+                _jobCv.wait_for(lock, Connection::PollInterval, [this] { return !_jobs.empty() || !_running; });
+                // Stopping: what is still queued is closed by Stop, after the joins
+                if (!_running)
                 {
-                    ++_rateLimitedConnections;
-                    CLOSE_SOCKET(clientSocket);
-                    quiet = true;
+                    break;
+                }
+                if (_jobs.empty())
+                {
                     continue;
                 }
-                if (admission.suppressed > 0)
-                {
-                    PostLog(std::format("Rate limit: {} may connect again; {} connection(s) were closed during its backoff",
-                                        RateLimitSubject(_peer), admission.suppressed));
-                }
-                if (admission.priorOffender)
-                {
-                    helloBudget = std::min(helloBudget, _rateLimiter->Policy().priorOffenderBudget);
-                }
+                job = std::move(_jobs.front());
+                _jobs.pop_front();
             }
-
-            // With TLS the connection is secured first, inside the Hello deadline (which counts from here). One that
-            // can't be is closed without ever counting as a client or a session, and the loop accepts the next.
-            const auto connectedAt = std::chrono::steady_clock::now();
-            bool secured = false;
             try
             {
-                secured = BeginTls(clientSocket, connectedAt + helloBudget, helloBudget);
+                ServePreAuth(job);
             }
             catch (...)
             {
-                PostLog("Dropping an editor connection after an unexpected error in its TLS handshake", true);
+                // e.g. bad_alloc; nothing may escape this thread (that would terminate the host)
+                PostLog("Dropping an editor connection after an unexpected error before its Hello", true);
             }
-            if (!secured)
+            // The job goes out of scope here: its connection is closed (unless it was handed on), then its slot is freed
+        }
+    }
+
+    void EditorServer::ServePreAuth(PreAuthJob &job)
+    {
+        Connection &connection = *job.connection;
+        const std::string peerText = connection.peer.ToString();
+
+        // With TLS the connection is secured first, inside its own handshake deadline (which counts from here: an
+        // unoptimised build's handshake can take longer than the Hello budget). One that can't be is closed without
+        // ever counting as a client or a session.
+        const auto acceptedAt = ConnectionNow();
+        connection.acceptedAt = acceptedAt;
+        bool secured = false;
+        try
+        {
+            secured = BeginTls(connection, acceptedAt + job.handshakeBudget, job.handshakeBudget);
+        }
+        catch (...)
+        {
+            PostLog("Dropping an editor connection after an unexpected error in its TLS handshake", true);
+        }
+        if (!secured)
+        {
+            // A handshake that failed or stalled is a connection that never got to Hello: a failure for its address
+            // (a stopping server's own abort is not the peer's doing). Counted before the socket is closed.
+            if (_running)
             {
-                EndTls();
-                CLOSE_SOCKET(clientSocket);
-                continue;
+                CountUnfinishedHello(connection.peer);
             }
+            return;
+        }
+        // The Hello budget (and, without a token, the session) starts once the connection is ready for it: at accept
+        // without TLS, at the end of the handshake with it
+        connection.connectedAt = connection.tls ? ConnectionNow() : acceptedAt;
+        connection.helloBudget = job.helloBudget;
 
-            // A new connection has no identity (its Hello gives it one). The tokens file is looked at before that Hello,
-            // so a token revoked since the last connection can't be used.
-            _closeConnection.store(false);
-            ClearIdentity();
-            ReloadTokens(false);
+        std::optional<std::vector<uint8_t>> hello;
+        // Without a token there is no Hello: the client is an admin with no name (what its session's identity will be)
+        SessionIdentity candidate{std::string{}, TokenRole::Admin};
+        bool errorCodes = false;
+        if (RequiresAccessToken())
+        {
+            VerifiedHello verified;
+            if (!ReadAndVerifyHello(connection, peerText, verified))
+            {
+                return;
+            }
+            candidate = verified.identity;
+            errorCodes = verified.errorCodes;
+            hello = std::move(verified.payload);
+        }
+        (void)OfferToSession(job, std::move(hello), candidate, errorCodes);
+    }
 
-            SetPeerText(peerText);
-            PostLog("Editor connected peer=" + peerText);
-            _clientConnected = true;
-            bool sessionOpened = false;
+    bool EditorServer::ReadAndVerifyHello(Connection &connection, const std::string_view peerText,
+                                          VerifiedHello &verified)
+    {
+        // The pre-Hello part of the request loop (HandleClient), for the one frame a connection may send before it has a
+        // session: the same budget, payload cap, refusals, failure accounting and log lines. Everything that fails is
+        // counted for the peer's address (a connection that ends without a good Hello held a worker for its budget) before
+        // the socket is closed, which the caller does by dropping the job.
+        const auto deadline = connection.connectedAt + connection.helloBudget;
+        const std::string peerSuffix = " peer=" + std::string(peerText);
+        // Every line here is about a connection that never authenticated, so each goes through the coalescer: the first
+        // few of a kind in a window are written as before, the rest only counted (a loop of connect + garbage must not
+        // write a line per connection into the main thread's queue, which has no bound)
+        const auto closeUnauthorized = [&](const std::string &reason)
+        {
+            PostLog("Closing an editor connection that hasn't sent a successful Hello: " + reason + peerSuffix, true);
+        };
+        const auto logIfDeadlinePassed = [&]
+        {
+            if (_running && ConnectionNow() >= deadline && AdmitPreAuthLine(PreAuthHelloTimedOut))
+            {
+                closeUnauthorized(std::format("no Hello within {} ms", connection.helloBudget.count()));
+            }
+        };
+        const auto countUnfinished = [&]
+        {
+            if (_running)
+            {
+                CountUnfinishedHello(connection.peer);
+            }
+        };
+
+        uint8_t cmdType;
+        uint32_t payloadLength;
+        if (!connection.Receive(&cmdType, 1, deadline) || !connection.Receive(&payloadLength, sizeof(payloadLength), deadline))
+        {
+            logIfDeadlinePassed();
+            countUnfinished();
+            return false;
+        }
+        // The length is client-supplied, so check it before allocating. The oversized payload is still in the stream, so
+        // the connection can't be resynchronized and is closed.
+        if (payloadLength > MaxPayloadBytesBeforeHello)
+        {
+            const std::string message = std::format("Payload of {} bytes exceeds the {} byte limit before Hello",
+                                                    payloadLength, MaxPayloadBytesBeforeHello);
+            BufferWriter response;
+            WriteError(response, message);
+            connection.Send(response.Data().data(), response.Size());
+            if (AdmitPreAuthLine(PreAuthOversized))
+            {
+                PostLog(message, true);
+            }
+            countUnfinished();
+            return false;
+        }
+        std::vector<uint8_t> payload(payloadLength);
+        if (payloadLength > 0 && !connection.Receive(payload.data(), payloadLength, deadline))
+        {
+            logIfDeadlinePassed();
+            countUnfinished();
+            return false;
+        }
+        // Nothing but Hello (Shutdown included) is answered before a successful Hello
+        if (!IsAllowedBeforeHello(cmdType))
+        {
+            BufferWriter response;
+            WriteError(response, HelloRequiredError);
+            connection.Send(response.Data().data(), response.Size());
+            if (AdmitPreAuthLine(PreAuthNotHello))
+            {
+                closeUnauthorized(std::format("it sent command 0x{:X}", cmdType));
+            }
+            countUnfinished();
+            return false;
+        }
+
+        // The user the Hello names is read here, and the token is checked BEFORE the user's backoff applies: a correct
+        // token always gets in (so an attacker who guesses a user's name cannot lock that user out), while a wrong one is
+        // still refused, counted and backs off further.
+        const bool rateLimited = _rateLimiter.has_value();
+        std::optional<std::string> helloUser;
+        if (rateLimited && HasTokensFile())
+        {
+            helloUser = UserNamedByHello(payload);
+            if (helloUser.has_value() && _rateLimiter->IsUserBackedOff(*helloUser) && !HelloTokenIsValid(payload))
+            {
+                LogRateLimitOutcome(_rateLimiter->RecordFailure(connection.peer, std::string_view(*helloUser)), *helloUser,
+                                    connection.peer);
+                BufferWriter response;
+                WriteError(response, RateLimitedError);
+                connection.Send(response.Data().data(), response.Size());
+                return false;
+            }
+        }
+
+        // The token and the protocol's major version, on this thread: HandleHello checks the same payload again on the
+        // main thread when the session replays it
+        std::optional<HelloCmd> cmd;
+        std::string failure;
+        try
+        {
+            BufferReader reader(payload);
+            cmd.emplace(HelloCmd::Deserialize(reader));
+        }
+        catch (const std::exception &e)
+        {
+            failure = e.what();
+        }
+        catch (...)
+        {
+            failure = "unknown exception";
+        }
+        if (!cmd.has_value())
+        {
+            // A Hello that wouldn't even parse: it held a worker and proved nothing, so it counts like an unfinished one,
+            // before its answer is sent (the answer is the one a failing command gets). Its line is written (and waited
+            // for) only when the coalescer lets it through; a flood of them neither writes nor waits.
+            const bool logged = AdmitPreAuthLine(PreAuthUnparsable);
+            if (logged)
+            {
+                PostLogAndWait(std::format("Command 0x{:X} failed: {}", cmdType, failure), true);
+            }
+            countUnfinished();
+            // The parser's text is in the log line above; the peer has not proved who it is
+            BufferWriter response;
+            WriteError(response, "Command failed: the Hello could not be read");
+            connection.Send(response.Data().data(), response.Size());
+            if (logged)
+            {
+                closeUnauthorized("its Hello was refused");
+            }
+            return false;
+        }
+
+        HelloEvaluation evaluation = EvaluateHello(*cmd, peerSuffix);
+        if (evaluation.result == HelloEvaluation::Result::Accepted)
+        {
+            verified.payload = std::move(payload);
+            verified.identity = SessionIdentity{evaluation.identity.user, evaluation.identity.role};
+            verified.errorCodes = cmd->errorCodes;
+            return true;
+        }
+        // The warning precedes the refusal (waited for, bounded) when the coalescer lets it through, as before; past the
+        // kind's burst the refusal goes out at once and the line is only counted
+        const bool logged = AdmitPreAuthLine(evaluation.result == HelloEvaluation::Result::TokenRefused
+                                                 ? PreAuthTokenRefused
+                                                 : PreAuthVersionRefused);
+        if (logged)
+        {
+            PostLogAndWait(evaluation.warning, true);
+        }
+        // The outcome is counted before the answer is sent, so a client that sees the refusal and connects again meets
+        // the backoff it earned. A good token and an old client (the version) is not a failure of the address.
+        if (rateLimited && evaluation.result == HelloEvaluation::Result::TokenRefused)
+        {
+            const std::optional<std::string_view> named =
+                helloUser.has_value() ? std::optional<std::string_view>(*helloUser) : std::nullopt;
+            LogRateLimitOutcome(_rateLimiter->RecordFailure(connection.peer, named), helloUser.value_or(std::string{}),
+                                connection.peer);
+        }
+        connection.Send(evaluation.refusal.data(), evaluation.refusal.size());
+        if (logged)
+        {
+            closeUnauthorized("its Hello was refused");
+        }
+        return false;
+    }
+
+    std::string EditorServer::BusyMessage(const std::optional<TokenRole> holder)
+    {
+        if (!holder.has_value())
+        {
+            return BusyError;
+        }
+        return std::format("The host is serving another session (a {} session); try again later", TokenRoleName(*holder));
+    }
+
+    void EditorServer::EndActiveSessionLocked(ConnectionPtr &dropped)
+    {
+        if (_handoff.has_value())
+        {
+            // Handed over but not taken by the session thread yet: it never ran, so there is nothing to clean up. The
+            // connection is closed by the caller, after it has let go of the lock.
+            _arbiter->End(_handoff->sessionId);
+            dropped = std::move(_handoff->connection);
+            _handoff.reset();
+        }
+        else if (_sessionRunning)
+        {
+            // The session thread leaves at its next wait (at most one poll interval), or when the command it has in flight
+            // on the main thread finishes, and then runs the cleanup that every end of a session runs. The request is set
+            // under the lock that clears _sessionRunning, and the thread clears it when it takes the next hand-off, so it
+            // can neither be lost nor end a later session.
+            _sessionReplaced.store(true);
+            _closeConnection.store(true);
+        }
+    }
+
+    void EditorServer::NoteSessionIdentity(const Connection &connection)
+    {
+        if (connection.sessionId == 0 || !_arbiter.has_value())
+        {
+            return;
+        }
+        const ConnectionIdentity identity = CurrentIdentity();
+        _arbiter->UpdateIdentity(connection.sessionId, SessionIdentity{identity.user, identity.role});
+    }
+
+    bool EditorServer::OfferToSession(PreAuthJob &job, std::optional<std::vector<uint8_t>> hello,
+                                      const SessionIdentity &candidate, const bool errorCodes)
+    {
+        if (_preHandoffHook)
+        {
+            _preHandoffHook();
+        }
+        Connection &connection = *job.connection;
+        const std::string peerText = connection.peer.ToString();
+        const bool noTokenHost = _arbiter->NoTokenHost();
+        const auto busyUntil = std::chrono::steady_clock::now() + _busyGrace;
+        const auto userText = [](const SessionIdentity &who) { return who.user.empty() ? std::string("-") : who.user; };
+
+        enum class Outcome : uint8_t
+        {
+            Stopping,
+            HungUp,
+            Busy,
+            TimedOut,
+            Superseded,
+        };
+        Outcome outcome = Outcome::Stopping;
+        // Whom the Busy answer says holds the host
+        std::optional<SessionIdentity> holder;
+        // The claim this offer holds (0: none): it is the one candidate told to wait for the active session to end
+        uint64_t myClaim = 0;
+        std::chrono::steady_clock::time_point claimUntil{};
+        // A connection taken out of the hand-off slot is closed here, after the lock is let go (declared before the lock)
+        ConnectionPtr dropped;
+
+        std::unique_lock lock(_sessionMutex);
+        while (_running)
+        {
+            if (myClaim != 0 && _claimId != myClaim)
+            {
+                // A newer candidate that outranks this one (or is the same user) has claimed the host since
+                outcome = Outcome::Superseded;
+                break;
+            }
+            // Free means no session running and nobody's connection in the slot: the session thread takes the slot and
+            // sets _sessionRunning under this same mutex, and ends a session and tells the arbiter under it too, so there
+            // is no moment with neither
+            const bool free = !_sessionRunning && !_handoff.has_value();
+            const std::optional<SessionIdentity> active = _arbiter->Active();
+            if (myClaim != 0 || (!active.has_value() && _claimId == 0))
+            {
+                if (free)
+                {
+                    const SessionArbiter::BeginResult begun = _arbiter->Begin(candidate);
+                    if (begun.sessionId != 0)
+                    {
+                        _handoff.emplace(HandOff{std::move(job.connection), std::move(hello), begun.sessionId});
+                        if (myClaim != 0)
+                        {
+                            _claimId = 0;
+                        }
+                        lock.unlock();
+                        ++_sessionHandoffs;
+                        // The connection is no longer pre-auth: its slot goes back (the job's connection is empty now)
+                        job.slot.Release();
+                        _sessionCv.notify_all();
+                        return true;
+                    }
+                }
+                else if (myClaim != 0 && std::chrono::steady_clock::now() >= claimUntil)
+                {
+                    // The old session did not end in time (a stuck write, a command that does not finish): it has been
+                    // asked to end and still will, but this candidate does not wait for it any longer
+                    outcome = Outcome::TimedOut;
+                    holder = active;
+                    break;
+                }
+            }
+            else
+            {
+                // Somebody is active, or has claimed the host and not got it yet: the candidate is judged against whoever
+                // would hold the host next
+                const std::optional<SessionIdentity> effective =
+                    _claimId != 0 ? std::optional<SessionIdentity>(_claim) : active;
+                const ArbiterVerdict verdict = SessionArbiter::Decide(effective, candidate, noTokenHost);
+                if ((verdict.decision == ArbiterDecision::Takeover || verdict.decision == ArbiterDecision::Preempt) &&
+                    _takeoverWait > std::chrono::milliseconds::zero())
+                {
+                    if (connection.PeerHasHungUp())
+                    {
+                        // Gone already (a port probe): it must not end the active session
+                        outcome = Outcome::HungUp;
+                        break;
+                    }
+                    myClaim = ++_claimCounter;
+                    if (_claimCounter == 0)
+                    {
+                        myClaim = ++_claimCounter;
+                    }
+                    _claimId = myClaim;
+                    _claim = candidate;
+                    claimUntil = std::chrono::steady_clock::now() + _takeoverWait;
+                    if (verdict.decision == ArbiterDecision::Takeover)
+                    {
+                        ++_sessionTakeovers;
+                        PostLog(noTokenHost
+                                    ? std::format("Session takeover: the newest connection takes over (the host has no "
+                                                  "access token) peer={}",
+                                                  peerText)
+                                    : std::format("Session takeover: the session of user={} role={} is closed for a newer "
+                                                  "connection of the same user peer={}",
+                                                  userText(*effective), TokenRoleName(effective->role), peerText));
+                    }
+                    else
+                    {
+                        ++_sessionPreemptions;
+                        PostLog(std::format("Session preemption: the session of user={} role={} is closed for a client "
+                                            "with a higher role (user={} role={}) peer={}",
+                                            userText(*effective), TokenRoleName(effective->role), userText(candidate),
+                                            TokenRoleName(candidate.role), peerText));
+                    }
+                    EndActiveSessionLocked(dropped);
+                    continue; // look again at once: the session may already be gone
+                }
+                // Busy: it waits for the session to end by itself (a session whose client just went away is still ending
+                // for a moment) and is turned away when the grace is over
+                holder = effective;
+                if (std::chrono::steady_clock::now() >= busyUntil)
+                {
+                    outcome = Outcome::Busy;
+                    break;
+                }
+            }
+            _sessionCv.wait_for(lock, Connection::PollInterval);
+            if (connection.PeerHasHungUp())
+            {
+                outcome = Outcome::HungUp;
+                break;
+            }
+        }
+        if (myClaim != 0 && _claimId == myClaim)
+        {
+            _claimId = 0;
+            // Nobody was handed the host: the session that was closed for this claim is not "replaced", so a host that
+            // stops on disconnect still stops when it ends
+            _sessionReplaced.store(false);
+        }
+        lock.unlock();
+
+        if (outcome == Outcome::Stopping)
+        {
+            return false; // stopping: the job closes the connection
+        }
+        if (outcome == Outcome::HungUp)
+        {
+            // Nothing is left to serve: the slot goes back with the connection, instead of being held until the session
+            // it was waiting for ends
+            PostLog("A client waiting for the session hung up; its connection is closed peer=" + peerText);
+            return false;
+        }
+
+        ++_busyRefusals;
+        const std::string text =
+            BusyMessage(holder.has_value() && outcome != Outcome::Superseded ? std::optional<TokenRole>(holder->role)
+                                                                             : std::nullopt);
+        BufferWriter response;
+        if (errorCodes)
+        {
+            WriteErrorCoded(response, text, ErrorCodeBusy);
+        }
+        else
+        {
+            WriteError(response, text);
+        }
+        connection.Send(response.Data().data(), response.Size());
+        const char *why = outcome == Outcome::Busy       ? "its role does not outrank the session's"
+                          : outcome == Outcome::TimedOut ? "the session it was to take over did not end in time"
+                                                         : "a newer client took the host first";
+        PostLog(std::format("Turned away an authenticated client: the host is serving another session ({}) peer={}", why,
+                            peerText));
+        return false;
+    }
+
+    void EditorServer::SessionLoop()
+    {
+        while (_running)
+        {
+            std::optional<HandOff> work;
+            {
+                std::unique_lock lock(_sessionMutex);
+                _sessionCv.wait_for(lock, Connection::PollInterval, [this] { return _handoff.has_value() || !_running; });
+                // Stopping: a connection still in the slot is closed by Stop, after the joins
+                if (!_running)
+                {
+                    break;
+                }
+                if (!_handoff.has_value())
+                {
+                    continue;
+                }
+                work.emplace(std::move(*_handoff));
+                _handoff.reset();
+                // A close request left over from the last session (made after it had stopped looking) must not end this
+                // one; one made from now on (the lock is held until _sessionRunning is set) is meant for it
+                _closeConnection.store(false);
+                _sessionReplaced.store(false);
+                _sessionRunning = true;
+                work->connection->sessionId = work->sessionId;
+            }
             try
             {
-                HandleClient(clientSocket, sessionOpened, connectedAt, helloBudget);
+                RunSession(*work);
             }
             catch (...)
             {
                 // e.g. bad_alloc; nothing may escape this thread (that would terminate the host)
                 PostLog("Dropping the editor connection after an unexpected error", true);
             }
-
-            EndTls();
-            CLOSE_SOCKET(clientSocket);
-            _clientConnected = false;
-            ClearIdentity();
-            _closeConnection.store(false);
-            PostLog("Editor disconnected peer=" + peerText);
-            SetPeerText({});
-            // A group it left open becomes a step (queued: the history is main-thread state)
-            (void)_commands.Enqueue([this]
+            const uint64_t endedSession = work->sessionId;
+            work.reset(); // closes the connection if RunSession didn't
             {
-                CloseEditGroups();
-                // A play host's keys the client held go up with it (a key held when it crashed would stay down)
-                _keys.ReleaseAll();
-                // A client that went away may have crashed: the last edits are written, however recent the autosave
-                FlushAutosave(true);
-                return CommandQueue::Response{};
-            });
-
-            // A Shutdown (or Stop) has already cleared _running; this is the client going away on its own
-            if (_stopOnDisconnect && sessionOpened && _running)
-            {
-                PostLog("Stopping the editor server: the client's session ended, and it stops on disconnect");
-                _running = false;
+                // The arbiter and the flag change together: an offer that sees the host free sees nobody active
+                const std::lock_guard lock(_sessionMutex);
+                _arbiter->End(endedSession);
+                _sessionRunning = false;
             }
+            _sessionCv.notify_all();
         }
     }
 
-    bool EditorServer::BeginTls(const int socket, const std::chrono::steady_clock::time_point deadline,
+    void EditorServer::RunSession(HandOff &handOff)
+    {
+        Connection &connection = *handOff.connection;
+        const std::string peerText = connection.peer.ToString();
+
+        // From here the connection is the session's: a reload that takes its rights away closes it, and its writes have
+        // the full budget
+        connection.env = MakeConnectionEnv(EnvKind::Session, peerText);
+        if (!RequiresAccessToken())
+        {
+            // Without a token the session (and its idle and age deadlines) starts when it gets the session thread; with
+            // one, at its first good Hello
+            connection.connectedAt = ConnectionNow();
+        }
+
+        // Half-open connections (a client whose machine lost power, a NAT that dropped the mapping) are noticed by the
+        // kernel, whatever the idle timeout is; the idle timeout and a takeover are the other ways out
+        if (!Connection::EnableKeepAlive(connection.socket, Connection::KeepAliveIdle, Connection::KeepAliveInterval,
+                                         Connection::KeepAliveCount))
+        {
+            PostLog("Couldn't set TCP keepalive on the session's socket: a half-open connection is noticed only by the "
+                    "idle timeout peer=" + peerText,
+                    true);
+        }
+        if (_sessionStartHook)
+        {
+            _sessionStartHook(connection.socket);
+        }
+
+        // A new session has no identity (its Hello gives it one)
+        BeginSessionState();
+        SetPeerText(peerText);
+        // Only a loopback peer can be local (IsLocalClient); one whose address is unknown is not loopback
+        _sessionRemote.store(!connection.peer.IsLoopback());
+        PostLog("Editor connected peer=" + peerText);
+        _clientConnected = true;
+        bool sessionOpened = false;
+        _activeConnection.store(&connection);
+        try
+        {
+            HandleClient(connection, sessionOpened, std::move(handOff.hello));
+        }
+        catch (...)
+        {
+            // e.g. bad_alloc; nothing may escape this thread (that would terminate the host)
+            PostLog("Dropping the editor connection after an unexpected error", true);
+        }
+        _activeConnection.store(nullptr);
+        if (_sessionEndHook)
+        {
+            _sessionEndHook();
+        }
+
+        handOff.connection.reset(); // its TLS session first, then the socket
+        _clientConnected = false;
+        EndSessionState();
+        PostLog("Editor disconnected peer=" + peerText);
+        SetPeerText({});
+        _sessionRemote.store(false);
+        // A group it left open becomes a step (queued: the history is main-thread state). Enqueued before the session is
+        // marked ended, so the next session's Hello (replayed through the same queue) runs after it.
+        (void)_commands.Enqueue([this]
+        {
+            CloseEditGroups();
+            // A play host's keys the client held go up with it (a key held when it crashed would stay down)
+            _keys.ReleaseAll();
+            // A client that went away may have crashed: the last edits are written, however recent the autosave
+            FlushAutosave(true);
+            return CommandQueue::Response{};
+        });
+
+        // A Shutdown (or Stop) has already cleared _running; this is the client going away on its own. A session that was
+        // closed for a takeover or a preemption did not go away: its successor is waiting for the host.
+        if (_stopOnDisconnect && sessionOpened && _running && !_sessionReplaced.load())
+        {
+            PostLog("Stopping the editor server: the client's session ended, and it stops on disconnect");
+            _running = false;
+        }
+        else if (_running)
+        {
+            PostLog("Waiting for editor connection...");
+        }
+    }
+
+    ConnectionEnv EditorServer::MakeConnectionEnv(const EnvKind kind, std::string peerText)
+    {
+        ConnectionEnv env;
+        env.running = &_running;
+        // Only the session is ever asked to close by a tokens reload; the listener's and the workers' flag stays clear
+        env.closeRequested = kind == EnvKind::Session ? &_closeConnection : &_neverClose;
+        if (kind == EnvKind::Listener)
+        {
+            // The real steady clock (the listener has no deadline of the connection clock's), and the tokens file is
+            // serviced every slice: the only thread that does
+            env.beforeWait = [this] { ServiceTokens(); };
+        }
+        else
+        {
+            env.now = [this] { return ConnectionNow(); };
+        }
+        // A worker only ever writes one small Error: a client that doesn't read it must not hold the worker for the
+        // session's write budget
+        env.writeTimeout = kind == EnvKind::PreAuth ? std::min(_writeTimeout, _helloTimeout) : _writeTimeout;
+        env.writeStalled = [this, kind, timeout = env.writeTimeout, peerText = std::move(peerText)]
+        {
+            // A pre-auth connection's stalled write is a pre-auth failure like the others (coalesced); the session's is not
+            if (kind == EnvKind::PreAuth && !AdmitPreAuthLine(PreAuthWriteStalled))
+            {
+                return;
+            }
+            PostLog(std::format("Closing an editor connection: no write progress for {} ms (the write timeout), the "
+                                "client isn't reading{}",
+                                timeout.count(), peerText.empty() ? std::string{} : " peer=" + peerText),
+                    true);
+        };
+        return env;
+    }
+
+    bool EditorServer::BeginTls(Connection &connection, const std::chrono::steady_clock::time_point deadline,
                                 const std::chrono::milliseconds budget)
     {
         if (!_tlsServer)
         {
             return true;
         }
-        _tlsSession = _tlsServer->NewSession(socket);
-        if (!_tlsSession)
+        connection.tls = _tlsServer->NewSession(connection.socket);
+        if (!connection.tls)
         {
-            PostLog("Closing an editor connection: its TLS session couldn't be started peer=" + _peer.ToString(), true);
+            // Here and below: lines about a connection that never authenticated go through the coalescer
+            if (AdmitPreAuthLine(PreAuthTlsStartFailed))
+            {
+                PostLog("Closing an editor connection: its TLS session couldn't be started peer=" +
+                            connection.peer.ToString(),
+                        true);
+            }
             return false;
         }
-        _tlsSessionSocket = socket;
 
         // Non-blocking steps, waiting on the socket between them (as every read and write here does), so a client that
         // stalls costs this thread no more than the deadline and Stop() is still noticed
         for (;;)
         {
-            const TlsStep step = _tlsSession->Handshake();
+            const TlsStep step = connection.tls->Handshake();
             if (step == TlsStep::Done)
             {
                 return true;
             }
             if (step == TlsStep::Failed)
             {
-                PostLog("Closing an editor connection: its TLS handshake failed: " + _tlsSession->LastError() +
-                            " peer=" + _peer.ToString(),
-                        true);
+                if (AdmitPreAuthLine(PreAuthTlsFailed))
+                {
+                    PostLog("Closing an editor connection: its TLS handshake failed: " + connection.tls->LastError() +
+                                " peer=" + connection.peer.ToString(),
+                            true);
+                }
                 return false;
             }
-            if (!WaitUntilReady(socket, step == TlsStep::WantWrite, deadline))
+            if (!connection.WaitUntilReady(step == TlsStep::WantWrite, deadline))
             {
-                if (_running)
+                if (_running && AdmitPreAuthLine(PreAuthTlsTimedOut))
                 {
                     PostLog(std::format("Closing an editor connection: its TLS handshake didn't finish within {} ms peer={}",
-                                        budget.count(), _peer.ToString()),
+                                        budget.count(), connection.peer.ToString()),
                             true);
                 }
                 return false;
@@ -2216,86 +3516,163 @@ namespace N2Engine::Editor
         }
     }
 
-    void EditorServer::EndTls()
+    void EditorServer::HandleClient(Connection &connection, bool &sessionOpened,
+                                    std::optional<std::vector<uint8_t>> helloReplay)
     {
-        if (_tlsSession)
-        {
-            _tlsSession->Close();
-        }
-        _tlsSession.reset();
-        _tlsSessionSocket = NoSocket;
-    }
-
-    void EditorServer::HandleClient(int clientSocket, bool &sessionOpened,
-                                    const std::chrono::steady_clock::time_point connectedAt,
-                                    const std::chrono::milliseconds helloBudget)
-    {
+        const auto connectedAt = connection.connectedAt;
+        const auto helloBudget = connection.helloBudget;
         // This connection's session: whether its last Hello succeeded. A new connection starts without one, so a
         // client that reconnects must send Hello again.
         bool helloAccepted = false;
         // A new connection hasn't asked for ErrorCoded: its Hello does (HandleHello)
         _clientErrorCodes = false;
-        // With an access token, a connection that hasn't succeeded a Hello must not hold the (one-at-a-time) server:
+        // With an access token, a connection that hasn't succeeded a Hello must not hold the session thread:
         // it has until this deadline to do so, and is closed after a refused command or a failed Hello
         const bool gated = RequiresAccessToken();
         // Without a token every connection is a session (for SetStopOnDisconnect); with one, from its first good Hello
         sessionOpened = !gated;
         const auto helloDeadline = connectedAt + helloBudget;
-        const auto deadline = [&]() -> std::optional<std::chrono::steady_clock::time_point>
+        // After that the session has the idle and maximum-age deadlines (0 is off for both). The age counts from the
+        // session's start: accept without a token, the first good Hello with one (a later Hello doesn't restart it).
+        // A connection is idle from when it starts waiting for its next request, so the time a command takes to run
+        // and its response to send isn't the client's.
+        auto sessionStart = connectedAt;
+        auto idleSince = connectedAt;
+        // Whether a Hello was run on this connection: a wrong token was counted when it was refused, and a refusal for
+        // anything else (the protocol version, a user in backoff) is not a failure of the peer's address
+        bool helloRun = false;
+
+        enum class Limit : uint8_t
+        {
+            Hello,
+            Idle,
+            Session,
+        };
+        struct WaitLimit
+        {
+            std::chrono::steady_clock::time_point at;
+            Limit which;
+        };
+        const auto currentLimit = [&]() -> std::optional<WaitLimit>
         {
             if (gated && !helloAccepted)
-                return helloDeadline;
-            return std::nullopt;
+                return WaitLimit{helloDeadline, Limit::Hello};
+            std::optional<WaitLimit> found;
+            if (_idleTimeout > std::chrono::milliseconds::zero())
+                found = WaitLimit{idleSince + _idleTimeout, Limit::Idle};
+            if (_maxSessionAge > std::chrono::milliseconds::zero())
+            {
+                const auto end = sessionStart + _maxSessionAge;
+                if (!found.has_value() || end < found->at)
+                    found = WaitLimit{end, Limit::Session};
+            }
+            return found;
         };
         const auto closeUnauthorized = [this](const std::string &reason)
         {
             PostLog("Closing an editor connection that hasn't sent a successful Hello: " + reason + PeerSuffix(), true);
         };
-        const auto logIfHelloTimedOut = [&]
+        // A read that failed at a deadline says which one (once: the connection closes right after); a peer that closed
+        // or an error isn't a deadline, whatever the clock says a moment later
+        const auto logIfLimitPassed = [&](const std::optional<WaitLimit> &waitedOn)
         {
-            if (deadline().has_value() && _running && std::chrono::steady_clock::now() >= helloDeadline)
+            if (!waitedOn.has_value() || !_running || ConnectionNow() < waitedOn->at)
+                return;
+            switch (waitedOn->which)
+            {
+            case Limit::Hello:
                 closeUnauthorized(std::format("no Hello within {} ms", helloBudget.count()));
+                break;
+            case Limit::Idle:
+                PostLog(std::format("Closing an editor connection: no request for {} ms (the idle timeout){}",
+                                    _idleTimeout.count(), PeerSuffix()),
+                        true);
+                break;
+            case Limit::Session:
+                PostLog(std::format("Closing an editor connection: its session reached the maximum age of {} ms{}",
+                                    _maxSessionAge.count(), PeerSuffix()),
+                        true);
+                break;
+            }
         };
+
+        // However this connection ends, one that never got a Hello through (and wasn't counted for a wrong token) is a
+        // failed Hello for its address: it held the server for its budget, closed early, sent another command or an
+        // oversized frame. Runs on every way out of this function, an exception included.
+        class CountAtExit
+        {
+        public:
+            explicit CountAtExit(std::function<void()> action) : _action(std::move(action)) {}
+            ~CountAtExit() { _action(); }
+            CountAtExit(const CountAtExit &) = delete;
+            CountAtExit &operator=(const CountAtExit &) = delete;
+
+        private:
+            std::function<void()> _action;
+        };
+        const CountAtExit countUnfinishedHello(
+            [&]
+            {
+                if (gated && !helloAccepted && !helloRun && _running)
+                    CountUnfinishedHello(connection.peer);
+            });
 
         while (_running)
         {
             // A reload of the tokens file took this connection's rights away (CheckIdentityAgainstTokens): it ends here,
-            // and in any wait below (WaitUntilReady)
+            // and in any wait below (Connection::WaitUntilReady)
             if (_closeConnection.load())
                 break;
 
-            // Read command header: [type: 1 byte][length: 4 bytes]
-            uint8_t cmdType;
-            uint32_t payloadLength;
-            if (!Receive(clientSocket, &cmdType, 1, deadline()) ||
-                !Receive(clientSocket, &payloadLength, sizeof(payloadLength), deadline()))
-            {
-                logIfHelloTimedOut();
-                break;
-            }
+            idleSince = ConnectionNow();
+            const std::optional<WaitLimit> waitedOn = currentLimit();
+            const std::optional<std::chrono::steady_clock::time_point> deadline =
+                waitedOn.has_value() ? std::optional<std::chrono::steady_clock::time_point>(waitedOn->at) : std::nullopt;
+            const bool beforeHello = gated && !helloAccepted;
 
-            // The length is client-supplied, so check it before allocating. The oversized payload is
-            // still in the stream, so the connection can't be resynchronized and is closed. Before a Hello on a
-            // gated connection, a payload bigger than any Hello needs is refused the same way.
-            const bool beforeHello = deadline().has_value();
-            const uint32_t limit = beforeHello ? MaxPayloadBytesBeforeHello : MaxPayloadBytes;
-            if (payloadLength > limit)
+            // The request: the Hello a pre-auth worker already read and verified (once, as the connection's first), else
+            // read from the connection
+            uint8_t cmdType = 0;
+            std::vector<uint8_t> payload;
+            if (helloReplay.has_value())
             {
-                const std::string message = std::format("Payload of {} bytes exceeds the {} byte limit{}",
-                                                        payloadLength, limit, beforeHello ? " before Hello" : "");
-                BufferWriter response;
-                WriteError(response, message);
-                Send(clientSocket, response.Data().data(), response.Size());
-                PostLog(message, true);
-                break;
+                cmdType = static_cast<uint8_t>(CommandType::Hello);
+                payload = std::move(*helloReplay);
+                helloReplay.reset();
             }
-
-            // Read payload
-            std::vector<uint8_t> payload(payloadLength);
-            if (payloadLength > 0 && !Receive(clientSocket, payload.data(), payloadLength, deadline()))
+            else
             {
-                logIfHelloTimedOut();
-                break;
+                // Read command header: [type: 1 byte][length: 4 bytes]
+                uint32_t payloadLength;
+                if (!connection.Receive(&cmdType, 1, deadline) ||
+                    !connection.Receive(&payloadLength, sizeof(payloadLength), deadline))
+                {
+                    logIfLimitPassed(waitedOn);
+                    break;
+                }
+
+                // The length is client-supplied, so check it before allocating. The oversized payload is
+                // still in the stream, so the connection can't be resynchronized and is closed. Before a Hello on a
+                // gated connection, a payload bigger than any Hello needs is refused the same way.
+                const uint32_t limit = beforeHello ? MaxPayloadBytesBeforeHello : MaxPayloadBytes;
+                if (payloadLength > limit)
+                {
+                    const std::string message = std::format("Payload of {} bytes exceeds the {} byte limit{}",
+                                                            payloadLength, limit, beforeHello ? " before Hello" : "");
+                    BufferWriter response;
+                    WriteError(response, message);
+                    connection.Send(response.Data().data(), response.Size());
+                    PostLog(message, true);
+                    break;
+                }
+
+                // Read payload
+                payload.assign(payloadLength, 0);
+                if (payloadLength > 0 && !connection.Receive(payload.data(), payloadLength, deadline))
+                {
+                    logIfLimitPassed(waitedOn);
+                    break;
+                }
             }
 
             // With an access token, nothing but Hello runs (or is even queued) until a Hello has succeeded, and
@@ -2304,7 +3681,7 @@ namespace N2Engine::Editor
             {
                 BufferWriter response;
                 WriteError(response, HelloRequiredError);
-                Send(clientSocket, response.Data().data(), response.Size());
+                connection.Send(response.Data().data(), response.Size());
                 closeUnauthorized(std::format("it sent command 0x{:X}", cmdType));
                 break;
             }
@@ -2317,7 +3694,7 @@ namespace N2Engine::Editor
                 {
                     const std::vector<uint8_t> denial =
                         BuildDenial(Protocol::ErrorCodeReadOnly, ReadOnlyMessage(cmdType));
-                    if (!Send(clientSocket, denial.data(), denial.size()))
+                    if (!connection.Send(denial.data(), denial.size()))
                         break;
                     continue;
                 }
@@ -2331,7 +3708,7 @@ namespace N2Engine::Editor
                                 true);
                         const std::vector<uint8_t> denial =
                             BuildDenial(Protocol::ErrorCodeForbidden, RoleDeniedMessage(identity.role, cmdType));
-                        if (!Send(clientSocket, denial.data(), denial.size()))
+                        if (!connection.Send(denial.data(), denial.size()))
                             break;
                         continue;
                     }
@@ -2340,7 +3717,7 @@ namespace N2Engine::Editor
                 }
                 BufferWriter response;
                 WriteOk(response);
-                Send(clientSocket, response.Data().data(), response.Size());
+                connection.Send(response.Data().data(), response.Size());
                 // Stop serving, so the host's main loop sees !IsRunning() and exits cleanly
                 PostLog("Shutdown requested by editor");
                 // The client chose to shut the host down: what it didn't save is what it chose to drop
@@ -2353,26 +3730,33 @@ namespace N2Engine::Editor
                 break;
             }
 
-            // A Hello on a host that counts failed ones: who it names is read here, on the network thread, which keeps the
-            // limiter's state its own. A user that is backed off is refused before its token is looked at.
+            // A Hello on a host that counts failed ones: who it names is read here, on the network thread. The token is
+            // checked BEFORE a user's backoff applies: a correct token always gets in (so an attacker who guesses a
+            // user's name cannot lock that user out), while a wrong one is still refused, counted and backs off further.
             const bool isHello = static_cast<CommandType>(cmdType) == CommandType::Hello;
             const bool rateLimited = gated && isHello && _rateLimiter.has_value();
             std::optional<std::string> helloUser;
             if (rateLimited && HasTokensFile())
             {
                 helloUser = UserNamedByHello(payload);
-                if (helloUser.has_value() && _rateLimiter->IsUserBackedOff(*helloUser))
+                if (helloUser.has_value() && _rateLimiter->IsUserBackedOff(*helloUser) && !HelloTokenIsValid(payload))
                 {
+                    // Counted like any wrong-token Hello (the user's backoff grows, the address is counted), before
+                    // the answer is sent; the answer is the backoff's, as before
+                    helloRun = true;
+                    LogRateLimitOutcome(_rateLimiter->RecordFailure(connection.peer, std::string_view(*helloUser)),
+                                        *helloUser, connection.peer);
                     BufferWriter response;
                     WriteError(response, RateLimitedError);
-                    Send(clientSocket, response.Data().data(), response.Size());
+                    connection.Send(response.Data().data(), response.Size());
                     break;
                 }
             }
 
             if (isHello)
             {
-                _helloTokenRefused = false;
+                connection.helloTokenRefused = false;
+                connection.helloVersionRefused = false;
             }
 
             // Everything else touches engine state, so it runs on the main thread (see ProcessCommands)
@@ -2393,7 +3777,20 @@ namespace N2Engine::Editor
             if (isHello)
             {
                 helloAccepted = !response.empty() && response[0] == static_cast<uint8_t>(ResponseType::ServerInfo);
+                if (helloAccepted && !sessionOpened)
+                {
+                    sessionStart = ConnectionNow();
+                }
                 sessionOpened = sessionOpened || helloAccepted;
+                // A tokens reload may have slipped in between the Hello's check and the identity it bound: the reload's own
+                // check saw no identity yet, so look again now
+                if (helloAccepted)
+                {
+                    CheckIdentityAgainstTokens();
+                    // A later Hello can give the connection another user or role: the arbiter judges a candidate against
+                    // what the session is now
+                    NoteSessionIdentity(connection);
+                }
             }
             // The outcome is counted before the answer is sent, so a client that sees the refusal and connects again
             // meets the backoff it earned
@@ -2402,19 +3799,32 @@ namespace N2Engine::Editor
                 if (helloAccepted)
                 {
                     const ConnectionIdentity identity = CurrentIdentity();
-                    _rateLimiter->RecordSuccess(_peer, HasTokensFile() && !identity.user.empty()
+                    _rateLimiter->RecordSuccess(connection.peer, HasTokensFile() && !identity.user.empty()
                                                            ? std::optional<std::string_view>(identity.user)
                                                            : std::nullopt);
                 }
-                else if (_helloTokenRefused)
+                else if (connection.helloTokenRefused)
                 {
+                    helloRun = true;
                     const std::optional<std::string_view> named =
                         helloUser.has_value() ? std::optional<std::string_view>(*helloUser) : std::nullopt;
-                    LogRateLimitOutcome(_rateLimiter->RecordFailure(_peer, named), helloUser.value_or(std::string{}));
+                    LogRateLimitOutcome(_rateLimiter->RecordFailure(connection.peer, named), helloUser.value_or(std::string{}),
+                                        connection.peer);
+                }
+                else if (connection.helloVersionRefused)
+                {
+                    helloRun = true; // a good token, an old client: not a failure of the address
+                }
+                else
+                {
+                    // Refused for anything else (a Hello that wouldn't even parse): it held the thread and proved
+                    // nothing, so it counts like an unfinished one, before its answer is sent
+                    helloRun = true;
+                    CountUnfinishedHello(connection.peer);
                 }
             }
 
-            if (!Send(clientSocket, response.data(), response.size()))
+            if (!connection.Send(response.data(), response.size()))
                 break;
 
             // With an access token, a refused Hello also ends the connection, once its Error is sent
@@ -2429,6 +3839,12 @@ namespace N2Engine::Editor
     std::vector<uint8_t> EditorServer::ExecuteCommand(uint8_t commandType, const std::vector<uint8_t> &payload)
     {
         _response.clear();
+        // Who this command answers to: a remote client is told generic messages and res://-relative paths (ClientText)
+        const bool localClient = IsLocalClient();
+        const ClientText::Scope clientScope(localClient, localClient ? std::vector<ClientText::HostRoot>{} : HostRoots());
+        // Every script declaration this command reads (a scene of many scripts, say) shares one wall-clock allowance,
+        // so the command answers within it however many scripts are slow (ScriptDeclarationCache::CommandBudget)
+        const Scripting::ScriptDeclarationCache::CommandBudget evaluationBudget;
 
         bool failed = false;
         std::string failure;
@@ -2466,14 +3882,18 @@ namespace N2Engine::Editor
             {
                 failure = "the command produced no response";
             }
-            Logger::Error(std::format("Command 0x{:X} failed: {}", commandType, failure));
+            ServerLog::Error(std::format("Command 0x{:X} failed: {}", commandType, failure));
 
+            // What an exception said is the host's (a std::filesystem_error names its paths): a remote client is told
+            // that the command failed, and the line above has the rest
             BufferWriter response;
-            WriteError(response, "Command failed: " + failure);
-            return {response.Data().begin(), response.Data().end()};
+            WriteError(response, "Command failed: " + (failed && !ClientText::IsLocal()
+                                                           ? std::string("the host couldn't complete it (see the host's log)")
+                                                           : failure));
+            return RedactErrorFrame({response.Data().begin(), response.Data().end()});
         }
 
-        return std::exchange(_response, {});
+        return RedactErrorFrame(std::exchange(_response, {}));
     }
 
     bool EditorServer::IsViewportSizeValid(int32_t width, int32_t height)
@@ -2597,6 +4017,10 @@ namespace N2Engine::Editor
         {CommandType::GetLuaFields, "GetLuaFields", EditorServer::CommandClass::Read},
         {CommandType::GetProjectInfo, "GetProjectInfo", EditorServer::CommandClass::Read},
         {CommandType::GetHistory, "GetHistory", EditorServer::CommandClass::Read},
+        // The extension lists answer from what was captured at load: they run no Lua. InvokeMenuItem (0x82) and
+        // InvokeInspectorAction (0x83) run extension code, so they are Writes below.
+        {CommandType::ListEditorExtensions, "ListEditorExtensions", EditorServer::CommandClass::Read},
+        {CommandType::GetEditorUi, "GetEditorUi", EditorServer::CommandClass::Read},
         {CommandType::GetAutosave, "GetAutosave", EditorServer::CommandClass::Read},
         {CommandType::GetPlayState, "GetPlayState", EditorServer::CommandClass::Read},
         // Write: changes the project, a scene, the game or an asset, or runs project code (SendInput, SetPaused,
@@ -2638,8 +4062,14 @@ namespace N2Engine::Editor
         {CommandType::SetPaused, "SetPaused", EditorServer::CommandClass::Write},
         {CommandType::Step, "Step", EditorServer::CommandClass::Write},
         {CommandType::SendInput, "SendInput", EditorServer::CommandClass::Write},
+        // Write: runs the code of an editor extension, which changes the scene as the invoking user (one edit group)
+        {CommandType::InvokeMenuItem, "InvokeMenuItem", EditorServer::CommandClass::Write},
+        // Write: the same for a button of an inspector section, on the component the client's inspector shows
+        {CommandType::InvokeInspectorAction, "InvokeInspectorAction", EditorServer::CommandClass::Write},
         // Admin: controls the host itself
         {CommandType::Shutdown, "Shutdown", EditorServer::CommandClass::Admin},
+        // Admin: reloading runs every extension file again, as the host's operator would by restarting it
+        {CommandType::ReloadEditorExtensions, "ReloadEditorExtensions", EditorServer::CommandClass::Admin},
         };
 
         const CommandInfo *FindCommand(const uint8_t commandType)
@@ -2693,7 +4123,7 @@ namespace N2Engine::Editor
     {
         if (_running)
         {
-            Logger::Warn("The editor server's read-only mode can't change while it is running");
+            ServerLog::Warn("The editor server's read-only mode can't change while it is running");
             return false;
         }
         _readOnly = readOnly;
@@ -2747,7 +4177,8 @@ namespace N2Engine::Editor
         ConnectionIdentity identity;
         if (hasRoles)
         {
-            identity = CurrentIdentity();
+            // A hook's commands run as a viewer, whoever is connected: the role table is what keeps a hook read-only
+            identity = _invocation != nullptr && _invocation->hook ? HookIdentity() : CurrentIdentity();
             if (!identity.authenticated && cmd != CommandType::Hello)
             {
                 // The network thread never lets this through; it is for a caller that reaches the command another way
@@ -2769,8 +4200,9 @@ namespace N2Engine::Editor
         // A role may run only what its class of commands allows (default deny, as the read-only gate above)
         if (hasRoles && !RoleAllows(identity.role, commandType))
         {
-            Logger::Warn(std::format("audit: denied user={} role={} command={}{}", identity.user,
-                                     TokenRoleName(identity.role), CommandName(commandType), PeerSuffix()));
+            ServerLog::Warn(std::format("audit: denied user={} role={} command={}{}{}", identity.user,
+                                     TokenRoleName(identity.role), CommandName(commandType), PeerSuffix(),
+                                     _invocation != nullptr ? " via=" + _invocation->via : std::string{}));
             SendResponse(clientSocket,
                          BuildDenial(Protocol::ErrorCodeForbidden, RoleDeniedMessage(identity.role, commandType)));
             return;
@@ -2790,8 +4222,10 @@ namespace N2Engine::Editor
             const std::optional<CommandClass> commandClass = ClassifyCommand(commandType);
             if (commandClass.has_value() && *commandClass != CommandClass::Read)
             {
-                Logger::Info(std::format("audit: user={} role={} command={}{}", identity.user, TokenRoleName(identity.role),
-                                         CommandName(commandType), PeerSuffix()));
+                // A command an editor extension's script sent says which one (via=), so the line names both who and what
+                ServerLog::Info(std::format("audit: user={} role={} command={}{}{}", identity.user, TokenRoleName(identity.role),
+                                         CommandName(commandType), PeerSuffix(),
+                                         _invocation != nullptr ? " via=" + _invocation->via : std::string{}));
             }
         }
 
@@ -2938,6 +4372,21 @@ namespace N2Engine::Editor
         case CommandType::GetLuaFields:
             HandleGetLuaFields(clientSocket, payload);
             break;
+        case CommandType::ListEditorExtensions:
+            HandleListEditorExtensions(clientSocket);
+            break;
+        case CommandType::GetEditorUi:
+            HandleGetEditorUi(clientSocket);
+            break;
+        case CommandType::ReloadEditorExtensions:
+            HandleReloadEditorExtensions(clientSocket);
+            break;
+        case CommandType::InvokeMenuItem:
+            HandleInvokeMenuItem(clientSocket, payload);
+            break;
+        case CommandType::InvokeInspectorAction:
+            HandleInvokeInspectorAction(clientSocket, payload);
+            break;
         case CommandType::CreateScript:
             HandleCreateScript(clientSocket, payload);
             break;
@@ -2993,7 +4442,7 @@ namespace N2Engine::Editor
             HandleDiscardAutosave(clientSocket);
             break;
         default:
-            Logger::Warn("Unknown command: " + std::to_string(commandType));
+            ServerLog::Warn("Unknown command: " + std::to_string(commandType));
             BufferWriter response;
             WriteError(response, "Unknown command");
             SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
@@ -3001,11 +4450,9 @@ namespace N2Engine::Editor
         }
     }
 
-    void EditorServer::HandleHello(int clientSocket, const std::vector<uint8_t> &payload)
+    EditorServer::HelloEvaluation EditorServer::EvaluateHello(const HelloCmd &cmd, const std::string &peerSuffix) const
     {
-        BufferReader reader(payload);
-        const HelloCmd cmd = HelloCmd::Deserialize(reader);
-
+        HelloEvaluation evaluation;
         // Client-supplied text only reaches the log, or the Error, sanitised and shortened; the token never does
         const std::string clientName = SanitizeForLog(cmd.clientName);
         const std::string clientVersionText = SanitizeForLog(cmd.protocolVersion, 40);
@@ -3013,33 +4460,30 @@ namespace N2Engine::Editor
         // too) or anything else there must not see it in a durable log: it is logged only when it is a user of the
         // current tokens table, else as user=? (user=- without named users)
         const std::string claimedUser = LoggableClaimedUser(cmd.user);
-        const std::string peerSuffix = PeerSuffix();
-        _helloTokenRefused = false;
-        BufferWriter response;
 
         // The token first, so a client without it learns nothing else. A wrong user and a wrong token are the same
         // answer, and the log holds the user the client claimed, never the token or its hash.
-        ConnectionIdentity identity;
         if (RequiresAccessToken())
         {
-            const std::optional<ConnectionIdentity> matched = Authenticate(cmd.token, cmd.user);
+            std::optional<ConnectionIdentity> matched = Authenticate(cmd.token, cmd.user);
             if (!matched)
             {
-                _helloTokenRefused = true;
-                Logger::Warn(std::format("Refused Hello from editor client '{}' (user={} role=none): wrong access token{}",
-                                         clientName, claimedUser, peerSuffix));
+                evaluation.result = HelloEvaluation::Result::TokenRefused;
+                evaluation.warning = std::format(
+                    "Refused Hello from editor client '{}' (user={} role=none): wrong access token{}", clientName,
+                    claimedUser, peerSuffix);
+                BufferWriter response;
                 WriteError(response, "Invalid access token");
-                SendResponse(clientSocket, response.Release());
-                return;
+                evaluation.refusal = response.Release();
+                return evaluation;
             }
-            identity = *matched;
+            evaluation.identity = std::move(*matched);
         }
-        // user=<u> role=<r> on every line about this Hello, once the token says who it is (a host without
-        // authentication has nobody to name)
-        const std::string who =
-            identity.authenticated ? std::format("user={} role={}", identity.user, TokenRoleName(identity.role)) : std::string{};
-        const std::string whoInParentheses = who.empty() ? std::string{} : " (" + who + ")";
-        const std::string whoAtEnd = who.empty() ? std::string{} : " " + who;
+        const ConnectionIdentity &identity = evaluation.identity;
+        const std::string whoInParentheses =
+            identity.authenticated
+                ? std::format(" (user={} role={})", identity.user, TokenRoleName(identity.role))
+                : std::string{};
 
         const auto clientVersion = ParseProtocolVersion(cmd.protocolVersion);
         const auto serverVersion = ParseProtocolVersion(ProtocolVersion);
@@ -3052,23 +4496,69 @@ namespace N2Engine::Editor
                                   "must match)", ProtocolVersion, clientVersionText)
                     : std::format("Invalid protocol version '{}' (expected major.minor.patch; this server speaks {})",
                                   clientVersionText, ProtocolVersion);
-            Logger::Warn("Refused Hello from editor client '" + clientName + "'" + whoInParentheses + ": " + message +
-                         peerSuffix);
+            evaluation.result = HelloEvaluation::Result::VersionRefused;
+            evaluation.warning =
+                "Refused Hello from editor client '" + clientName + "'" + whoInParentheses + ": " + message + peerSuffix;
+            BufferWriter response;
             WriteError(response, message);
-            SendResponse(clientSocket, response.Release());
+            evaluation.refusal = response.Release();
+        }
+        return evaluation;
+    }
+
+    void EditorServer::HandleHello(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const HelloCmd cmd = HelloCmd::Deserialize(reader);
+
+        // Client-supplied text only reaches the log, or the Error, sanitised and shortened; the token never does
+        const std::string clientName = SanitizeForLog(cmd.clientName);
+        const std::string clientVersionText = SanitizeForLog(cmd.protocolVersion, 40);
+        const std::string peerSuffix = PeerSuffix();
+        // This Hello's outcome goes to the connection being served (none for a command run without a socket)
+        Connection *const served = _activeConnection.load();
+        if (served != nullptr)
+        {
+            served->helloTokenRefused = false;
+            served->helloVersionRefused = false;
+        }
+        BufferWriter response;
+
+        // The token and the protocol's major version: the check a pre-auth worker has already made on this same payload
+        // (EvaluateHello). A refusal is the same Error and the same log line wherever it is made.
+        HelloEvaluation evaluation = EvaluateHello(cmd, peerSuffix);
+        if (evaluation.result != HelloEvaluation::Result::Accepted)
+        {
+            if (served != nullptr)
+            {
+                if (evaluation.result == HelloEvaluation::Result::TokenRefused)
+                    served->helloTokenRefused = true;
+                else
+                    served->helloVersionRefused = true;
+            }
+            ServerLog::Warn(evaluation.warning);
+            SendResponse(clientSocket, std::move(evaluation.refusal));
             return;
         }
+        const ConnectionIdentity identity = std::move(evaluation.identity);
+        // user=<u> role=<r> on every line about this Hello, once the token says who it is (a host without
+        // authentication has nobody to name)
+        const std::string who =
+            identity.authenticated ? std::format("user={} role={}", identity.user, TokenRoleName(identity.role)) : std::string{};
+        const std::string whoAtEnd = who.empty() ? std::string{} : " " + who;
 
+        const auto clientVersion = ParseProtocolVersion(cmd.protocolVersion);
+        const auto serverVersion = ParseProtocolVersion(ProtocolVersion);
         if (clientVersion->minorVersion != serverVersion->minorVersion)
         {
             // Compatible, but one side has commands the other doesn't: those fail with "Unknown command"
-            Logger::Warn(std::format("Editor client '{}' said Hello with protocol {}, this server speaks {}: commands "
+            ServerLog::Warn(std::format("Editor client '{}' said Hello with protocol {}, this server speaks {}: commands "
                                      "only one of them knows will fail{}{}", clientName, clientVersionText, ProtocolVersion,
                                      whoAtEnd, peerSuffix));
         }
         else
         {
-            Logger::Info(std::format("Editor client '{}' said Hello (protocol {}){}{}", clientName, clientVersionText,
+            ServerLog::Info(std::format("Editor client '{}' said Hello (protocol {}){}{}", clientName, clientVersionText,
                                      whoAtEnd, peerSuffix));
         }
         // A new session: a group the last one left open is ended, and the keys it held (a play host's) go up
@@ -3160,7 +4650,10 @@ namespace N2Engine::Editor
 
         // Nothing here may log: every logged line is an event, so a poll that logged would always find one more. (Only
         // a failure, such as a malformed payload, is logged, by ExecuteCommand, as for every polled command.)
-        EventBatch batch = _events.Read(cmd.afterSeq, cmd.maxEvents, cmd.epoch);
+        // An admin, and the one local user of a host with no authentication, read every event. Any other role reads the
+        // Public view: its own numbering, no Admin line, host paths scrubbed (see EventRing).
+        EventBatch batch = _events.Read(cmd.afterSeq, cmd.maxEvents, cmd.epoch,
+                                        SeesEveryEvent() ? EventView::Full : EventView::PublicOnly);
         BufferWriter response;
         WriteEvents(response, batch.epoch, batch.nextSeq, batch.dropped, nlohmann::json(std::move(batch.events)));
         SendResponse(clientSocket, response.Release());
@@ -3528,12 +5021,12 @@ namespace N2Engine::Editor
             SceneManager::AddScene(std::move(newScene), false);
 
             WriteSceneData(response, sceneJsonString);
-            Logger::Info("Created scene: " + SanitizeForLog(cmd.name));
+            ServerLog::PublicInfo("Created scene: " + SanitizeForLog(cmd.name));
         }
         catch (const std::exception &e)
         {
-            Logger::Error("Failed to create scene: " + std::string(e.what()));
-            WriteError(response, std::string("Failed to create scene: ") + e.what());
+            // Failure logs the detail at Admin sensitivity (ServerLog::Warn) and tells a remote client the reason
+            WriteError(response, ClientText::Failure("Failed to create scene", "the scene could not be created", e.what()));
         }
 
         SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
@@ -3544,7 +5037,17 @@ namespace N2Engine::Editor
         BufferReader reader(payload);
         const std::string sceneJsonString = LoadSceneCmd::Deserialize(reader).sceneJson;
 
-        Logger::Info("Loading scene from scene data: " + SanitizeForLog(sceneJsonString, 200));
+        ServerLog::Info("Loading scene from scene data: " + SanitizeForLog(sceneJsonString, 200));
+
+        // Nesting is checked before the parse: a scene nested 100 000 deep would overflow the stack of the walks over
+        // it. Nothing has changed yet, so the open scene stays as it was.
+        if (JsonLimits::SceneJsonTooDeep(sceneJsonString))
+        {
+            BufferWriter response;
+            WriteError(response, "The scene passed was refused: " + JsonLimits::SceneJsonTooDeepMessage());
+            SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+            return;
+        }
 
         // Non-throwing parse: the JSON comes from the client
         nlohmann::json sceneJson = nlohmann::json::parse(sceneJsonString, nullptr, false);
@@ -3568,16 +5071,10 @@ namespace N2Engine::Editor
         // The scene that was open is left: what it hadn't saved is dropped, and so is its autosave
         DiscardWrittenAutosave();
 
-        if (int sceneIndex = SceneManager::GetSceneIndex(scene->sceneName); sceneIndex != -1)
-        {
-            SceneManager::UpdateScene(sceneIndex, sceneJson);
-            SceneManager::LoadScene(sceneIndex);
-        }
-        else
-        {
-            SceneManager::AddScene(sceneJson);
-            SceneManager::LoadScene(scene->sceneName);
-        }
+        // The scene is built once, above: that instance (validated by being built) is stored, replacing the stored scene of
+        // its name if there is one, and loaded as it is. It used to be built again to store it, and again when it loaded
+        // (a script's top-level code ran each time).
+        SceneManager::AddScene(std::move(scene), true);
         SceneManager::ProcessAnyPendingSceneChange();
 
         // The scene came from the client, not a file: it has none (until SaveSceneToFile names one), and it is
@@ -3606,7 +5103,7 @@ namespace N2Engine::Editor
 
         if (SceneManager::GetCurScene() == nullptr)
         {
-            Logger::Warn("No scene loaded to save");
+            ServerLog::Warn("No scene loaded to save");
             WriteError(response, "No scene loaded");
             SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
 
@@ -3615,8 +5112,9 @@ namespace N2Engine::Editor
         nlohmann::json sceneJson = SceneManager::GetCurSceneRef().Serialize();
         SceneManager::UpdateScene(SceneManager::GetCurSceneIndex(), sceneJson);
 
-        // dump(): passing the json itself converted it to a string, which throws for an object
-        WriteSceneData(response, sceneJson.dump());
+        // dump(): passing the json itself converted it to a string, which throws for an object. Without recursion, as
+        // the scene can nest as deep as its cap.
+        WriteSceneData(response, JsonLimits::IterativeDump(sceneJson));
         SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
     }
 
@@ -3640,7 +5138,7 @@ namespace N2Engine::Editor
             }
             else if (!sceneFile.has_value())
             {
-                Logger::Warn("Rejected DeleteScene outside the scenes directory: " + SanitizeForLog(cmd.sceneName));
+                ServerLog::Warn("Rejected DeleteScene outside the scenes directory: " + SanitizeForLog(cmd.sceneName));
                 WriteError(response, "Not a scene file in the project's scenes directory: " + cmd.sceneName);
             }
             else if (loadedScene != nullptr && sceneFile->stem() == std::filesystem::path(loadedScene->sceneName))
@@ -3654,7 +5152,7 @@ namespace N2Engine::Editor
                 // narrow string can throw for names the code page can't represent.
                 // Only the file is removed. Scenes in SceneManager aren't tied to files (the editor loads
                 // them by sending JSON), so a stored scene that happens to share the name is left alone.
-                Logger::Info("Deleting scene file: " + SanitizeForLog(cmd.sceneName));
+                ServerLog::Info("Deleting scene file: " + SanitizeForLog(cmd.sceneName));
                 std::filesystem::remove(*sceneFile);
                 WriteOk(response);
             }
@@ -3665,7 +5163,7 @@ namespace N2Engine::Editor
         }
         catch (const std::exception &e)
         {
-            WriteError(response, std::string("Failed to delete scene: ") + e.what());
+            WriteError(response, ClientText::Failure("Failed to delete scene", "the file could not be deleted", e.what()));
         }
 
         SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
@@ -3687,13 +5185,13 @@ namespace N2Engine::Editor
             Scene &scene = SceneManager::GetCurSceneRef();
             nlohmann::json sceneJson = scene.Serialize();
 
-            WriteSceneData(response, sceneJson.dump());
+            WriteSceneData(response, JsonLimits::IterativeDump(sceneJson)); // the scene can nest as deep as its cap
             SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
         }
         catch (const std::exception &e)
         {
-            Logger::Error("Failed to get current scene: " + std::string(e.what()));
-            WriteError(response, "Failed to get current scene: " + std::string(e.what()));
+            // Failure logs the detail at Admin sensitivity (ServerLog::Warn) and tells a remote client the reason
+            WriteError(response, ClientText::Failure("Failed to get current scene", "the scene could not be read", e.what()));
             SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
         }
     }
@@ -3716,7 +5214,7 @@ namespace N2Engine::Editor
         }
         else
         {
-            Logger::Warn("No scene present");
+            ServerLog::Warn("No scene present");
             WriteError(response, "No scene present");
         }
 
@@ -4079,6 +5577,11 @@ namespace N2Engine::Editor
         case CommandType::WriteTextAsset:
         case CommandType::CreateScriptAsset:
         case CommandType::CreateFolder:
+        // Reloading runs the project's extension files again, and invoking runs one's code, which a play host (it plays a
+        // snapshot, and runs no extension) never does
+        case CommandType::ReloadEditorExtensions:
+        case CommandType::InvokeMenuItem:
+        case CommandType::InvokeInspectorAction:
             return true;
         default:
             return false;
@@ -4143,7 +5646,11 @@ namespace N2Engine::Editor
             auto text = ReadTextFile(resolved->file);
             if (!text)
             {
-                return std::unexpected(text.error());
+                return std::unexpected("Couldn't read " + SanitizeForLog(resourcePath) + ": " + text.error());
+            }
+            if (JsonLimits::SceneJsonTooDeep(*text))
+            {
+                return std::unexpected(SanitizeForLog(resourcePath) + ": " + JsonLimits::SceneJsonTooDeepMessage());
             }
             sceneJson = nlohmann::json::parse(*text, nullptr, false);
             if (sceneJson.is_discarded())
@@ -4164,7 +5671,8 @@ namespace N2Engine::Editor
         std::filesystem::create_directories(file.parent_path(), error);
         if (auto written = IO::WriteTextFileAtomically(file, SceneFileText(sceneJson)); !written)
         {
-            return std::unexpected(written.error());
+            return std::unexpected(
+                ClientText::Failure("Couldn't write the play snapshot", "the file could not be written", written.error()));
         }
         return file;
     }
@@ -4177,12 +5685,25 @@ namespace N2Engine::Editor
         const auto written = WritePlaySnapshot(cmd.scenePath);
         if (!written)
         {
+            // A request that does not validate (a path outside the project, no scene, a play host) runs no hook: the
+            // unvalidated path of a client never reaches an extension or the warnings broadcast to the other clients
             SendError(clientSocket, written.error());
             return;
         }
-        Logger::Info("Wrote the play snapshot " + Utf8(*written));
+        if (_extensions != nullptr)
+        {
+            // OnBeforePlay (E-X6): validation of a request that WritePlaySnapshot accepted, so the scene path is one it
+            // resolved, run before the response (the launcher starts the play host only on it). Its warnings reach the
+            // client as extensionOutput events; play is never blocked by it (decision D10), and a hook that fails changes
+            // nothing here
+            const std::string scene = cmd.scenePath.empty() ? OpenScenePath() : cmd.scenePath;
+            (void)RunExtensionHook("OnBeforePlay", nlohmann::json{{"scene", SanitizeForLog(scene, 300)}});
+        }
+        ServerLog::Info("Wrote the play snapshot " + Utf8(*written));
         BufferWriter response;
-        Protocol::WritePlaySnapshot(response, Utf8(*written));
+        // The launcher that runs the play host is local and gets the path --play takes; a remote client gets it below the
+        // project (.n2/play/<name>.scene)
+        Protocol::WritePlaySnapshot(response, ClientPath(*written));
         SendResponse(clientSocket, response.Release());
     }
 
@@ -4195,7 +5716,12 @@ namespace N2Engine::Editor
         auto text = ReadTextFile(snapshotFile);
         if (!text)
         {
-            return std::unexpected(text.error());
+            // The play host's own start-up (--play): the host's operator reads this, so it names the file
+            return std::unexpected("can't read " + Utf8(snapshotFile) + ": " + text.error());
+        }
+        if (JsonLimits::SceneJsonTooDeep(*text))
+        {
+            return std::unexpected(Utf8(snapshotFile) + ": " + JsonLimits::SceneJsonTooDeepMessage());
         }
         const nlohmann::json sceneJson = nlohmann::json::parse(*text, nullptr, false);
         if (sceneJson.is_discarded())
@@ -4233,7 +5759,7 @@ namespace N2Engine::Editor
         Application::GetInstance().ResetFrameClock();
         _watchAssets = false;
 
-        Logger::Info(std::format("Playing scene '{}' from {}", playing->sceneName, Utf8(snapshotFile)));
+        ServerLog::Info(std::format("Playing scene '{}' from {}", playing->sceneName, Utf8(snapshotFile)));
         PushPlayState();
         return {};
     }
@@ -4298,7 +5824,7 @@ namespace N2Engine::Editor
             catch (const std::exception &e)
             {
                 // Another frame would only throw the same way sixty times a second
-                Logger::Error(std::string("A game frame failed, so the game is paused: ") + e.what());
+                ServerLog::PublicError(std::string("A game frame failed, so the game is paused: ") + e.what());
                 SetPausedState(true);
             }
         }
@@ -4418,7 +5944,16 @@ namespace N2Engine::Editor
     void EditorServer::HandleGetEngineHealth(int clientSocket)
     {
         BufferWriter response;
-        WriteEngineHealth(response, Application::GetInstance().GetHealth());
+        EngineHealth health = Application::GetInstance().GetHealth();
+        if (!SeesEveryEvent())
+        {
+            // A subsystem's detail can name a file of the host: the same scrubbing as the Public events
+            for (SubsystemStatus &subsystem : health.subsystems)
+            {
+                subsystem.detail = _events.ScrubHostPaths(subsystem.detail);
+            }
+        }
+        WriteEngineHealth(response, health);
         SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
     }
 
@@ -4526,14 +6061,27 @@ namespace N2Engine::Editor
             return;
         }
 
+        const std::string name = cmd.name.empty() ? std::string(preset->objectName) : cmd.name;
+        // A tree is only so deep: the new object would be one level below its parent (the root being level 1)
+        if (parent != nullptr && parent->GetHierarchyDepth() + 2 > JsonLimits::MaxHierarchyDepth)
+        {
+            SendError(clientSocket, TooDeepMessage(name, parent->GetName()));
+            return;
+        }
+
         // An editor object always has a transform (CreateEntity's has none until something gives it one)
-        auto gameObject = GameObject::Create(cmd.name.empty() ? std::string(preset->objectName) : cmd.name);
+        auto gameObject = GameObject::Create(name);
         gameObject->CreatePositionable();
         preset->addComponents(*gameObject);
 
         if (parent != nullptr)
         {
             parent->AddChild(gameObject, false);
+            if (gameObject->GetParent() != parent)
+            {
+                SendError(clientSocket, TooDeepMessage(name, parent->GetName())); // nothing recorded; it is dropped
+                return;
+            }
         }
         else
         {
@@ -4582,6 +6130,13 @@ namespace N2Engine::Editor
             {
                 SendError(clientSocket, std::format("Can't make '{}' a child of itself or of its own descendant '{}'",
                                                     SanitizeForLog(entity->GetName()), SanitizeForLog(newParent->GetName())));
+                return;
+            }
+            // A tree is only so deep (the same cap a load enforces), or one command at a time would build one a
+            // load refuses, and the walks over it could overflow the stack
+            if (!newParent->CanAddChild(entity))
+            {
+                SendError(clientSocket, TooDeepMessage(entity->GetName(), newParent->GetName()));
                 return;
             }
         }
@@ -4723,6 +6278,13 @@ namespace N2Engine::Editor
         copy->SetName(DuplicateName(*source, parent != nullptr ? parent->GetChildren() : scene->GetRootGameObjects()));
         if (parent != nullptr)
         {
+            // The copy is as tall as its source, which the parent holds already, so this holds; checked all the same,
+            // as nothing may be recorded for an object that isn't in the scene
+            if (!parent->CanAddChild(copy))
+            {
+                SendError(clientSocket, TooDeepMessage(copy->GetName(), parent->GetName()));
+                return;
+            }
             parent->AddChild(copy, false);
         }
         else
@@ -5078,6 +6640,40 @@ namespace N2Engine::Editor
         SendResponse(clientSocket, response.Release());
     }
 
+    void EditorServer::HandleListEditorExtensions(int clientSocket)
+    {
+        // What was captured at load: no Lua runs. Without --editor-extensions the answer says so (not an error), so a
+        // client can ask any host and show or hide its Tools menu.
+        BufferWriter response;
+        WriteEditorExtensions(response, _extensions ? _extensions->DescribeJson() : ExtensionHost::DisabledDescribeJson());
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleGetEditorUi(int clientSocket)
+    {
+        BufferWriter response;
+        WriteEditorUi(response, _extensions ? _extensions->UiJson() : ExtensionHost::DisabledUiJson());
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleReloadEditorExtensions(int clientSocket)
+    {
+        if (!_extensions)
+        {
+            SendResponse(clientSocket,
+                         BuildDenial(Protocol::ErrorCodeExtensionsDisabled,
+                                     "Editor extensions are not enabled on this host (it was not started with "
+                                     "--editor-extensions)"));
+            return;
+        }
+        // Every file is evaluated again, each off this thread under its own deadline; the new registry replaces the old
+        // one, uiRevision moves on and extensionsChanged follows (the extension host's changed callback)
+        _extensions->Reload();
+        BufferWriter response;
+        WriteEditorExtensions(response, _extensions->DescribeJson());
+        SendResponse(clientSocket, response.Release());
+    }
+
     void EditorServer::HandleCreateScript(int clientSocket, const std::vector<uint8_t> &payload)
     {
         BufferReader reader(payload);
@@ -5089,11 +6685,11 @@ namespace N2Engine::Editor
         {
             std::string scriptTemplate = Scripting::MakeLuaScriptTemplate(cmd.name);
             WriteScriptData(response, scriptTemplate);
-            Logger::Info("Generated script template for: " + SanitizeForLog(cmd.name));
+            ServerLog::Info("Generated script template for: " + SanitizeForLog(cmd.name));
         }
         catch (const std::exception &e)
         {
-            WriteError(response, std::string("Failed to create script: ") + e.what());
+            WriteError(response, ClientText::Failure("Failed to create script", "the script could not be made", e.what()));
         }
 
         SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
@@ -5313,7 +6909,7 @@ namespace N2Engine::Editor
                 auto text = ReadTextFile(loader.Resolve(path));
                 if (!text)
                 {
-                    Logger::Warn("Can't reload " + path.ToString() + ": " + text.error());
+                    ServerLog::PublicWarn("Can't reload " + path.ToString() + ": " + text.error());
                     return;
                 }
                 script->SetSourceCode(*text);
@@ -5324,11 +6920,11 @@ namespace N2Engine::Editor
         }
         catch (const std::exception &e)
         {
-            Logger::Error(std::format("Can't reload {}: {}", path.ToString(), SanitizeForLog(e.what(), 300)));
+            ServerLog::PublicError(std::format("Can't reload {}: {}", path.ToString(), SanitizeForLog(e.what(), 300)));
         }
         catch (...)
         {
-            Logger::Error("Can't reload " + path.ToString());
+            ServerLog::PublicError("Can't reload " + path.ToString());
         }
     }
 
@@ -5347,6 +6943,22 @@ namespace N2Engine::Editor
         _events.Push("assetsChanged", nlohmann::json{{"added", PathStrings(changes.added)},
                                                      {"removed", PathStrings(changes.removed)},
                                                      {"modified", PathStrings(changes.modified)}});
+        if (_extensions != nullptr)
+        {
+            // OnAssetsChanged (E-X6): after the reload and the event, as a call of its own; each list is cut to what a hook is
+            // given. A hook cannot fail this: RunExtensionHook logs and counts, and returns.
+            const auto capped = [](std::vector<std::string> paths)
+            {
+                if (paths.size() > ExtensionHost::MaxHookAssetPaths)
+                {
+                    paths.resize(ExtensionHost::MaxHookAssetPaths);
+                }
+                return paths;
+            };
+            (void)RunExtensionHook("OnAssetsChanged", nlohmann::json{{"added", capped(PathStrings(changes.added))},
+                                                                     {"removed", capped(PathStrings(changes.removed))},
+                                                                     {"modified", capped(PathStrings(changes.modified))}});
+        }
     }
 
     void EditorServer::NoteAssetWritten(const IO::ResourcePath &path, const bool force)
@@ -5397,7 +7009,7 @@ namespace N2Engine::Editor
             if (!_assetPollFailureLogged)
             {
                 _assetPollFailureLogged = true;
-                Logger::Warn(std::format("The asset watcher couldn't scan the assets folder: {}",
+                ServerLog::Warn(std::format("The asset watcher couldn't scan the assets folder: {}",
                                          SanitizeForLog(e.what(), 300)));
             }
             return false;
@@ -5417,6 +7029,8 @@ namespace N2Engine::Editor
             return false;
         }
         _lastAssetPoll = now;
+        // A reload the poll triggers reads declarations on this thread too: one allowance for all of them
+        const Scripting::ScriptDeclarationCache::CommandBudget evaluationBudget;
         return PollAssets();
     }
 
@@ -5615,7 +7229,9 @@ namespace N2Engine::Editor
         }
         if (auto saved = loader.SetImportSettings(resolved->resourcePath, cmd.customData); !saved)
         {
-            SendError(clientSocket, "Couldn't change the import settings: " + saved.error());
+            SendError(clientSocket,
+                      ClientText::Failure("Couldn't change the import settings of " + SanitizeForLog(resolved->resourcePath.ToString()),
+                                          "the settings could not be saved", saved.error()));
             return;
         }
 
@@ -5630,7 +7246,7 @@ namespace N2Engine::Editor
         _events.Push("assetsChanged", nlohmann::json{{"added", nlohmann::json::array()},
                                                      {"removed", nlohmann::json::array()},
                                                      {"modified", nlohmann::json::array({resolved->resourcePath.ToString()})}});
-        Logger::Info("Changed the import settings of " + resolved->resourcePath.ToString());
+        ServerLog::PublicInfo("Changed the import settings of " + resolved->resourcePath.ToString());
 
         BufferWriter response;
         WriteOk(response);
@@ -5675,7 +7291,7 @@ namespace N2Engine::Editor
         auto text = ReadTextFile(resolved->file);
         if (!text)
         {
-            SendError(clientSocket, "Couldn't read " + shown + ": " + text.error());
+            SendError(clientSocket, "Couldn't read " + shown + ": " + text.error()); // a stable reason, no path
             return;
         }
         if (!IsValidUtf8(*text))
@@ -5739,11 +7355,11 @@ namespace N2Engine::Editor
         }
         if (auto written = IO::WriteTextFileAtomically(resolved->file, cmd.text); !written)
         {
-            SendError(clientSocket, "Couldn't write " + shown + ": " + written.error());
+            SendError(clientSocket, ClientText::Failure("Couldn't write " + shown, "the file could not be written", written.error()));
             return;
         }
         NoteAssetWritten(resolved->resourcePath, true);
-        Logger::Info("Wrote " + shown);
+        ServerLog::Info("Wrote " + shown);
 
         BufferWriter response;
         WriteOk(response);
@@ -5783,16 +7399,16 @@ namespace N2Engine::Editor
         std::filesystem::create_directories(resolved->file.parent_path(), error);
         if (error)
         {
-            SendError(clientSocket, "Couldn't create the folder of " + shown + ": " + error.message());
+            SendError(clientSocket, ClientText::Failure("Couldn't create the folder of " + shown, ClientText::Reason(error), error.message()));
             return;
         }
         if (auto written = IO::WriteTextFileAtomically(resolved->file, scriptText); !written)
         {
-            SendError(clientSocket, "Couldn't write " + shown + ": " + written.error());
+            SendError(clientSocket, ClientText::Failure("Couldn't write " + shown, "the file could not be written", written.error()));
             return;
         }
         NoteAssetWritten(resolved->resourcePath, false);
-        Logger::Info("Created script " + shown);
+        ServerLog::Info("Created script " + shown);
 
         const Math::UUID uuid = IO::ResourceLoader::Instance().GetUUID(resolved->resourcePath);
         BufferWriter response;
@@ -5831,10 +7447,10 @@ namespace N2Engine::Editor
             std::filesystem::create_directories(resolved->file, error);
             if (error)
             {
-                SendError(clientSocket, "Couldn't create " + shown + ": " + error.message());
+                SendError(clientSocket, ClientText::Failure("Couldn't create " + shown, ClientText::Reason(error), error.message()));
                 return;
             }
-            Logger::Info("Created folder " + shown);
+            ServerLog::Info("Created folder " + shown);
         }
 
         BufferWriter response;
@@ -5846,7 +7462,8 @@ namespace N2Engine::Editor
 
     std::string EditorServer::SnapshotScene(const Scene &scene)
     {
-        return scene.Serialize().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        // Without recursion: the scene can nest as deep as its cap
+        return JsonLimits::IterativeDump(scene.Serialize(), -1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     EditOutcome EditorServer::RestoreSceneSnapshot(const std::string &snapshot)
@@ -5855,6 +7472,10 @@ namespace N2Engine::Editor
         if (current == nullptr)
         {
             return std::unexpected(std::string("No scene loaded"));
+        }
+        if (JsonLimits::SceneJsonTooDeep(snapshot))
+        {
+            return std::unexpected(JsonLimits::SceneJsonTooDeepMessage());
         }
         const nlohmann::json sceneJson = nlohmann::json::parse(snapshot, nullptr, false);
         if (sceneJson.is_discarded())
@@ -6161,7 +7782,9 @@ namespace N2Engine::Editor
 
     void EditorServer::FlushAutosave(const bool force)
     {
-        if (!_autosavePending || _playMode)
+        // Nothing is written while an editor extension's call is in progress: its group is not a step yet, and the call
+        // ends with the one flush ExecuteCommand makes
+        if (!_autosavePending || _playMode || _invocation != nullptr)
         {
             return;
         }
@@ -6177,7 +7800,7 @@ namespace N2Engine::Editor
             if (!_protectedAutosaveWarned)
             {
                 _protectedAutosaveWarned = true;
-                Logger::Warn("An autosave from an earlier session is kept, and none is written over it, until it is "
+                ServerLog::Warn("An autosave from an earlier session is kept, and none is written over it, until it is "
                              "restored or discarded (RestoreAutosave, DiscardAutosave) or the scene is saved");
             }
             return;
@@ -6205,7 +7828,7 @@ namespace N2Engine::Editor
         {
             // Once: a folder that can't be written would otherwise log after every edit
             _autosaveWarned = true;
-            Logger::Warn("Couldn't write the autosave: " + written.error());
+            ServerLog::Warn("Couldn't write the autosave: " + written.error());
         }
         else if (written)
         {
@@ -6232,7 +7855,7 @@ namespace N2Engine::Editor
         if (std::filesystem::is_regular_file(file, error))
         {
             info["exists"] = true;
-            info["path"] = Utf8(file);
+            info["path"] = ClientPath(file); // .n2/autosave/<scene>.scene below the project, for a remote client
             const auto size = std::filesystem::file_size(file, error);
             info["size"] = error ? 0 : static_cast<uint64_t>(size);
             const auto modified = std::filesystem::last_write_time(file, error);
@@ -6275,7 +7898,14 @@ namespace N2Engine::Editor
         auto text = ReadTextFile(file);
         if (!text)
         {
-            SendError(clientSocket, text.error());
+            SendError(clientSocket, "Couldn't read the autosave: " + text.error());
+            return;
+        }
+
+        // The nesting first: an autosave is a file, which is as untrusted as any other
+        if (JsonLimits::SceneJsonTooDeep(*text))
+        {
+            SendError(clientSocket, "The autosave can't be used: " + JsonLimits::SceneJsonTooDeepMessage());
             return;
         }
 
@@ -6338,6 +7968,11 @@ namespace N2Engine::Editor
 
     void EditorServer::SetProject(std::filesystem::path root, IO::ProjectFile project)
     {
+        // What a non-admin reader sees as res:// is the project's assets folder (the project folder itself is user://,
+        // and anything else under it reads as a hidden host path). HostRoots names the same folder res:// for an error
+        // frame to a remote client (ClientText::Redact).
+        const std::filesystem::path assets = root / "assets";
+        _events.SetHostRoots({assets.string(), assets.generic_string()});
         _project = ProjectState{std::move(root), std::move(project)};
     }
 
@@ -6510,7 +8145,11 @@ namespace N2Engine::Editor
         auto text = ReadTextFile(resolved->file);
         if (!text)
         {
-            return std::unexpected(text.error());
+            return std::unexpected("Couldn't read " + SanitizeForLog(resourcePath) + ": " + text.error());
+        }
+        if (JsonLimits::SceneJsonTooDeep(*text))
+        {
+            return std::unexpected(SanitizeForLog(resourcePath) + ": " + JsonLimits::SceneJsonTooDeepMessage());
         }
         const nlohmann::json sceneJson = nlohmann::json::parse(*text, nullptr, false);
         if (sceneJson.is_discarded())
@@ -6534,7 +8173,12 @@ namespace N2Engine::Editor
         scene->SetResourcePath(resolved->resourcePath);
 
         LoadOpenedScene(std::move(scene), resourcePath);
-        Logger::Info("Opened scene " + resourcePath);
+        ServerLog::PublicInfo("Opened scene " + resourcePath);
+        if (_extensions != nullptr)
+        {
+            // OnSceneOpened (E-X6): after the scene is loaded and the host's state is whole, never inside the load
+            (void)RunExtensionHook("OnSceneOpened", nlohmann::json{{"scene", resourcePath}});
+        }
         return GetOpenSceneInfo();
     }
 
@@ -6576,7 +8220,8 @@ namespace N2Engine::Editor
             std::filesystem::create_directories(resolved->file.parent_path(), error);
             if (auto written = IO::WriteTextFileAtomically(resolved->file, SceneFileText(scene->Serialize())); !written)
             {
-                return std::unexpected(written.error());
+                return std::unexpected(ClientText::Failure("Couldn't write " + SanitizeForLog(resolved->resourcePath.ToString()),
+                                                           "the file could not be written", written.error()));
             }
             resourcePath = resolved->resourcePath.ToString();
             (void)IO::ResourceLoader::Instance().Reload(resolved->resourcePath);
@@ -6585,8 +8230,13 @@ namespace N2Engine::Editor
         }
 
         LoadOpenedScene(std::move(scene), resourcePath);
-        Logger::Info(resourcePath.empty() ? "New scene " + SanitizeForLog(sceneName) + " (not saved to a file yet)"
+        ServerLog::Info(resourcePath.empty() ? "New scene " + SanitizeForLog(sceneName) + " (not saved to a file yet)"
                                           : "New scene " + SanitizeForLog(sceneName) + " at " + resourcePath);
+        if (_extensions != nullptr)
+        {
+            // OnSceneOpened (E-X6) for a new scene too: its path is empty when it has no file yet
+            (void)RunExtensionHook("OnSceneOpened", nlohmann::json{{"scene", resourcePath}});
+        }
         return GetOpenSceneInfo();
     }
 
@@ -6620,7 +8270,8 @@ namespace N2Engine::Editor
         std::filesystem::create_directories(resolved->file.parent_path(), error);
         if (auto written = IO::WriteTextFileAtomically(resolved->file, SceneFileText(sceneJson)); !written)
         {
-            return std::unexpected(written.error());
+            return std::unexpected(ClientText::Failure("Couldn't write " + SanitizeForLog(resolved->resourcePath.ToString()),
+                                                       "the file could not be written", written.error()));
         }
         // As SaveScene does: the stored snapshot is what loading this scene by name rebuilds
         SceneManager::UpdateScene(SceneManager::GetCurSceneIndex(), sceneJson);
@@ -6645,7 +8296,12 @@ namespace N2Engine::Editor
         _autosavePending = false;
         _autosaveProtected = false;
         PushSceneChanged();
-        Logger::Info("Saved scene " + resourcePath);
+        ServerLog::PublicInfo("Saved scene " + resourcePath);
+        if (_extensions != nullptr)
+        {
+            // OnSceneSaved (E-X6): the file is written and the history marked saved; the hook reads and cannot fail the save
+            (void)RunExtensionHook("OnSceneSaved", nlohmann::json{{"scene", resourcePath}});
+        }
         return GetOpenSceneInfo();
     }
 
@@ -6653,7 +8309,8 @@ namespace N2Engine::Editor
     {
         if (auto saved = changed.Save(_project->root); !saved)
         {
-            return std::unexpected("Couldn't save " + std::string(IO::ProjectFile::FileName) + ": " + saved.error());
+            return std::unexpected(ClientText::Failure("Couldn't save " + std::string(IO::ProjectFile::FileName),
+                                                       "the file could not be written", saved.error()));
         }
         _project->file = std::move(changed);
         _events.Push("projectChanged", nlohmann::json::object());
@@ -6677,7 +8334,11 @@ namespace N2Engine::Editor
     void EditorServer::SendProjectInfo(int clientSocket)
     {
         BufferWriter response;
-        WriteProjectInfo(response, Utf8(_project->root), Utf8(IO::ResourceLoader::Instance().GetUserDataRoot()),
+        // The project's folders are the host's: a local client (the launcher, the single user) gets them, a remote one
+        // gets empty strings (audit F10; the shape of the response is the same)
+        const bool local = IsLocalClient();
+        WriteProjectInfo(response, local ? Utf8(_project->root) : std::string{},
+                         local ? Utf8(IO::ResourceLoader::Instance().GetUserDataRoot()) : std::string{},
                          _project->file.ToJson());
         SendResponse(clientSocket, response.Release());
     }
@@ -6729,6 +8390,35 @@ namespace N2Engine::Editor
     {
         BufferReader reader(payload);
         const SetProjectSettingsCmd cmd = SetProjectSettingsCmd::Deserialize(reader);
+
+        // Audit item 11: some of the project's settings are an admin's alone (determinism.luaSeed: a constant Lua hash
+        // seed allows hash flooding, which the engine itself calls a security trade-off). SetProjectSettings is a Write
+        // command, which an editor may run, so the block is checked here, before anything is applied or saved. A host
+        // without authentication has no roles: its one user is the admin, as for every command.
+        if (cmd.settings.is_object() && RequiresAccessToken())
+        {
+            const ConnectionIdentity identity = CurrentIdentity();
+            if (identity.role != TokenRole::Admin)
+            {
+                for (const auto &[key, value] : cmd.settings.items())
+                {
+                    if (!IsAdminOnlySettingsBlock(key))
+                    {
+                        continue;
+                    }
+                    ServerLog::Warn(std::format("audit: denied user={} role={} command=SetProjectSettings setting={}{}",
+                                                identity.user, TokenRoleName(identity.role), SanitizeForLog(key),
+                                                PeerSuffix()));
+                    SendResponse(clientSocket,
+                                 BuildDenial(Protocol::ErrorCodeForbidden,
+                                             std::format("forbidden: role {} is not allowed to change the project's '{}' settings: "
+                                                         "determinism.luaSeed makes Lua's hash seed a constant, a security "
+                                                         "trade-off that only an admin may accept",
+                                                         TokenRoleName(identity.role), SanitizeForLog(key))));
+                    return;
+                }
+            }
+        }
         if (!_project)
         {
             SendNoProject(clientSocket);
@@ -6781,7 +8471,7 @@ namespace N2Engine::Editor
             SendResponse(clientSocket, response.Release());
             return;
         }
-        Logger::Info("Project settings changed and saved");
+        ServerLog::PublicInfo("Project settings changed and saved");
         SendProjectInfo(clientSocket);
     }
 
@@ -6825,119 +8515,9 @@ namespace N2Engine::Editor
             SendResponse(clientSocket, response.Release());
             return;
         }
-        Logger::Info(_project->file.startupScene.empty() ? std::string("The project has no startup scene now")
+        ServerLog::Info(_project->file.startupScene.empty() ? std::string("The project has no startup scene now")
                                                          : "Startup scene: " + _project->file.startupScene);
         SendProjectInfo(clientSocket);
-    }
-
-    bool EditorServer::Send(int socket, const void *data, size_t size)
-    {
-        size_t sent = 0;
-        auto *bytes = static_cast<const char*>(data);
-
-        if (_tlsSession && socket == _tlsSessionSocket)
-        {
-            while (sent < size)
-            {
-                size_t count = 0;
-                switch (_tlsSession->Write(bytes + sent, size - sent, count))
-                {
-                case TlsStep::Done:
-                    sent += count;
-                    break;
-                case TlsStep::WantWrite: // the same bytes are offered again, as the library asks
-                    if (!WaitUntilReady(socket, true)) return false;
-                    break;
-                case TlsStep::WantRead: // only a renegotiation needs this, and it isn't enabled
-                case TlsStep::Failed:
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        while (sent < size)
-        {
-            if (!WaitUntilReady(socket, true)) return false;
-            int result = send(socket, bytes + sent, static_cast<int>(size - sent), SendFlags);
-            if (result <= 0) return false;
-            sent += result;
-        }
-        return true;
-    }
-
-    bool EditorServer::Receive(int socket, void *data, size_t size,
-                               std::optional<std::chrono::steady_clock::time_point> deadline)
-    {
-        size_t received = 0;
-        auto *bytes = static_cast<char*>(data);
-
-        if (_tlsSession && socket == _tlsSessionSocket)
-        {
-            while (received < size)
-            {
-                // Returns at once for bytes the TLS library has already decrypted (see WaitUntilReady), and otherwise
-                // when the socket has more of a record
-                if (!WaitUntilReady(socket, false, deadline)) return false;
-                size_t count = 0;
-                switch (_tlsSession->Read(bytes + received, size - received, count))
-                {
-                case TlsStep::Done:
-                    received += count;
-                    break;
-                case TlsStep::WantRead: // a partial record: wait for the rest
-                    break;
-                case TlsStep::WantWrite:
-                    if (!WaitUntilReady(socket, true, deadline)) return false;
-                    break;
-                case TlsStep::Failed:
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        while (received < size)
-        {
-            if (!WaitUntilReady(socket, false, deadline)) return false;
-            int result = recv(socket, bytes + received, static_cast<int>(size - received), 0);
-            if (result <= 0) return false;
-            received += result;
-        }
-        return true;
-    }
-
-    bool EditorServer::WaitUntilReady(int sock, bool forWrite,
-                                      std::optional<std::chrono::steady_clock::time_point> deadline)
-    {
-        const auto nativeSocket = static_cast<NativeSocket>(sock);
-        while (_running)
-        {
-            // Everything the network thread waits on goes through here, so this is where it notices a SIGHUP (the tokens
-            // file re-read) and where a connection whose rights were revoked ends
-            ServiceTokens();
-            if (_closeConnection.load())
-                return false;
-
-            if (deadline.has_value() && std::chrono::steady_clock::now() >= *deadline)
-                return false;
-
-            // Bytes the TLS library has already taken off the socket and decrypted are invisible to select(): without
-            // this a frame that arrived in the same record as the one before it would wait for more traffic
-            if (!forWrite && _tlsSession && sock == _tlsSessionSocket && _tlsSession->HasBufferedInput())
-                return true;
-
-            fd_set set;
-            FD_ZERO(&set);
-            FD_SET(nativeSocket, &set);
-            timeval timeout{0, PollIntervalMicroseconds};
-
-            // The first argument is ignored on Windows
-            const int result = select(sock + 1, forWrite ? nullptr : &set, forWrite ? &set : nullptr, nullptr, &timeout);
-            if (result > 0) return true;
-            if (result < 0) return false;
-        }
-        return false;
     }
 
     void EditorServer::SendResponse(int /*clientSocket*/, std::vector<uint8_t> data)

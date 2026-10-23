@@ -1,0 +1,10 @@
+{
+  "name": "mcp2-write-tools",
+  "head": "c5028a7790ffba746d77371d97c7d117296882fe",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "CI:success"
+  ],
+  "failures": []
+}

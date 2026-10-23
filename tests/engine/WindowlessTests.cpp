@@ -82,6 +82,55 @@ TEST_F(WindowlessWindowTest, OnlyAHeadlessSoftwareApplicationHasNoWindow)
     EXPECT_FALSE(Window::UsesNoWindow(Options(RenderBackend::OPENGL, false)));
 }
 
+// Stage G4 of #155: WebGPU has no window path, so a headless WebGPU application takes the no-window path too
+TEST_F(WindowlessWindowTest, AHeadlessWebGpuApplicationHasNoWindow)
+{
+    EXPECT_TRUE(Window::UsesNoWindow(Options(RenderBackend::WEBGPU, true)));
+    EXPECT_FALSE(Window::UsesNoWindow(Options(RenderBackend::WEBGPU, false)));
+}
+
+TEST_F(WindowlessWindowTest, WebGpuWithAWindowIsRefusedWithoutTouchingGlfw)
+{
+    Window window;
+    EXPECT_FALSE(window.InitWindow(Options(RenderBackend::WEBGPU, false)));
+    EXPECT_FALSE(window.IsValid());
+    EXPECT_FALSE(window.IsWindowless());
+    EXPECT_FALSE(window.RendererFailed()) << "a refused configuration, not a renderer that failed";
+    EXPECT_NE(window.GetInitError().find("only without a window"), std::string::npos) << window.GetInitError();
+    EXPECT_EQ(window.GetRenderer(), nullptr);
+    EXPECT_FALSE(Window::HasGlfw());
+    window.Shutdown();
+}
+
+// Natively the WebGPU backend is the CI harness only (design decision W8): the engine refuses it. In the web build it is
+// made, but it cannot start until the page hands its device in (stage G5): node, where the web tests run, has no WebGPU
+// either. Either way InitWindow fails cleanly, with no window, no renderer and no GLFW call
+TEST_F(WindowlessWindowTest, HeadlessWebGpuFailsCleanlyInThisBuild)
+{
+    Window window;
+    EXPECT_FALSE(window.InitWindow(Options(RenderBackend::WEBGPU, true)));
+    EXPECT_FALSE(window.IsValid());
+    EXPECT_FALSE(window.IsWindowless());
+    EXPECT_EQ(window.GetRenderer(), nullptr);
+    EXPECT_EQ(window.GetInputSystem(), nullptr);
+    EXPECT_FALSE(Window::HasGlfw());
+#if defined(N2ENGINE_PLATFORM_WEB)
+    EXPECT_TRUE(window.RendererFailed());
+    EXPECT_NE(window.GetInitError().find("Failed to initialize the WebGPU renderer"), std::string::npos)
+        << window.GetInitError();
+#else
+    EXPECT_FALSE(window.RendererFailed()) << "refused before any renderer was made";
+    EXPECT_NE(window.GetInitError().find("only be chosen in the web build"), std::string::npos) << window.GetInitError();
+#endif
+    window.Shutdown();
+
+    // The window is still usable for a backend that works here
+    ASSERT_TRUE(window.InitWindow(Options(RenderBackend::SOFTWARE, true))) << window.GetInitError();
+    EXPECT_TRUE(window.IsValid());
+    EXPECT_TRUE(window.GetInitError().empty());
+    window.Shutdown();
+}
+
 TEST_F(WindowlessWindowTest, InitCreatesARendererAndInputButNoWindow)
 {
     Window window;
@@ -119,6 +168,34 @@ TEST_F(WindowlessWindowTest, InitCreatesARendererAndInputButNoWindow)
     (void)stick.getValue();
 
     window.Shutdown();
+}
+
+TEST_F(WindowlessWindowTest, NoRendererBackendCreatesNeitherAWindowNorARenderer)
+{
+    Window window;
+    ASSERT_TRUE(window.InitWindow(Options(RenderBackend::NONE, true))) << window.GetInitError();
+
+    // Nothing to draw with, so the window is not valid, but it started: nothing failed and nothing can close
+    EXPECT_FALSE(window.IsValid());
+    EXPECT_TRUE(window.IsWindowless());
+    EXPECT_FALSE(window.RendererFailed());
+    EXPECT_TRUE(window.GetInitError().empty());
+    EXPECT_EQ(window.GetRenderer(), nullptr);
+    EXPECT_NE(window.GetInputSystem(), nullptr);
+    EXPECT_FALSE(window.ShouldClose());
+    EXPECT_EQ(window.GetWindowDimensions()[0], 0);
+    EXPECT_EQ(window.GetWindowDimensions()[1], 0);
+    EXPECT_FALSE(Window::UsesNoWindow(Options(RenderBackend::NONE, true)));
+
+    // GLFW was never initialised and none of these reach it (TearDown fails on any GLFW error)
+    EXPECT_FALSE(Window::HasGlfw());
+    window.PollEvents();
+    window.Clear();
+    EXPECT_FALSE(window.SetRenderSize(8, 4));
+
+    window.Shutdown();
+    EXPECT_FALSE(window.IsWindowless());
+    EXPECT_TRUE(window.ShouldClose());
 }
 
 TEST_F(WindowlessWindowTest, RendersAndReadsBackAtTheRenderSize)

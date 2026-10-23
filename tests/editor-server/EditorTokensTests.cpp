@@ -581,8 +581,20 @@ TEST(TokenEnvTest, ANewConnectionStartsWithoutTheLastOnesIdentity)
     EXPECT_EQ(Decode(*response).Text(), EditorServer::HelloRequiredError);
     EXPECT_TRUE(second.IsClosedByServer());
     // The host itself holds no identity between connections either: a command that reaches it with nobody's Hello is
-    // refused, though the last connection was an admin
-    EXPECT_EQ(Execute(server, CommandType::GetAllEntities).Text(), EditorServer::HelloRequiredError);
+    // refused, though the last connection was an admin. The first session ends on its own thread (the second
+    // connection is answered by a worker), so give it a moment to finish before looking.
+    const auto identityDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    std::string afterwards;
+    do
+    {
+        afterwards = Execute(server, CommandType::GetAllEntities).Text();
+        if (afterwards == EditorServer::HelloRequiredError)
+        {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    } while (std::chrono::steady_clock::now() < identityDeadline);
+    EXPECT_EQ(afterwards, EditorServer::HelloRequiredError);
     StopWithin(server, std::chrono::seconds(10));
 }
 
@@ -1154,6 +1166,67 @@ TEST_F(TokensServerTest, AReloadThatRemovesTheOpenConnectionsUserClosesIt)
     StopWithin(server, std::chrono::seconds(10));
 }
 
+TEST_F(TokensServerTest, ATokenRevokedBetweenThePreAuthCheckAndTheReplayIsRefusedAndTheNextClientIsServed)
+{
+    // PR S-3: a pre-auth worker verifies the Hello's token, and the session thread replays the Hello through the
+    // ordinary Hello command on the main thread, which checks the token again. A user revoked in between must not get in.
+    // The hook holds the worker after its check (the connection is verified, not yet offered); the file is rewritten and
+    // reloaded while it waits.
+    LogCapture log;
+    EditorServer server;
+    ASSERT_TRUE(server.SetTokensFile(File()));
+    std::atomic<int> offers{0};
+    std::atomic<bool> held{false};
+    std::atomic<bool> release{false};
+    ASSERT_TRUE(server.SetPreHandoffHook(
+        [&]
+        {
+            if (offers++ == 0)
+            {
+                held = true;
+                while (!release.load())
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+        }));
+    ASSERT_TRUE(server.Start(0));
+
+    TestClient bob(server.GetPort());
+    ASSERT_TRUE(bob.IsConnected());
+    ASSERT_TRUE(bob.SendRequest(CommandType::Hello, HelloPayload(Bob.token, true, "bob")));
+    {
+        const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!held.load() && std::chrono::steady_clock::now() < limit)
+            server.ProcessCommands(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(held.load()) << "the worker never verified bob's Hello";
+
+    WriteTokensFile(File(), {Alice, Carol});
+    server.RequestTokensReload();
+    ASSERT_TRUE(PumpUntilLogged(server, log, "Reloaded the tokens file: 2 user(s)"));
+    release = true;
+
+    // The replay on the main thread refuses him, as a wrong token, and the connection closes
+    {
+        const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (bob.BytesAvailable() < 5 && std::chrono::steady_clock::now() < limit)
+            server.ProcessCommands(std::chrono::milliseconds(10));
+    }
+    const auto response = bob.ReadResponse();
+    ASSERT_TRUE(response.has_value());
+    EXPECT_EQ(Decode(*response).type, ErrorType);
+    EXPECT_EQ(Decode(*response).Text(), "Invalid access token");
+    EXPECT_TRUE(bob.IsClosedByServer());
+
+    // The host is not stuck on him: the next candidate is served
+    TestClient carol(server.GetPort());
+    ASSERT_TRUE(carol.IsConnected());
+    const auto hello = Roundtrip(server, carol, CommandType::Hello, HelloPayload(Carol.token, true, "carol"));
+    ASSERT_TRUE(hello.has_value());
+    ASSERT_EQ(hello->type, ServerInfoType) << hello->Text();
+    EXPECT_EQ(DecodeServerInfo(*hello).role, "viewer");
+    StopWithin(server, std::chrono::seconds(10));
+}
+
 TEST_F(TokensServerTest, AReloadThatChangesTheOpenConnectionsRoleOrTokenClosesIt)
 {
     EditorServer server;
@@ -1303,4 +1376,23 @@ TEST_F(TokensServerTest, AReloadOfAFileTheOthersCanReadIsRefusedOnPosix)
     }
     StopWithin(server, std::chrono::seconds(10));
 #endif
+}
+
+// ==================== Nobody on a tokens host is local (audit item 11) ====================
+
+TEST_F(TokensServerTest, NobodyOnATokensHostIsLocalAndNoUserIsToldWhatAnExceptionSaid)
+{
+    EditorServer server;
+    ASSERT_TRUE(server.SetTokensFile(File()));
+    EXPECT_FALSE(server.IsLocalClient()) << "a host with a tokens file serves several users: the detail is the admin's log";
+
+    // Every role gets the same generic answer to a command that throws (a payload that is cut short)
+    for (const User &user : {Alice, Bob})
+    {
+        ASSERT_EQ(DecodeServerInfo(Execute(server, CommandType::Hello, HelloPayload(user.token, true, user.name))).user,
+                  user.name);
+        const Frame failed = Execute(server, CommandType::CreateEntity);
+        EXPECT_EQ(failed.type, static_cast<uint8_t>(ResponseType::Error)) << user.name;
+        EXPECT_EQ(failed.Text(), "Command failed: the host couldn't complete it (see the host's log)") << user.name;
+    }
 }

@@ -1,0 +1,10 @@
+{
+  "name": "_selftest",
+  "head": "3e75f051f16b12c624006b1cd189530583de622a",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "CI:success"
+  ],
+  "failures": []
+}

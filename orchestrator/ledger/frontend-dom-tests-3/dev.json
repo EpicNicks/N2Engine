@@ -1,0 +1,1 @@
+{"pr":30,"branch":"feat-dom-tests-assets-hierarchy","head":"e79c37219d8a914b3462323ddd0165f69fa5b93f","files":["README.md","src/test-dom/assets-panel.test.tsx","src/test-dom/hierarchy-panel.test.tsx","src/test-dom/panel-fakes.ts"],"deviations":[],"unverified":["Electron UI against a live host","layout-dependent drop positions (before/after)"],"needsUser":null}

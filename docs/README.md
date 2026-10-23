@@ -20,7 +20,7 @@ The pages describe `master`. PRs #26–#34 have all merged; their `PR #nn` badge
 | `transforms.html` | `Positionable` local/world transforms, dirty propagation, physics notification |
 | `scenes.html` | `Scene` and `SceneManager`: storage, loading, switching, teardown |
 | `coroutines.html` | Coroutine scheduling, waits, stop rules, re-entrancy |
-| `physics.html` | Backends, bodies, colliders, events, raycasts, mass properties |
+| `physics.html` | Backends, bodies, colliders, events, raycasts, mass properties, the vendored Jolt Physics (option, build flags) and the Jolt backend (core: what exists, the mapping, the differences from PhysX, determinism declarations) |
 | `input.html` | Input system, action maps, bindings, value combination |
 | `audio.html` | Audio system, sources, one-shots, mixer groups, shutdown |
 | `text.html` | Font backends, SDF atlas, UTF-8 and text layout, the `Font` asset and default font, the `TextRenderer` component, the OpenGL and software text shaders, golden-image tests, the drawing code shared with UI text |
@@ -34,9 +34,13 @@ The pages describe `master`. PRs #26–#34 have all merged; their `PR #nn` badge
 | `serialization.html` | Scene/component JSON, references, failure handling |
 | `math.html` | Math types, SIMD tiers, correctness guarantees |
 | `scripting-lua.html` | `LuaComponent`, fields, checked handles, subscriptions, `engine-api.lua` |
+| `editor-extensions.html` | Lua editor extensions: the model (Lua in the edit host, the UI as data, no code in the editor), `--editor-extensions`, the trust prompt and `--editor-extensions-watch`, the file layout, what a file declares, forms and field kinds, menu items, inspector sections, hooks, the whole `Editor` API, capabilities and the role table, budgets, workers and the fault flag, the sandbox, security notes, troubleshooting (states and messages), the AlignTools example, `editor-api.lua` |
 | `logging-and-editor.html` | Logger, engine health, the editor host |
 | `editor.html` | Editor projects: `project.n2proj`, `--create`, opening a project, scene files, unsaved changes, the hierarchy and entity commands, project settings, per-project `user://` |
-| `testing.html` | Test layout, CI, conventions, pixel tests with the headless software renderer |
+| `netcode.html` | n2net, the netcode packet layer: the `ITransport` interface, the packet byte layout, acks, the reliable-ordered and unreliable-sequenced channels, fragmentation and its limits, bounded parsing of untrusted input, the deterministic network simulator and how to use it in tests, the native UDP transport, the secure layer and N2Server, the network world (the `NetworkObject` component, net ids, scene objects matched by UUID, prefab spawns and despawns, the join fingerprint, the world messages, `NetworkServer` and `NetworkClient`), field replication (`.Replicated()`, Lua `replicated = true`, the codecs, deltas against the acknowledged baseline, `NetworkTransform`), what is not built yet (interpolation, inputs, RPCs, prediction) |
+| `web-build.html` | The WebAssembly build (stages 0 to 2 of #155): Emscripten toolchain and pinned version, `N2ENGINE_PLATFORM_WEB`, the dev/size/speed profiles, building locally, the reduced target set and exclusions, the web player (canvas, loop, input, assets, page), building and hosting the static package, the output contract, the size report, what is not done yet |
+| `web-checklist.html` | What to check by hand in a real browser for the web player (loading, canvas, input, resize, hosting from a subdirectory, MIME fallback, performance), which CI cannot do |
+| `testing.html` | Test layout, CI, conventions, pixel tests with the headless software renderer, the Jolt smoke test and its cross-leg state hash, the typed physics tests over both backends and the Jolt backend determinism numbers |
 
 ## Adding or changing a page
 

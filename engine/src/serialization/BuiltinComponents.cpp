@@ -8,6 +8,8 @@
 #include "engine/example/renderers/CubeRenderer.hpp"
 #include "engine/example/renderers/QuadRenderer.hpp"
 #include "engine/example/renderers/SphereRenderer.hpp"
+#include "engine/network/NetworkObject.hpp"
+#include "engine/network/NetworkTransform.hpp"
 #include "engine/physics/BoxCollider.hpp"
 #include "engine/physics/CapsuleCollider.hpp"
 #include "engine/physics/Rigidbody.hpp"
@@ -65,5 +67,7 @@ namespace N2Engine
         Add<UI::Image>(registry, "Image");
         Add<UI::UIText>(registry, "UIText");
         Add<UI::Button>(registry, "Button");
+        Add<Network::NetworkObject>(registry, "NetworkObject");
+        Add<Network::NetworkTransform>(registry, "NetworkTransform");
     }
 }

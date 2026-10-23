@@ -30,6 +30,19 @@ namespace N2Engine::Editor
     struct HostOptions
     {
         static constexpr int DefaultPort = 9999;
+        /// EditorServer::DefaultIdleTimeout / DefaultWriteTimeout in seconds, spelled out like bindAddress;
+        /// HostOptionsTest.NoArgumentsGiveTheDefaults pins them equal
+        static constexpr int DefaultIdleTimeoutSeconds = 300;
+        static constexpr int DefaultWriteTimeoutSeconds = 30;
+        /// The largest value --idle-timeout, --write-timeout (seconds) and --max-session (minutes) take: a day, an hour
+        /// and a year. A bigger number is a typo for "never", which --idle-timeout 0 and --max-session 0 already say.
+        static constexpr int MaxIdleTimeoutSeconds = 24 * 60 * 60;
+        static constexpr int MaxWriteTimeoutSeconds = 60 * 60;
+        static constexpr int MaxSessionMinutesLimit = 365 * 24 * 60;
+        /// EditorServer::DefaultPreAuthSlots / MaxPreAuthSlots, spelled out like the timeouts above; HostOptionsTest pins
+        /// them equal
+        static constexpr int DefaultPreAuthSlots = 4;
+        static constexpr int MaxPreAuthSlots = 16;
 
         /// 0 lets the OS pick a free port; the ready line reports the one it picked
         int port = DefaultPort;
@@ -62,13 +75,39 @@ namespace N2Engine::Editor
         /// host built with N2ENGINE_EDITOR_TLS (RunHost refuses it otherwise). It applies to this one process: a play
         /// host a launcher starts (--play) is a separate process and stays plaintext on loopback.
         bool tls = false;
+        /// --insecure-bind: accept a non-loopback --bind without a token and --tls. Without it ParseHostArguments
+        /// refuses such a bind when the host would serve (S3, audit F5); with it the host starts and logs the old
+        /// warnings, which still describe the risk.
+        bool insecureBind = false;
         /// --read-only: the host answers every command that isn't a read (EditorServer::IsReadCommand; Shutdown included)
         /// with the readOnly error, and keeps serving. Works with or without --token-env.
         bool readOnly = false;
+        /// --editor-extensions: load the project's Lua editor extensions (<project>/editor/**/*.lua; EditorServer::
+        /// EnableEditorExtensions) and answer ListEditorExtensions, GetEditorUi and ReloadEditorExtensions from them.
+        /// OFF by default on every host: running project code on the host is a decision of whoever starts it, never of
+        /// a project. ParseHostArguments refuses it with --play (a play host never loads extensions) and with a
+        /// non-loopback --bind unless --tokens-file is given (so roles exist). Allowed with --read-only.
+        bool editorExtensions = false;
+        /// --editor-extensions-watch: poll the project's editor/ folder (about once a second) and reload only the extension
+        /// file that changed (EditorServer::SetEditorExtensionsWatching, ExtensionHost::ReloadChanged). OFF by default, and
+        /// meaningful only with --editor-extensions: ParseHostArguments refuses it without.
+        bool editorExtensionsWatch = false;
         /// --no-rate-limit: turns off the failed-Hello rate limiting (EditorServer::SetRateLimiting) that a host with
         /// an access token has by default; for test rigs that fail Hellos on purpose. It changes nothing on a host
         /// without a token, which has no failed Hellos to count.
         bool noRateLimit = false;
+        /// --idle-timeout <seconds>: close a connection that has sent no request for this long once it is a session
+        /// (EditorServer::SetIdleTimeout). 0 turns it off, for test rigs and debugging.
+        int idleTimeoutSeconds = DefaultIdleTimeoutSeconds;
+        /// --write-timeout <seconds>: close a connection whose response makes no write progress for this long
+        /// (EditorServer::SetWriteTimeout); at least 1
+        int writeTimeoutSeconds = DefaultWriteTimeoutSeconds;
+        /// --max-session <minutes>: close a session older than this (EditorServer::SetMaxSessionAge). 0, the default, is off.
+        int maxSessionMinutes = 0;
+        /// --preauth-slots <n>: how many connections may be in their TLS handshake and Hello at once, and how many pre-auth
+        /// worker threads there are (EditorServer::SetPreAuthSlots); 1 to 16. Default 4. The authenticated session has its
+        /// own thread, so these bound only what an unauthenticated peer can occupy.
+        int preAuthSlots = DefaultPreAuthSlots;
         /// --log-level <info|warn|error>: the least severe level the host's log sink (LogSink; stderr, and --log-file) writes.
         /// Info by default. The Logger has no Debug level, and polled commands never log, so Info is quiet while idle.
         Logger::LogLevel logLevel = Logger::LogLevel::Info;
@@ -114,6 +153,15 @@ namespace N2Engine::Editor
     /// port" (EditorServer::Start(0)).
     [[nodiscard]] std::optional<int> ParsePort(std::string_view text);
 
+    /// A whole number in [min, max] written in decimal digits only (no sign, whitespace, exponent or trailing text)
+    [[nodiscard]] std::optional<int> ParseWholeNumber(std::string_view text, int min, int max);
+
+    /// True for a dotted-quad IPv4 address in 127.0.0.0/8 (four decimal fields of 1 to 3 digits, no leading zero,
+    /// each at most 255, nothing else). Anything that does not parse is false (so it counts as non-loopback): the
+    /// server's inet_pton rejects whatever this rejects and more, and "localhost", an empty string, IPv6 and
+    /// trailing text are all false.
+    [[nodiscard]] bool IsLoopbackBindAddress(std::string_view text);
+
     /// "opengl" or "software" (exactly; no other spelling)
     [[nodiscard]] std::optional<HostRenderer> ParseRenderer(std::string_view text);
 
@@ -122,6 +170,8 @@ namespace N2Engine::Editor
     /// starts with "--"), an invalid port, renderer or --project-id, --create together with --project, --name or
     /// --project-id without --create, --tokens-file together with --token-env, and --new-token with an invalid user
     /// or role (it takes two values) are errors (the message names the option); unknown arguments are ignored.
+    /// A host that would serve (not --create, --new-token or --help) with a non-loopback --bind (IsLoopbackBindAddress)
+    /// is an error unless it has a token (--token-env or --tokens-file) and --tls, or --insecure-bind is given.
     [[nodiscard]] std::expected<HostOptions, std::string> ParseHostArguments(const std::vector<std::string> &args);
 
     /// Reads up to `size` bytes into `buffer`; returns the count read, 0 at end of file, and a negative number on error

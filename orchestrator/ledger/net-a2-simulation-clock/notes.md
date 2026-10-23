@@ -1,0 +1,13 @@
+Accepted by the user 2026-10-13:
+- A1 not merged: mode is Application::SetSimulationMode(None|Authoritative|Deterministic) and GetSimulationClock(); nothing reads a project setting yet
+- Tick counter increments at the START of a tick (inside tick N's FixedUpdate and OnAttach GetTick()==N); in None it increments only when a step actually runs (not while timeScale is 0)
+- Network mode: timeScale is allowed but presentation-only (scales Update delta and Time.time), not refused; fixed dt ignores it and a pause does not stop ticks
+- Max catch-up default is 30 ticks per frame (0 = unlimited), my choice; owed time stays in the accumulator, behind handler fires every frame that ends behind, only ResetAccumulator() discards
+- Network mode does not process the attach queue once per frame, only at tick boundaries, so a frame with no tick leaves new objects unattached and Update-spawned objects attach at a frame-timing-dependent tick (documented: spawn in FixedUpdate)
+- StepTicks(n) is a new public Application API: ticks only (no Update/time/accumulator); in None it attaches once first and runs none while timeScale is 0
+- The old accumulator member moved into SimulationClock; None loop arithmetic is the same but the loop now calls clock.BeginFrame/TickDue/CompleteTick/EndFrame and a RunFixedTick helper
+- Dropped a planned StepTicks-without-scene test: SceneManager::UnloadScenes is private
+- Docs also touched gameobjects-components.html, physics.html and index.html (design-decision row) beyond application/testing/scripting-lua
+- Review fix: Time::SetFixedIgnoresTimeScale moved from SimulationClock::SetMode to Application::SetSimulationMode
+- Review fix: network-mode BeginFrame ignores NaN/inf/negative deltas; SetMode(None) clamps accumulator to 0.25 s
+- Review low fixed: Application::Tick and StepTicks re-sync Time fixed-ignores-timeScale from the clock mode, so GetSimulationClock().SetMode() cannot disagree with fixed dt

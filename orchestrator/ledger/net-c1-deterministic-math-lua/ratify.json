@@ -1,0 +1,7 @@
+{
+  "name": "net-c1-deterministic-math-lua",
+  "decision": "merge",
+  "reasons": [],
+  "relaxed": "behind master by 16 file(s), no code overlap with the PR's files (docs overlap: docs/testing.html), trial merge clean",
+  "merged": true
+}

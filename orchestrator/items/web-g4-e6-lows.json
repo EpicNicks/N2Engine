@@ -1,0 +1,28 @@
+{
+  "closes": null,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "requiresDocs": true,
+  "repo": "engine",
+  "name": "web-g4-e6-lows",
+  "branch": "fix-web-g4-e6-lows",
+  "title": "Follow-ups: G4 async-readback coverage, WebGpuFactory comment, isHeadless docs row, web-build size table; E-X6 code lows",
+  "issue": "Follow-ups of merged G4 (#208) and E-X6 (#215); the user accepted these LOW findings as a follow-up. Verify each against the CODE on master first and say what you did not change and why. G4/web: (1) the async readback path of the WebGPU renderer compiles but no test runs it (engine/src/renderer/.../WebGpuRenderer.cpp ~line 428): add the best coverage achievable without a browser GPU (a test in the web node tests or a pure-logic test of the readback state machine/ordering, e.g. factor the pure part out) or, if truly impossible, a clearly marked TODO in docs 'Not verified' naming G5/G6; (2) engine/include/.../WebGpuFactory.hpp comment says the factory is declared only where compiled in but the header declares it unconditionally: make comment and code agree (prefer fixing the comment unless the conditional declaration is trivially right); (3) docs/application.html isHeadless row (~line 128) and the Headless mode intro name only SOFTWARE and WEBGPU as the backends without a window: NONE also has no window: say so; (4) docs/web-build.html #size-report: the Limit column still shows the pre-Jolt limits (a J3 leftover) while web/budgets.json holds the raised ones: make the table match web/budgets.json exactly (read the file; do not invent numbers) and check the sentences around it. E-X6: (5) OnBeforePlay runs and broadcasts its warnings before WritePlaySnapshot validates the request, with the unvalidated client scene path in the message: move the hook after validation or sanitise the path in the message; test; (6) an extension's own asset write never reaches any OnAssetsChanged hook because NoteAssetWritten refreshes the index so no later poll sees a change: this was a DECLARED deviation, so only make the docs state it plainly and precisely if they do not already; (7) the watcher never retries a file that failed on an id clash when the owning file changes, and the untouched extension always wins: retry the failed file when the clash owner changes or is removed; test. Also one tiny frontend-unrelated engine item: none. Nothing builds locally for the engine; CI (12 checks) is the test; expect fix rounds; re-read every edit twice (CMake/YAML/C++ syntax); NEVER call a stateful function (RNG etc.) twice in one argument list or operator expression (unspecified evaluation order); NEVER run taskkill or kill other processes; verify every docs sentence against the CODE; no attribution lines on commits or PRs (no Co-Authored-By, no Generated-with footer); GitHub only via the wrapper; before your final push merge origin/master into the branch if it moved; your FINAL message must be a real report (PR number, head sha, what you did, deviations), never a single word.",
+  "allowedPaths": [
+    "^engine/",
+    "^editor-server/",
+    "^web/",
+    "^tests/",
+    "^docs/",
+    "^\\.github/",
+    "^renderer/"
+  ],
+  "acceptance": [
+    "Readback covered or honestly documented; WebGpuFactory comment true",
+    "Docs rows (isHeadless, size table) true against code and budgets.json",
+    "OnBeforePlay hook runs after validation; watcher retries an id-clash file; CI green"
+  ],
+  "reviewer": "sonnet",
+  "notes": "Reviewer: size table equals web/budgets.json exactly, hook ordering test, retry cannot loop or reload an unchanged file repeatedly, docs true."
+}

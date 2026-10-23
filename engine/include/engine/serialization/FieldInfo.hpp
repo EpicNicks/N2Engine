@@ -59,6 +59,31 @@ namespace N2Engine
     /// The kind's name as it is on the wire ("Bool", "Vector3", "AssetRefList", ...)
     [[nodiscard]] std::string_view FieldKindName(FieldKind kind);
 
+    /// Whether a field of this kind can be replicated (netcode stage B2): Bool, Int, Float, String, Vector2/3/4,
+    /// Quaternion, Color, Enum, AssetRef and GameObjectRef. Not the lists, ComponentRef (no component id exists on the
+    /// wire) or Json (arbitrary JSON is never put on the wire).
+    [[nodiscard]] constexpr bool IsReplicableKind(const FieldKind kind) noexcept
+    {
+        switch (kind)
+        {
+        case FieldKind::Bool:
+        case FieldKind::Int:
+        case FieldKind::Float:
+        case FieldKind::String:
+        case FieldKind::Vector2:
+        case FieldKind::Vector3:
+        case FieldKind::Vector4:
+        case FieldKind::Quaternion:
+        case FieldKind::Color:
+        case FieldKind::Enum:
+        case FieldKind::AssetRef:
+        case FieldKind::GameObjectRef:
+            return true;
+        default:
+            return false;
+        }
+    }
+
     /**
      * Everything an editor needs to show and edit one serialized member. Built at the RegisterMember call from the
      * member's C++ type (FieldTraits), then refined by the opt-in FieldBuilder calls.
@@ -90,6 +115,14 @@ namespace N2Engine
         std::string container;
         bool hidden = false;
         bool readOnly = false;
+        /// Netcode stage B2: the server sends this field's value to every client (FieldBuilder::Replicated, or
+        /// `replicated = true` in a Lua field declaration). Only a kind IsReplicableKind accepts is ever set. Not part of
+        /// the editor protocol's FieldSchema (ToJson does not write it); it is part of the network registry fingerprint.
+        bool replicated = false;
+        /// Replicated Float and Vector2/3/4 only: when above 0 the wire carries the value as a whole number of these
+        /// steps (a varint), so a value that moves by less than a step costs nothing and the round-trip error is at
+        /// most half a step. 0: the full float, or, for a Float with a Range, 16 bits across the range.
+        double replicationStep = 0.0;
 
         /// The FieldSchema of the editor protocol (protocol.json): optional keys are left out when empty
         [[nodiscard]] nlohmann::json ToJson() const;

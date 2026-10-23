@@ -1,12 +1,14 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <initializer_list>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include <editor-server/RateLimiter.hpp>
@@ -356,96 +358,58 @@ TEST(RateLimiterTest, LoopbackIsExemptFromTheAddressRule)
     FakeClock clock;
     RateLimiter limiter({}, clock.Get());
 
-    // Nine failures: more than an address is allowed, fewer than loopback's burst
+    // More failures than an address is allowed
     for (int i = 0; i < 9; ++i)
     {
         const auto outcome = limiter.RecordFailure(Loopback, std::nullopt);
         EXPECT_FALSE(outcome.address.has_value());
-        EXPECT_FALSE(outcome.loopback.has_value());
+        EXPECT_FALSE(outcome.user.has_value());
         EXPECT_TRUE(limiter.AdmitConnection(Loopback).allowed);
         EXPECT_FALSE(limiter.AdmitConnection(Loopback).priorOffender) << "no short budget for a tunnel";
     }
     EXPECT_EQ(limiter.AddressCount(), 0u) << "no per-address entry for loopback";
 }
 
-TEST(RateLimiterTest, TenFailuresInAMinuteBackOffAllOfLoopback)
+// PR S-4: the shared loopback counter, which refused every loopback connection after ten failed Hellos in a minute
+// (a client with the right token included, and everybody behind a proxy), is gone. Loopback is bounded by the slots and
+// the handshake rate (PreAuthServerTests), not by a count of failures.
+TEST(RateLimiterTest, FailuresFromLoopbackNeverRefuseLoopback)
 {
-    FakeClock clock; // starts at zero: no time stands for "never"
+    FakeClock clock;
     RateLimiter limiter({}, clock.Get());
-    Fail(limiter, Loopback, 9);
 
-    const auto tenth = limiter.RecordFailure(PeerAddress::IPv4(127, 0, 0, 5), std::nullopt);
-    ASSERT_TRUE(tenth.loopback.has_value());
-    EXPECT_EQ(tenth.loopback->duration, milliseconds(1000));
-    EXPECT_FALSE(tenth.address.has_value());
-
-    // All of loopback, whichever spelling, until it ends; anything else is served
-    EXPECT_FALSE(limiter.AdmitConnection(Loopback).allowed);
-    EXPECT_FALSE(limiter.AdmitConnection(PeerAddress::IPv4(127, 9, 9, 9)).allowed);
-    EXPECT_FALSE(limiter.AdmitConnection(PeerAddress::IPv6(Ipv6({}, 1))).allowed);
-    EXPECT_TRUE(limiter.AdmitConnection(OtherPeer).allowed);
+    // Far more than the ten in a minute that used to start the global backoff, over every spelling of loopback
+    for (int i = 0; i < 300; ++i)
+    {
+        const PeerAddress peer = i % 3 == 0   ? Loopback
+                                 : i % 3 == 1 ? PeerAddress::IPv4(127, 9, 9, 9)
+                                              : PeerAddress::IPv6(Ipv6({}, 1));
+        const auto outcome = limiter.RecordFailure(peer, std::nullopt);
+        ASSERT_FALSE(outcome.address.has_value()) << i;
+        ASSERT_FALSE(outcome.user.has_value()) << i;
+        ASSERT_TRUE(limiter.AdmitConnection(peer).allowed) << i;
+        clock.Advance(milliseconds(10));
+    }
     EXPECT_EQ(limiter.AddressCount(), 0u);
-
-    clock.Advance(milliseconds(1000));
-    const auto after = limiter.AdmitConnection(Loopback);
-    EXPECT_TRUE(after.allowed);
-    EXPECT_EQ(after.suppressed, 3u);
+    EXPECT_EQ(limiter.UserCount(), 0u);
+    EXPECT_TRUE(limiter.AdmitConnection(OtherPeer).allowed);
 }
 
-TEST(RateLimiterTest, LoopbackFailuresSpreadOverMoreThanAMinuteNeverBackOff)
+TEST(RateLimiterTest, LoopbackFailuresThatNameAUserStillBackThatUserOffButNotLoopback)
 {
     FakeClock clock;
     RateLimiter limiter({}, clock.Get());
-    // One failure every 7 seconds is under 10 a minute, for as long as it goes on
-    for (int i = 0; i < 200; ++i)
-    {
-        const auto outcome = limiter.RecordFailure(Loopback, std::nullopt);
-        ASSERT_FALSE(outcome.loopback.has_value()) << i;
-        clock.Advance(milliseconds(7000));
-    }
+
+    // Wrong tokens naming alice through a tunnel: the user's backoff (short, capped) is what holds an attacker there
+    Fail(limiter, Loopback, 2, "alice");
+    const auto third = limiter.RecordFailure(Loopback, "alice");
+    ASSERT_TRUE(third.user.has_value());
+    EXPECT_TRUE(limiter.IsUserBackedOff("alice"));
+    EXPECT_FALSE(limiter.IsUserBackedOff("bob"));
+    // ... and every loopback connection is still admitted, so bob (and alice, whose right token passes the user's
+    // backoff in the server) get in
     EXPECT_TRUE(limiter.AdmitConnection(Loopback).allowed);
-}
-
-TEST(RateLimiterTest, EachFurtherBurstOnLoopbackDoublesTheBackoff)
-{
-    FakeClock clock;
-    RateLimiter limiter({}, clock.Get());
-
-    const std::vector<int64_t> expected = {1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000, 256000, 300000, 300000};
-    for (const int64_t wanted : expected)
-    {
-        const auto outcome = Fail(limiter, Loopback, 10);
-        ASSERT_TRUE(outcome.loopback.has_value());
-        EXPECT_EQ(outcome.loopback->duration.count(), wanted);
-        clock.Advance(outcome.loopback->duration);
-        ASSERT_TRUE(limiter.AdmitConnection(Loopback).allowed);
-    }
-}
-
-TEST(RateLimiterTest, ALoopbackSuccessDoesNotClearTheGlobalCounter)
-{
-    FakeClock clock;
-    RateLimiter limiter({}, clock.Get());
-    Fail(limiter, Loopback, 9);
-    // A good login through the tunnel must not give an attacker behind it a fresh count
-    limiter.RecordSuccess(Loopback, std::nullopt);
-    EXPECT_TRUE(limiter.RecordFailure(Loopback, std::nullopt).loopback.has_value());
-}
-
-TEST(RateLimiterTest, LoopbackIsForgottenAfterFifteenIdleMinutes)
-{
-    FakeClock clock;
-    RateLimiter limiter({}, clock.Get());
-    Fail(limiter, Loopback, 10);
-    clock.Advance(milliseconds(1000));
-    ASSERT_TRUE(limiter.AdmitConnection(Loopback).allowed);
-
-    clock.Advance(milliseconds(15 * 60 * 1000));
-    // The strikes are gone: the next burst is the first again
-    const auto outcome = Fail(limiter, Loopback, 10);
-    ASSERT_TRUE(outcome.loopback.has_value());
-    EXPECT_EQ(outcome.loopback->duration, milliseconds(1000));
-    EXPECT_EQ(outcome.loopback->failures, 1u);
+    EXPECT_FALSE(third.address.has_value());
 }
 
 TEST(RateLimiterTest, AnUnknownPeerIsAnAddressLikeAnyOther)
@@ -549,7 +513,6 @@ TEST(RateLimiterTest, AFailureCanStartTheAddressAndTheUserBackoffTogether)
     const auto outcome = limiter.RecordFailure(Attacker, "alice");
     ASSERT_TRUE(outcome.address.has_value());
     ASSERT_TRUE(outcome.user.has_value());
-    EXPECT_FALSE(outcome.loopback.has_value());
 }
 
 TEST(RateLimiterTest, AUserBackoffIsNotAFailureAndDoesNotChangeTheAddress)
@@ -570,6 +533,54 @@ TEST(RateLimiterTest, AUserBackoffIsNotAFailureAndDoesNotChangeTheAddress)
 
 // ==================== Policy ====================
 
+// ==================== A connection that never finished a Hello ====================
+
+TEST(RateLimiterTest, AnUnfinishedHelloCountsLikeAFailedHelloForItsAddress)
+{
+    FakeClock clock;
+    RateLimiter limiter({}, clock.Get());
+
+    // Two are free, the third starts the same 1 s backoff a wrong token would, naming no user
+    EXPECT_FALSE(limiter.RecordUnfinishedHello(Attacker).address.has_value());
+    EXPECT_FALSE(limiter.RecordUnfinishedHello(Attacker).address.has_value());
+    const auto third = limiter.RecordUnfinishedHello(Attacker);
+    ASSERT_TRUE(third.address.has_value());
+    EXPECT_EQ(third.address->duration, milliseconds(1000));
+    EXPECT_EQ(third.address->failures, 3u);
+    EXPECT_FALSE(third.user.has_value());
+    EXPECT_EQ(limiter.UserCount(), 0u);
+
+    EXPECT_FALSE(limiter.AdmitConnection(Attacker).allowed);
+    EXPECT_TRUE(limiter.AdmitConnection(OtherPeer).allowed);
+
+    // And it adds to what wrong tokens did: one more failure of either kind doubles the backoff
+    clock.Advance(milliseconds(1000));
+    const auto wrongToken = limiter.RecordFailure(Attacker, std::nullopt);
+    ASSERT_TRUE(wrongToken.address.has_value());
+    EXPECT_EQ(wrongToken.address->duration, milliseconds(2000));
+    EXPECT_EQ(wrongToken.address->failures, 4u);
+}
+
+TEST(RateLimiterTest, AnUnfinishedHelloFromLoopbackIsNotRecordedAtAll)
+{
+    FakeClock clock;
+    RateLimiter limiter({}, clock.Get());
+
+    // Behind a tunnel or a proxy every peer is loopback: nothing is recorded for a mere connect, however many there are
+    for (int i = 0; i < 50; ++i)
+    {
+        const auto outcome = limiter.RecordUnfinishedHello(i % 2 == 0 ? Loopback : PeerAddress::IPv4(127, 7, 7, 7));
+        EXPECT_FALSE(outcome.address.has_value());
+        EXPECT_FALSE(outcome.user.has_value());
+    }
+    EXPECT_TRUE(limiter.AdmitConnection(Loopback).allowed);
+    EXPECT_EQ(limiter.AddressCount(), 0u);
+
+    // ... and neither does a wrong token from loopback: there is no shared loopback counter to feed (PR S-4)
+    Fail(limiter, Loopback, 30);
+    EXPECT_TRUE(limiter.AdmitConnection(Loopback).allowed);
+}
+
 TEST(RateLimiterTest, ThePolicyIsTheDocumentedOne)
 {
     const RateLimitPolicy policy;
@@ -578,8 +589,6 @@ TEST(RateLimiterTest, ThePolicyIsTheDocumentedOne)
     EXPECT_EQ(policy.maxBackoff, milliseconds(5 * 60 * 1000));
     EXPECT_EQ(policy.idleReset, milliseconds(15 * 60 * 1000));
     EXPECT_EQ(policy.maxEntries, 4096u);
-    EXPECT_EQ(policy.loopbackFailures, 10u);
-    EXPECT_EQ(policy.loopbackWindow, milliseconds(60 * 1000));
     EXPECT_EQ(policy.userMaxBackoff, milliseconds(30 * 1000));
     EXPECT_EQ(policy.priorOffenderBudget, milliseconds(2000));
 }
@@ -592,4 +601,92 @@ TEST(RateLimiterTest, WithoutAnInjectedClockItUsesTheSteadyClock)
     const auto admission = limiter.AdmitConnection(Attacker);
     EXPECT_FALSE(admission.allowed);
     EXPECT_GT(admission.retryAfter, milliseconds(0));
+}
+
+// ---- thread safety: every public method is locked (no sanitizer leg runs these; a data race would show as a crash, a
+// corrupt table or a wrong count)
+
+TEST(RateLimiterThreadingTest, ManyThreadsHammeringTheLimiterKeepItConsistent)
+{
+    RateLimitPolicy policy;
+    policy.maxEntries = 64; // small, so the eviction paths run too
+    RateLimiter limiter(policy, [] { return RateLimiter::TimePoint(milliseconds(1000)); });
+
+    constexpr int ThreadCount = 8;
+    constexpr int Rounds = 3000;
+    std::vector<std::thread> threads;
+    for (int t = 0; t < ThreadCount; ++t)
+    {
+        threads.emplace_back(
+            [&limiter, t]
+            {
+                for (int i = 0; i < Rounds; ++i)
+                {
+                    const uint8_t host = static_cast<uint8_t>((t * 31 + i) % 250);
+                    const PeerAddress peer = (i % 17 == 0) ? PeerAddress::IPv4(127, 0, 0, 1)
+                                                           : PeerAddress::IPv4(203, 0, static_cast<uint8_t>(i % 7), host);
+                    const std::string user = "user" + std::to_string((t + i) % 90);
+                    switch (i % 5)
+                    {
+                    case 0:
+                        (void)limiter.AdmitConnection(peer);
+                        break;
+                    case 1:
+                        (void)limiter.RecordFailure(peer, std::string_view(user));
+                        break;
+                    case 2:
+                        (void)limiter.IsUserBackedOff(user);
+                        break;
+                    case 3:
+                        (void)limiter.RecordUnfinishedHello(peer);
+                        break;
+                    default:
+                        limiter.RecordSuccess(peer, std::string_view(user));
+                        (void)limiter.AddressCount();
+                        (void)limiter.UserCount();
+                        break;
+                    }
+                }
+            });
+    }
+    for (std::thread &thread : threads)
+    {
+        thread.join();
+    }
+    EXPECT_LE(limiter.AddressCount(), policy.maxEntries);
+    EXPECT_LE(limiter.UserCount(), policy.maxEntries);
+}
+
+TEST(RateLimiterThreadingTest, ConcurrentFailuresAreAllCounted)
+{
+    RateLimiter limiter({}, [] { return RateLimiter::TimePoint(milliseconds(1000)); });
+
+    constexpr int ThreadCount = 8;
+    constexpr int Failures = 250;
+    std::atomic<int> backoffsStarted{0};
+    std::vector<std::thread> threads;
+    for (int t = 0; t < ThreadCount; ++t)
+    {
+        threads.emplace_back(
+            [&limiter, &backoffsStarted, t]
+            {
+                // Different addresses (so no address rule interferes), one user: its failures are counted wherever they
+                // come from
+                const PeerAddress peer = PeerAddress::IPv4(203, 0, 113, static_cast<uint8_t>(t + 1));
+                for (int i = 0; i < Failures; ++i)
+                {
+                    if (limiter.RecordFailure(peer, std::string_view("alice")).user.has_value())
+                    {
+                        ++backoffsStarted;
+                    }
+                }
+            });
+    }
+    for (std::thread &thread : threads)
+    {
+        thread.join();
+    }
+    // Two failures are free, every one after starts a backoff: a lost update would leave a gap
+    EXPECT_EQ(backoffsStarted.load(), ThreadCount * Failures - static_cast<int>(RateLimitPolicy{}.userFreeFailures));
+    EXPECT_TRUE(limiter.IsUserBackedOff("alice"));
 }

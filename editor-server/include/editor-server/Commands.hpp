@@ -6,6 +6,7 @@
 #include <math/Quaternion.hpp>
 #include <math/Vector3.hpp>
 #include <engine/Health.hpp>
+#include <engine/serialization/JsonLimits.hpp>
 #include <nlohmann/json.hpp>
 
 #include <cstddef>
@@ -82,10 +83,12 @@ namespace N2Engine::Editor::Protocol
     }
 
     /// json: a string holding the value's compact JSON text (keys sorted, as nlohmann::json keeps them). Invalid
-    /// UTF-8 in a string value is replaced (U+FFFD) rather than throwing.
+    /// UTF-8 in a string value is replaced (U+FFFD) rather than throwing. Dumped without recursion (the same text as
+    /// nlohmann's dump): a response can carry component data, which can nest as deep as scene JSON may.
     inline void WriteJson(BufferWriter &w, const nlohmann::json &value)
     {
-        w.WriteString(value.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
+        w.WriteString(N2Engine::JsonLimits::IterativeDump(value, -1, ' ', false,
+                                                          nlohmann::json::error_handler_t::replace));
     }
 
     /// Throws nlohmann::json::parse_error for text that isn't JSON (ExecuteCommand turns it into an Error response)
@@ -100,35 +103,9 @@ namespace N2Engine::Editor::Protocol
     inline constexpr std::size_t MaxJsonDepth = 64;
     inline constexpr std::size_t MaxJsonValues = 200000;
 
-    /// Throws std::runtime_error when the JSON text nests deeper than maxDepth (counting [ and { outside strings)
-    inline void CheckJsonDepth(std::string_view text, const std::size_t maxDepth)
-    {
-        std::size_t depth = 0;
-        bool inString = false;
-        bool escaped = false;
-        for (const char c : text)
-        {
-            if (inString)
-            {
-                if (escaped)
-                    escaped = false;
-                else if (c == '\\')
-                    escaped = true;
-                else if (c == '"')
-                    inString = false;
-                continue;
-            }
-            if (c == '"')
-                inString = true;
-            else if (c == '[' || c == '{')
-            {
-                if (++depth > maxDepth)
-                    throw std::runtime_error("the JSON nests more than " + std::to_string(maxDepth) + " levels deep");
-            }
-            else if ((c == ']' || c == '}') && depth > 0)
-                --depth;
-        }
-    }
+    /// Throws std::runtime_error when the JSON text nests deeper than maxDepth (counting [ and { outside strings).
+    /// The scanner lives in the engine (JsonLimits.hpp), which also checks scene, prefab and snapshot text with it.
+    using N2Engine::JsonLimits::CheckJsonDepth;
 
     /// ReadJson with the limits above: nesting checked before parsing, the number of values after. Throws
     /// std::runtime_error (an Error response) for either, and nlohmann::json::parse_error for text that isn't JSON.
@@ -754,6 +731,51 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    /// The most UUID strings InvokeMenuItem's selection may hold (the same bound as MaxBoundsEntityIds)
+    inline constexpr std::size_t MaxInvokeSelection = 4096;
+
+    struct InvokeMenuItemCmd
+    {
+        /// The item's id (GetEditorUi's menuItems[].id)
+        std::string itemId;
+        /// A JSON array of the UUID strings of the client's selection
+        nlohmann::json selection;
+        /// A JSON object with the values of the item's form
+        nlohmann::json params;
+        /// The uiRevision of the GetEditorUi the request was built from
+        uint32_t uiRevision;
+
+        static InvokeMenuItemCmd Deserialize(BufferReader &r)
+        {
+            std::string id = r.ReadString();
+            nlohmann::json selection = ReadBoundedJson(r);
+            nlohmann::json params = ReadBoundedJson(r);
+            const uint32_t revision = r.ReadU32();
+            return {std::move(id), std::move(selection), std::move(params), revision};
+        }
+    };
+
+    struct InvokeInspectorActionCmd
+    {
+        /// The UUID string of the component the client's inspector shows (it must be of the section's componentType)
+        std::string componentId;
+        /// The button's id (GetEditorUi's inspectorSections[].buttons[].id)
+        std::string actionId;
+        /// A JSON object with the values of the button's form
+        nlohmann::json params;
+        /// The uiRevision of the GetEditorUi the request was built from
+        uint32_t uiRevision;
+
+        static InvokeInspectorActionCmd Deserialize(BufferReader &r)
+        {
+            std::string component = r.ReadString();
+            std::string action = r.ReadString();
+            nlohmann::json params = ReadBoundedJson(r);
+            const uint32_t revision = r.ReadU32();
+            return {std::move(component), std::move(action), std::move(params), revision};
+        }
+    };
+
     struct SetEntityTransformCmd
     {
         /// The GameObject's UUID string
@@ -793,6 +815,23 @@ namespace N2Engine::Editor::Protocol
     inline constexpr std::string_view ErrorCodeReadOnly = "readOnly";
     /// Since 1.12.0: the role bound to the connection may not run the command (a host with a tokens file)
     inline constexpr std::string_view ErrorCodeForbidden = "forbidden";
+    /// Since 1.13.0: the host is serving another session and this client is turned away at Hello (it does not outrank
+    /// that session and is not the same user): the connection is closed after the answer
+    inline constexpr std::string_view ErrorCodeBusy = "busy";
+    /// Since 1.14.0: the host was not started with --editor-extensions, so it has no editor extensions to reload or run
+    inline constexpr std::string_view ErrorCodeExtensionsDisabled = "extensionsDisabled";
+    /// Since 1.14.0: an extension's call failed (a Lua error, a budget trip, a result of the wrong shape, or an error of
+    /// a command it sent). InvokeMenuItem answers it, since 1.15.0, and InvokeInspectorAction, since 1.16.0, after taking
+    /// back what the call changed.
+    inline constexpr std::string_view ErrorCodeExtensionFailed = "extensionFailed";
+    /// Since 1.14.0: the extension failed too often in a short time, ran out of its budget or stopped answering, and is
+    /// disabled until the extensions are reloaded. InvokeMenuItem answers it, since 1.15.0 (InvokeInspectorAction since
+    /// 1.16.0).
+    inline constexpr std::string_view ErrorCodeExtensionFaulted = "extensionFaulted";
+    /// Since 1.15.0: InvokeMenuItem's (since 1.16.0 also InvokeInspectorAction's) uiRevision is not the host's current one
+    inline constexpr std::string_view ErrorCodeStaleUiRevision = "staleUiRevision";
+    /// Since 1.15.0: InvokeMenuItem (since 1.16.0 also InvokeInspectorAction) while the client has an edit group open
+    inline constexpr std::string_view ErrorCodeEditGroupOpen = "editGroupOpen";
 
     /// ErrorCoded (since 1.11.0), sent only to a client that asked for it with Hello's errorCodes: the message an Error
     /// would carry, then a code. Unlike Error's, its payload is two length-prefixed strings.
@@ -1201,6 +1240,47 @@ namespace N2Engine::Editor::Protocol
         WriteJson(payload, schema);
 
         w.WriteU8(static_cast<uint8_t>(ResponseType::LuaFields));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// ListEditorExtensions' and ReloadEditorExtensions' response: an EditorExtensionsInfo as JSON
+    inline void WriteEditorExtensions(BufferWriter &w, const nlohmann::json &info)
+    {
+        BufferWriter payload;
+        WriteJson(payload, info);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::EditorExtensions));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// GetEditorUi's response: an EditorUiInfo as JSON
+    inline void WriteEditorUi(BufferWriter &w, const nlohmann::json &ui)
+    {
+        BufferWriter payload;
+        WriteJson(payload, ui);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::EditorUi));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// InvokeMenuItem's and InvokeInspectorAction's response: the edit result (as EditResult has it: the item's title or
+    /// the button's label as the label, the revision after the call, whether a step can be undone and redone, the
+    /// revision last saved) and the ExtensionResultInfo the item or button returned, as JSON
+    inline void WriteExtensionResult(BufferWriter &w, const std::string &label, uint32_t revision, bool canUndo,
+                                     bool canRedo, uint32_t savedRevision, const nlohmann::json &result)
+    {
+        BufferWriter payload;
+        payload.WriteString(label);
+        payload.WriteU32(revision);
+        payload.WriteBool(canUndo);
+        payload.WriteBool(canRedo);
+        payload.WriteU32(savedRevision);
+        WriteJson(payload, result);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::ExtensionResult));
         w.WriteU32(static_cast<uint32_t>(payload.Size()));
         w.WriteBytes(payload.Data());
     }

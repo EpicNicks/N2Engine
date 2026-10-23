@@ -1,0 +1,26 @@
+{
+  "closes": null,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "requiresDocs": false,
+  "repo": "frontend",
+  "allowedPaths": [
+    "^engine-ref\\.txt$",
+    "^package\\.json$",
+    "^package-lock\\.json$",
+    "^README\\.md$",
+    "^src/",
+    "^scripts/"
+  ],
+  "name": "fe7-regex-safety",
+  "branch": "fix-fe7-regex-safety",
+  "title": "FE7 follow-up: make the console regex filter safe (linear-time matching or a hard work cap) replacing the NestedRepeat heuristic",
+  "issue": "Follow-up to merged FE7 (frontend PR #38; src/renderer/console-filter.ts ~line 73). The user accepted the review low as a follow-up: the NestedRepeat ReDoS heuristic is bypassed by shapes such as ((a+))+ and (a|aa)+$, so a careless or hostile pattern typed into the console regex filter can hang the renderer. FIX properly (do not extend the heuristic): choose the safest approach that fits the repo and justify it in the README/dev.json: (a) run user regexes in a Web Worker (or a node-compatible equivalent in tests) with a hard time budget per filter pass and terminate+disable the regex mode on overrun with an inline message, or (b) a linear-time matcher (a small vetted RE2-style implementation as a dependency only if it is tiny, MIT/BSD, pinned and covered by notices; otherwise implement a restricted subset), or (c) a bounded-work wrapper that processes the lines in small chunks with a deadline between chunks (a single catastrophic match can still hang, so (c) alone is NOT acceptable). Keep the existing behaviour: regex off by default and never persisted as on, caps of 200 pattern characters and 4096 input characters, inline invalid-regex messages. TESTS: the old bypass patterns (((a+))+, (a|aa)+$, (a*)*b, (x+x+)+y) against long adversarial inputs must complete within the budget or be rejected without hanging the test (use a test timeout), normal patterns still match identically, the disable-on-overrun path, DOM test of the inline message; README updated. Frontend rules: requiresDocs is false (README only); run npm run typecheck and npm test locally before every push; no token in logs/storage; NEVER run taskkill or kill other processes; keep changes inside the files your lane owns (other frontend items are in flight: README.md and keymap/panel registrations will collide mechanically: keep each as a small separate hunk; the repo README is LF); no engine/protocol change unless this item says so. Read the named design sections and the decisions (all ACCEPTED by the user) FIRST. Merged and usable: F1 panel registry/layout, F2 prefs store + keymap, FE3 rotate/scale gizmos (mode on ViewportController, W/E/R/Q keymap actions), FE5 inspector local transform, FE6/FE7 filters, FE8 history panel, MCP1 n2-mcp (mcp/), the protocol 1.14.0 typed client.",
+  "acceptance": [
+    "Catastrophic patterns can no longer hang the UI (worker with a hard time budget or a linear-time matcher); old bypass shapes tested",
+    "Existing regex filter behaviour unchanged; tests and frontend CI green; README updated"
+  ],
+  "reviewer": "opus",
+  "notes": "Reviewer: really cannot hang (the cap is enforced outside the matching thread, or the algorithm is linear), adversarial corpus meaningful, no leaked workers/timers, behaviour parity for normal patterns, dependency (if any) pinned and licensed, mediums count."
+}

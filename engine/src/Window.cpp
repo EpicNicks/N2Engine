@@ -10,6 +10,14 @@
 #include "engine/input/ActionMap.hpp"
 #include "engine/input/InputBinding.hpp"
 
+// The WebGPU backend is an engine renderer only in the web build (stage G4 of #155); natively it is the CI test harness (W8)
+#if N2ENGINE_RENDERER_WEBGPU && defined(N2ENGINE_PLATFORM_WEB)
+#define N2_WINDOW_HAS_WEBGPU 1
+#include <renderer/webgpu/WebGpuFactory.hpp>
+#else
+#define N2_WINDOW_HAS_WEBGPU 0
+#endif
+
 using namespace N2Engine;
 
 namespace
@@ -60,7 +68,8 @@ bool Window::FailInit(const std::string &error)
 
 bool Window::UsesNoWindow(const Config::ApplicationOptions &options)
 {
-    return options.isHeadless && options.renderBackend == Config::ApplicationOptions::RenderBackend::SOFTWARE;
+    return options.isHeadless && (options.renderBackend == Config::ApplicationOptions::RenderBackend::SOFTWARE ||
+                                  options.renderBackend == Config::ApplicationOptions::RenderBackend::WEBGPU);
 }
 
 bool Window::InitWindow(const Config::ApplicationOptions &options)
@@ -71,20 +80,55 @@ bool Window::InitWindow(const Config::ApplicationOptions &options)
     _windowless = false;
     _windowlessSize = {0, 0};
 
+    if (options.renderBackend == Config::ApplicationOptions::RenderBackend::NONE)
+    {
+        // A dedicated server: no GLFW, no window and no renderer. IsValid() stays false (it needs a renderer), so a host
+        // that would draw checks it; Tick with render off and no event polling runs as usual. The input system exists
+        // (scripts may ask for a key and get nothing), exactly as it does on a windowless renderer.
+        _windowless = true;
+        _windowlessSize = {0, 0};
+        Logger::Log("No renderer and no window (headless server)", Logger::LogLevel::Info);
+        _inputSystem = std::make_unique<Input::InputSystem>(*this);
+        return true;
+    }
+
+    const bool webGpu = options.renderBackend == Config::ApplicationOptions::RenderBackend::WEBGPU;
+    if (webGpu && !UsesNoWindow(options))
+    {
+        // WebGPU has no window path (no surface or swapchain on a GLFW window): it runs headless, in the web player
+        return FailInit("The WebGPU renderer runs only without a window (isHeadless), as in the web player");
+    }
+
     if (UsesNoWindow(options))
     {
-        // No GLFW at all (glfwInit needs a display on some platforms): the renderer draws into its CPU buffer, and
-        // frames are read back rather than shown. Window-only calls (SetTitle, SetWindowMode) do nothing.
-        auto renderer = std::make_unique<Renderer::Software::SoftwareRenderer>();
+        // No GLFW at all (glfwInit needs a display on some platforms): the renderer draws offscreen (the software renderer
+        // into its CPU buffer, WebGPU into its offscreen target), and frames are read back rather than shown. Window-only
+        // calls (SetTitle, SetWindowMode) do nothing.
+        std::unique_ptr<Renderer::Common::IRenderer> renderer;
+        if (webGpu)
+        {
+#if N2_WINDOW_HAS_WEBGPU
+            renderer = Renderer::WebGpu::CreateWebGpuRenderer();
+#else
+            return FailInit("The WebGPU renderer can only be chosen in the web build (natively it is the CI test harness of "
+                            "the backend, not a renderer an application can run)");
+#endif
+        }
+        else
+        {
+            renderer = std::make_unique<Renderer::Software::SoftwareRenderer>();
+        }
         if (!renderer->Initialize(nullptr, static_cast<uint32_t>(FallbackWidth), static_cast<uint32_t>(FallbackHeight)))
         {
             _rendererFailed = true;
-            return FailInit("Failed to initialize renderer");
+            // WebGPU in the browser build cannot start yet: the page hands its device in at stage G5 (the renderer logs why)
+            return FailInit(webGpu ? "Failed to initialize the WebGPU renderer (see the log)" : "Failed to initialize renderer");
         }
         _renderer = std::move(renderer);
         _windowless = true;
         _windowlessSize = {FallbackWidth, FallbackHeight};
-        Logger::Log("Using Software renderer, headless (no window)", Logger::LogLevel::Info);
+        Logger::Log(webGpu ? "Using WebGPU renderer, headless (no window)" : "Using Software renderer, headless (no window)",
+                    Logger::LogLevel::Info);
         // Keyboard and mouse bindings read nothing without a window (InputBinding, Mouse), as on a failed one
         _inputSystem = std::make_unique<Input::InputSystem>(*this);
         return true;
@@ -260,8 +304,8 @@ bool Window::ShouldClose() const
         return glfwWindowShouldClose(_window);
     }
     // A window that failed to open (or was shut down) has nothing to keep running for; a windowless one has
-    // nothing that could close
-    return !IsValid();
+    // nothing that could close (RenderBackend::NONE is windowless without being valid: it never closes either)
+    return !IsValid() && !_windowless;
 }
 
 void Window::SetTitle(const std::string &title)

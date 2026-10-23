@@ -43,12 +43,14 @@
 <li><a href="resources.html">Resources &amp; paths</a></li>
 <li><a href="serialization.html">Serialization</a></li>
 <li><a href="math.html">Math &amp; SIMD</a></li>
+<li><a href="netcode.html">Netcode (n2net)</a></li>
 </ul>
 </div>
 <div>
 <h2>Scripting</h2>
 <ul>
 <li><a href="scripting-lua.html">Lua scripting</a></li>
+<li><a href="editor-extensions.html">Lua editor extensions</a></li>
 </ul>
 </div>
 <div>
@@ -57,6 +59,7 @@
 <li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
 <li><a href="editor.html">Editor projects</a></li>
 <li><a href="testing.html">Testing &amp; CI</a></li>
+<li><a href="web-build.html">Web build</a></li>
 </ul>
 </div>
 </nav>
@@ -261,7 +264,7 @@ sb:Reset()                              -- back to the rest shape at the current
 </ul>
 
 <h2 id="rendering">Drawing <span class="badge">PR #143</span></h2>
-<p>A SoftBody draws nothing itself. It owns a <strong>runtime copy of the mesh</strong> (same vertex count, indices and submeshes) and hands it to the sibling <code>MeshRenderer</code> through <code>MeshRenderer::SetDeformedMesh</code>, a runtime-only override: while it is set the renderer draws, bounds and queues the copy instead of its mesh. After each step the body writes the embedded positions (skinned from the tetrahedra, then converted to local space) and <strong>area-weighted normals</strong> recomputed from the triangles into the copy and calls <code>Mesh::SetData</code>, which bumps the version so <code>GpuCache</code> re-uploads the GPU mesh in place (<code>IRenderer::UpdateMesh</code>). There are no renderer changes: the OpenGL and software renderers draw it like any mesh, and the Vulkan renderer draws it only when the material is Unlit (stages A and B of #43): a lit material, which is the default, has no Vulkan material until stage C, so a lit soft body is not drawn there.</p>
+<p>A SoftBody draws nothing itself. It owns a <strong>runtime copy of the mesh</strong> (same vertex count, indices and submeshes) and hands it to the sibling <code>MeshRenderer</code> through <code>MeshRenderer::SetDeformedMesh</code>, a runtime-only override: while it is set the renderer draws, bounds and queues the copy instead of its mesh. After each step the body writes the embedded positions (skinned from the tetrahedra, then converted to local space) and <strong>area-weighted normals</strong> recomputed from the triangles into the copy and calls <code>Mesh::SetData</code>, which bumps the version so <code>GpuCache</code> re-uploads the GPU mesh in place (<code>IRenderer::UpdateMesh</code>). There are no renderer changes: the OpenGL and software renderers draw it like any mesh, and the Vulkan renderer draws it like any mesh since stages B and C of #43 (the unlit and lit shaders).</p>
 <ul>
 <li><strong>The override is never serialized.</strong> It is not a registered field, <code>MeshRenderer</code> saves the same <code>"_mesh"</code> and <code>"_materials"</code> as ever, and <code>GetMesh()</code> (which scripts read) still returns the saved mesh. It is cleared when the SoftBody is destroyed or removed and when the <code>MeshRenderer</code> is destroyed. <strong>Picking follows what is drawn.</strong> While the override is set, the world bounds and the exact ray test both use the deformed mesh (a plain triangle loop, as its geometry changes every step and no BVH is cached for it; a copy over 100000 triangles is picked by its box), so a moved soft body is picked where it is seen.</li>
 <li><strong>Tangents stay the rest ones</strong>, so a normal map is slightly off under large deformation; texture coordinates, vertex colours, submeshes and materials are unchanged.</li>

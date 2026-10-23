@@ -1,0 +1,10 @@
+{
+  "name": "sec-preauth-s5-docs",
+  "head": "a1d5e9a4d76fc42571aea24fba2786ae2f1cd5d3",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

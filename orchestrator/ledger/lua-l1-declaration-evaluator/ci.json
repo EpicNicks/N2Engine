@@ -1,0 +1,10 @@
+{
+  "name": "lua-l1-declaration-evaluator",
+  "head": "69c39afdd0e2c55938c13b5eb77afb885fa49d6c",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

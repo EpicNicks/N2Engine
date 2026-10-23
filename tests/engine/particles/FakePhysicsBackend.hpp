@@ -201,6 +201,9 @@ namespace N2Engine::TestSupport
             new (&gpu) FakeGpuParticleBackend();
         }
         Math::Vector3 gravity{0.0f, -9.81f, 0.0f};
+        /// The feature groups it declares (GetImplementedFeatures): none by default, as the interface's default
+        Physics::PhysicsFeatureSet implementedFeatures = Physics::PhysicsFeatureSet::None();
+        [[nodiscard]] Physics::PhysicsFeatureSet GetImplementedFeatures() const override { return implementedFeatures; }
 
         bool Initialize() override { return true; }
         void Update(const float dt) override

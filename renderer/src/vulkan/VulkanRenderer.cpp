@@ -13,8 +13,9 @@
 
 // Stage 0 of the Vulkan backend (#43): headless initialisation, an offscreen colour and depth target, a frame that
 // clears it, readback, resizing and shutdown. Nothing here needs a window, a surface or a swapchain. Meshes and textures
-// (stage A) are in VulkanResources.cpp; the built-in shaders, materials, pipelines and draws (stage B) are in
-// VulkanDraw.cpp. What is still a stub (lighting, stage C) logs once and does nothing.
+// (stage A) are in VulkanResources.cpp; the built-in shaders, materials, pipelines and draws (stage B) and
+// the scene lighting (stage C), blending (stage D) and the text shader (stage E) are in VulkanDraw.cpp. What is still a
+// stub (the window) logs once and does nothing.
 //
 // Object lifetimes, in creation order (Shutdown destroys them in reverse):
 //   instance -> debug messenger -> device -> VMA allocator -> command pool (+ the frames' command buffers and fences) ->
@@ -1506,16 +1507,10 @@ bool VulkanRenderer::SetRenderTargetSize(uint32_t width, uint32_t height)
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Stubs: stages C-F of #43. Each fails loudly (a log, once) and cleanly (nothing), never crashes.
-// (Meshes and textures, stage A, are in VulkanResources.cpp; shaders, materials and draws, stage B, in VulkanDraw.cpp.)
+// Stubs: stages D-F of #43. Each fails loudly (a log, once) and cleanly (nothing), never crashes.
+// (Meshes and textures, stage A, are in VulkanResources.cpp; shaders, materials, draws and scene lighting, stages B and C,
+// in VulkanDraw.cpp.)
 // ---------------------------------------------------------------------------------------------------------------------
-
-void VulkanRenderer::UpdateSceneLighting(const Common::SceneLightingData& lighting,
-                                         const N2Engine::Math::Vector3& cameraPosition)
-{
-    static_cast<void>(lighting);
-    static_cast<void>(cameraPosition);
-}
 
 std::vector<GPUInfo> VulkanRenderer::GetCompatibleGPUs()
 {

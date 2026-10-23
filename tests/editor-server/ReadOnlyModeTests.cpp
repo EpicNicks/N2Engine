@@ -48,6 +48,8 @@ namespace
             {"GetProjectInfo", Class::Read}, {"GetHistory", Class::Read}, {"GetAutosave", Class::Read},
             {"ListAssets", Class::Read}, {"GetAssetInfo", Class::Read}, {"ReadTextAsset", Class::Read},
             {"GetPlayState", Class::Read},
+            // The extension lists answer from what was captured at load and run no Lua
+            {"ListEditorExtensions", Class::Read}, {"GetEditorUi", Class::Read},
             // Write: the project, a scene, an asset, the game, or project code
             {"SetCameraPosition", Class::Write}, {"CreateScene", Class::Write}, {"LoadScene", Class::Write},
             {"SaveScene", Class::Write}, {"DeleteScene", Class::Write}, {"OpenScene", Class::Write},
@@ -63,8 +65,12 @@ namespace
             {"RestoreAutosave", Class::Write}, {"DiscardAutosave", Class::Write},
             {"WritePlaySnapshot", Class::Write}, {"SetPaused", Class::Write}, {"Step", Class::Write},
             {"SendInput", Class::Write},
+            // Runs an extension's code, which changes the scene as the invoking user
+            {"InvokeMenuItem", Class::Write},
+            // The same for a button of an inspector section (since 1.16.0)
+            {"InvokeInspectorAction", Class::Write},
             // Admin: the host itself
-            {"Shutdown", Class::Admin},
+            {"Shutdown", Class::Admin}, {"ReloadEditorExtensions", Class::Admin},
         };
         return classes;
     }
@@ -395,9 +401,18 @@ TEST(ErrorCodedTest, TheCodesAreTheSpecsStableWords)
         (void)description;
         codes.insert(code);
     }
-    EXPECT_EQ(codes, (std::set<std::string>{std::string{ErrorCodeReadOnly}, std::string{ErrorCodeForbidden}}));
+    EXPECT_EQ(codes, (std::set<std::string>{std::string{ErrorCodeReadOnly}, std::string{ErrorCodeForbidden},
+                                            std::string{ErrorCodeBusy}, std::string{ErrorCodeExtensionsDisabled},
+                                            std::string{ErrorCodeExtensionFailed},
+                                            std::string{ErrorCodeExtensionFaulted},
+                                            std::string{ErrorCodeStaleUiRevision},
+                                            std::string{ErrorCodeEditGroupOpen}}));
     EXPECT_EQ(std::string{ErrorCodeReadOnly}, "readOnly");
     EXPECT_EQ(std::string{ErrorCodeForbidden}, "forbidden");
+    EXPECT_EQ(std::string{ErrorCodeBusy}, "busy");
+    EXPECT_EQ(std::string{ErrorCodeExtensionsDisabled}, "extensionsDisabled");
+    EXPECT_EQ(std::string{ErrorCodeExtensionFailed}, "extensionFailed");
+    EXPECT_EQ(std::string{ErrorCodeExtensionFaulted}, "extensionFaulted");
 }
 
 TEST(ErrorCodedTest, HelloTakesTheCapabilityAsATrailingFieldThatDefaultsToFalse)

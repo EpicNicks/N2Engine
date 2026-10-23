@@ -1,0 +1,26 @@
+{
+ "pr": 110,
+ "branch": "feat-text-effects-multipass",
+ "head": "577dd1f442c0857a568f886a67bb130ee075536d",
+ "files": [
+  "engine/include/engine/text/TextEffects.hpp",
+  "engine/include/engine/text/TextJson.hpp",
+  "engine/include/engine/rendering/TextDrawing.hpp",
+  "engine/src/rendering/TextDrawing.cpp",
+  "engine/include/engine/rendering/TextRenderer.hpp",
+  "engine/src/rendering/TextRenderer.cpp",
+  "engine/include/engine/ui/UIText.hpp",
+  "engine/src/ui/UIText.cpp",
+  "engine/src/scripting/bindings/LuaComponentBindings.cpp",
+  "engine/src/scripting/bindings/LuaUIBindings.cpp",
+  "engine/src/scripting/bindings/engine-api.lua",
+  "tests/engine/rendering/SoftwareTextPassesGoldenTests.cpp",
+  "docs/text.html",
+  "docs/serialization.html"
+ ],
+ "deviations": [],
+ "unverified": [
+  "OpenGL multi-draw pass path and order sort not run on a GPU"
+ ],
+ "needsUser": null
+}

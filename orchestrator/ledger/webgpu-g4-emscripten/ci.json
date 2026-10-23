@@ -1,0 +1,10 @@
+{
+  "name": "webgpu-g4-emscripten",
+  "head": "85e5923ac526755da3c5ee06b52d58fe23d6ac1e",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

@@ -35,8 +35,9 @@ namespace N2Engine::Rendering
      * - Each font's atlas becomes one texture per renderer, shared by every TextRenderer (and UI::UIText)
      *   using that font there, and destroyed when the last of them releases it. The drawing code is
      *   shared with UI::UIText (TextDrawing.hpp).
-     * - It needs IRenderer::GetStandardTextShader, which OpenGL and the software renderer have. Where it
-     *   is null (Vulkan until #43) it draws nothing and logs one warning per process.
+     * - It needs IRenderer::GetStandardTextShader, which OpenGL, the software renderer and the Vulkan
+     *   renderer have. Where it is null (a renderer or a build without the text shader) it draws nothing and logs one
+     *   warning per process.
      * - Empty text, or text with only spaces, draws nothing.
      */
     class TextRenderer final : public IRenderable

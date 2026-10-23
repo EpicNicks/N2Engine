@@ -250,6 +250,18 @@ namespace ProtocolVectors
                 return json{{"settings", SetProjectSettingsCmd::Deserialize(r).settings}};
             }},
             {"SetStartupScene", [](BufferReader &r) { return json{{"path", SetStartupSceneCmd::Deserialize(r).path}}; }},
+            {"InvokeMenuItem", [](BufferReader &r)
+            {
+                const auto cmd = InvokeMenuItemCmd::Deserialize(r);
+                return json{{"itemId", cmd.itemId}, {"selection", cmd.selection}, {"params", cmd.params},
+                            {"uiRevision", cmd.uiRevision}};
+            }},
+            {"InvokeInspectorAction", [](BufferReader &r)
+            {
+                const auto cmd = InvokeInspectorActionCmd::Deserialize(r);
+                return json{{"componentId", cmd.componentId}, {"actionId", cmd.actionId}, {"params", cmd.params},
+                            {"uiRevision", cmd.uiRevision}};
+            }},
         };
         return decoders;
     }
@@ -357,6 +369,13 @@ namespace ProtocolVectors
             }},
             {"ComponentData", [](BufferWriter &w, const json &f) { WriteComponentData(w, f.at("values")); }},
             {"LuaFields", [](BufferWriter &w, const json &f) { WriteLuaFields(w, f.at("schema")); }},
+            {"EditorExtensions", [](BufferWriter &w, const json &f) { WriteEditorExtensions(w, f.at("info")); }},
+            {"EditorUi", [](BufferWriter &w, const json &f) { WriteEditorUi(w, f.at("ui")); }},
+            {"ExtensionResult", [](BufferWriter &w, const json &f)
+            {
+                WriteExtensionResult(w, StringField(f, "label"), Uint32Field(f, "revision"), f.at("canUndo").get<bool>(),
+                                     f.at("canRedo").get<bool>(), Uint32Field(f, "savedRevision"), f.at("result"));
+            }},
             {"EditResult", [](BufferWriter &w, const json &f)
             {
                 WriteEditResult(w, StringField(f, "label"), Uint32Field(f, "revision"), f.at("canUndo").get<bool>(),

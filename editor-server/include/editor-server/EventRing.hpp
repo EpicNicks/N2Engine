@@ -5,6 +5,7 @@
 #include <deque>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -29,6 +30,15 @@ namespace N2Engine::Editor
         std::vector<nlohmann::json> events;
     };
 
+    /// Whose events a Read returns. Full is every event (an admin, or a host with no authentication, whose one local
+    /// user has always seen everything). PublicOnly is what any role may see: the events tagged Public, with host paths
+    /// scrubbed from their text, numbered as a view of their own (see EventRing).
+    enum class EventView : uint8_t
+    {
+        Full,
+        PublicOnly,
+    };
+
     /// The editor's event ring: a bounded buffer of events ({seq, kind, ...}) that PollEvents reads.
     ///
     /// Every event gets the next seq, from 1, consecutive within an epoch. The epoch is a random non-zero number picked
@@ -36,6 +46,13 @@ namespace N2Engine::Editor
     /// the ring is emptied and numbering restarts at 1 under a new epoch. A reader passes the epoch and the last seq it
     /// has seen; afterSeq only means something within the epoch it came from, so Read treats it as 0 when the reader's
     /// epoch is non-zero and isn't the ring's (or when afterSeq is newer than any seq of this epoch).
+    ///
+    /// Sensitivity: every event is stored with the Logger's LogSensitivity tag (Push and PushLog take it, Public by
+    /// default; the tag is not part of the event's JSON). The PublicOnly view has its own numbering, so it leaks nothing
+    /// of the events it doesn't show: its seqs are consecutive over the Public events alone (a client never sees a gap
+    /// that stands for a hidden line), and it has its own epoch, so a client that moves from one view to the other (a
+    /// session taken over by another role) restarts instead of misreading a seq. What it can still observe is that the
+    /// byte and count limits are shared: a burst of hidden lines evicts Public ones sooner, which shows as `dropped`.
     ///
     /// The ring keeps the newest events within both limits (a count and an approximate byte size) and drops the oldest
     /// beyond them; the newest event is always kept. It keeps no per-client state: what fell off after a reader's
@@ -61,6 +78,9 @@ namespace N2Engine::Editor
         /// The kind of the events PushLog makes
         static constexpr const char *LogKind = "log";
 
+        /// What replaces a host path that is not under a known root, in the text a PublicOnly reader gets
+        static constexpr const char *HiddenPathText = "<host path>";
+
         explicit EventRing(size_t maxEvents = DefaultMaxEvents, size_t maxBytes = DefaultMaxBytes);
 
         EventRing(const EventRing &) = delete;
@@ -68,21 +88,37 @@ namespace N2Engine::Editor
 
         /// Adds an event of this kind with these fields (a JSON object; anything else is kept under "value") and returns
         /// its seq. seq and kind are set here, over any fields of those names.
-        uint32_t Push(std::string_view kind, nlohmann::json fields = nlohmann::json::object());
+        uint32_t Push(std::string_view kind, nlohmann::json fields = nlohmann::json::object(),
+                      Logger::LogSensitivity sensitivity = Logger::LogSensitivity::Public);
 
         /// Adds a log event: {seq, kind: "log", level: "info" | "warn" | "error", message, time (Unix milliseconds)}
-        uint32_t PushLog(Logger::LogLevel level, std::string_view message, int64_t unixMilliseconds);
+        /// A PublicOnly reader gets the message with host paths scrubbed (ScrubHostPaths); an Admin-tagged line is not
+        /// given to one at all.
+        uint32_t PushLog(Logger::LogLevel level, std::string_view message, int64_t unixMilliseconds,
+                         Logger::LogSensitivity sensitivity = Logger::LogSensitivity::Public);
 
         /// The events with a seq after afterSeq, oldest first, at most min(maxEvents, MaxEventsPerRead) of them.
         /// afterSeq reads as 0 when epoch is non-zero and isn't this ring's, or when it is newer than any seq of this
         /// epoch (a reader that doesn't know the epoch passes 0). maxEvents 0 returns none, with nextSeq the newest
         /// seq, which skips everything retained.
-        [[nodiscard]] EventBatch Read(uint32_t afterSeq, uint32_t maxEvents, uint32_t epoch = 0) const;
+        /// afterSeq, epoch, nextSeq and dropped all belong to the view asked for.
+        [[nodiscard]] EventBatch Read(uint32_t afterSeq, uint32_t maxEvents, uint32_t epoch = 0,
+                                      EventView view = EventView::Full) const;
 
-        /// The newest seq issued in this epoch, 0 before its first event
-        [[nodiscard]] uint32_t LastSeq() const;
-        /// The current epoch (never 0)
-        [[nodiscard]] uint32_t Epoch() const;
+        /// The newest seq issued in this epoch (of the view: PublicOnly counts the Public events), 0 before its first
+        [[nodiscard]] uint32_t LastSeq(EventView view = EventView::Full) const;
+        /// The current epoch (never 0); each view has its own
+        [[nodiscard]] uint32_t Epoch(EventView view = EventView::Full) const;
+
+        /// The folders whose path prefix a PublicOnly reader sees as res:// (the open project's assets folder, which is res://). Replaces the
+        /// earlier list; applies to lines pushed after it.
+        void SetHostRoots(std::vector<std::string> roots);
+        /// text with host paths made safe to show a non-admin: a path under a known root becomes res://..., any other
+        /// absolute path (a drive letter, a UNC share, or two or more POSIX components after a word boundary) becomes
+        /// HiddenPathText. A heuristic on top of the sensitivity tags, never instead of them.
+        [[nodiscard]] std::string ScrubHostPaths(std::string_view text) const;
+        /// The same with an explicit list of roots
+        [[nodiscard]] static std::string ScrubHostPaths(std::string_view text, const std::vector<std::string> &roots);
         /// How many events the ring holds now
         [[nodiscard]] size_t Size() const;
         /// How many events have fallen off (or been cleared by a new epoch) since the ring was made
@@ -105,13 +141,23 @@ namespace N2Engine::Editor
         struct Entry
         {
             uint32_t seq;
+            /// Position among the Public events (0 for one that isn't); what a PublicOnly reader sees as seq
+            uint32_t publicSeq;
             nlohmann::json event;
+            /// What a PublicOnly reader gets when it differs from `event` (a log line whose text was scrubbed)
+            std::optional<nlohmann::json> publicEvent;
             size_t bytes;
+            bool isPublic;
         };
 
         /// Gives the event the next seq (starting a new epoch past MaxSeq), stores it and drops the oldest beyond the
         /// limits. The seq is only taken once the event is stored, so a failed allocation leaves no gap.
-        uint32_t Store(nlohmann::json event, size_t bytes);
+        uint32_t Store(nlohmann::json event, size_t bytes, Logger::LogSensitivity sensitivity,
+                       std::optional<nlohmann::json> publicEvent = std::nullopt);
+        /// Requires the lock: fills `batch` as Read does for the PublicOnly view
+        void ReadPublicLocked(EventBatch &batch, uint32_t afterSeq, uint32_t maxEvents, uint32_t epoch) const;
+        /// A random epoch for the PublicOnly view: neither previous nor the full view's
+        [[nodiscard]] static uint32_t NewPublicEpoch(uint32_t previous, uint32_t fullEpoch);
         /// Requires the lock: empties the ring
         void ClearLocked();
 
@@ -123,7 +169,14 @@ namespace N2Engine::Editor
         size_t _bytes = 0;
         // 64 bits, so the step past MaxSeq is seen rather than wrapping; it never exceeds MaxSeq
         uint64_t _lastSeq = 0;
+        // The same for the PublicOnly view: counts only the Public events, so never ahead of _lastSeq
+        uint64_t _lastPublicSeq = 0;
         uint32_t _epoch;
+        uint32_t _publicEpoch;
         uint64_t _droppedTotal = 0;
+
+        // Its own lock: ScrubHostPaths runs before the ring's mutex is taken, and neither is held while the other is
+        mutable std::mutex _rootsMutex;
+        std::vector<std::string> _hostRoots;
     };
 }

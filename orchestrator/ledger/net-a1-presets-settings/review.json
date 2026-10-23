@@ -1,0 +1,27 @@
+{
+  "head": "8070435a4153d88e3fd17746ff01f8284f30fe6e",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "engine/src/Application.cpp",
+      "line": 224,
+      "summary": "The none preset leaves whatever simulation mode the process already had: Shutdown does not reset it, so Init(authoritative), Shutdown, Init(none) in one process keeps running the Authoritative loop",
+      "scenario": "Any embedding that switches projects in one process (a future editor 'open project', a test that does two real Inits) would start a none project with timeScale ignored by physics, no time dropped and attach at tick boundaries, while its Network row says 'Preset none (offline)'. No current path does it (editor host, play child, web player, lua_project and test_project each Init once per process; unit tests may not run a successful Init) and docs/application.html states the behaviour, so it is not a live bug. Simplest fix: Shutdown (or Init for none) calls SetSimulationMode(None); a host that wants another mode sets it after Init anyway."
+    },
+    {
+      "severity": "low",
+      "file": "engine/src/Application.cpp",
+      "line": 226,
+      "summary": "The authoritative preset now really switches the loop to A2's no-drop clock, but nothing resyncs it (no netcode, no behind handler), so after a long stall the game fast-forwards at up to 30 ticks per frame until the debt is paid",
+      "scenario": "A web build of an authoritative project whose tab is hidden for 60 s at tickRate 60: rAF stops, the next Time::Update delta is ~60 s, about 3600 ticks are owed and the next ~120 frames each run 30 physics ticks (or the frame falls further behind if 30 ticks cost more than a frame). In None mode the 0.25 s clamp drops it. This is A2's documented design and the wiring was asked for; worth one docs sentence (or a default resync until the netcode exists) since the Network row says the network runtime does not exist yet."
+    },
+    {
+      "severity": "low",
+      "file": "engine/include/engine/Application.hpp",
+      "line": 101,
+      "summary": "Two header comments still say the network presets will drive the mode later: Application.hpp:101 'The network presets will set this when the project's settings do; until then a host or a test does' and SimulationClock.hpp:11 'the network presets will drive it later'",
+      "scenario": "After this PR Application::Init sets the mode from network.preset; the docs were corrected but these two API comments (outside the docs and the brief's listed lines) were not."
+    }
+  ],
+  "verdict": "clean"
+}

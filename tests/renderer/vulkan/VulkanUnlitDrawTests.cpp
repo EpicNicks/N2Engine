@@ -328,18 +328,38 @@ TEST_F(VulkanDrawTest, TheDefaultStateCullsBackFacesAndDepthTestsAndWritesAsTheO
     EXPECT_EQ(back.Count(kRed), 0);
 }
 
-TEST_F(VulkanDrawTest, ABlendedDrawIsDrawnOpaqueUntilStageD)
+TEST_F(VulkanDrawTest, ABlendedDrawBlendsWithWhatIsBehindItAsOnGL)
 {
-    // Blending is stage D of #43: blend and additive are accepted, drawn as opaque (and logged once)
+    // Stage D of #43 replaced stage B's "a blended draw is drawn opaque": a half-alpha red quad over the black clear colour
+    // is half red (SRC_ALPHA, ONE_MINUS_SRC_ALPHA: 0.5 * 255 = 127.5, within one unit), an additive one adds half of its
+    // colour, and without blend the same quad replaces what is behind it. (VulkanBlendTests.cpp has the full set.)
     IMaterial* halfRed = Colour(1.0f, 0.0f, 0.0f, 0.5f);
     IMesh* quad = MakeMesh(Quad(-1.0f, -1.0f, 1.0f, 1.0f, 0.0f));
     ASSERT_NE(quad, nullptr);
     RenderState additive = RenderState::Transparent();
     additive.additive = true;
+    const auto isHalfRed = [](const Frame& frame)
+    {
+        for (int y = 0; y < Size; ++y)
+        {
+            for (int x = 0; x < Size; ++x)
+            {
+                const Rgb p = frame.At(x, y);
+                if (p.r < 127 || p.r > 128 || p.g != 0 || p.b != 0)
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
     const Frame blended = RenderFrame([&] { R().DrawMesh(quad, Identity, halfRed, RenderState::Transparent()); });
-    EXPECT_EQ(blended.Count(kRed), Size * Size);
+    EXPECT_TRUE(isHalfRed(blended));
+    EXPECT_EQ(blended.Count(kRed), 0) << "not drawn opaque";
     const Frame added = RenderFrame([&] { R().DrawMesh(quad, Identity, halfRed, additive); });
-    EXPECT_EQ(added.Count(kRed), Size * Size);
+    EXPECT_TRUE(isHalfRed(added)) << "additive over black: half of the red";
+    const Frame opaque = RenderFrame([&] { R().DrawMesh(quad, Identity, halfRed, RenderState::Opaque()); });
+    EXPECT_EQ(opaque.Count(kRed), Size * Size) << "without blend the alpha is ignored";
 }
 
 // ============================================================================
@@ -1168,6 +1188,34 @@ TEST_F(VulkanDrawTest, APipelineThatCannotBeMadeIsRememberedLoggedOncePerKeyAndI
     EXPECT_EQ(RenderFrame([&] { R().DrawMesh(quad, Identity, red, noWrite); }).Count(kRed), Size * Size);
 }
 
+TEST_F(VulkanDrawTest, WireframeTurnedOffByTheFeatureHookAfterInitializeDrawsSolidAndLogsOnce)
+{
+    // The order the other test does not cover: wireframe is already on (and honoured) when the feature goes away
+    if (!R().IsWireframeSupportedForTest())
+    {
+        GTEST_SKIP() << "this device has no fillModeNonSolid: the hook has nothing to switch off";
+    }
+    R().SetWireframe(true);
+    {
+        const Frame outline = DrawBigTriangle(R());
+        EXPECT_EQ(outline.At(Size / 2, 20), kBlack) << "wireframe is on: the interior is the background";
+        EXPECT_GT(outline.Count(kRed), 50);
+    }
+
+    const CerrCapture capture;
+    R().SetWireframeUnavailableForTest(true);
+    EXPECT_FALSE(R().IsWireframeSupportedForTest());
+    const Frame frame = DrawBigTriangle(R());
+    EXPECT_EQ(frame.At(Size / 2, 20), kRed) << "the draw is solid, not dropped silently";
+    EXPECT_GT(frame.Count(kRed), 1500);
+    EXPECT_EQ(CountOccurrences(capture.Text(), "wireframe ignored: fillModeNonSolid not supported"), 1)
+        << capture.Text();
+    R().SetWireframe(true); // still ignored, and still the one line
+    EXPECT_EQ(DrawBigTriangle(R()).At(Size / 2, 20), kRed);
+    EXPECT_EQ(CountOccurrences(capture.Text(), "wireframe ignored: fillModeNonSolid not supported"), 1)
+        << capture.Text();
+}
+
 TEST_F(VulkanDrawTest, ATextureCreatedAtTheAddressOfADestroyedOneIsNotDrawnInItsPlace)
 {
     const std::uint8_t redTexel[4] = {255, 0, 0, 255};
@@ -1183,32 +1231,45 @@ TEST_F(VulkanDrawTest, ATextureCreatedAtTheAddressOfADestroyedOneIsNotDrawnInIts
     material->SetTexture(a);
     EXPECT_EQ(RenderFrame([&] { R().DrawMesh(quad, Identity, material); }).Count(kRed), Size * Size);
 
-    const std::uint64_t oldId = R().GetTextureIdForTest(a);
-    EXPECT_NE(oldId, 0u);
+    // The stale pair, injected: the pointer is a live texture of the renderer, but the id the material holds is not the
+    // one that texture has. This is exactly what a texture made at the address of a destroyed one looks like to the
+    // draw, and it must get the 1x1 default, not that texture. It runs on every machine, whatever the allocator does
+    const std::uint64_t liveId = R().GetTextureIdForTest(a);
+    EXPECT_NE(liveId, 0u);
+    ASSERT_TRUE(R().SetMaterialTextureIdForTest(material, 0, liveId + 1000));
+    EXPECT_EQ(RenderFrame([&] { R().DrawMesh(quad, Identity, material); }).Count(kWhite), Size * Size)
+        << "a live texture under a stale id is the default, not drawn";
+    ASSERT_TRUE(R().SetMaterialTextureIdForTest(material, 0, 0));
+    EXPECT_EQ(RenderFrame([&] { R().DrawMesh(quad, Identity, material); }).Count(kWhite), Size * Size)
+        << "a texture set with no id (not a live texture then) is the default too";
+    ASSERT_TRUE(R().SetMaterialTextureIdForTest(material, 0, liveId));
+    EXPECT_EQ(RenderFrame([&] { R().DrawMesh(quad, Identity, material); }).Count(kRed), Size * Size)
+        << "the right id draws the texture again";
+    EXPECT_FALSE(R().SetMaterialTextureIdForTest(nullptr, 0, 1));
+    EXPECT_FALSE(R().SetMaterialTextureIdForTest(material, 5, 1)) << "there are five slots, 0 to 4";
+
+    const std::uint64_t oldId = liveId;
     R().DestroyTexture(a);
     EXPECT_EQ(R().GetTextureIdForTest(a), 0u) << "a destroyed texture has no id";
 
-    // Make textures until one lands on the old address (the allocator often hands it straight back); either way every
-    // new texture has an id that is not the old one
+    // The real thing too: make textures until one lands on the old address (the allocator often hands it straight back);
+    // whether or not it does, every new texture has an id that is not the old one, and the material, which still names
+    // the destroyed texture, draws the default and never the texture made after it
     std::vector<ITexture*> made;
-    ITexture* b = nullptr;
-    for (int attempt = 0; attempt < 64 && b != a; ++attempt)
+    bool reused = false;
+    for (int attempt = 0; attempt < 64 && !reused; ++attempt)
     {
-        b = R().CreateTexture(blueTexel, 1, 1, 4, Nearest());
+        ITexture* b = R().CreateTexture(blueTexel, 1, 1, 4, Nearest());
         ASSERT_NE(b, nullptr);
         made.push_back(b);
         EXPECT_NE(R().GetTextureIdForTest(b), oldId);
         EXPECT_NE(R().GetTextureIdForTest(b), 0u);
+        reused = b == a;
     }
-    if (b != a)
-    {
-        std::cout << "[ note ] the address was not reused here; only the ids were checked" << std::endl;
-    }
-
-    // The material still names the destroyed texture, so it draws the 1x1 white default, not the new texture
     EXPECT_EQ(material->GetTexture(), a);
     const Frame frame = RenderFrame([&] { R().DrawMesh(quad, Identity, material); });
-    EXPECT_EQ(frame.Count(kWhite), Size * Size) << "the default, not the blue texture made later (nor the destroyed red one)";
+    EXPECT_EQ(frame.Count(kWhite), Size * Size)
+        << (reused ? "the new texture sits at the old address: " : "") << "the default, not the blue texture made later (nor the destroyed red one)";
 
     // Setting the new texture afterwards draws it
     material->SetTexture(made.back());

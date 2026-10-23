@@ -1,23 +1,78 @@
 #include "engine/scripting/LuaComponent.hpp"
+#include "engine/scripting/LuaFieldDeclaration.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/scripting/LuaScript.hpp"
 #include "engine/scripting/ScriptCallback.hpp"
+#include "engine/scripting/DeclarationEvaluator.hpp"
+#include "engine/scripting/ScriptDeclarationCache.hpp"
 #include "engine/scripting/bindings/LuaBindings.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/GameObject.hpp"
 #include "engine/Logger.hpp"
 #include "engine/serialization/ComponentRegistry.hpp"
 #include "engine/serialization/ComponentSerializer.hpp"
+#include "engine/serialization/JsonLimits.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <format>
 #include <iterator>
 #include <limits>
+#include <optional>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 namespace N2Engine::Scripting
 {
+    namespace
+    {
+        /// LuaBudgetScope where scripts run; nothing where they do not (the scope would make the engine's Lua state just to
+        /// count in it). The policy is set once at start-up, so the scope is opened and closed under the same one.
+        class EntryScope
+        {
+            std::optional<LuaBudgetScope> _scope;
+
+        public:
+            EntryScope()
+            {
+                if (LuaRuntime::RunsScripts())
+                {
+                    _scope.emplace();
+                }
+            }
+        };
+
+        /// The list of fields is known. That is so for a script that declares them, and for one that declares none (it
+        /// returned a table and no SerializableFields table: declared is false and nothing went wrong), as long as no
+        /// limit was hit and nothing in the LIST came from the engine. A partial list (an error such as "more fields than
+        /// the limit" beside a declared one) is still a list. (A field whose own default is unknown is listed too: that
+        /// is a field, not the list.)
+        bool IsReadable(const DeclarationResult &declaration)
+        {
+            return !declaration.unevaluable && !declaration.budgetExceeded && !declaration.memoryExhausted &&
+                   (declaration.declared || declaration.errors.empty());
+        }
+
+        /// What kind of default a stored value looks like, for a script whose declarations could not be read: as
+        /// InjectFieldsIntoScript would hand it to the script
+        LuaDefaultKind KindOfStoredValue(const nlohmann::json &value)
+        {
+            if (value.is_number_float())
+                return LuaDefaultKind::Float;
+            if (value.is_number_integer())
+                return LuaDefaultKind::Integer;
+            if (value.is_boolean())
+                return LuaDefaultKind::Bool;
+            if (value.is_string())
+                return LuaDefaultKind::String;
+            if (value.is_object() && value.contains("x"))
+                return LuaDefaultKind::Vector3;
+            return LuaDefaultKind::Other;
+        }
+    }
+
     LuaComponent::LuaComponent(GameObject &gameObject)
         : SerializableComponent(gameObject) {}
 
@@ -30,47 +85,192 @@ namespace N2Engine::Scripting
     void LuaComponent::ReleaseScript()
     {
         *_alive = false;
-        LuaRuntime::Instance().UnregisterReloadCallbacks(this);
+        UnsubscribeReload();
 
         // Closures the script registered can outlive this component (they keep `self` alive);
         // make those fields nil so a stray call errors in Lua instead of touching freed memory
         if (_scriptInstance.valid())
         {
-            _scriptInstance["component"] = sol::lua_nil;
-            _scriptInstance["gameObject"] = sol::lua_nil;
+            // The destructor calls this: nothing may leave it (GuardedAccess does not throw, but this is the one
+            // place where an exception would be std::terminate)
+            const std::uint64_t panicsBefore = LuaRuntime::Instance().PanicCount();
+            try
+            {
+                GuardedAccess([this]
+                {
+                    _scriptInstance["component"] = sol::lua_nil;
+                    _scriptInstance["gameObject"] = sol::lua_nil;
+                }, 2);
+            }
+            catch (...)
+            {
+                LuaRuntime::Instance().RecoverAfterPanic(panicsBefore);
+            }
         }
+    }
+
+    void LuaComponent::UnsubscribeReload()
+    {
+        ScriptDeclarationCache::Instance().Unsubscribe(this);
+        // Only an existing runtime has callbacks to remove: asking for it would make a Lua state (and a destructor of a
+        // component on a host that runs no scripts must not)
+        if (LuaRuntime::HasInstance())
+        {
+            LuaRuntime::Instance().UnregisterReloadCallbacks(this);
+        }
+    }
+
+    void LuaComponent::ReportScriptError(const std::string_view what, const std::string_view message)
+    {
+        if (LuaRuntime::IsLimitError(message))
+        {
+            if (!_faulted)
+            {
+                _faulted = true;
+                Logger::Error(std::format("Lua {} in {} aborted: {}. The script is switched off until it is set again or reloaded.",
+                                          what, _scriptPath.ToString(), message));
+            }
+            return;
+        }
+        Logger::Error(std::format("Lua {} error in {}: {}", what, _scriptPath.ToString(), message));
+    }
+
+    bool LuaComponent::GuardedAccess(const std::function<void()> &body, const int references)
+    {
+        // A Lua protected call, so an error in a metamethod (or the budget) is a return value here: never a panic
+        // (a C++ exception thrown through Lua's C frames) and never a jump over this function's frames
+        std::string error;
+        const std::uint64_t panicsBefore = LuaRuntime::Instance().PanicCount();
+        try
+        {
+            // The bodies make sol references (a method read as a function, the fields' tables and values): free registry
+            // slots first, so none of them has to grow the registry. Where Lua's errors are C++ exceptions (the web
+            // build, MSVC Debug) a failing luaL_ref inside sol's noexcept constructors ends the process even in a
+            // protected call; with the slots reserved it cannot fail. A body holds a few references at a time.
+            if (LuaRuntime::Instance().ReserveReferences(references, error) && LuaRuntime::Instance().ProtectedCall(body, error))
+            {
+                return true;
+            }
+        }
+        catch (...)
+        {
+            // ProtectedCall is not expected to throw (it reads its error without converting it); kept so a Lua
+            // failure can never leave a lifecycle call or a destructor
+            LuaRuntime::Instance().RecoverAfterPanic(panicsBefore);
+            error = "unknown error";
+        }
+        ReportScriptError("access", error);
+        return false;
+    }
+
+    bool LuaComponent::HasMethod(const char *methodName)
+    {
+        // No instance exists where scripts do not run; if one was made under another policy it is not asked either: reading
+        // a method can run the script's __index
+        if (!_scriptInstance.valid() || !LuaRuntime::RunsScripts())
+            return false;
+
+        bool has = false;
+        GuardedAccess([&] { has = _scriptInstance[methodName].valid(); }, 2);
+        return has;
     }
 
     template <typename... Args>
     void LuaComponent::CallLuaMethod(const std::string &methodName, Args &&... args)
     {
-        if (_hasMissingScript)
-            return; // Silently skip if script is missing
+        if (_hasMissingScript || _faulted)
+            return; // Silently skip if script is missing, or it ran out of budget
+        if (!LuaRuntime::RunsScripts())
+            return; // DeclarationsOnly: there is no instance and nothing may run (no caller gets here; this is the guard)
+
+        // One budget for the whole call, whatever it triggers (see LuaBudgetScope)
+        const LuaBudgetScope budget;
 
         // Callbacks the script registers during this call (e.g. Subscribe in OnAttach) are tied to this
         // component (and to this script instance: see RetireScriptInstance)
         ScriptLifetimeScope scope(_alive);
 
-        sol::protected_function func = _scriptInstance[methodName];
-        auto result = func(_scriptInstance, std::forward<Args>(args)...);
-
-        if (!result.valid())
+        const std::uint64_t panicsBefore = LuaRuntime::Instance().PanicCount();
+        try
         {
-            sol::error err = result;
-            Logger::Error(std::format("Lua {} error in {}: {}",
-                                      methodName,
-                                      _scriptPath.ToString(),
-                                      err.what()));
+            // Reading the method can run the script's __index: do it in a protected call
+            sol::protected_function func;
+            if (!GuardedAccess([&] { func = _scriptInstance[methodName].get<sol::protected_function>(); }, 2))
+            {
+                return;
+            }
+            auto result = func(_scriptInstance, std::forward<Args>(args)...);
+
+            if (!result.valid())
+            {
+                // The budget error from the runtime's state when it is spent (the scope above is still open), a
+                // memory error from the call's status, not from an error object that can be displaced, and the text
+                // read without converting (ErrorText)
+                ReportScriptError(methodName, LuaRuntime::Instance().LimitAwareError(
+                                                  LuaRuntime::ErrorText(result),
+                                                  result.status() == sol::call_status::memory));
+            }
         }
+        catch (const std::exception &e)
+        {
+            // Includes the panic path: pushing the arguments happens before sol's protected call, so at the memory
+            // cap it fails outside it and sol throws
+            LuaRuntime::Instance().RecoverAfterPanic(panicsBefore);
+            ReportScriptError(methodName, LuaRuntime::Instance().LimitAwareError(e.what()));
+        }
+        catch (...)
+        {
+            LuaRuntime::Instance().RecoverAfterPanic(panicsBefore);
+            ReportScriptError(methodName, LuaRuntime::Instance().LimitAwareError("unknown error"));
+        }
+    }
+
+    template <typename MakeArgument>
+    void LuaComponent::CallLuaMethodWithArgument(const std::string &methodName, MakeArgument makeArgument)
+    {
+        if (_hasMissingScript || _faulted || !LuaRuntime::RunsScripts())
+            return;
+
+        // The object makeArgument returns is a registry reference made outside a protected call (sol::make_object):
+        // free slots first (one is needed, a second is margin for a temporary), so it allocates nothing there (the
+        // userdata it wraps still can fail: caught below)
+        std::string reserveError;
+        if (!LuaRuntime::Instance().ReserveReferences(2, reserveError))
+        {
+            ReportScriptError(methodName, LuaRuntime::Instance().LimitAwareError(reserveError));
+            return;
+        }
+        const std::uint64_t panicsBefore = LuaRuntime::Instance().PanicCount();
+        sol::object argument;
+        try
+        {
+            argument = makeArgument();
+        }
+        catch (const std::exception &e)
+        {
+            LuaRuntime::Instance().RecoverAfterPanic(panicsBefore);
+            ReportScriptError(methodName, LuaRuntime::Instance().LimitAwareError(e.what()));
+            return;
+        }
+        catch (...)
+        {
+            LuaRuntime::Instance().RecoverAfterPanic(panicsBefore);
+            ReportScriptError(methodName, LuaRuntime::Instance().LimitAwareError("unknown error"));
+            return;
+        }
+        CallLuaMethod(methodName, std::move(argument));
     }
 
     void LuaComponent::SetScript(const IO::ResourcePath &path)
     {
         // A different script keeps only the fields it declares itself (not on the first SetScript, which
         // may follow Deserialize filling _scriptData)
+        const EntryScope budget;
         const bool otherScript = _scriptPath.IsValid() && _scriptPath != path;
         _scriptPath = path;
         _script = nullptr;
+        _declaration = nullptr;
+        _declarationRefused = false;
 
         // Use ResourceLoader and gracefully handle missing files
         auto scriptAsset = IO::ResourceLoader::Instance().Load<LuaScript>(path);
@@ -79,17 +279,25 @@ namespace N2Engine::Scripting
             Logger::Warn(std::format("Script file not found or failed to load: {}", path.ToString()));
             // The previous script used to stay referenced, and its subscriptions kept firing
             RetireScriptInstance();
+            _faulted = false;
             _hasMissingScript = true;
             CacheLifecycleMethods();
             return;
         }
 
         _script = scriptAsset;
+        const std::string moduleName = LuaRuntime::PathToModuleName(path);
+        // Register the reload callback, replacing any from a previous SetScript; removed on destroy
+        if (!LuaRuntime::RunsScripts())
+        {
+            UnsubscribeReload();
+            LoadDeclaration(false, otherScript);
+            ScriptDeclarationCache::Instance().Subscribe(moduleName, [this]() { ReloadScript(); }, this);
+            return;
+        }
         LoadScriptInstance(false, otherScript);
 
-        // Register reload callback, replacing any from a previous SetScript; removed on destroy
-        std::string moduleName = LuaRuntime::Instance().PathToModuleName(path);
-        LuaRuntime::Instance().UnregisterReloadCallbacks(this);
+        UnsubscribeReload();
         LuaRuntime::Instance().RegisterReloadCallback(moduleName, [this]()
         {
             ReloadScript();
@@ -98,10 +306,14 @@ namespace N2Engine::Scripting
 
     void LuaComponent::ClearScript()
     {
-        LuaRuntime::Instance().UnregisterReloadCallbacks(this);
+        const EntryScope budget;
+        UnsubscribeReload();
         RetireScriptInstance();
+        _faulted = false;
         _scriptPath = IO::ResourcePath{};
         _script = nullptr;
+        _declaration = nullptr;
+        _declarationRefused = false;
         _hasMissingScript = false;
         CacheLifecycleMethods();
     }
@@ -113,12 +325,25 @@ namespace N2Engine::Scripting
 
         auto &lua = LuaRuntime::Instance().GetState();
 
-        auto result = LuaRuntime::Instance().RunSource(_script->GetSourceCode(), _scriptPath.ToString());
+        // The chunk and the instance setup below (assigning into a table whose metatable the script chose can run its
+        // __newindex) share one budget
+        const LuaBudgetScope budget;
+        // At most the chunk's first value stays on the stack (RunChunk), so the copies below, which allocate outside
+        // a protected call, cannot leave more on the stack than the panic path's padding covers
+        // A failure that is the memory cap's (or the budget's) is logged once per script, whatever the step
+        const auto logLoadFailure = [this](const std::string &error)
+        {
+            if (!LuaRuntime::IsLimitError(error) || LuaRuntime::Instance().ShouldLogLimitError(_scriptPath.ToString()))
+            {
+                Logger::Error(std::format("Failed to load script {}: {}", _scriptPath.ToString(), error));
+            }
+        };
+        auto result = LuaRuntime::Instance().RunChunk(_script->GetSourceCode(), _scriptPath.ToString());
 
         if (!result.valid())
         {
-            sol::error err = result;
-            Logger::Error(std::format("Failed to load script: {}", err.what()));
+            logLoadFailure(LuaRuntime::Instance().LimitAwareError(
+                LuaRuntime::ErrorText(result), result.status() == sol::call_status::memory));
             return sol::table{};
         }
 
@@ -126,6 +351,16 @@ namespace N2Engine::Scripting
 
         if (result.return_count() > 0 && result[0].is<sol::table>())
         {
+            // The reference to the chunk's table is made outside a protected call (a stack value to a registry
+            // reference): free registry slots first (one is needed for it, one for the instance table the protected call
+            // below makes, and as many again as margin for temporaries), so at the memory cap it allocates nothing
+            // (sol's constructors are noexcept: a failure there would end the process)
+            std::string reserveError;
+            if (!LuaRuntime::Instance().ReserveReferences(4, reserveError))
+            {
+                logLoadFailure(LuaRuntime::Instance().LimitAwareError(reserveError));
+                return sol::table{};
+            }
             scriptClass = result[0];
         }
         else
@@ -134,18 +369,166 @@ namespace N2Engine::Scripting
             return sol::table{};
         }
 
-        sol::table instance = lua.create_table();
-        instance[sol::metatable_key] = scriptClass;
-
-        // Handles, so anything that copies them out of self can't reach freed objects later
-        instance["component"] = ComponentRef<LuaComponent>(*this);
-        instance["gameObject"] = GameObjectRef(_gameObject);
+        // The VM runs a __gc finalizer with its debug hooks off, so the budget could not stop a looping one: the class
+        // is read for it (raw, with Lua's own API: no sol reference is made for the value, which is the script's) and
+        // the table and the handles are made, all in a protected call: each allocates, and at the memory cap an
+        // allocation outside one would go down the panic path. The table and the handles are made so anything that
+        // copies them out of self can't reach freed objects later.
+        sol::table instance;
+        bool definesFinalizer = false;
+        const bool bound = GuardedAccess([&]
+        {
+            lua_State *L = scriptClass.lua_state();
+            scriptClass.push(L);
+            lua_pushstring(L, "__gc");
+            lua_rawget(L, -2);
+            const int gcType = lua_type(L, -1);
+            lua_pop(L, 2);
+            if (gcType != LUA_TNIL && gcType != LUA_TNONE)
+            {
+                definesFinalizer = true;
+                return;
+            }
+            instance = lua.create_table();
+            instance[sol::metatable_key] = scriptClass;
+            instance["component"] = ComponentRef<LuaComponent>(*this);
+            instance["gameObject"] = GameObjectRef(_gameObject);
+        });
+        if (definesFinalizer)
+        {
+            Logger::Error(std::format("Script {} defines __gc, which scripts may not use", _scriptPath.ToString()));
+            return sol::table{};
+        }
+        if (!bound)
+        {
+            return sol::table{};
+        }
 
         return instance;
     }
 
+    void LuaComponent::LoadDeclaration(const bool keepOldOnFailure, const bool keepOnlyDeclaredFields)
+    {
+        // Evaluated off this thread, in a state of its own that has no engine binding; kept per source hash, so the same
+        // text (a scene loaded twice, an undo) is read once. Never null.
+        bool refused = false;
+        const ScriptDeclarationCache::Declaration declaration =
+            ScriptDeclarationCache::Instance().Get(_scriptPath, _script->GetSourceCode(), refused);
+        if (refused)
+        {
+            // Not the script's answer (no worker free, the command's budget spent, shutdown): read again when the
+            // component is next described. Said once, not on every retry.
+            if (!_declarationRefused)
+            {
+                Logger::Warn(std::format("The declarations of {} are not read now ({}); they are read again when the "
+                                         "component is next described",
+                                         _scriptPath.ToString(),
+                                         declaration->errors.empty() ? std::string{} : declaration->errors.front()));
+            }
+            _declarationRefused = true;
+            _refusedKeepOld = keepOldOnFailure;
+            _refusedKeepOnlyDeclared = keepOnlyDeclaredFields;
+            if (keepOldOnFailure && _declaration != nullptr && IsReadable(*_declaration) && !_hasMissingScript)
+            {
+                return; // a reload: the previous version's declarations stay meanwhile
+            }
+            // Meanwhile it is shown as a script that cannot be read (the keys of its data, left as they are)
+            _declaration = declaration;
+            _faulted = false;
+            _hasMissingScript = true;
+            return;
+        }
+        _declarationRefused = false;
+
+        if (!IsReadable(*declaration) && keepOldOnFailure && _declaration != nullptr && IsReadable(*_declaration) &&
+            !_hasMissingScript)
+        {
+            Logger::Warn(std::format("Keeping the declarations of the running version of {}", _scriptPath.ToString()));
+            return;
+        }
+
+        _declaration = declaration;
+        _faulted = false;
+        // As a script that fails to run is: the editor shows it as one it could not load
+        _hasMissingScript = !IsReadable(*_declaration);
+        if (!IsReadable(*_declaration))
+        {
+            // _scriptData is left exactly as it is, and the step that drops what the script does not declare is skipped:
+            // there is no list to keep to (the cache's log line says why)
+            return;
+        }
+
+        if (!_scriptData.is_object())
+        {
+            _scriptData = nlohmann::json::object();
+        }
+        // A list that is partial (an error was reported: more fields than the limit, say) cannot say what is NOT declared
+        if (keepOnlyDeclaredFields && _declaration->errors.empty())
+        {
+            // An unrelated script must not inherit another's values or references under the same name unless it declares
+            // that field (and then, as a field of the component, it keeps the value)
+            nlohmann::json kept = nlohmann::json::object();
+            for (auto &[fieldName, value] : _scriptData.items())
+            {
+                const bool isDeclared = std::ranges::any_of(
+                    _declaration->fields, [&fieldName](const DeclaredField &field) { return field.name == fieldName; });
+                if (isDeclared)
+                {
+                    kept[fieldName] = JsonLimits::IterativeCopy(value); // field data can nest deep
+                }
+            }
+            _scriptData = std::move(kept);
+        }
+        // Fields the script declares but _scriptData lacks get their defaults; saved values are kept
+        for (const DeclaredField &field : _declaration->fields)
+        {
+            if (!_scriptData.contains(field.name) && !field.defaultValue.is_null())
+            {
+                _scriptData[field.name] = field.defaultValue;
+            }
+        }
+    }
+
+    void LuaComponent::RetryRefusedDeclaration() const
+    {
+        if (!_declarationRefused || !_script || LuaRuntime::RunsScripts())
+        {
+            return;
+        }
+        // Components live in their scene's objects, never as const objects: this changes only what the refused reading
+        // left undone (the declaration, the missing-script flag, the defaults it adds to _scriptData)
+        auto *self = const_cast<LuaComponent *>(this);
+        self->LoadDeclaration(_refusedKeepOld, _refusedKeepOnlyDeclared);
+    }
+
+    void LuaComponent::AppendDeclaredFields(std::vector<FieldInfo> &fields) const
+    {
+        if (_declaration == nullptr)
+        {
+            return;
+        }
+        if (IsReadable(*_declaration))
+        {
+            // The same mapping as a running instance's (MakeLuaFieldInfo), sorted by name
+            std::vector<FieldInfo> declared = _declaration->ToFieldInfos();
+            fields.insert(fields.end(), std::make_move_iterator(declared.begin()), std::make_move_iterator(declared.end()));
+            return;
+        }
+        // The script could not be read: nothing is lost or hidden. Every key of the data is a field, of the kind its value
+        // has (an object's keys come out sorted).
+        if (_scriptData.is_object())
+        {
+            for (const auto &[fieldName, value] : _scriptData.items())
+            {
+                fields.push_back(MakeLuaFieldInfo(fieldName, std::string{}, KindOfStoredValue(value)));
+            }
+        }
+    }
+
     void LuaComponent::LoadScriptInstance(const bool keepOldOnFailure, const bool keepOnlyDeclaredFields)
     {
+        // The chunk, the setup that follows it and the OnAttach of a replaced instance share one budget
+        const LuaBudgetScope budget;
         sol::table instance = CreateScriptInstance();
         if (!instance.valid() && keepOldOnFailure && _scriptInstance.valid() && !_hasMissingScript)
         {
@@ -154,6 +537,7 @@ namespace N2Engine::Scripting
         }
 
         const sol::table previous = RetireScriptInstance();
+        _faulted = false; // a new instance (or none) replaces the one that ran out of budget
         if (!instance.valid())
         {
             _hasMissingScript = true;
@@ -161,34 +545,43 @@ namespace N2Engine::Scripting
             return;
         }
 
-        _scriptInstance = instance;
+        // Moved, not copied: a copy is a registry reference made outside a protected call (see ReserveReferences)
+        _scriptInstance = std::move(instance);
         _hasMissingScript = false;
-        if (keepOnlyDeclaredFields)
+        // The script's metamethods can run in every step below, outside a protected call
+        const bool setUp = GuardedAccess([&]
         {
-            // An unrelated script must not inherit another's values or references under the same name
-            // unless it declares that field (and then, as a field of the component, it keeps the value)
-            const sol::optional<sol::table> declared = _scriptInstance["SerializableFields"];
-            nlohmann::json kept = nlohmann::json::object();
-            if (declared && _scriptData.is_object())
+            if (keepOnlyDeclaredFields)
             {
-                for (auto &[fieldName, value] : _scriptData.items())
+                // An unrelated script must not inherit another's values or references under the same name
+                // unless it declares that field (and then, as a field of the component, it keeps the value)
+                const sol::optional<sol::table> declared = _scriptInstance["SerializableFields"];
+                nlohmann::json kept = nlohmann::json::object();
+                if (declared && _scriptData.is_object())
                 {
-                    if (declared->get<sol::object>(fieldName).valid())
+                    for (auto &[fieldName, value] : _scriptData.items())
                     {
-                        kept[fieldName] = value;
+                        if (declared->get<sol::object>(fieldName).valid())
+                        {
+                            kept[fieldName] = JsonLimits::IterativeCopy(value); // field data can nest deep
+                        }
                     }
                 }
+                _scriptData = std::move(kept);
             }
-            _scriptData = std::move(kept);
+            // Fields the script declares but _scriptData lacks get their defaults; saved values are kept
+            ExtractSerializableFields();
+            InjectFieldsIntoScript();
+            CopyReferenceFields(previous);
+        });
+        if (!setUp)
+        {
+            _faulted = true; // half set up: no lifecycle calls until it is set again or reloaded
         }
-        // Fields the script declares but _scriptData lacks get their defaults; saved values are kept
-        ExtractSerializableFields();
-        InjectFieldsIntoScript();
-        CopyReferenceFields(previous);
         CacheLifecycleMethods();
 
         // Already attached: the first OnAttach won't come again, so the new instance gets its own
-        if (_attached && _scriptInstance["OnAttach"].valid())
+        if (_attached && HasMethod("OnAttach"))
         {
             CallLuaMethod("OnAttach");
         }
@@ -196,20 +589,20 @@ namespace N2Engine::Scripting
 
     sol::table LuaComponent::RetireScriptInstance()
     {
-        sol::table previous = _scriptInstance;
-        if (!previous.valid())
+        if (!_scriptInstance.valid())
         {
-            return previous;
+            return sol::table{};
         }
 
+        const LuaBudgetScope budget;
         // The same teardown a removed component's script gets, so it can undo what OnAttach set up
-        if (_attached && !_hasMissingScript)
+        if (_attached && !_hasMissingScript && !_faulted)
         {
-            if (IsActive() && previous["OnDisable"].valid())
+            if (IsActive() && HasMethod("OnDisable"))
             {
                 CallLuaMethod("OnDisable");
             }
-            if (previous["OnDestroy"].valid())
+            if (HasMethod("OnDestroy"))
             {
                 CallLuaMethod("OnDestroy");
             }
@@ -218,10 +611,14 @@ namespace N2Engine::Scripting
         // Its subscriptions stop firing; the next instance's get a flag of their own
         *_alive = false;
         _alive = std::make_shared<bool>(true);
-        previous["component"] = sol::lua_nil;
-        previous["gameObject"] = sol::lua_nil;
-        _scriptInstance = sol::lua_nil;
-        return previous;
+        GuardedAccess([&]
+        {
+            _scriptInstance["component"] = sol::lua_nil;
+            _scriptInstance["gameObject"] = sol::lua_nil;
+        }, 2);
+        // The instance leaves the component by a move: a copy would be a registry reference made outside a protected
+        // call (see ReserveReferences), and the member is empty afterwards, as `= sol::lua_nil` left it
+        return std::move(_scriptInstance);
     }
 
     void LuaComponent::CopyReferenceFields(const sol::table &from)
@@ -229,6 +626,8 @@ namespace N2Engine::Scripting
         if (!from.valid() || !_scriptInstance.valid())
             return;
 
+        GuardedAccess([&]
+        {
         for (auto &[fieldName, value] : _scriptData.items())
         {
             if (value.is_object() && value.contains("$ref"))
@@ -236,6 +635,7 @@ namespace N2Engine::Scripting
                 _scriptInstance[fieldName] = from.get<sol::object>(fieldName);
             }
         }
+        });
     }
 
     void LuaComponent::ExtractSerializableFields()
@@ -243,6 +643,8 @@ namespace N2Engine::Scripting
         if (!_scriptInstance.valid())
             return;
 
+        GuardedAccess([&]
+        {
         sol::optional<sol::table> fieldsTable = _scriptInstance["SerializableFields"];
         if (!fieldsTable)
             return;
@@ -285,6 +687,7 @@ namespace N2Engine::Scripting
                 }
             }
         }
+        });
     }
 
     void LuaComponent::InjectFieldsIntoScript()
@@ -292,6 +695,8 @@ namespace N2Engine::Scripting
         if (!_scriptInstance.valid())
             return;
 
+        GuardedAccess([&]
+        {
         for (auto &[key, value] : _scriptData.items())
         {
             if (value.is_number_float())
@@ -313,6 +718,7 @@ namespace N2Engine::Scripting
                 _scriptInstance[key] = Math::Vector3{component("x"), component("y"), component("z")};
             }
         }
+        });
     }
 
     void LuaComponent::CacheLifecycleMethods()
@@ -340,23 +746,23 @@ namespace N2Engine::Scripting
             return;
         }
 
-        _hasOnUpdate = _scriptInstance["OnUpdate"].valid();
-        _hasOnFixedUpdate = _scriptInstance["OnFixedUpdate"].valid();
-        _hasOnLateUpdate = _scriptInstance["OnLateUpdate"].valid();
-        _hasOnCollisionEnter = _scriptInstance["OnCollisionEnter"].valid();
-        _hasOnCollisionStay = _scriptInstance["OnCollisionStay"].valid();
-        _hasOnCollisionExit = _scriptInstance["OnCollisionExit"].valid();
-        _hasOnTriggerEnter = _scriptInstance["OnTriggerEnter"].valid();
-        _hasOnTriggerStay = _scriptInstance["OnTriggerStay"].valid();
-        _hasOnTriggerExit = _scriptInstance["OnTriggerExit"].valid();
-        _hasOnApplicationQuit = _scriptInstance["OnApplicationQuit"].valid();
-        _hasOnMouseEnter = _scriptInstance["OnMouseEnter"].valid();
-        _hasOnMouseOver = _scriptInstance["OnMouseOver"].valid();
-        _hasOnMouseExit = _scriptInstance["OnMouseExit"].valid();
-        _hasOnMouseDown = _scriptInstance["OnMouseDown"].valid();
-        _hasOnMouseDrag = _scriptInstance["OnMouseDrag"].valid();
-        _hasOnMouseUp = _scriptInstance["OnMouseUp"].valid();
-        _hasOnMouseUpAsButton = _scriptInstance["OnMouseUpAsButton"].valid();
+        _hasOnUpdate = HasMethod("OnUpdate");
+        _hasOnFixedUpdate = HasMethod("OnFixedUpdate");
+        _hasOnLateUpdate = HasMethod("OnLateUpdate");
+        _hasOnCollisionEnter = HasMethod("OnCollisionEnter");
+        _hasOnCollisionStay = HasMethod("OnCollisionStay");
+        _hasOnCollisionExit = HasMethod("OnCollisionExit");
+        _hasOnTriggerEnter = HasMethod("OnTriggerEnter");
+        _hasOnTriggerStay = HasMethod("OnTriggerStay");
+        _hasOnTriggerExit = HasMethod("OnTriggerExit");
+        _hasOnApplicationQuit = HasMethod("OnApplicationQuit");
+        _hasOnMouseEnter = HasMethod("OnMouseEnter");
+        _hasOnMouseOver = HasMethod("OnMouseOver");
+        _hasOnMouseExit = HasMethod("OnMouseExit");
+        _hasOnMouseDown = HasMethod("OnMouseDown");
+        _hasOnMouseDrag = HasMethod("OnMouseDrag");
+        _hasOnMouseUp = HasMethod("OnMouseUp");
+        _hasOnMouseUpAsButton = HasMethod("OnMouseUpAsButton");
     }
 
     void LuaComponent::OnAttach()
@@ -371,7 +777,7 @@ namespace N2Engine::Scripting
             return;
         }
 
-        if (_scriptInstance.valid() && _scriptInstance["OnAttach"].valid())
+        if (HasMethod("OnAttach"))
         {
             CallLuaMethod("OnAttach");
         }
@@ -403,7 +809,7 @@ namespace N2Engine::Scripting
 
     void LuaComponent::OnDestroy()
     {
-        if (_scriptInstance.valid() && _scriptInstance["OnDestroy"].valid() && !_hasMissingScript)
+        if (!_hasMissingScript && !_faulted && HasMethod("OnDestroy"))
         {
             CallLuaMethod("OnDestroy");
         }
@@ -412,7 +818,7 @@ namespace N2Engine::Scripting
 
     void LuaComponent::OnEnable()
     {
-        if (_scriptInstance.valid() && _scriptInstance["OnEnable"].valid() && !_hasMissingScript)
+        if (!_hasMissingScript && !_faulted && HasMethod("OnEnable"))
         {
             CallLuaMethod("OnEnable");
         }
@@ -420,7 +826,7 @@ namespace N2Engine::Scripting
 
     void LuaComponent::OnDisable()
     {
-        if (_scriptInstance.valid() && _scriptInstance["OnDisable"].valid() && !_hasMissingScript)
+        if (!_hasMissingScript && !_faulted && HasMethod("OnDisable"))
         {
             CallLuaMethod("OnDisable");
         }
@@ -439,7 +845,7 @@ namespace N2Engine::Scripting
     {
         if (_hasOnCollisionEnter && !_hasMissingScript)
         {
-            CallLuaMethod("OnCollisionEnter", Bindings::CollisionToLua(collision, _scriptInstance.lua_state()));
+            CallLuaMethodWithArgument("OnCollisionEnter", [&] { return Bindings::CollisionToLua(collision, _scriptInstance.lua_state()); });
         }
     }
 
@@ -447,7 +853,7 @@ namespace N2Engine::Scripting
     {
         if (_hasOnCollisionStay && !_hasMissingScript)
         {
-            CallLuaMethod("OnCollisionStay", Bindings::CollisionToLua(collision, _scriptInstance.lua_state()));
+            CallLuaMethodWithArgument("OnCollisionStay", [&] { return Bindings::CollisionToLua(collision, _scriptInstance.lua_state()); });
         }
     }
 
@@ -455,7 +861,7 @@ namespace N2Engine::Scripting
     {
         if (_hasOnCollisionExit && !_hasMissingScript)
         {
-            CallLuaMethod("OnCollisionExit", Bindings::CollisionToLua(collision, _scriptInstance.lua_state()));
+            CallLuaMethodWithArgument("OnCollisionExit", [&] { return Bindings::CollisionToLua(collision, _scriptInstance.lua_state()); });
         }
     }
 
@@ -463,7 +869,7 @@ namespace N2Engine::Scripting
     {
         if (_hasOnTriggerEnter && !_hasMissingScript)
         {
-            CallLuaMethod("OnTriggerEnter", Bindings::TriggerToLua(trigger, _scriptInstance.lua_state()));
+            CallLuaMethodWithArgument("OnTriggerEnter", [&] { return Bindings::TriggerToLua(trigger, _scriptInstance.lua_state()); });
         }
     }
 
@@ -471,7 +877,7 @@ namespace N2Engine::Scripting
     {
         if (_hasOnTriggerStay && !_hasMissingScript)
         {
-            CallLuaMethod("OnTriggerStay", Bindings::TriggerToLua(trigger, _scriptInstance.lua_state()));
+            CallLuaMethodWithArgument("OnTriggerStay", [&] { return Bindings::TriggerToLua(trigger, _scriptInstance.lua_state()); });
         }
     }
 
@@ -479,7 +885,7 @@ namespace N2Engine::Scripting
     {
         if (_hasOnTriggerExit && !_hasMissingScript)
         {
-            CallLuaMethod("OnTriggerExit", Bindings::TriggerToLua(trigger, _scriptInstance.lua_state()));
+            CallLuaMethodWithArgument("OnTriggerExit", [&] { return Bindings::TriggerToLua(trigger, _scriptInstance.lua_state()); });
         }
     }
 
@@ -557,7 +963,8 @@ namespace N2Engine::Scripting
             j["scriptPath"] = _scriptPath;
         }
 
-        j["scriptData"] = _scriptData;
+        // Copied without recursion: a script's data is scene data, which can nest up to JsonLimits::MaxSceneJsonDepth
+        j["scriptData"] = JsonLimits::IterativeCopy(_scriptData);
         return j;
     }
 
@@ -565,9 +972,10 @@ namespace N2Engine::Scripting
     {
         SerializableComponent::Deserialize(j, resolver);
 
+        const EntryScope budget; // SetScript and what follows it each open one; this keeps them in the one entry
         if (j.contains("scriptData") && !j["scriptData"].is_null())
         {
-            _scriptData = j["scriptData"];
+            _scriptData = JsonLimits::IterativeCopy(j["scriptData"]); // as deep as the scene allows
         }
 
         // Try UUID first (preferred)
@@ -607,9 +1015,10 @@ namespace N2Engine::Scripting
         // Resolve references if resolver provided
         if (resolver)
         {
-            resolver->AddPendingReference([this, j, resolver]()
+            // Not a copy of j: ResolveReferences reads _scriptData, and copying j would recurse once per JSON level
+            resolver->AddPendingReference([this, resolver]()
             {
-                ResolveReferences(j, resolver);
+                ResolveReferences(_scriptData, resolver);
             });
         }
     }
@@ -619,6 +1028,8 @@ namespace N2Engine::Scripting
         if (!_scriptInstance.valid())
             return;
 
+        GuardedAccess([&]
+        {
         sol::optional<sol::table> fieldsTable = _scriptInstance["SerializableFields"];
         if (!fieldsTable)
             return;
@@ -630,7 +1041,7 @@ namespace N2Engine::Scripting
             // Check if this is a reference field
             if (value.is_object() && value.contains("$ref"))
             {
-                auto refValue = value["$ref"];
+                const auto &refValue = value["$ref"];
                 if (refValue.is_null())
                 {
                     _scriptInstance[fieldName] = sol::nil;
@@ -685,15 +1096,12 @@ namespace N2Engine::Scripting
                 }
             }
         }
+        });
     }
 
     bool LuaComponent::IsComponentType(const std::string &type) const
     {
-        // Any type scripts can add by name (Rigidbody, BoxCollider, ...), or a name ending in "Component".
-        // Only the latter used to count, so `type = "Rigidbody"` reference fields were silently skipped.
-        const auto names = Bindings::GetScriptableComponentNames();
-        return std::ranges::find(names, type) != names.end() ||
-               (type.size() > 9 && type.ends_with("Component"));
+        return IsLuaComponentType(type);
     }
 
     std::vector<FieldInfo> LuaComponent::DescribeFields() const
@@ -708,106 +1116,165 @@ namespace N2Engine::Scripting
         script.assetType = script.typeName;
         fields.push_back(std::move(script));
 
-        sol::table instance = _scriptInstance;
-        if (!instance.valid())
+        if (!LuaRuntime::RunsScripts())
+        {
+            RetryRefusedDeclaration();
+            AppendDeclaredFields(fields);
+            return fields;
+        }
+        if (!_scriptInstance.valid())
         {
             return fields;
         }
-        sol::optional<sol::table> declared = instance["SerializableFields"];
-        if (!declared)
+        const LuaBudgetScope budget;
+        // Reading a field of the script's tables can run its metamethods: each read is a Lua protected call
+        const auto guarded = [this](const std::function<void()> &body)
+        {
+            std::string error;
+            if (LuaRuntime::Instance().ProtectedCall(body, error))
+            {
+                return true;
+            }
+            Logger::Warn(std::format("Lua error reading the fields of {}: {}", _scriptPath.ToString(), error));
+            return false;
+        };
+        // The declarations are read with Lua's own API into plain C++ data: a sol reference made for each key, value or
+        // table would be a registry reference (luaL_ref), and where Lua's errors are C++ exceptions (the web build, MSVC
+        // Debug) one that fails at the memory cap ends the process even inside a protected call, as outside one. The
+        // instance is pushed on the stack, which keeps it alive while the reads run its metamethods (a SetScript from
+        // one of them cannot free it).
+        using DefaultKind = LuaDefaultKind;
+        struct Declaration
+        {
+            std::string name;
+            bool isDefinition = false; // { default = 5, type = "..." } rather than the shorthand `speed = 5`
+            std::string declaredType;
+            DefaultKind defaultKind = DefaultKind::Other; // what the default (or the shorthand value) is
+            // `replicated` of a definition: 0 absent or false, 1 true, 2 present but not a boolean
+            int replicated = 0;
+        };
+        const auto classify = [](lua_State *state, const int index)
+        {
+            switch (lua_type(state, index))
+            {
+            case LUA_TNUMBER:
+                return lua_isinteger(state, index) != 0 ? DefaultKind::Integer : DefaultKind::Float;
+            case LUA_TBOOLEAN:
+                return DefaultKind::Bool;
+            case LUA_TSTRING:
+                return DefaultKind::String;
+            default:
+                return sol::stack_object(state, index).is<Math::Vector3>() ? DefaultKind::Vector3
+                                                                            : DefaultKind::Other;
+            }
+        };
+
+        // The state is read once, before any script code runs: a metamethod can retire the instance (SetScript), which
+        // empties the member and nulls its state
+        lua_State *const luaState = _scriptInstance.lua_state();
+        std::vector<Declaration> declarations;
+        bool declared = false;
+        if (!guarded([&]
+        {
+            lua_State *state = luaState;
+            const int base = lua_gettop(state);
+            _scriptInstance.push(state);
+            lua_getfield(state, -1, "SerializableFields");
+            if (lua_type(state, -1) == LUA_TTABLE)
+            {
+                declared = true;
+                const int table = lua_gettop(state);
+                lua_pushnil(state);
+                while (lua_next(state, table) != 0)
+                {
+                    // A field is named by a string (a table can be keyed by anything: the script's own business)
+                    if (lua_type(state, -2) == LUA_TSTRING)
+                    {
+                        Declaration declaration;
+                        std::size_t length = 0;
+                        const char *text = lua_tolstring(state, -2, &length);
+                        declaration.name.assign(text, length);
+                        // As ExtractSerializableFields reads it: sol's table check accepts a userdata too
+                        declaration.isDefinition = lua_type(state, -1) == LUA_TTABLE || lua_type(state, -1) == LUA_TUSERDATA;
+                        if (!declaration.isDefinition)
+                        {
+                            declaration.defaultKind = classify(state, -1);
+                        }
+                        declarations.push_back(std::move(declaration));
+                    }
+                    lua_pop(state, 1);
+                }
+            }
+            lua_settop(state, base);
+        }) || !declared)
         {
             return fields;
         }
 
-        std::vector<FieldInfo> scriptFields;
-        for (const auto &[key, value] : *declared)
+        // A definition's type and default are read one definition at a time, each in a protected call of its own (they
+        // can run the definition's metamethods): one that fails leaves that field to its default, the others unaffected
+        for (Declaration &declaration : declarations)
         {
-            // A field is named by a string (a table can be keyed by anything: the script's own business)
-            if (key.get_type() != sol::type::string)
+            if (!declaration.isDefinition)
             {
                 continue;
             }
-            FieldInfo info;
-            info.name = key.as<std::string>();
-            info.displayName = DefaultDisplayName(info.name);
-            info.container = "scriptData";
+            guarded([&]
+            {
+                // An earlier definition's metamethod may have retired the instance: nothing left to read
+                if (!_scriptInstance.valid())
+                {
+                    return;
+                }
+                lua_State *state = luaState;
+                const int base = lua_gettop(state);
+                _scriptInstance.push(state);
+                lua_getfield(state, -1, "SerializableFields");
+                if (lua_type(state, -1) == LUA_TTABLE)
+                {
+                    lua_pushlstring(state, declaration.name.data(), declaration.name.size());
+                    lua_rawget(state, -2);
+                    if (lua_type(state, -1) == LUA_TTABLE || lua_type(state, -1) == LUA_TUSERDATA)
+                    {
+                        const int definition = lua_gettop(state);
+                        lua_getfield(state, definition, "type");
+                        if (lua_type(state, -1) == LUA_TSTRING)
+                        {
+                            std::size_t length = 0;
+                            const char *text = lua_tolstring(state, -1, &length);
+                            declaration.declaredType.assign(text, length);
+                        }
+                        lua_pop(state, 1);
+                        lua_getfield(state, definition, "replicated");
+                        if (lua_type(state, -1) == LUA_TBOOLEAN)
+                        {
+                            declaration.replicated = lua_toboolean(state, -1) != 0 ? 1 : 0;
+                        }
+                        else if (lua_type(state, -1) != LUA_TNIL)
+                        {
+                            declaration.replicated = 2;
+                        }
+                        lua_pop(state, 1);
+                        lua_getfield(state, definition, "default");
+                        declaration.defaultKind = classify(state, -1);
+                    }
+                }
+                lua_settop(state, base);
+            });
+        }
 
-            // Either { default = 5, type = "..." } or the shorthand `speed = 5`
-            std::string declaredType;
-            sol::object defaultValue = value;
-            if (value.is<sol::table>())
+        std::vector<FieldInfo> scriptFields;
+        for (const Declaration &declaration : declarations)
+        {
+            // The mapping from a declaration to the editor field is shared with the DeclarationEvaluator
+            FieldInfo info = MakeLuaFieldInfo(declaration.name, declaration.declaredType, declaration.defaultKind,
+                                              declaration.replicated == 1);
+            if (!_replicatedWarned && (declaration.replicated == 2 || (declaration.replicated == 1 && !info.replicated)))
             {
-                const sol::table definition = value.as<sol::table>();
-                declaredType = definition.get_or<std::string>("type", "");
-                defaultValue = definition.get<sol::object>("default");
-            }
-
-            if (declaredType == "GameObject")
-            {
-                info.kind = FieldKind::GameObjectRef;
-                info.typeName = "GameObject";
-            }
-            else if (!declaredType.empty() && IsComponentType(declaredType))
-            {
-                info.kind = FieldKind::ComponentRef;
-                info.typeName = declaredType;
-            }
-            else if (declaredType == "string")
-            {
-                info.kind = FieldKind::String;
-                info.typeName = "string";
-            }
-            else if (declaredType == "int" || declaredType == "integer")
-            {
-                info.kind = FieldKind::Int;
-                info.typeName = "int";
-            }
-            else if (declaredType == "number" || declaredType == "float")
-            {
-                info.kind = FieldKind::Float;
-                info.typeName = "float";
-            }
-            else if (declaredType == "bool" || declaredType == "boolean")
-            {
-                info.kind = FieldKind::Bool;
-                info.typeName = "bool";
-            }
-            else if (declaredType == "Vector3")
-            {
-                info.kind = FieldKind::Vector3;
-                info.typeName = "Vector3";
-            }
-            else if (defaultValue.get_type() == sol::type::number)
-            {
-                // As ExtractSerializableFields stores it: a Lua integer is an integer
-                lua_State *L = defaultValue.lua_state();
-                defaultValue.push(L);
-                const bool isInteger = lua_isinteger(L, -1) != 0;
-                lua_pop(L, 1);
-                info.kind = isInteger ? FieldKind::Int : FieldKind::Float;
-                info.typeName = isInteger ? "int" : "float";
-            }
-            else if (defaultValue.is<bool>())
-            {
-                info.kind = FieldKind::Bool;
-                info.typeName = "bool";
-            }
-            else if (defaultValue.is<std::string>())
-            {
-                info.kind = FieldKind::String;
-                info.typeName = "string";
-            }
-            else if (defaultValue.is<Math::Vector3>())
-            {
-                info.kind = FieldKind::Vector3;
-                info.typeName = "Vector3";
-            }
-            // else Json (the FieldInfo's own default): whatever the data holds
-            if (info.kind == FieldKind::Int)
-            {
-                // Stored as a JSON integer and injected as a Lua integer
-                info.limits = {static_cast<double>(std::numeric_limits<std::int64_t>::lowest()),
-                               static_cast<double>(std::numeric_limits<std::int64_t>::max())};
+                _replicatedWarned = true;
+                Logger::Warn(std::format("Field '{}' of {}: `replicated` must be true or false, and only a bool, int, "
+                                         "float, string or Vector3 field can be replicated: it stays local",
+                                         declaration.name, _scriptPath.ToString()));
             }
             scriptFields.push_back(std::move(info));
         }
@@ -826,6 +1293,7 @@ namespace N2Engine::Scripting
             return;
         }
 
+        const EntryScope budget;
         if (const auto found = values.find("scriptUUID"); found != values.end())
         {
             if (!found->is_string())
@@ -864,7 +1332,8 @@ namespace N2Engine::Scripting
                 {
                     return candidate.container == "scriptData" && candidate.name == fieldName;
                 });
-                _scriptData[fieldName] = field != fields.end() ? ClampFieldValue(*field, fieldValue) : fieldValue;
+                _scriptData[fieldName] = field != fields.end() ? ClampFieldValue(*field, fieldValue)
+                                                               : JsonLimits::IterativeCopy(fieldValue);
             }
             InjectFieldsIntoScript();
             if (resolver != nullptr)
@@ -878,9 +1347,146 @@ namespace N2Engine::Scripting
         }
     }
 
+    void LuaComponent::InjectField(const std::string &key, const nlohmann::json &value)
+    {
+        if (!_scriptInstance.valid())
+            return;
+
+        GuardedAccess([&]
+        {
+            if (value.is_number_float())
+                _scriptInstance[key] = value.get<float>();
+            else if (value.is_number_integer())
+                _scriptInstance[key] = value.get<std::int64_t>();
+            else if (value.is_boolean())
+                _scriptInstance[key] = value.get<bool>();
+            else if (value.is_string())
+                _scriptInstance[key] = value.get<std::string>();
+            else if (value.is_object() && value.contains("x"))
+            {
+                const auto component = [&value](const char *axis)
+                {
+                    return value.contains(axis) && value[axis].is_number() ? value[axis].get<float>() : 0.0f;
+                };
+                _scriptInstance[key] = Math::Vector3{component("x"), component("y"), component("z")};
+            }
+        });
+    }
+
+    nlohmann::json LuaComponent::SerializeReplicated(const std::span<const FieldInfo> replicated)
+    {
+        nlohmann::json json = Serialize();
+        if (replicated.empty() || !_scriptInstance.valid() || !LuaRuntime::RunsScripts())
+        {
+            return json;
+        }
+        if (!json.contains("scriptData") || !json["scriptData"].is_object())
+        {
+            json["scriptData"] = nlohmann::json::object();
+        }
+        nlohmann::json &data = json["scriptData"];
+
+        const EntryScope budget;
+        lua_State *const luaState = _scriptInstance.lua_state();
+        // The live values, read with Lua's own API into plain data (as DescribeFields reads the declarations)
+        GuardedAccess([&]
+        {
+            lua_State *state = luaState;
+            const int base = lua_gettop(state);
+            _scriptInstance.push(state);
+            const int instance = lua_gettop(state);
+            for (const FieldInfo &field : replicated)
+            {
+                if (field.container != "scriptData")
+                {
+                    continue;
+                }
+                lua_getfield(state, instance, field.name.c_str());
+                const int type = lua_type(state, -1);
+                switch (field.kind)
+                {
+                case FieldKind::Bool:
+                    if (type == LUA_TBOOLEAN)
+                    {
+                        data[field.name] = lua_toboolean(state, -1) != 0;
+                    }
+                    break;
+                case FieldKind::Int:
+                    if (type == LUA_TNUMBER)
+                    {
+                        if (lua_isinteger(state, -1) != 0)
+                        {
+                            data[field.name] = static_cast<std::int64_t>(lua_tointeger(state, -1));
+                        }
+                        else
+                        {
+                            const double number = static_cast<double>(lua_tonumber(state, -1));
+                            if (std::isfinite(number) && std::fabs(number) < 9.0e18)
+                            {
+                                data[field.name] = static_cast<std::int64_t>(std::llround(number));
+                            }
+                        }
+                    }
+                    break;
+                case FieldKind::Float:
+                    if (type == LUA_TNUMBER)
+                    {
+                        data[field.name] = static_cast<double>(lua_tonumber(state, -1));
+                    }
+                    break;
+                case FieldKind::String:
+                    if (type == LUA_TSTRING)
+                    {
+                        std::size_t length = 0;
+                        const char *text = lua_tolstring(state, -1, &length);
+                        data[field.name] = std::string(text, length);
+                    }
+                    break;
+                case FieldKind::Vector3:
+                    if (sol::stack_object(state, -1).is<Math::Vector3>())
+                    {
+                        const auto vector = sol::stack_object(state, -1).as<Math::Vector3>();
+                        data[field.name] = {{"x", vector.x}, {"y", vector.y}, {"z", vector.z}};
+                    }
+                    break;
+                default:
+                    break;
+                }
+                lua_pop(state, 1);
+            }
+            lua_settop(state, base);
+        });
+        return json;
+    }
+
+    void LuaComponent::ApplyReplicated(const nlohmann::json &values, ReferenceResolver * /*resolver*/)
+    {
+        if (!values.is_object())
+        {
+            return;
+        }
+        const auto found = values.find("scriptData");
+        if (found == values.end() || !found->is_object())
+        {
+            return;
+        }
+        const EntryScope budget;
+        if (!_scriptData.is_object())
+        {
+            _scriptData = nlohmann::json::object();
+        }
+        for (const auto &entry : found->items())
+        {
+            // Plain values only (the codecs make nothing else): no nesting to copy without recursion
+            _scriptData[entry.key()] = entry.value();
+            InjectField(entry.key(), entry.value());
+        }
+    }
+
     void LuaComponent::SetScriptData(const nlohmann::json &data)
     {
-        _scriptData = data;
+        const EntryScope budget;
+        _scriptData = JsonLimits::IterativeCopy(data);
         InjectFieldsIntoScript();
     }
 
@@ -901,7 +1507,7 @@ namespace N2Engine::Scripting
 
         if (_scriptInstance.valid())
         {
-            _scriptInstance[fieldName] = value;
+            GuardedAccess([&] { _scriptInstance[fieldName] = value; });
         }
     }
 
@@ -933,7 +1539,14 @@ namespace N2Engine::Scripting
 
         // Saved fields (and resolved references) carry over, fields the new version adds get their
         // defaults, and the old instance is retired properly: see LoadScriptInstance
-        LoadScriptInstance(true, false);
+        if (!LuaRuntime::RunsScripts())
+        {
+            LoadDeclaration(true, false);
+        }
+        else
+        {
+            LoadScriptInstance(true, false);
+        }
 
         Logger::Info(std::format("Reloaded script: {}", _scriptPath.ToString()));
     }
@@ -941,6 +1554,7 @@ namespace N2Engine::Scripting
     // Add getter for missing script status
     bool LuaComponent::HasMissingScript() const
     {
+        RetryRefusedDeclaration(); // a refused reading is not a missing script: it is asked again first
         return _hasMissingScript;
     }
 

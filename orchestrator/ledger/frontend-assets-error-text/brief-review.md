@@ -1,0 +1,13 @@
+# Review frontend-assets-error-text: assets-state: strip the error-code prefix from host errors and report coded denials to the banner
+Read-only. Do NOT edit files, push, or comment on GitHub. Repo C:/Method Notes Obsidian/N2Engine-Electron-Frontend. First `git fetch`, then review `git diff origin/master...origin/fix-assets-state-error-text` (read C:/Method Notes Obsidian/orchestrator/ledger/frontend-assets-error-text/dev.json for the PR number and the dev's deviations; if C:/Method Notes Obsidian/orchestrator/ledger/frontend-assets-error-text/review.json exists, it holds your predecessor's findings: check each is fixed and review only the delta since its "head").
+Use the gh wrapper for any GitHub read: `bash "C:/Method Notes Obsidian/gh-epicnicks.sh" ...` from inside C:/Method Notes Obsidian/N2Engine-Electron-Frontend.
+
+## Plan under review
+Follow-up to the reviewed low finding on merged frontend PR #28. In src/renderer/assets-state.ts `messageOf` (around line 94) reads the raw error message, so a coded denial (the code travels as a U+2063-delimited message prefix, see errorCodeOf/errorTextOf in src/shared/api.ts and how src/renderer/inspector-state.ts handles it) would show the code glued to the host text; the catch blocks that save import settings and save a text file (around lines 346 and 475) set only the inline error. Fix: use errorTextOf in messageOf, and for a coded denial (readOnly/forbidden) in those catch blocks also call the state's error callback (store.reportError: banner + deniedAsReadOnly), keeping the inline error; plain failures stay inline only. Mirror what inspector-state.ts already does. Add unit/DOM tests (existing harness in src/test-dom and src/test) for both: coded denial shows clean text and reaches the banner callback; plain error unchanged. Run npm run typecheck, build and npm test; open a PR and wait for repo CI. No new dependencies; no other behaviour change.
+
+## Look for
+Correctness bugs and concrete failure scenarios; security (injection, secrets); missing tests / test sources that won't compile (missing includes) / non-ASCII in tests; anything outside the allowed paths; docs out of sync; line endings; regressions. Say nothing about style.
+
+## Output
+Overwrite C:/Method Notes Obsidian/orchestrator/ledger/frontend-assets-error-text/review.json: {"head":"<origin/fix-assets-state-error-text sha you reviewed>","findings":[{"severity":"blocker|high|medium|low","file":"","line":0,"summary":"one line","scenario":"one line"}],"verdict":"clean|fixes-needed"}. At most 10 findings, most severe first, only ones you are confident in. Then return the same counts to your caller.
+Rules: no attribution anywhere; no tokens in env or commands.

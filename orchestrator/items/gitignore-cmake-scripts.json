@@ -1,0 +1,21 @@
+{
+  "name": "gitignore-cmake-scripts",
+  "repo": "engine",
+  "branch": "fix-gitignore-cmake-scripts",
+  "title": "Stop .gitignore from hiding new CMake scripts under cmake/",
+  "closes": null,
+  "issue": "Add `!cmake/*.cmake` next to the existing `!text/cmake/*.cmake` exception in .gitignore (the `*.cmake` rule currently hides new files in cmake/, which is why cmake/PhysXLinuxHashes.cmake had to be force-added in PR #120). Change only .gitignore; keep its line endings and layout; add a one-line comment. Verify with git check-ignore that cmake/PhysXLinuxHashes.cmake (tracked) and a hypothetical untracked cmake/Foo.cmake are NOT ignored, while generated files such as CMakeCache.txt, cmake_install.cmake and build output stay ignored, and that `git status` on the branch shows nothing new unexpectedly untracked. CI must stay green (no code change).",
+  "allowedPaths": [
+    "^.gitignore$"
+  ],
+  "acceptance": [
+    "git check-ignore shows cmake/*.cmake not ignored and generated CMake files still ignored",
+    "All CI jobs green"
+  ],
+  "requiresDocs": false,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "reviewer": "sonnet",
+  "notes": "Tiny change. No docs needed."
+}

@@ -1,0 +1,10 @@
+{
+  "name": "frontend-dom-tests-1",
+  "head": "f91cccd5ce9d1358b1e4ab2d2160821da9216962",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "CI:success"
+  ],
+  "failures": []
+}

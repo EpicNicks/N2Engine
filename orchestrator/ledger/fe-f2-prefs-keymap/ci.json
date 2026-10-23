@@ -1,0 +1,10 @@
+{
+  "name": "fe-f2-prefs-keymap",
+  "head": "65fa5f61f838aeade6c49d582e51134c3a30264d",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "CI:success"
+  ],
+  "failures": []
+}

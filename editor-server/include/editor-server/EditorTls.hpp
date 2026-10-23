@@ -26,7 +26,7 @@ namespace N2Engine::Editor
 
     /**
      * One TLS connection, over a connected socket the caller owns (and closes after this goes). Every call is
-     * non-blocking: the caller waits on the socket between calls (EditorServer::WaitUntilReady). Used from one thread.
+     * non-blocking: the caller waits on the socket between calls (Connection::WaitUntilReady). Used from one thread.
      * Nothing here includes a TLS library header, so a build without N2ENGINE_EDITOR_TLS compiles the same interface
      * (the calls then fail).
      */

@@ -1,0 +1,10 @@
+{
+  "name": "fe-f1-panel-registry",
+  "head": "1005765f1b2340c175db0f73bd78ad2678ae8a81",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "CI:success"
+  ],
+  "failures": []
+}

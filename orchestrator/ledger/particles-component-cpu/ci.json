@@ -1,0 +1,10 @@
+{
+  "name": "particles-component-cpu",
+  "head": "8368842f4a04bfde00b774c1fef7ad9e3cc36a7a",
+  "done": true,
+  "allGreen": true,
+  "runs": [
+    "Tests:success"
+  ],
+  "failures": []
+}

@@ -1,0 +1,25 @@
+{
+  "closes": null,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "requiresDocs": true,
+  "repo": "engine",
+  "name": "net-a4-lows",
+  "branch": "fix-net-a4-lows",
+  "title": "Netcode A4 follow-ups: drain the socket before the idle-peer sweep, DualStack() only for wildcard IPv6 binds, ITransport header text brought up to date",
+  "issue": "Follow-up of the merged A4 PR #203 (native UdpTransport). The user accepted three LOW review findings as a follow-up item; verify each against the CODE on master before changing it: (1) engine/src/network/n2net/UdpTransport.cpp (~line 832): the idle-peer sweep runs BEFORE the socket is drained in Poll, so a stall between Polls longer than peerIdleTimeoutMs drops every peer although their datagrams sit in the receive buffer: drain first (bounded as today), then sweep, so a peer whose datagram was just received is not timed out; add a test that stalls longer than the idle timeout with datagrams queued and asserts the peer survives (and a peer that sent nothing is still swept); (2) UdpTransport.cpp (~line 613): DualStack() returns true for any IPv6 bind whose IPV6_V6ONLY=0 was accepted, including a specific address such as ::1 that can never reach IPv4, so Connect to an IPv4 address succeeds and every Send fails silently: DualStack() is true only for the IPv6 wildcard (::) bind; Connect to an IPv4 peer on a non-dual-stack IPv6 socket fails with a clear error; test both (skip cleanly when IPv6 is unavailable, as the existing tests do); (3) engine/include/engine/network/n2net/Transport.hpp (~line 52): the ITransport header comment still says the library has no sockets / native UDP is later work and that Disconnect makes the other side see PeerDisconnected; rewrite it to describe the current contract (UdpTransport exists, native only; the Disconnect semantics UdpTransport actually has, which the user accepted as a deviation in #203: read the A4 ledger C:/Method Notes Obsidian/orchestrator/ledger/net-a4-udp-transport/pr-body.md for the accepted wording). Update docs/netcode.html where it describes these behaviours. Nothing builds locally for the engine; CI (12 checks) is the test; expect fix rounds; re-read every edit twice (CMake/YAML/C++ syntax); NEVER call a stateful function (RNG etc.) twice in one argument list or operator expression (unspecified evaluation order); NEVER run taskkill or kill other processes; verify every docs sentence against the CODE; no attribution lines on commits or PRs (no Co-Authored-By, no Generated-with footer); GitHub only via the wrapper; before your final push merge origin/master into the branch if it moved; your FINAL message must be a real report (PR number, head sha, what you did, deviations), never a single word.",
+  "allowedPaths": [
+    "^engine/",
+    "^tests/",
+    "^docs/"
+  ],
+  "acceptance": [
+    "Poll drains the socket before the idle sweep; stall test passes",
+    "DualStack() only for the wildcard IPv6 bind; IPv4 connect on a specific IPv6 bind is refused clearly; tested",
+    "Transport.hpp comment matches the code",
+    "All checks green; docs verified"
+  ],
+  "reviewer": "sonnet",
+  "notes": "Reviewer: drain bound kept (no unbounded loop), sweep order, the IPv6 test skips cleanly, header text true, no flaky timing (deadline polling)."
+}

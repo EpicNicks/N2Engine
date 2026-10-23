@@ -99,6 +99,11 @@ namespace
             {"GetProjectInfo", CommandType::GetProjectInfo},
             {"SetProjectSettings", CommandType::SetProjectSettings},
             {"SetStartupScene", CommandType::SetStartupScene},
+            {"ListEditorExtensions", CommandType::ListEditorExtensions},
+            {"GetEditorUi", CommandType::GetEditorUi},
+            {"InvokeMenuItem", CommandType::InvokeMenuItem},
+            {"InvokeInspectorAction", CommandType::InvokeInspectorAction},
+            {"ReloadEditorExtensions", CommandType::ReloadEditorExtensions},
             {"Undo", CommandType::Undo},
             {"Redo", CommandType::Redo},
             {"BeginEditGroup", CommandType::BeginEditGroup},
@@ -150,6 +155,9 @@ namespace
             {"AssetDetail", ResponseType::AssetDetail},
             {"TextData", ResponseType::TextData},
             {"AssetCreated", ResponseType::AssetCreated},
+            {"EditorExtensions", ResponseType::EditorExtensions},
+            {"EditorUi", ResponseType::EditorUi},
+            {"ExtensionResult", ResponseType::ExtensionResult},
         };
         return responses;
     }
@@ -205,6 +213,8 @@ namespace
             {"SetProjectSettings", [](BufferReader &r) { (void)SetProjectSettingsCmd::Deserialize(r); }},
             {"SetStartupScene", [](BufferReader &r) { (void)SetStartupSceneCmd::Deserialize(r); }},
             {"BeginEditGroup", [](BufferReader &r) { (void)BeginEditGroupCmd::Deserialize(r); }},
+            {"InvokeMenuItem", [](BufferReader &r) { (void)InvokeMenuItemCmd::Deserialize(r); }},
+            {"InvokeInspectorAction", [](BufferReader &r) { (void)InvokeInspectorActionCmd::Deserialize(r); }},
         };
         return deserializers;
     }
@@ -626,6 +636,10 @@ TEST(ProtocolSpecTest, EveryCommandIsClassifiedForAPlayHost)
         {"ListAssets", false}, {"GetAssetInfo", false}, {"ReadTextAsset", false},
         {"WritePlaySnapshot", false}, {"SetPaused", false}, {"Step", false}, {"GetPlayState", false},
         {"SendInput", false}, {"Shutdown", false},
+        // A play host runs no editor extension: the lists answer (nothing is loaded there), the reload and the invocation
+        // are refused
+        {"ListEditorExtensions", false}, {"GetEditorUi", false}, {"ReloadEditorExtensions", true},
+        {"InvokeMenuItem", true}, {"InvokeInspectorAction", true},
     };
 
     const spec_json spec = LoadSpec();

@@ -1,0 +1,27 @@
+{
+  "closes": null,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "requiresDocs": false,
+  "name": "fe-fe8-history-panel",
+  "repo": "frontend",
+  "branch": "feat-fe-fe8-history-panel",
+  "title": "Electron UI FE8: history panel over GetHistory with visible, jumpable undo steps (sequential Undo/Redo) and edit-group awareness",
+  "issue": "Roadmap C:/Method Notes Obsidian/orchestrator/proposals/electron-ui-roadmap.md section 7 (Candidate 4: history panel), decision U19 (history jump = sequential Undo/Redo from the client; a host UndoTo only if jumps prove slow). Read edit-controller.ts, edit-groups.ts, edit-actions.ts, the Edit menu code that already uses GetHistory, panels.tsx (register the new panel through the F1 registry as a closable panel in the default bottom/side group the roadmap names), the README undo/edit-groups section and the engine docs for GetHistory (/engine repo docs/editor.html: READ-ONLY) FIRST. SCOPE: a History panel listing the host's undo stack and redo stack (labels, revision numbers, which is current, the saved revision marker, group boundaries as the host reports them), live-updated on the history events the host sends (historyChanged: find how the client already reacts), clicking an entry undoes or redoes sequentially to that point as ONE visible operation with a progress state (cancel supported between steps), disabled when the host is read-only/viewer or when a client edit group is open or when a step fails (show the error; stop; re-read the history), keyboard accessible list (arrow keys, Enter to jump, Escape), large histories virtualised or capped as the host caps them, tests: pure logic (diff of history lists, jump planning, failure handling) and DOM tests with a fake edit backend (jump forward/back, failure mid-jump, read-only, concurrent change by the host, empty), README updated. Frontend rules: requiresDocs false (README only); run npm run typecheck and npm test locally before every push; no token in logs/storage; keep changes inside the files your lane owns (other frontend lanes are in flight at the same time: keymap action registrations and README additions will conflict mechanically, keep them as small separate hunks); no engine/protocol change unless this item says so. Read the roadmap section named in this item, decisions U1-U21 (all ACCEPTED by the user on 2026-10-20), the frontend README and the code you touch FIRST; F1 (panel registry/layout) and F2 (prefs store and keymap) are merged: use them (register panels through the registry, shortcuts through the keymap, preferences through the prefs store).",
+  "allowedPaths": [
+    "^engine-ref\\.txt$",
+    "^package\\.json$",
+    "^package-lock\\.json$",
+    "^README\\.md$",
+    "^src/",
+    "^scripts/"
+  ],
+  "acceptance": [
+    "History panel registered through the F1 registry, live-updated, shows current/saved markers",
+    "Sequential jump with progress, cancel, failure handling, read-only/group-open disabled states",
+    "Unit and DOM tests; frontend CI green; README updated"
+  ],
+  "reviewer": "sonnet",
+  "notes": "Reviewer: jump never leaves the project in an unexpected state (failure mid-jump re-syncs), concurrency with host events, disabled states, keyboard access, no listener leaks, tests meaningful, mediums count."
+}

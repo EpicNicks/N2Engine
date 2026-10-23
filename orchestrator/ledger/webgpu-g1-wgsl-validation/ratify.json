@@ -1,0 +1,7 @@
+{
+  "name": "webgpu-g1-wgsl-validation",
+  "decision": "merge",
+  "reasons": [],
+  "relaxed": "behind master by 42 file(s), no code overlap with the PR's files (docs overlap: docs/application.html, docs/testing.html), trial merge clean",
+  "merged": true
+}

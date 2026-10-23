@@ -1,7 +1,7 @@
 // Auto-generated from protocol.json by generate_typescript.py - do not edit
 
 /** protocol.json's version (major.minor.patch); Hello sends it, and the server answers with its own */
-export const PROTOCOL_VERSION = "1.12.0";
+export const PROTOCOL_VERSION = "1.16.0";
 
 // ==================== Types ====================
 
@@ -56,6 +56,8 @@ export interface EditorEvent {
   redoCount?: number;
   state?: string;
   frame?: number;
+  uiRevision?: number;
+  extension?: string;
 }
 
 export interface InputEvent {
@@ -197,6 +199,66 @@ export interface ComponentSchema {
   defaults?: unknown;
 }
 
+export interface ExtensionInfo {
+  id: string;
+  name: string;
+  sha256: string;
+  apiVersion: number;
+  state: string;
+  error?: string;
+  capabilities: string[];
+  itemCount: number;
+}
+
+export interface EditorExtensionsInfo {
+  enabled: boolean;
+  uiRevision: number;
+  extensions: ExtensionInfo[];
+}
+
+export interface MenuForm {
+  fields: FieldSchema[];
+  defaults: unknown;
+}
+
+export interface MenuItemInfo {
+  id: string;
+  extension: string;
+  path: string;
+  title: string;
+  enabledWhen: unknown;
+  confirm?: string;
+  minRole: string;
+  form?: MenuForm;
+}
+
+export interface InspectorButtonInfo {
+  id: string;
+  label: string;
+  minRole: string;
+  form?: MenuForm;
+}
+
+export interface InspectorSectionInfo {
+  componentType: string;
+  extension: string;
+  label: string;
+  fields: FieldSchema[];
+  buttons: InspectorButtonInfo[];
+}
+
+export interface EditorUiInfo {
+  uiRevision: number;
+  menuItems: MenuItemInfo[];
+  inspectorSections: InspectorSectionInfo[];
+}
+
+export interface ExtensionResultInfo {
+  message?: string;
+  select?: string[];
+  warnings?: string[];
+}
+
 // ==================== Ids ====================
 
 export const CommandType = {
@@ -252,6 +314,11 @@ export const CommandType = {
   GetProjectInfo: 0x70,
   SetProjectSettings: 0x71,
   SetStartupScene: 0x72,
+  ListEditorExtensions: 0x80,
+  GetEditorUi: 0x81,
+  ReloadEditorExtensions: 0x84,
+  InvokeMenuItem: 0x82,
+  InvokeInspectorAction: 0x83,
   Undo: 0x90,
   Redo: 0x91,
   BeginEditGroup: 0x92,
@@ -306,6 +373,9 @@ export const ResponseType = {
   PlaySnapshot: 0xB0,
   PlayState: 0xB1,
   ErrorCoded: 0x1C,
+  EditorExtensions: 0x1D,
+  EditorUi: 0x1E,
+  ExtensionResult: 0x1F,
 } as const;
 
 export type ResponseType = typeof ResponseType[keyof typeof ResponseType];
@@ -364,6 +434,11 @@ export const CommandResponse = {
   GetProjectInfo: "ProjectInfo",
   SetProjectSettings: "ProjectInfo",
   SetStartupScene: "ProjectInfo",
+  ListEditorExtensions: "EditorExtensions",
+  GetEditorUi: "EditorUi",
+  ReloadEditorExtensions: "EditorExtensions",
+  InvokeMenuItem: "ExtensionResult",
+  InvokeInspectorAction: "ExtensionResult",
   Undo: "EditResult",
   Redo: "EditResult",
   BeginEditGroup: "Ok",
@@ -579,6 +654,20 @@ export interface SetStartupSceneRequest {
   path: string;
 }
 
+export interface InvokeMenuItemRequest {
+  itemId: string;
+  selection: unknown;
+  params: unknown;
+  uiRevision: number;
+}
+
+export interface InvokeInspectorActionRequest {
+  componentId: string;
+  actionId: string;
+  params: unknown;
+  uiRevision: number;
+}
+
 export interface BeginEditGroupRequest {
   label: string;
 }
@@ -761,6 +850,23 @@ export interface ProjectInfoResponse {
   rootPath: string;
   userDataPath: string;
   project: ProjectFile;
+}
+
+export interface EditorExtensionsResponse {
+  info: EditorExtensionsInfo;
+}
+
+export interface EditorUiResponse {
+  ui: EditorUiInfo;
+}
+
+export interface ExtensionResultResponse {
+  label: string;
+  revision: number;
+  canUndo: boolean;
+  canRedo: boolean;
+  savedRevision: number;
+  result: ExtensionResultInfo;
 }
 
 export interface EditResultResponse {
@@ -1709,6 +1815,46 @@ export function decodeSetStartupSceneRequest(payload: Uint8Array): SetStartupSce
   return { path };
 }
 
+/** InvokeMenuItem's request payload (without the frame header) */
+export function encodeInvokeMenuItemRequest(value: InvokeMenuItemRequest): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.string(value.itemId);
+  writer.json(value.selection);
+  writer.json(value.params);
+  writer.u32(value.uiRevision);
+  return writer.finish();
+}
+
+/** Reads InvokeMenuItem's request payload; bytes after the last field are ignored */
+export function decodeInvokeMenuItemRequest(payload: Uint8Array): InvokeMenuItemRequest {
+  const reader = new ProtocolReader(payload);
+  const itemId = reader.string();
+  const selection = reader.json() as unknown;
+  const params = reader.json() as unknown;
+  const uiRevision = reader.u32();
+  return { itemId, selection, params, uiRevision };
+}
+
+/** InvokeInspectorAction's request payload (without the frame header) */
+export function encodeInvokeInspectorActionRequest(value: InvokeInspectorActionRequest): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.string(value.componentId);
+  writer.string(value.actionId);
+  writer.json(value.params);
+  writer.u32(value.uiRevision);
+  return writer.finish();
+}
+
+/** Reads InvokeInspectorAction's request payload; bytes after the last field are ignored */
+export function decodeInvokeInspectorActionRequest(payload: Uint8Array): InvokeInspectorActionRequest {
+  const reader = new ProtocolReader(payload);
+  const componentId = reader.string();
+  const actionId = reader.string();
+  const params = reader.json() as unknown;
+  const uiRevision = reader.u32();
+  return { componentId, actionId, params, uiRevision };
+}
+
 /** BeginEditGroup's request payload (without the frame header) */
 export function encodeBeginEditGroupRequest(value: BeginEditGroupRequest): Uint8Array {
   const writer = new ProtocolWriter();
@@ -2274,6 +2420,58 @@ export function decodeProjectInfoResponse(payload: Uint8Array): ProjectInfoRespo
   return { rootPath, userDataPath, project };
 }
 
+/** EditorExtensions's payload (without the frame header) */
+export function encodeEditorExtensionsResponse(value: EditorExtensionsResponse): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.json(value.info);
+  return writer.finish();
+}
+
+/** Reads EditorExtensions's payload; bytes after the last field are ignored */
+export function decodeEditorExtensionsResponse(payload: Uint8Array): EditorExtensionsResponse {
+  const reader = new ProtocolReader(payload);
+  const info = reader.json() as EditorExtensionsInfo;
+  return { info };
+}
+
+/** EditorUi's payload (without the frame header) */
+export function encodeEditorUiResponse(value: EditorUiResponse): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.json(value.ui);
+  return writer.finish();
+}
+
+/** Reads EditorUi's payload; bytes after the last field are ignored */
+export function decodeEditorUiResponse(payload: Uint8Array): EditorUiResponse {
+  const reader = new ProtocolReader(payload);
+  const ui = reader.json() as EditorUiInfo;
+  return { ui };
+}
+
+/** ExtensionResult's payload (without the frame header) */
+export function encodeExtensionResultResponse(value: ExtensionResultResponse): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.string(value.label);
+  writer.u32(value.revision);
+  writer.bool(value.canUndo);
+  writer.bool(value.canRedo);
+  writer.u32(value.savedRevision);
+  writer.json(value.result);
+  return writer.finish();
+}
+
+/** Reads ExtensionResult's payload; bytes after the last field are ignored */
+export function decodeExtensionResultResponse(payload: Uint8Array): ExtensionResultResponse {
+  const reader = new ProtocolReader(payload);
+  const label = reader.string();
+  const revision = reader.u32();
+  const canUndo = reader.bool();
+  const canRedo = reader.bool();
+  const savedRevision = reader.u32();
+  const result = reader.json() as ExtensionResultInfo;
+  return { label, revision, canUndo, canRedo, savedRevision, result };
+}
+
 /** EditResult's payload (without the frame header) */
 export function encodeEditResultResponse(value: EditResultResponse): Uint8Array {
   const writer = new ProtocolWriter();
@@ -2415,6 +2613,8 @@ export const RequestCodecs = {
   GetLuaFields: { encode: encodeGetLuaFieldsRequest, decode: decodeGetLuaFieldsRequest },
   SetProjectSettings: { encode: encodeSetProjectSettingsRequest, decode: decodeSetProjectSettingsRequest },
   SetStartupScene: { encode: encodeSetStartupSceneRequest, decode: decodeSetStartupSceneRequest },
+  InvokeMenuItem: { encode: encodeInvokeMenuItemRequest, decode: decodeInvokeMenuItemRequest },
+  InvokeInspectorAction: { encode: encodeInvokeInspectorActionRequest, decode: decodeInvokeInspectorActionRequest },
   BeginEditGroup: { encode: encodeBeginEditGroupRequest, decode: decodeBeginEditGroupRequest },
   WritePlaySnapshot: { encode: encodeWritePlaySnapshotRequest, decode: decodeWritePlaySnapshotRequest },
   SetPaused: { encode: encodeSetPausedRequest, decode: decodeSetPausedRequest },
@@ -2453,6 +2653,9 @@ export const ResponseCodecs = {
   ComponentData: { encode: encodeComponentDataResponse, decode: decodeComponentDataResponse },
   LuaFields: { encode: encodeLuaFieldsResponse, decode: decodeLuaFieldsResponse },
   ProjectInfo: { encode: encodeProjectInfoResponse, decode: decodeProjectInfoResponse },
+  EditorExtensions: { encode: encodeEditorExtensionsResponse, decode: decodeEditorExtensionsResponse },
+  EditorUi: { encode: encodeEditorUiResponse, decode: decodeEditorUiResponse },
+  ExtensionResult: { encode: encodeExtensionResultResponse, decode: decodeExtensionResultResponse },
   EditResult: { encode: encodeEditResultResponse, decode: decodeEditResultResponse },
   History: { encode: encodeHistoryResponse, decode: decodeHistoryResponse },
   Autosave: { encode: encodeAutosaveResponse, decode: decodeAutosaveResponse },

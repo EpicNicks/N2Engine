@@ -1,0 +1,7 @@
+{
+  "name": "phys-j2-interface-backend-setting",
+  "decision": "merge",
+  "reasons": [],
+  "relaxed": "behind master by 622 file(s), no code overlap with the PR's files (docs overlap: docs/application.html, docs/index.html, docs/physics.html, docs/testing.html), trial merge clean",
+  "merged": true
+}

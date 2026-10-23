@@ -21,6 +21,11 @@ file(GLOB_RECURSE RENDERER_SOURCES
 if(NOT N2ENGINE_RENDERER_VULKAN)
     list(FILTER RENDERER_SOURCES EXCLUDE REGEX "/src/vulkan/")
 endif()
+# Likewise the WebGPU backend (natively the CI harness only, cmake/DawnPrebuilt.cmake; in the web build the backend the player
+# links, cmake/EmdawnwebgpuPort.cmake)
+if(NOT N2ENGINE_RENDERER_WEBGPU)
+    list(FILTER RENDERER_SOURCES EXCLUDE REGEX "/src/webgpu/")
+endif()
 
 # Only create library if we have source files
 if(RENDERER_SOURCES)
@@ -35,7 +40,11 @@ if(N2ENGINE_RENDERER_VULKAN)
     # backend then builds without its built-in shaders: see the SPIR-V step below)
     find_package(Vulkan REQUIRED OPTIONAL_COMPONENTS glslangValidator glslc)
 endif()
+# Web: no OpenGL library and no GLFW to build. external/web-stubs (added by the root CMakeLists.txt first) defines the
+# `glfw` and `OpenGL::GL` targets the renderer links: GLFW's real headers with no-op functions, and nothing for GL
+if(NOT N2ENGINE_PLATFORM_WEB)
 find_package(OpenGL REQUIRED)
+endif()
 
 # Configure GLFW
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
@@ -47,12 +56,14 @@ if(UNIX AND NOT APPLE)
     set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "" FORCE)
 endif()
 
+if(NOT N2ENGINE_PLATFORM_WEB)
 FetchContent_Declare(
     glfw
     GIT_REPOSITORY https://github.com/glfw/glfw.git
     GIT_TAG 3.4
 )
 FetchContent_MakeAvailable(glfw)
+endif()
 
 # Add GLAD
 add_library(glad ${CMAKE_SOURCE_DIR}/external/glad/src/glad.c)
@@ -85,6 +96,24 @@ if(N2ENGINE_RENDERER_VULKAN)
     target_include_directories(renderer SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/external/VulkanMemoryAllocator)
 endif()
 
+# WebGPU backend. Natively: the pinned prebuilt Dawn (target n2_dawn, defined GLOBAL so the tests see it). PRIVATE: nothing that
+# links the renderer gets Dawn's headers, and the static library is only pulled in by what references it. In the web build
+# (stage G4): Emscripten's emdawnwebgpu port of the same Dawn release (target n2_emdawnwebgpu): its compile option gives the
+# renderer webgpu.h, and its link option, which reaches every executable linking the renderer (a static library's private
+# dependencies are linked by its users), adds the port's implementation. Nothing outside the renderer includes webgpu.h: the
+# engine makes the backend through renderer/webgpu/WebGpuFactory.hpp
+if(N2ENGINE_RENDERER_WEBGPU)
+    if(N2ENGINE_PLATFORM_WEB)
+        include(${CMAKE_SOURCE_DIR}/cmake/EmdawnwebgpuPort.cmake)
+        set(N2_WEBGPU_IMPLEMENTATION n2_emdawnwebgpu)
+    else()
+        include(${CMAKE_SOURCE_DIR}/cmake/DawnPrebuilt.cmake)
+        set(N2_WEBGPU_IMPLEMENTATION n2_dawn)
+    endif()
+    # renderer_webgpu_shaders (defined further down) is the generated WgslSources.hpp the backend's shader modules are made from
+    target_link_libraries(renderer PRIVATE ${N2_WEBGPU_IMPLEMENTATION} renderer_webgpu_shaders)
+endif()
+
 # Compile definitions
 target_compile_definitions(renderer PRIVATE 
     GLFW_INCLUDE_NONE
@@ -98,6 +127,7 @@ if(N2ENGINE_RENDERER_VULKAN)
 endif()
 # 1 or 0 for everything that links the renderer (renderer/common/RendererConfig.hpp)
 target_compile_definitions(renderer PUBLIC N2ENGINE_RENDERER_VULKAN=$<BOOL:${N2ENGINE_RENDERER_VULKAN}>)
+target_compile_definitions(renderer PUBLIC N2ENGINE_RENDERER_WEBGPU=$<BOOL:${N2ENGINE_RENDERER_WEBGPU}>)
 
 # Link libraries
 target_link_libraries(renderer
@@ -206,6 +236,62 @@ file(WRITE "${OUTPUT}" "#pragma once\n#include <cstdint>\nconst uint32_t ${SYMBO
         target_compile_definitions(renderer PRIVATE N2ENGINE_VULKAN_HAS_SPIRV=0)
     endif()
 endif()
+
+# ---------------------------------------------------------------------------------------------------------------------
+# The WebGPU backend's built-in shaders (G1 of #155, design W1): hand-written WGSL under shaders/webgpu/, embedded as ONE
+# generated header of string_views (<build>/generated/webgpu_shaders/renderer/webgpu/WgslSources.hpp, namespace
+# Renderer::WebGpu::Wgsl: kUnlitWgsl, kLitWgsl, kTextWgsl) behind the header-only target renderer_webgpu_shaders. Written
+# at configure time (no tool, so it is the same on native and web builds) and again whenever a .wgsl changes (they are
+# CMAKE_CONFIGURE_DEPENDS); the file is rewritten only when its text changes, so an unchanged shader rebuilds nothing.
+# Each shader goes in as raw string literals of at most 8000 characters, concatenated (MSVC limits a literal to 16380).
+#
+# The WebGPU backend (N2ENGINE_RENDERER_WEBGPU) links this target (stage G3a: its unlit shader module is made from kUnlitWgsl; the lit
+# and text shaders follow in G3b); renderer_tests links it to check the embedded text is the files'. The shaders are validated by Tint and naga in CI
+# (scripts/validate-wgsl.sh) and parsed by tests/renderer/webgpu/WebGpuShaderParityTests.cpp.
+# ---------------------------------------------------------------------------------------------------------------------
+set(N2_WGSL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders/webgpu")
+set(N2_WGSL_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/webgpu_shaders")
+set(N2_WGSL_HEADER "${N2_WGSL_GENERATED_DIR}/renderer/webgpu/WgslSources.hpp")
+set(N2_WGSL_CHUNK_SIZE 8000)
+set(N2_WGSL_HEADER_TEXT "#pragma once\n\n#include <string_view>\n\n// Generated by renderer/CMakeLists.txt from renderer/shaders/webgpu/*.wgsl (the shaders with LF line ends): do not edit.\nnamespace Renderer::WebGpu::Wgsl\n{\n")
+foreach(_entry unlit:Unlit lit:Lit text:Text)
+    string(REPLACE ":" ";" _parts "${_entry}")
+    list(GET _parts 0 _wgsl_name)
+    list(GET _parts 1 _wgsl_symbol)
+    set(_wgsl_file "${N2_WGSL_SOURCE_DIR}/${_wgsl_name}.wgsl")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_wgsl_file}")
+    file(READ "${_wgsl_file}" _wgsl)
+    string(REPLACE "\r\n" "\n" _wgsl "${_wgsl}")
+    string(LENGTH "${_wgsl}" _wgsl_length)
+    string(APPEND N2_WGSL_HEADER_TEXT "    inline constexpr std::string_view k${_wgsl_symbol}Wgsl =")
+    set(_wgsl_pos 0)
+    while(_wgsl_pos LESS _wgsl_length)
+        math(EXPR _wgsl_remaining "${_wgsl_length} - ${_wgsl_pos}")
+        if(_wgsl_remaining GREATER N2_WGSL_CHUNK_SIZE)
+            set(_wgsl_take ${N2_WGSL_CHUNK_SIZE})
+        else()
+            set(_wgsl_take ${_wgsl_remaining})
+        endif()
+        string(SUBSTRING "${_wgsl}" ${_wgsl_pos} ${_wgsl_take} _wgsl_chunk)
+        string(APPEND N2_WGSL_HEADER_TEXT "\n        R\"n2wgsl(${_wgsl_chunk})n2wgsl\"")
+        math(EXPR _wgsl_pos "${_wgsl_pos} + ${_wgsl_take}")
+    endwhile()
+    string(APPEND N2_WGSL_HEADER_TEXT ";\n\n")
+endforeach()
+string(APPEND N2_WGSL_HEADER_TEXT "}\n")
+
+set(_wgsl_existing "")
+if(EXISTS "${N2_WGSL_HEADER}")
+    file(READ "${N2_WGSL_HEADER}" _wgsl_existing)
+    # file(WRITE) writes CRLF on Windows: compare the texts with LF line ends, or every configure would rewrite the file
+    string(REPLACE "\r\n" "\n" _wgsl_existing "${_wgsl_existing}")
+endif()
+if(NOT "${_wgsl_existing}" STREQUAL "${N2_WGSL_HEADER_TEXT}")
+    file(WRITE "${N2_WGSL_HEADER}" "${N2_WGSL_HEADER_TEXT}")
+endif()
+
+add_library(renderer_webgpu_shaders INTERFACE)
+target_include_directories(renderer_webgpu_shaders INTERFACE "${N2_WGSL_GENERATED_DIR}")
 
 # Set standard
 set_target_properties(renderer PROPERTIES

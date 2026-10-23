@@ -2,21 +2,57 @@
 
 #include <sol/sol.hpp>
 #include <unordered_map>
+#include <cstddef>
+#include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include "engine/io/ResourcePath.hpp"
 #include "engine/scripting/LuaScript.hpp"
 
 namespace N2Engine::Scripting
 {
+    /// Resource limits of the Lua state. A value of 0 means unlimited (tools only; every engine build applies the defaults).
+    struct LuaLimits
+    {
+        /// Lua VM instructions one outermost C++ -> Lua entry may run before it is aborted with a Lua error
+        std::uint64_t instructionsPerEntry = 50'000'000;
+        /// Bytes the whole state (every script shares it) may hold; an allocation past it fails with a memory error
+        std::size_t maxBytes = std::size_t{256} * 1024 * 1024;
+    };
+
+    /// What this process lets the engine do with project Lua. Run is every game, the play host and every test: scripts run
+    /// as the docs describe. DeclarationsOnly is the editor host that edits (N2EditorHost without --play): project Lua
+    /// never runs in the engine's state there. A LuaComponent reads its script's field declarations from the
+    /// ScriptDeclarationCache (a throwaway, budgeted evaluation with no engine bindings, off the calling thread), and the
+    /// runtime refuses every way of running a script.
+    enum class LuaExecutionPolicy
+    {
+        Run,
+        DeclarationsOnly
+    };
+
+    namespace Detail
+    {
+        /// What the state's allocator and count hook share (reached through lua_getallocf). Defined in LuaRuntime.cpp.
+        struct LuaGuardState;
+    }
+
     class LuaRuntime
     {
     private:
         static LuaRuntime* _instance;
 
+        // What GetLuaSeed was when the state was created (declared first: the state reads the setting as it is made)
+        std::optional<std::uint64_t> _stateLuaSeed;
+        // Declared before _lua: the allocator and the hook use it until the state is closed
+        std::unique_ptr<Detail::LuaGuardState> _guard;
         sol::state _lua;
+        bool _deterministicMath = false; // the engine-owned math functions are installed (see HasDeterministicMath)
+        std::unordered_set<std::string> _limitLogged; // chunk names whose limit error was already logged
         std::unordered_map<std::string, sol::table> _loadedModules;
         struct ReloadCallback
         {
@@ -27,9 +63,43 @@ namespace N2Engine::Scripting
         std::optional<bool> _initializeResult;
 
         LuaRuntime();
+        ~LuaRuntime(); // out of line: the guard state is defined in LuaRuntime.cpp
 
     public:
         static LuaRuntime& Instance();
+        /// True once Instance() has made the runtime. A path that only has something to undo in an existing runtime
+        /// (a destructor removing its reload callbacks) asks this instead of making a Lua state to look.
+        [[nodiscard]] static bool HasInstance();
+
+        /// Sets what the process may run (default Run). Process-wide on purpose: the editor host turns edit mode on for a
+        /// scene only AFTER it is deserialised, and deserialising is what runs a script's top-level chunk, so a per-scene
+        /// switch comes too late. N2EditorHost sets it once at start-up, before any scene loads, and nothing changes it
+        /// back; tests set it and restore it. Safe to call from any thread.
+        static void SetExecutionPolicy(LuaExecutionPolicy policy);
+        [[nodiscard]] static LuaExecutionPolicy GetExecutionPolicy();
+        /// True under Run
+        [[nodiscard]] static bool RunsScripts() { return GetExecutionPolicy() == LuaExecutionPolicy::Run; }
+
+        /// The project setting determinism.luaSeed (unset by default). Unset: Lua seeds its string hash from the clock
+        /// and addresses and math.random from the clock, as upstream Lua does, so pairs() order over string keys and
+        /// math.random differ from run to run. Set: the hash seed is a constant and math.random starts as
+        /// math.randomseed(seed) would, so both are a function of the seed alone.
+        /// SECURITY: a constant hash seed lets whoever controls the keys a script stores (network input, save files,
+        /// mods) build keys that all collide and so make string-keyed tables quadratically slow (hash flooding). It
+        /// must stay unset unless the game needs reproducible Lua and its script data is trusted; a host must never
+        /// set it on its own.
+        /// Call it from the main thread BEFORE the first Instance() (Application::Init does): the seeds are read when
+        /// the state is created, a state that exists keeps the ones it was created with (a warning says so if the
+        /// value differs). Takes effect for every Lua state created after it, also a sol::state of a test.
+        static void SetLuaSeed(std::optional<std::uint64_t> seed);
+        /// The seed SetLuaSeed configured (empty: unset)
+        [[nodiscard]] static std::optional<std::uint64_t> GetLuaSeed();
+        /// The seed this runtime's state was created with (empty: it seeded itself from the clock)
+        [[nodiscard]] std::optional<std::uint64_t> StateLuaSeed() const { return _stateLuaSeed; }
+        /// Whether this runtime's state has the engine-owned math.sin, cos, tan, asin, acos, atan, exp and log
+        /// (InstallDeterministicMath): exactly when it was created with a Lua seed, the same gate as the seeds. Unset:
+        /// Lua's own (the C library's), unchanged. Ordered.pairs is in every state.
+        [[nodiscard]] bool HasDeterministicMath() const { return _deterministicMath; }
 
         /// Registers all engine bindings. Safe to call more than once: later calls return the first result,
         /// because re-registering a usertype in the same state breaks the metatables of existing values.
@@ -37,16 +107,73 @@ namespace N2Engine::Scripting
         bool Initialize();
         sol::state& GetState() { return _lua; }
 
+        /// Sets the instruction budget (per outermost entry from C++ into Lua) and the memory cap of the state; takes
+        /// effect at the next entry (the cap at once). The defaults (LuaLimits) apply in every build.
+        void SetLimits(const LuaLimits& limits);
+        [[nodiscard]] LuaLimits GetLimits() const;
+        /// Bytes the Lua state holds now (what the cap counts)
+        [[nodiscard]] std::size_t GetMemoryUsed() const;
+        /// True if the error text is one the budget or the cap raises ("script exceeded its instruction budget",
+        /// "not enough memory"): what a caller of a protected call checks to fault a component instead of retrying it
+        [[nodiscard]] static bool IsLimitError(std::string_view message);
+        /// The text to report for an error a protected call returned inside an entry: once the budget is spent every
+        /// error of the entry is the budget's, so this is the budget error then (from the runtime's own state, not
+        /// from the error object, which a C++ frame unwound on the way can have displaced). With `memoryError` (the
+        /// call's status said LUA_ERRMEM) it is the memory error, whatever the error object says; else `message`
+        [[nodiscard]] std::string LimitAwareError(std::string_view message, bool memoryError = false) const;
+        /// Makes sure the registry hands out `count` (1 to 16) references without allocating: sol creates and copies
+        /// a reference (table, object, function, make_object) with luaL_ref, which grows the registry when it has no
+        /// free slot, and does so in a noexcept constructor, so a growth that fails at the memory cap outside a
+        /// protected call would end the process (the panic function throws, the exception meets the noexcept frame).
+        /// Call it right before the unprotected reference creations of a path that runs with no Lua call on the stack
+        /// (a component loading its script, a hot reload, a collision handler), `count` being how many it makes, and
+        /// make none in between (script code can take slots). It grows the registry in a protected call, so a failure
+        /// is an error here: false with the text in `error` (the memory error, or the budget's), and the caller then
+        /// logs it and gives up instead of making the reference. Cheap when the slots are free (a read of the free
+        /// list; no Lua call, no allocation).
+        [[nodiscard]] bool ReserveReferences(int count, std::string& error);
+        /// Runs C++ code that touches script tables (a table access can reach a script's metamethods) inside a Lua
+        /// protected call (a budget scope too), so a Lua error, the budget or a failed allocation never goes down
+        /// the panic path (a C++ exception thrown through Lua's C frames) or jumps over the caller's C++ frames.
+        /// Keep the body to the access itself: a Lua error abandons it without running its destructors.
+        /// @returns false with the error text in `error` if the body raised a Lua error or threw
+        bool ProtectedCall(const std::function<void()>& body, std::string& error);
+        /// True the first time it is asked about a key: limit errors of chunks that run outside a component are
+        /// logged once per chunk name
+        bool ShouldLogLimitError(const std::string& key);
+        /// How many errors have reached the panic function (an error outside every protected call, e.g. an allocation
+        /// failing at the memory cap while sol pushes a call's arguments). Read it before such a call...
+        [[nodiscard]] std::uint64_t PanicCount() const;
+        /// ...and pass it here from the catch of the C++ exception: if it came down the panic path, the stack holds only
+        /// what the panic function left there (the error object and padding, part of it popped by the unwound C++
+        /// frames), so this resets it to the empty base. Only for a caller that is no Lua call's (a panic means none
+        /// was running) and holds no stack values.
+        void RecoverAfterPanic(std::uint64_t panicsBefore);
+
         /// Loads a script through ResourceLoader and runs it once (e.g. a scene setup script).
         /// @returns false if the file couldn't be loaded or the script raised an error; the error is logged
         bool RunFile(const IO::ResourcePath& path);
         /// Runs Lua source text in the global environment. The one way the engine runs script assets
         /// (RunFile, require, LuaComponent): binary (precompiled) chunks are rejected.
         sol::protected_function_result RunSource(std::string_view source, const std::string& chunkName);
+        /// RunSource keeping at most the chunk's first return value on the stack (the error object if it failed). What
+        /// the engine's own loading uses (RunFile, require and hot reload, LuaComponent): a chunk can return any number
+        /// of values, the result pops all of them when destroyed, and if a C++ exception from the panic path (an
+        /// allocation failing outside a protected call) unwinds it, more pops than the panic function's padding would
+        /// go below the base of the stack (std::terminate). One value always fits.
+        sol::protected_function_result RunChunk(std::string_view source, const std::string& chunkName);
+        /// The error text of a failed result, read without converting: a string error object as it is, any other
+        /// value as "(a <type> error value)". sol's conversion (sol::error err = result) turns a number into a new
+        /// string, an allocation that fails at the memory cap outside any protected call.
+        [[nodiscard]] static std::string ErrorText(const sol::protected_function_result& result);
 
         // Module management
         sol::table LoadScriptAsModule(const IO::ResourcePath& path, LuaScript* script);
+        /// The module's table, or nothing if it is not loaded or its reference could not be copied (the memory cap)
         sol::optional<sol::table> GetModule(const std::string& moduleName);
+        /// Run: runs the new source as the module (erasing the old one) and tells every component that registered for it
+        /// to rebuild. DeclarationsOnly: runs nothing: it drops the cache's entries of other sources of this path and tells
+        /// the components (ScriptDeclarationCache::Subscribe) to read the new source's declarations.
         void ReloadModule(const IO::ResourcePath& path, LuaScript* script);
 
         // Reload callbacks
@@ -58,13 +185,31 @@ namespace N2Engine::Scripting
         void ClearReloadCallbacks(const std::string& moduleName);
 
         // Path conversion (public for LuaComponent)
-        std::string PathToModuleName(const IO::ResourcePath& path);
+        [[nodiscard]] static std::string PathToModuleName(const IO::ResourcePath& path);
 
     private:
+        friend class LuaBudgetScope;
+        void BeginEntry();
+        void EndEntry(int outerDepth);
         // Not public: destroying the state while components still hold sol::table/sol::function
         // references into it left them dangling. Nothing calls it; the runtime lives for the process.
         static void Destroy();
         void RegisterBindings();
         void SetupModuleSystem();
+    };
+
+    /// Marks one entry from C++ into Lua (a protected call, a chunk run, a table access that can reach a metamethod).
+    /// The OUTERMOST scope refills the instruction budget and ends by refilling it again; a scope inside one (a
+    /// binding that calls back into Lua, require inside a chunk) shares the running budget and never refills it.
+    /// Every C++ -> Lua entry of the engine opens one.
+    class LuaBudgetScope
+    {
+        int _outerDepth;
+
+    public:
+        LuaBudgetScope();
+        ~LuaBudgetScope();
+        LuaBudgetScope(const LuaBudgetScope&) = delete;
+        LuaBudgetScope& operator=(const LuaBudgetScope&) = delete;
     };
 }

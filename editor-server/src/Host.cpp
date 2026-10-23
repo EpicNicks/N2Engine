@@ -24,10 +24,13 @@
 #include "engine/io/ResourceUUID.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
+#include "engine/scripting/LuaRuntime.hpp"
+#include "engine/scripting/ScriptDeclarationCache.hpp"
 
 #include "editor-server/EditorServer.hpp"
 #include "editor-server/EditorTls.hpp"
 #include "editor-server/LogSink.hpp"
+#include "editor-server/ServerLog.hpp"
 
 namespace N2Engine::Editor
 {
@@ -319,15 +322,38 @@ namespace N2Engine::Editor
                 }
             }
 
+            // Scripts in the scenes a client loads must not end an editor host: only the --play child, which is a running
+            // game, lets Application.Quit through. Set before any scene (and so any script) is loaded.
+            Application::SetScriptQuitAllowed(!options.playScene.empty());
+
+            // The same split for project Lua as a whole: a host that edits never runs it. A LuaComponent there reads the
+            // fields its script declares (a budgeted evaluation in a throwaway state with no engine bindings, off this
+            // thread) and the engine's Lua state runs nothing of the project: not a scene's script, not a callback, not a
+            // reloaded module. Only the --play child, a running game, runs scripts. Process-wide and set before any scene
+            // loads, because a scene is built (and its scripts would run) before it is put in edit mode.
+            Scripting::LuaRuntime::SetExecutionPolicy(options.playScene.empty()
+                                                          ? Scripting::LuaExecutionPolicy::DeclarationsOnly
+                                                          : Scripting::LuaExecutionPolicy::Run);
+
             auto &app = Application::GetInstance();
-            app.Init({
+            const EngineHealth health = app.Init({
                 .projectPath = projectDir.string(),
                 .physicsBackend = Config::ApplicationOptions::PhysicsBackend::PHYSX,
                 .renderBackend = ToRenderBackend(options.renderer),
                 .isHeadless = true,
             });
 
-            Logger::Info("Engine initialized");
+            // A refused project (network.preset deterministic with unmet requirements: a Failed Network row) is never
+            // edited or played: Init started nothing and logged every unmet requirement, so the host ends here, before
+            // play mode, the edit loop and the ready line, with exit code 1 and a line on stderr
+            if (const SubsystemStatus *network = health.Find("Network");
+                network != nullptr && network->state == SubsystemState::Failed)
+            {
+                std::println(stderr, "N2EditorHost: the engine refused to start the project: {}", network->detail);
+                return 1;
+            }
+
+            ServerLog::Info("Engine initialized");
 
             // After Init, so their log lines reach the console (and the event ring). The project's id is the asset UUID
             // namespace, res:// resolves under <project>/assets, user:// is the project's own folder, and its settings
@@ -335,10 +361,10 @@ namespace N2Engine::Editor
             // asset references are unavailable, and no scene is loaded.
             if (project)
             {
-                Logger::Info(std::format("Opening project '{}' ({})", project->name, project->projectId.ToString()));
+                ServerLog::Info(std::format("Opening project '{}' ({})", project->name, project->projectId.ToString()));
                 if (versionMatch != IO::EngineVersionMatch::Compatible)
                 {
-                    Logger::Warn(std::format("{} was made with engine {}; this is engine {}", IO::ProjectFile::FileName,
+                    ServerLog::Warn(std::format("{} was made with engine {}; this is engine {}", IO::ProjectFile::FileName,
                                              project->engineVersion, EngineVersion()));
                 }
                 IO::ResourceUUID::Initialize(project->projectId);
@@ -348,7 +374,7 @@ namespace N2Engine::Editor
                 IO::ResourceLoader::Instance().Initialize(projectDir, project->UserDataPath());
                 for (const std::string &problem : ApplyProjectSettings(project->settings))
                 {
-                    Logger::Warn("Project settings: " + problem);
+                    ServerLog::Warn("Project settings: " + problem);
                 }
 
                 server.SetScenesDirectory(projectDir / "scenes");
@@ -361,14 +387,16 @@ namespace N2Engine::Editor
                 {
                     try
                     {
+                        // One allowance for the declarations of every script of the scene, as a command has
+                        const Scripting::ScriptDeclarationCache::CommandBudget evaluationBudget;
                         if (const auto opened = server.OpenSceneFile(project->startupScene); !opened)
                         {
-                            Logger::Warn("Couldn't open the startup scene: " + opened.error());
+                            ServerLog::Warn("Couldn't open the startup scene: " + opened.error());
                         }
                     }
                     catch (const std::exception &e)
                     {
-                        Logger::Warn(std::string("Couldn't open the startup scene: ") + e.what());
+                        ServerLog::Warn(std::string("Couldn't open the startup scene: ") + e.what());
                     }
                 }
                 if (options.playScene.empty() && SceneManager::GetCurScene() == nullptr)
@@ -377,18 +405,40 @@ namespace N2Engine::Editor
                     {
                         if (const auto created = server.NewSceneFile("", ""); !created)
                         {
-                            Logger::Warn("Couldn't create an empty scene: " + created.error());
+                            ServerLog::Warn("Couldn't create an empty scene: " + created.error());
                         }
                     }
                     catch (const std::exception &e)
                     {
-                        Logger::Warn(std::string("Couldn't create an empty scene: ") + e.what());
+                        ServerLog::Warn(std::string("Couldn't create an empty scene: ") + e.what());
                     }
                 }
             }
             else
             {
-                Logger::Info("No --project given: assets and asset references are unavailable");
+                ServerLog::Info("No --project given: assets and asset references are unavailable");
+            }
+
+            // --editor-extensions: the project's Lua editor extensions, read once here (never as a side effect of loading a
+            // scene) and again only on ReloadEditorExtensions. The flag combinations that make this unsafe were refused when
+            // the arguments were parsed (ParseHostArguments).
+            if (options.editorExtensions)
+            {
+                if (!project)
+                {
+                    ServerLog::Warn("--editor-extensions without --project: there is no project folder to find extensions in");
+                }
+                ServerLog::Info("Editor extensions are on (--editor-extensions): the project's editor/ folder runs Lua on this host");
+                if (!server.EnableEditorExtensions(project ? projectDir : std::filesystem::path{}))
+                {
+                    ServerLog::Warn("The editor extensions could not be enabled");
+                }
+                else if (options.editorExtensionsWatch)
+                {
+                    server.SetEditorExtensionsWatching(true);
+                    ServerLog::Info("The editor extensions watcher is on (--editor-extensions-watch): a changed file in "
+                                    "editor/ is reloaded");
+                }
             }
 
             // --play: the game is the snapshot (a file a launcher got from WritePlaySnapshot, or a res:// scene of the
@@ -427,7 +477,7 @@ namespace N2Engine::Editor
                 if (!playError.empty())
                 {
                     std::println(stderr, "N2EditorHost --play: {}", playError);
-                    Logger::Error("Couldn't start playing: " + playError);
+                    ServerLog::Error("Couldn't start playing: " + playError);
                     app.Shutdown();
                     return 1;
                 }
@@ -438,50 +488,90 @@ namespace N2Engine::Editor
             {
                 (void)server.SetAccessToken(accessToken);
                 // The variable's name only, never the token
-                Logger::Info("Clients must send Hello with the access token from " + options.tokenEnv);
+                ServerLog::Info("Clients must send Hello with the access token from " + options.tokenEnv);
             }
             if (server.HasTokensFile())
             {
                 // The path only: never a token, and a hash is in the file, not here
-                Logger::Info("Clients must send Hello with the token of a user in the tokens file " + options.tokensFile);
+                ServerLog::Info("Clients must send Hello with the token of a user in the tokens file " + options.tokensFile);
             }
             if (server.IsTlsEnabled())
             {
                 // The fingerprint is public (it is in the ready line); the key and the token never reach a log
-                Logger::Info("Serving TLS; certificate SHA-256 " + server.TlsFingerprint());
+                ServerLog::Info("Serving TLS; certificate SHA-256 " + server.TlsFingerprint());
             }
             if (options.noRateLimit)
             {
                 (void)server.SetRateLimiting(false);
                 if (server.RequiresAccessToken())
                 {
-                    Logger::Warn("Failed-Hello rate limiting is off (--no-rate-limit): wrong tokens can be tried as fast "
+                    ServerLog::Warn("Failed-Hello rate limiting is off (--no-rate-limit): wrong tokens can be tried as fast "
                                  "as the host can answer, and each costs it up to the Hello timeout");
                 }
             }
             else if (server.RequiresAccessToken())
             {
-                Logger::Info("Failed-Hello rate limiting is on: an address that fails 3 Hellos is backed off (1 s, doubling "
-                             "to 5 min) and closed at accept; loopback shares one backoff; users in a tokens file have one "
-                             "of up to 30 s");
+                ServerLog::Info("Failed-Hello rate limiting is on: an address that fails 3 Hellos, or connects and never "
+                             "finishes one, is backed off (1 s, doubling to 5 min) and closed at accept; loopback has no "
+                             "backoff (the slots and the handshake rate bound it); users in a tokens file have one of "
+                             "up to 30 s, which the right token passes");
+            }
+            // The deadlines that bound how long a connection that has not said Hello holds one pre-auth slot (the
+            // pre-Hello budget is EditorServer::DefaultHelloTimeout, 2 s, from the end of the TLS handshake, which has
+            // its own DefaultTlsHandshakeTimeout, 5 s; neither is a flag)
+            // The pre-auth side: this many connections in their TLS handshake and Hello at once, each non-loopback
+            // address limited to its share, and handshakes (the TLS CPU) rationed. The host sees the peer address the
+            // proxy or container presents: loopback only when the proxy connects over loopback, and loopback has no
+            // per-address limits (see the docs).
+            (void)server.SetPreAuthSlots(static_cast<size_t>(options.preAuthSlots));
+            TokenBucketOptions handshakeRate;
+            handshakeRate.globalPerSecond = 20;
+            handshakeRate.perAddressPerSecond = 5;
+            (void)server.SetHandshakeRateLimit(handshakeRate);
+            (void)server.SetIdleTimeout(std::chrono::seconds(options.idleTimeoutSeconds));
+            (void)server.SetWriteTimeout(std::chrono::seconds(options.writeTimeoutSeconds));
+            (void)server.SetMaxSessionAge(std::chrono::minutes(options.maxSessionMinutes));
+            ServerLog::Info(std::format("Connection limits: {}{} to say Hello, idle timeout {}, write timeout {} s, "
+                                     "maximum session {}",
+                                     options.tls ? std::format("{} ms for the TLS handshake, then ",
+                                                               server.GetTlsHandshakeTimeout().count())
+                                                 : std::string(),
+                                     std::format("{} ms", server.GetHelloTimeout().count()),
+                                     options.idleTimeoutSeconds > 0 ? std::format("{} s", options.idleTimeoutSeconds)
+                                                                    : std::string("off"),
+                                     options.writeTimeoutSeconds,
+                                     options.maxSessionMinutes > 0 ? std::format("{} min", options.maxSessionMinutes)
+                                                                   : std::string("off")));
+            if (options.idleTimeoutSeconds == 0)
+            {
+                ServerLog::Warn("The idle timeout is off (--idle-timeout 0): a client that connects and goes quiet keeps "
+                             "every other client out until it disconnects");
             }
             if (options.readOnly)
             {
                 (void)server.SetReadOnly(true);
-                Logger::Info("Read-only host (--read-only): commands that change anything are refused");
+                ServerLog::Info("Read-only host (--read-only): commands that change anything are refused");
             }
             if (options.exitOnDisconnect)
             {
                 (void)server.SetStopOnDisconnect(true);
-                Logger::Info("The host exits when its client's session ends (--exit-on-disconnect)");
+                ServerLog::Info("The host exits when its client's session ends (--exit-on-disconnect)");
             }
             if (options.bindAddress != EditorServer::DefaultBindAddress)
             {
+                // Only when the flag actually overrode the rule (non-loopback and not token + TLS)
+                if (options.insecureBind && !IsLoopbackBindAddress(options.bindAddress) &&
+                    !(server.RequiresAccessToken() && server.IsTlsEnabled()))
+                {
+                    ServerLog::Warn("--insecure-bind was given: " + options.bindAddress +
+                                 " is not a loopback address and the host would otherwise have refused to start "
+                                 "without a token and --tls");
+                }
                 if (server.IsTlsEnabled())
                 {
                     // Encrypted, but a client that doesn't check the certificate's fingerprint can be talked into
                     // sending the token to someone else, and nothing here limits who may connect
-                    Logger::Warn("Editor server bound to " + options.bindAddress +
+                    ServerLog::Warn("Editor server bound to " + options.bindAddress +
                                  (!server.RequiresAccessToken()
                                       ? ": the traffic is encrypted (TLS) but it has no authentication, so anything that "
                                         "can reach it can control this host"
@@ -491,7 +581,7 @@ namespace N2Engine::Editor
                 }
                 else
                 {
-                    Logger::Warn("Editor server bound to " + options.bindAddress +
+                    ServerLog::Warn("Editor server bound to " + options.bindAddress +
                                  (!server.RequiresAccessToken()
                                       ? ": it has no authentication, so anything that can reach it can control this host"
                                       : ": the access token isn't encrypted, so anything that can see the traffic can "
@@ -501,7 +591,7 @@ namespace N2Engine::Editor
             const bool serverStarted = server.Start(options.port, options.bindAddress);
             if (!serverStarted)
             {
-                Logger::Error("Editor server failed to start");
+                ServerLog::Error("Editor server failed to start");
             }
             else
             {
@@ -517,11 +607,11 @@ namespace N2Engine::Editor
             auto &window = app.GetWindow();
             if (!window.IsValid())
             {
-                Logger::Warn("No window or renderer; rendering commands will be unavailable");
+                ServerLog::Warn("No window or renderer; rendering commands will be unavailable");
             }
             else if (window.IsWindowless())
             {
-                Logger::Info("Rendering with the software renderer, without a window");
+                ServerLog::Info("Rendering with the software renderer, without a window");
             }
 
             // --exit-on-stdin-eof: the flag turns true when stdin ends or fails (a launcher that died)
@@ -529,7 +619,7 @@ namespace N2Engine::Editor
             if (options.exitOnStdinEof)
             {
                 stdinClosed = StartStdinEofWatcher();
-                Logger::Info("The host exits when its stdin closes (--exit-on-stdin-eof)");
+                ServerLog::Info("The host exits when its stdin closes (--exit-on-stdin-eof)");
             }
 
             // Main loop: handle OS events and run the editor's requests. Requests touch engine state, so they
@@ -562,15 +652,32 @@ namespace N2Engine::Editor
 
             if (!g_running)
             {
-                Logger::Info("Shutdown signal received");
+                ServerLog::Info("Shutdown signal received");
             }
             if (stdinClosed && stdinClosed->load())
             {
-                Logger::Info("Stdin closed");
+                ServerLog::Info("Stdin closed");
             }
             server.ProcessCommands(); // flushes log lines the network thread has posted
             server.Stop();
-            Logger::Info("Editor server stopped");
+            ServerLog::Info("Editor server stopped");
+
+            // The same for an editor extension still being evaluated (abandoned at its deadline, stuck in C)
+            if (const int leftRunning = server.ShutdownEditorExtensions(std::chrono::milliseconds(1000)); leftRunning > 0)
+            {
+                ServerLog::Warn(std::format("{} editor extension evaluation(s) still running at exit; they are left to end with "
+                                         "the process",
+                                         leftRunning));
+            }
+
+            // A script evaluation that is still running (abandoned at its deadline, stuck in a long garbage collection)
+            // cannot be stopped: wait a moment for it, then leave it. It owns everything it touches and holds no host
+            // data, so the host ends either way (ScriptDeclarationCache).
+            if (const int leftRunning = Scripting::ScriptDeclarationCache::Instance().Shutdown(); leftRunning > 0)
+            {
+                ServerLog::Warn(std::format("{} script evaluation(s) still running at exit; they are left to end with the process",
+                                         leftRunning));
+            }
 
             // As Application::Run does, however the loop ended
             if (SceneManager::GetCurScene() != nullptr)
@@ -579,7 +686,7 @@ namespace N2Engine::Editor
             }
 
             app.Shutdown();
-            Logger::Info("Engine shut down");
+            ServerLog::Info("Engine shut down");
 
             if (!serverStarted)
             {
@@ -588,7 +695,7 @@ namespace N2Engine::Editor
         }
         catch (const std::exception &e)
         {
-            Logger::Error(std::string("Fatal error: ") + e.what());
+            ServerLog::Error(std::string("Fatal error: ") + e.what());
             return 1;
         }
 

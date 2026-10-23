@@ -1,5 +1,7 @@
 #include "editor-server/EditHistory.hpp"
 
+#include "editor-server/ClientText.hpp"
+
 #include <algorithm>
 #include <exception>
 #include <format>
@@ -60,6 +62,7 @@ namespace N2Engine::Editor
                 EditOp &earlier = _groupOps[i];
                 if (!op.coalesceKey.empty() && earlier.coalesceKey == op.coalesceKey)
                 {
+                    _lowestMergeSinceMark = std::min(_lowestMergeSinceMark, i);
                     _groupBytes = _groupBytes - earlier.redoBytes + op.redoBytes;
                     MergeOps(earlier, std::move(op));
                     return Recorded::InGroup;
@@ -233,6 +236,108 @@ namespace N2Engine::Editor
         return FinishGroup();
     }
 
+    std::expected<EditEffect, std::string> EditHistory::AbortGroup()
+    {
+        if (_groupDepth == 0)
+        {
+            return EditEffect{};
+        }
+        // The group is closed first, with its ops in hand: an op that fails must not leave it open
+        const std::string label = std::move(_groupLabel);
+        std::vector<EditOp> ops = std::move(_groupOps);
+        _groupDepth = 0;
+        _groupLabel.clear();
+        _groupOps.clear();
+        _groupBytes = 0;
+
+        EditEffect effect;
+        for (size_t n = ops.size(); n-- > 0;)
+        {
+            // Last to first, as the edits were made
+            std::string failure;
+            try
+            {
+                const EditOutcome outcome = ops[n].undo();
+                if (outcome)
+                {
+                    effect.Merge(*outcome);
+                    continue;
+                }
+                failure = outcome.error();
+            }
+            catch (const std::exception &error)
+            {
+                // The engine's own text stays in the log for a remote client (audit F10)
+                failure = ClientText::Failure("", "the engine refused it", error.what());
+            }
+            catch (...)
+            {
+                failure = "unknown exception";
+            }
+
+            Clear();
+            return std::unexpected(std::format("Couldn't take back '{}': {} (the edit history was cleared)", label,
+                                               failure));
+        }
+        return effect;
+    }
+
+    size_t EditHistory::MarkGroup()
+    {
+        _lowestMergeSinceMark = SIZE_MAX;
+        return _groupDepth > 0 ? _groupOps.size() : 0;
+    }
+
+    std::expected<EditEffect, std::string> EditHistory::TakeBackGroupTo(const size_t mark)
+    {
+        if (_groupDepth == 0)
+        {
+            return EditEffect{};
+        }
+        if (_lowestMergeSinceMark < mark)
+        {
+            // An op of before the mark holds a redo of after it: undoing the later ops alone would not restore it
+            return std::unexpected(std::string("an edit of the call merged into an earlier edit of the group, so it "
+                                               "cannot be taken back alone"));
+        }
+
+        EditEffect effect;
+        while (_groupOps.size() > mark)
+        {
+            // Last to first, each dropped from the group before it is undone
+            EditOp op = std::move(_groupOps.back());
+            _groupOps.pop_back();
+            const size_t opBytes = op.undoBytes + op.redoBytes + BytesPerOp;
+            _groupBytes = _groupBytes > opBytes ? _groupBytes - opBytes : 0;
+
+            std::string failure;
+            try
+            {
+                const EditOutcome outcome = op.undo();
+                if (outcome)
+                {
+                    effect.Merge(*outcome);
+                    continue;
+                }
+                failure = outcome.error();
+            }
+            catch (const std::exception &error)
+            {
+                // The engine's own text stays in the log for a remote client (audit F10)
+                failure = ClientText::Failure("", "the engine refused it", error.what());
+            }
+            catch (...)
+            {
+                failure = "unknown exception";
+            }
+
+            Clear();
+            return std::unexpected(std::format("Couldn't take back a partly done call: {} (the edit history was cleared)",
+                                               failure));
+        }
+        return effect;
+    }
+
     std::expected<EditHistory::Applied, std::string> EditHistory::Run(const bool undo)
     {
         if (_groupDepth > 0)
@@ -267,7 +372,8 @@ namespace N2Engine::Editor
             }
             catch (const std::exception &error)
             {
-                failure = error.what();
+                // The engine's own text stays in the log for a remote client (audit F10)
+                failure = ClientText::Failure("", "the engine refused it", error.what());
             }
             catch (...)
             {
