@@ -67,7 +67,7 @@ namespace
     std::vector<std::vector<std::uint8_t>> ValidServerMessages()
     {
         return {Encode(SampleHello()), Encode(SampleSpawn()), Encode(DespawnMessage{NetworkId{9}}),
-                Encode(WorldReadyMessage{5, 2})};
+                Encode(WorldReadyMessage{5, 2}), Encode(VisibilityMessage{NetworkId{9},false,true})};
     }
 
     std::vector<std::vector<std::uint8_t>> ValidClientMessages()
@@ -273,7 +273,7 @@ TEST(NetworkProtocolTest, UnknownTypesAreRejected)
 {
     for (int type = 0; type < 256; ++type)
     {
-        const bool serverType = type >= 0x01 && type <= 0x04;
+        const bool serverType = (type >= 0x01 && type <= 0x04) || type == static_cast<int>(MessageType::Visibility);
         const bool clientType = type == 0x81 || type == 0x82;
         const std::vector<std::uint8_t> message = {static_cast<std::uint8_t>(type), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
         const auto asServer = DecodeServerMessage(message);

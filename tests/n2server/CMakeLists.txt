@@ -3,6 +3,20 @@
 
 file(GLOB N2SERVER_TEST_SOURCES "N2Server*Tests.cpp")
 
+add_executable(websocket_echo WebSocketEcho.cpp)
+target_link_libraries(websocket_echo PRIVATE n2net)
+set_target_properties(websocket_echo PROPERTIES CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON)
+find_program(N2_NODE_EXECUTABLE node)
+if(N2_NODE_EXECUTABLE)
+    execute_process(COMMAND ${N2_NODE_EXECUTABLE} -e "process.exit(typeof WebSocket === 'function' ? 0 : 1)"
+        RESULT_VARIABLE N2_NODE_HAS_WEBSOCKET)
+endif()
+if(N2_NODE_EXECUTABLE AND N2_NODE_HAS_WEBSOCKET EQUAL 0)
+    add_test(NAME websocket_smoke COMMAND ${N2_NODE_EXECUTABLE}
+        ${CMAKE_SOURCE_DIR}/scripts/websocket-smoke.mjs $<TARGET_FILE:websocket_echo>)
+    set_tests_properties(websocket_smoke PROPERTIES TIMEOUT 40)
+endif()
+
 add_executable(n2server_tests ${N2SERVER_TEST_SOURCES})
 target_link_libraries(n2server_tests
         PRIVATE

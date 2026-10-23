@@ -5,6 +5,9 @@
 #include <optional>
 
 #include "engine/Logger.hpp"
+#include "engine/GameObjectScene.hpp"
+#include "engine/Time.hpp"
+#include "engine/network/LagCompensatedHitbox.hpp"
 #include "engine/network/NetworkProtocol.hpp"
 
 namespace N2Engine::Network
@@ -14,6 +17,7 @@ namespace N2Engine::Network
         constexpr std::uint64_t kMicrosPerSecond = 1'000'000;
         constexpr std::uint32_t kHardMaxClients = 1024;
         constexpr std::uint32_t kMaxStateSendRateHz = 240;
+        NetworkServer *g_physicsQueryServer = nullptr;
 
         /// The server most recently constructed that is still alive (NetworkServer::Active)
         NetworkServer *g_activeServer = nullptr;
@@ -49,7 +53,8 @@ namespace N2Engine::Network
     }
 
     NetworkServer::NetworkServer(N2Net::ITransport &transport, NetworkWorld &world, NetworkServerOptions options)
-        : _transport(transport), _world(world), _options(std::move(options)), _replicator(_options.replication)
+        : _transport(transport), _world(world), _options(std::move(options)), _replicator(_options.replication),
+          _lagCompensation(_options.lagCompMaxMicros,256)
     {
         _options.maxClients = std::clamp<std::uint32_t>(_options.maxClients, 1u, kHardMaxClients);
         _options.stateSendRateHz = std::min<std::uint32_t>(_options.stateSendRateHz, kMaxStateSendRateHz);
@@ -63,6 +68,7 @@ namespace N2Engine::Network
 
     NetworkServer::~NetworkServer()
     {
+        if (g_physicsQueryServer == this) g_physicsQueryServer = nullptr;
         if (g_activeServer == this)
         {
             g_activeServer = nullptr;
@@ -70,9 +76,50 @@ namespace N2Engine::Network
         _world.SetDestroyedHandler({});
     }
 
+    void NetworkServer::BindPhysicsQueries() { g_physicsQueryServer = this; }
+    bool NetworkServer::SetObserver(ClientId client, NetworkId observer)
+    {
+        const auto *object = _world.Find(observer);
+        if (!IsClientJoined(client) || (observer.IsValid() && (!object || object->GetOwner() != client))) return false;
+        return _replicator.SetObserver(client,observer);
+    }
+    NetworkServer *NetworkServer::PhysicsQueryServer() noexcept { return g_physicsQueryServer; }
+
+    bool NetworkServer::CaptureHitboxes(std::uint64_t now, std::span<const HistoricalHitbox> boxes)
+    {
+        if (!_world.HasScene()) return false;
+        for (const auto &box : boxes) if (!_world.Find(box.object)) return false;
+        return _lagCompensation.Capture(now, boxes);
+    }
+
+    std::optional<LagCompensatedHit> NetworkServer::CastLagCompensated(ClientId requester,
+        std::uint64_t renderTime, const Math::Vector3 &origin, const Math::Vector3 &direction,
+        float maxDistance, float radius, std::uint32_t layers, NetworkId ignore) const
+    {
+        if (!_world.HasScene()) return {};
+        for (const auto &[peer, client] : _clients)
+        {
+            if (client.id != requester || client.state != ClientState::Joined || client.dropping ||
+                !client.connection->Rtt().HasSample()) continue;
+            return _lagCompensation.Cast(_now, renderTime, client.connection->Rtt().SmoothedMicros(),
+                origin, direction, maxDistance, radius, layers, ignore);
+        }
+        return {};
+    }
+
     void NetworkServer::Update(const std::uint64_t nowMicros)
     {
         _now = nowMicros;
+
+        if (_options.autoCaptureHitboxes && _world.HasScene() && _lastHitboxTick != Time::GetTick())
+        {
+            _lastHitboxTick = Time::GetTick();
+            std::vector<HistoricalHitbox> boxes;
+            for (const auto &[id,object] : _world.Objects())
+                if (const auto *hitbox = object->GetGameObject().GetComponent<LagCompensatedHitbox>())
+                    if (const auto box = hitbox->Snapshot(NetworkId{id})) boxes.push_back(*box);
+            (void)_lagCompensation.Capture(_now,boxes);
+        }
 
         if (!_worldLost && !_world.HasScene())
         {
@@ -140,8 +187,12 @@ namespace N2Engine::Network
         client.peer = peer;
         client.id = _nextClientId;
         ++_nextClientId;
-        client.connection =
-            std::make_unique<N2Net::Connection>(MakeWorldConnectionConfig(_options.protocolId, _transport), _now);
+        // A multiplexer may contain both datagram and stream peers.
+        auto connectionOptions = MakeWorldConnectionConfig(_options.protocolId, _transport);
+        connectionOptions.reliableStream = _transport.IsReliablePeer(peer);
+        connectionOptions.maxPacketSize = static_cast<std::uint32_t>(
+            std::min(_transport.MaxPeerPacketSize(peer),N2Net::kMaxPacketSize));
+        client.connection = std::make_unique<N2Net::Connection>(connectionOptions, _now);
         client.connectedAt = _now;
         client.rateWindowStart = _now;
         client.ackWindowStart = _now;
@@ -428,6 +479,7 @@ namespace N2Engine::Network
             _destroyedSceneIds.insert(id.value);
         }
         _replicator.ForgetObject(id);
+        _lagCompensation.Forget(id);
         DespawnMessage message;
         message.id = id;
         Broadcast(Encode(message));
@@ -497,6 +549,7 @@ namespace N2Engine::Network
                 _destroyedSceneIds.insert(entry.first);
             }
             _replicator.ForgetObject(NetworkId{entry.first});
+            _lagCompensation.Forget(NetworkId{entry.first});
             DespawnMessage message;
             message.id = NetworkId{entry.first};
             Broadcast(Encode(message));
@@ -675,6 +728,16 @@ namespace N2Engine::Network
             if (client.state != ClientState::Joined || client.dropping || client.connection->IsFailed())
             {
                 continue;
+            }
+            const auto visible = _replicator.VisibleObjects(client.id);
+            std::erase_if(client.hidden,[&](auto id){ return !_world.Find(NetworkId{id}); });
+            for (const auto &[id,object] : _world.Objects())
+            {
+                const bool shown = visible.contains(id);
+                const bool wasShown = !client.hidden.contains(id);
+                if (shown == wasShown) continue;
+                if (!Send(client,Encode(VisibilityMessage{NetworkId{id},shown,object->GetGameObject().IsActive()}))) break;
+                if (shown) client.hidden.erase(id); else client.hidden.insert(id);
             }
             const std::vector<std::vector<std::uint8_t>> messages =
                 _replicator.BuildForClient(client.id, _now, client.connection->MaxUnreliableMessageSize());

@@ -8,8 +8,10 @@
 #include <expected>
 #include <functional>
 #include <memory>
+#include <map>
 #include <optional>
 #include <span>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -20,6 +22,9 @@
 #include "NetworkTestSupport.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/Positionable.hpp"
+#include "engine/network/LagCompensatedHitbox.hpp"
+#include "engine/scripting/LuaRuntime.hpp"
+#include "engine/scripting/LuaHandles.hpp"
 #include "engine/network/NetworkClient.hpp"
 #include "engine/network/NetworkFingerprint.hpp"
 #include "engine/network/NetworkObject.hpp"
@@ -1638,4 +1643,160 @@ TEST(NetworkTransformTest, IsABuiltinSingletonWithItsSettingsSaved)
     }
     const std::vector<std::string> expected = {"position", "rotation", "teleportSerial"};
     EXPECT_EQ(replicated, expected);
+}
+
+
+TEST(ServerReplicatorTest, InterestOwnerOnlyAndReentryResetBaseline)
+{
+    DirectRig rig;
+    auto *hidden = rig.side.world.Find(NetworkId{2});
+    ASSERT_TRUE(hidden);
+    ASSERT_TRUE(hidden->SetInterestPolicy({Relevance::OwnerOnly,100,1}));
+    const auto messages = rig.Tick();
+    for (const auto &message : messages)
+        for (const auto &entry : Parse(message,2).entries) EXPECT_NE(entry.id,2u);
+    EXPECT_EQ(rig.replicator.BaselineCount(1),2u);
+    ASSERT_TRUE(hidden->SetInterestPolicy({Relevance::Always,100,1}));
+    const auto reentry = rig.Tick(1);
+    bool found = false;
+    for (const auto &message : reentry)
+        for (const auto &entry : Parse(message,2).entries) if (entry.id==2) found=true;
+    EXPECT_TRUE(found);
+    EXPECT_EQ(rig.replicator.BaselineCount(1),3u);
+}
+
+TEST(ServerReplicatorTest, SnapshotByteBudgetAndPriorityDoNotStarveObjects)
+{
+    ServerReplicationOptions options;
+    options.maxBytesPerTick = 64;
+    options.maxMessageBytes = 150;
+    DirectRig rig(options);
+    ASSERT_TRUE(rig.side.world.Find(NetworkId{3})->SetInterestPolicy({Relevance::Always,100,4}));
+    std::set<std::uint32_t> seen;
+    std::map<std::uint32_t,std::size_t> counts;
+    bool firstSelection=true;
+    for (std::uint64_t tick=0;tick<30;++tick)
+    {
+        const auto messages=rig.Tick(tick*33'333);
+        EXPECT_LE(TotalBytes(messages),64u);
+        for(const auto &message:messages)
+            for(const auto &entry:Parse(message,2).entries) { seen.insert(entry.id); ++counts[entry.id]; if(firstSelection) { EXPECT_EQ(entry.id,3u); firstSelection=false; } }
+    }
+    EXPECT_EQ(seen,(std::set<std::uint32_t>{1,2,3}));
+    EXPECT_GT(rig.replicator.Stats().entriesBudgetDeferred,0u);
+    EXPECT_GT(counts[3],counts[1]);
+    EXPECT_GT(counts[3],counts[2]);
+}
+
+
+TEST(InterestGridTest, RadiusBoundaryUsesOwnedObserverAndTracksMovement)
+{
+    ScopedProbePrefab prefab("interest-observer");
+    ASSERT_TRUE(prefab.Registered());
+    Side side("interest-grid",{1,2,3});
+    const auto spawned=side.world.SpawnInstance(NetworkId{4},prefab.Name(),1);
+    ASSERT_TRUE(spawned);
+    for(const auto &[id,object]:side.world.Objects())
+    {
+        auto &go=object->GetGameObject();
+        if(!go.HasPositionable())go.CreatePositionable();
+        go.GetPositionable()->SetPosition(Math::Vector3{0,0,0});
+    }
+    auto *target=side.world.Find(NetworkId{2});
+    ASSERT_TRUE(target->SetInterestPolicy({Relevance::Radius,10,1}));
+    target->GetGameObject().GetPositionable()->SetPosition(Math::Vector3{10,0,0});
+    ASSERT_TRUE(side.world.Find(NetworkId{3})->SetInterestPolicy({Relevance::OwnerOnly,10,1}));
+    InterestGrid grid;grid.Rebuild(side.world);
+    EXPECT_TRUE(grid.Visible(1,NetworkId{4}).contains(2));
+    EXPECT_FALSE(grid.Visible(1,NetworkId{4}).contains(3));
+    EXPECT_FALSE(grid.Visible(2,NetworkId{4}).contains(2));
+    EXPECT_FALSE(grid.Visible(1,NetworkId{}).contains(2));
+    target->GetGameObject().GetPositionable()->SetPosition(Math::Vector3{10.01f,0,0});
+    grid.Rebuild(side.world);EXPECT_FALSE(grid.Visible(1,NetworkId{4}).contains(2));
+    EXPECT_TRUE(grid.Visible(1,NetworkId{4}).contains(4));
+}
+
+TEST(NetworkReplicationTest, VisibilityAndFullReentryConvergeUnderLossAndReorder)
+{
+    SessionConfig config;
+    config.link.latencyMicros=10'000;config.link.jitterMicros=10'000;
+    config.link.lossPpm=100'000;config.link.reorderPpm=100'000;config.link.reorderDelayMicros=30'000;
+    Session session(config);auto &client=session.AddClient();
+    ASSERT_TRUE(session.RunUntil([&]{return session.AllConverged();}));
+    auto *serverObject=session.serverSide.world.Find(NetworkId{2});
+    auto *clientObject=client.side.world.Find(NetworkId{2});
+    ASSERT_TRUE(serverObject);ASSERT_TRUE(clientObject);
+    ASSERT_TRUE(serverObject->SetInterestPolicy({Relevance::OwnerOnly,100,1}));
+    ASSERT_TRUE(session.RunUntil([&]{return !clientObject->GetGameObject().IsActive();}));
+    // Let old state leave the network, then change a hidden field: it must not be delivered.
+    session.RunFor(500'000);
+    session.serverSide.ProbeOf(NetworkId{2})->score=4321;
+    session.RunFor(500'000);
+    EXPECT_NE(client.side.ProbeOf(NetworkId{2})->score,4321);
+    ASSERT_TRUE(serverObject->SetInterestPolicy({Relevance::Always,100,1}));
+    ASSERT_TRUE(session.RunUntil([&]{return clientObject->GetGameObject().IsActive() &&
+        client.side.ProbeOf(NetworkId{2})->score==4321;}));
+}
+
+
+TEST(NetworkReplicationTest, HistoricalServerQueriesRequireAJoinedRequesterAndForgetDespawns)
+{
+    SessionConfig config;config.link.latencyMicros=10'000;
+    Session session(config);auto &client=session.AddClient();
+    ASSERT_TRUE(session.RunUntil([&]{return client.client->IsJoined();}));
+    session.RunFor(100'000); // let connection acknowledgements establish the measured RTT
+    std::array<HistoricalHitbox,1> boxes;
+    boxes[0].object=NetworkId{2};boxes[0].centre=Math::Vector3{0,0,5};
+    const auto now=session.network.NowMicros();
+    ASSERT_TRUE(session.server->CaptureHitboxes(now,boxes));
+    EXPECT_FALSE(session.server->CastLagCompensated(9999,now,{0,0,0},{0,0,1},20));
+    const auto hit=session.server->CastLagCompensated(client.client->LocalClientId(),now,{0,0,0},{0,0,1},20);
+    ASSERT_TRUE(hit);EXPECT_NEAR(hit->distance,4.5f,0.001f);
+    ASSERT_TRUE(session.server->Despawn(NetworkId{2}));
+    EXPECT_FALSE(session.server->CastLagCompensated(client.client->LocalClientId(),now,{0,0,0},{0,0,1},20));
+}
+
+
+TEST(NetworkReplicationTest, OptInHitboxComponentIsCapturedAutomaticallyByTheServer)
+{
+    Session session;
+    auto *object=session.serverSide.world.Find(NetworkId{2});
+    ASSERT_TRUE(object);
+    auto &go=object->GetGameObject();
+    if(!go.HasPositionable())go.CreatePositionable();
+    go.GetPositionable()->SetPosition(Math::Vector3{0,0,5});
+    go.AddComponent<LagCompensatedHitbox>();
+    auto &client=session.AddClient();
+    ASSERT_TRUE(session.RunUntil([&]{return client.client->IsJoined();}));
+    session.RunFor(50'000);
+    const auto hit=session.server->CastLagCompensated(client.client->LocalClientId(),session.network.NowMicros(),
+        {0,0,0},{0,0,1},20);
+    ASSERT_TRUE(hit);EXPECT_EQ(hit->object,NetworkId{2});EXPECT_NEAR(hit->distance,4.5f,0.001f);
+}
+
+
+TEST(NetworkReplicationTest, LuaQueriesAndInterestPoliciesUseTheBoundAuthoritativeWorld)
+{
+    Session session;auto &client=session.AddClient();
+    ASSERT_TRUE(session.RunUntil([&]{return client.client->IsJoined();}));
+    session.RunFor(50'000);
+    std::array<HistoricalHitbox,1> boxes;
+    boxes[0].object=NetworkId{2};boxes[0].centre=Math::Vector3{0,0,5};
+    ASSERT_TRUE(session.server->CaptureHitboxes(session.network.NowMicros(),boxes));
+    session.server->BindPhysicsQueries();
+    auto &runtime=Scripting::LuaRuntime::Instance();ASSERT_TRUE(runtime.Initialize());
+    auto &lua=runtime.GetState();
+    lua["b8910Object"]=Scripting::GameObjectRef(session.serverSide.world.Find(NetworkId{2})->GetGameObject());
+    lua["b8910Client"]=client.client->LocalClientId();lua["b8910Time"]=session.network.NowMicros();
+    const auto result=lua.safe_script(R"(
+        local hit=Physics.RaycastLagCompensated(b8910Client,b8910Time,Vector3(0,0,0),Vector3(0,0,1),20)
+        assert(hit and hit.netId==2 and math.abs(hit.distance-4.5)<0.001)
+        assert(Physics.RaycastLagCompensated(9999,b8910Time,Vector3(0,0,0),Vector3(0,0,1),20)==nil)
+        assert(Network.SetInterestPolicy(b8910Object,"owner",100,2))
+        assert(not Network.SetObserver(b8910Client,b8910Object))
+        assert(Network.ClearObserver(b8910Client))
+    )",sol::script_pass_on_error);
+    if(!result.valid()) {const sol::error error=result;FAIL()<<error.what();}
+    EXPECT_EQ(session.serverSide.world.Find(NetworkId{2})->GetInterestPolicy().relevance,Relevance::OwnerOnly);
+    lua["b8910Object"]=sol::nil;lua["b8910Client"]=sol::nil;lua["b8910Time"]=sol::nil;
 }

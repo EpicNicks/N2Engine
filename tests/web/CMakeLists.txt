@@ -21,3 +21,8 @@ set_target_properties(web_tests PROPERTIES
 target_compile_options(web_tests PRIVATE -Wall -Wextra)
 
 add_test(NAME web_tests COMMAND web_tests)
+
+add_executable(websocket_client WebSocketClient.cpp)
+target_link_libraries(websocket_client PRIVATE n2net)
+set_target_properties(websocket_client PROPERTIES CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON)
+target_link_options(websocket_client PRIVATE "-sEXIT_RUNTIME=1")

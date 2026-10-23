@@ -925,6 +925,15 @@ TEST(MyFeatureTest, AddedRootCanBeFoundByUUID)
 </code></pre>
 <p class="src">Source: <code>tests/engine/CMakeLists.txt</code>; conventions from <code>tests/engine/**</code></p>
 
+<h2 id="network-b8-b10">Lag compensation, interest and browser transport</h2>
+<p><code>LagCompensationTest.*</code> tests interpolation, server RTT/cap clamping, shape intersections, rounded-box corners, normals, teleports, layer masks, ignored ids, despawn and history bounds. <code>InterestGridTest.*</code> and the B9 cases in <code>ServerReplicatorTest.*</code>/<code>NetworkReplicationTest.*</code> check owned observers, spatial boundaries, byte budgets, priority fairness, hidden state, reliable visibility and full re-entry under loss/jitter/reordering. These run in engine_tests on native and web builds.</p>
+<p><code>WebSocketTransportTest.*</code> uses real native loopback TCP: HTTP upgrade, token admission, binary message boundaries, fragmentation, ping and malformed input. <code>MultiplexTransportTest.*</code> checks distinct peer ids, per-peer reliability and packet sizes. Native <code>websocket_smoke</code> is registered when Node provides its WebSocket API. The web CI job also builds a small native endpoint and runs both Node and an actual Emscripten client against it, using the pinned SDK's Node.</p>
+<pre class="lang-shell"><code>node scripts/websocket-smoke.mjs build/bin/websocket_echo
+node scripts/websocket-smoke.mjs build/bin/websocket_echo build-web/bin/websocket_client.js
+# Optional: install Playwright in an ignored tool directory and run an isolated real browser.
+node scripts/websocket-browser-smoke.mjs build/bin/websocket_echo build-web/bin build/browser-tools</code></pre>
+<p>Set <code>N2_BROWSER_EXECUTABLE</code> to an installed Chrome/Edge path, or use Playwright's Chromium. The browser smoke uses a separate profile and a loopback HTTP origin. Real public wss hosting, certificates, reverse-proxy configuration, mobile browsers and background-tab behavior need deployment checks.</p>
+
 <div class="page-footer">
 <span>Describes master through PR #34.</span>
 <a href="index.html">Back to overview</a>

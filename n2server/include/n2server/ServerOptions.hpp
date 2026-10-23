@@ -48,6 +48,10 @@ namespace N2Engine::Server
         /// --relay: RESERVED for the deterministic relay mode (stage C3). It parses, and RunServer refuses it as not
         /// implemented.
         bool relay = false;
+        /// --websocket-port: -1 disabled, 0 chooses a free loopback TCP port. Put a TLS proxy in front for wss.
+        int webSocketPort = -1;
+        /// --websocket-origin: exact allowed browser Origin; empty accepts requests with no Origin only.
+        std::string webSocketOrigin;
         /// --exit-on-stdin-eof: stop when stdin reaches end of file or fails (a launcher that has gone away)
         bool exitOnStdinEof = false;
         /// --log-level <info|warn|error>

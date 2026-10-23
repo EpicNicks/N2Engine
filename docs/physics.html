@@ -1213,6 +1213,8 @@ box-&gt;SetOffset(Vector3(0.0f, 1.0f, 0.0f)); // centre of mass moves to (0, 1, 
 </ul>
 <p class="src">Source: <code>Rigidbody::AddForce</code>, <code>AddImpulse</code>, <code>SetVelocity</code>, <code>SetGravityEnabled</code>; <code>PhysXBackend::AddForce</code>, <code>AddImpulse</code>, <code>SetGravityEnabled</code>, <code>Initialize</code></p>
 
+<h2 id="historical-queries">Historical network hit queries</h2><p>Server-only <code>Physics::RaycastLagCompensated</code> and <code>SphereCastLagCompensated</code> query recorded sphere, capsule and box hitboxes without moving live physics bodies. See <a href="netcode.html#lag-compensation">the history, RTT bounds and opt-in hitbox component</a>.</p>
+
 <div class="page-footer">
 <span>Describes master through PR #34.</span>
 <a href="index.html">Back to overview</a>

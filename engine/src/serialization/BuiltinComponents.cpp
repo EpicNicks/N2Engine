@@ -9,6 +9,7 @@
 #include "engine/example/renderers/QuadRenderer.hpp"
 #include "engine/example/renderers/SphereRenderer.hpp"
 #include "engine/network/NetworkObject.hpp"
+#include "engine/network/LagCompensatedHitbox.hpp"
 #include "engine/network/NetworkTransform.hpp"
 #include "engine/physics/BoxCollider.hpp"
 #include "engine/physics/CapsuleCollider.hpp"
@@ -70,6 +71,7 @@ namespace N2Engine
         Add<UI::UIText>(registry, "UIText");
         Add<UI::Button>(registry, "Button");
         Add<Network::NetworkObject>(registry, "NetworkObject");
+        Add<Network::LagCompensatedHitbox>(registry, "LagCompensatedHitbox");
         Add<Network::NetworkTransform>(registry, "NetworkTransform");
     }
 }

@@ -218,8 +218,9 @@ namespace N2Engine::Scripting::Bindings
         // Lambdas, not the function pointers: sol catches a C++ exception around a lambda and turns it into a Lua error, but
         // an exception thrown out of a bare function pointer would unwind through Lua's C frames and leave its call stack
         // (NetworkInputLuaTest.AFailedCallLeavesTheLuaCallStackAsItWas)
-        lua["Network"] = lua.create_table_with(
-            "DeclareInputLayout", [](const sol::object &controls) { DeclareInputLayout(controls); },
-            "GetInput", [](const GameObjectRef *target, sol::this_state state) { return GetInput(target, state); });
+        // The table is shared with BindNetworkInterest (netcode stage B9): add to it, never replace it
+        sol::table network = lua["Network"].get_or_create<sol::table>();
+        network["DeclareInputLayout"] = [](const sol::object &controls) { DeclareInputLayout(controls); };
+        network["GetInput"] = [](const GameObjectRef *target, sol::this_state state) { return GetInput(target, state); };
     }
 }

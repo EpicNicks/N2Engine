@@ -77,10 +77,14 @@ namespace N2Engine::N2Net
 
         /// The largest datagram Send accepts and Poll delivers, at most kMaxPacketSize
         [[nodiscard]] virtual std::size_t MaxPacketSize() const noexcept = 0;
+        /// A mixed transport may have a smaller limit for an encrypted datagram peer.
+        [[nodiscard]] virtual std::size_t MaxPeerPacketSize(PeerId) const noexcept { return MaxPacketSize(); }
 
         /// True for a stream transport (WebSocket over TCP): it already delivers every datagram once and in order, so
         /// the packet layer skips its own resends (it keeps its sequence numbers and acks, for RTT and ordering checks)
         [[nodiscard]] virtual bool IsReliableStream() const noexcept = 0;
+        /// Mixed transports select stream semantics per authenticated peer.
+        [[nodiscard]] virtual bool IsReliablePeer(PeerId) const noexcept { return IsReliableStream(); }
 
         /// Queues one datagram to `peer`. Never blocks.
         virtual TransportSendResult Send(PeerId peer, std::span<const std::uint8_t> datagram) = 0;

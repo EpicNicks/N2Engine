@@ -3,6 +3,7 @@
 #include <format>
 
 #include "engine/Logger.hpp"
+#include "engine/GameObject.hpp"
 #include "engine/network/NetworkServer.hpp"
 
 namespace N2Engine::Network
@@ -128,13 +129,23 @@ namespace N2Engine::Network
             if (_serverPeer == N2Net::kInvalidPeer && _state == NetworkClientState::Connecting)
             {
                 _serverPeer = event.peer;
-                _connection = std::make_unique<N2Net::Connection>(
-                    MakeWorldConnectionConfig(_options.protocolId, _transport), _now);
+                auto config = MakeWorldConnectionConfig(_options.protocolId, _transport);
+                config.reliableStream = _transport.IsReliablePeer(event.peer);
+                config.maxPacketSize = static_cast<std::uint32_t>(_transport.MaxPeerPacketSize(event.peer));
+                _connection = std::make_unique<N2Net::Connection>(config, _now);
                 _state = NetworkClientState::AwaitingHello;
                 _helloWaitSince = _now;
             }
             break;
         case N2Net::TransportEventType::PeerDisconnected:
+            if (_state == NetworkClientState::Connecting)
+            {
+                _state = NetworkClientState::Failed;
+                _error = "the transport could not connect or authenticate";
+                _finished = true;
+                Notify(NetworkSessionEvent{.type = NetworkSessionEvent::Type::Failed, .text = _error});
+                break;
+            }
             if (event.peer == _serverPeer && _serverPeer != N2Net::kInvalidPeer)
             {
                 if (Live())
@@ -226,6 +237,13 @@ namespace N2Engine::Network
         else if (const auto *despawn = std::get_if<DespawnMessage>(&*decoded))
         {
             OnDespawn(*despawn);
+        }
+        else if (const auto *visibility = std::get_if<VisibilityMessage>(&*decoded))
+        {
+            if (_state != NetworkClientState::Joined) { Fail("visibility before joining"); return; }
+            auto *object = _world.Find(visibility->id);
+            if (!object) { Fail("visibility for an unknown object"); return; }
+            object->GetGameObject().SetActive(visibility->visible && visibility->active);
         }
         else if (const auto *ready = std::get_if<WorldReadyMessage>(&*decoded))
         {

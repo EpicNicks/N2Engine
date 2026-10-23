@@ -16,6 +16,7 @@
 
 #include "engine/network/InputLayout.hpp"
 #include "engine/network/NetworkFingerprint.hpp"
+#include "engine/network/LagCompensation.hpp"
 #include "engine/network/NetworkId.hpp"
 #include "engine/network/NetworkInput.hpp"
 #include "engine/network/NetworkReplication.hpp"
@@ -64,6 +65,8 @@ namespace N2Engine::Network
         std::uint32_t maxClientAcksPerSecond = 1024;
         /// The bounds of the state messages (see ServerReplicationOptions)
         ServerReplicationOptions replication;
+        std::uint64_t lagCompMaxMicros = 200'000;
+        bool autoCaptureHitboxes = true;
         /// The networked input layout (netcode stage B4), part of the fingerprint: every client must declare the same.
         /// Empty (the default): the server takes no input, and a client that sends any is dropped.
         InputLayout inputLayout;
@@ -232,6 +235,7 @@ namespace N2Engine::Network
         /// What the state replication has sent and what the clients acknowledged
         [[nodiscard]] const ServerReplicationStats &ReplicationStats() const noexcept { return _replicator.Stats(); }
         [[nodiscard]] const ServerReplicator &Replicator() const noexcept { return _replicator; }
+        bool SetObserver(ClientId client, NetworkId observer);
 
         /// True once the world's scene went away; the server then takes no more clients
         [[nodiscard]] bool WorldLost() const noexcept { return _worldLost; }
@@ -240,6 +244,16 @@ namespace N2Engine::Network
         [[nodiscard]] const PrefabTable &Prefabs() const noexcept { return _options.prefabs; }
         [[nodiscard]] const NetworkServerStats &Stats() const noexcept { return _stats; }
         [[nodiscard]] NetworkWorld &World() noexcept { return _world; }
+
+        /// Game code captures world-space hitboxes after a simulation tick, using the same monotonic clock as Update.
+        /// Only registered objects may be recorded. Despawn removes their history immediately.
+        bool CaptureHitboxes(std::uint64_t nowMicros, std::span<const HistoricalHitbox> hitboxes);
+        [[nodiscard]] std::optional<LagCompensatedHit> CastLagCompensated(ClientId requester,
+            std::uint64_t renderTimeMicros, const Math::Vector3 &origin, const Math::Vector3 &direction,
+            float maxDistance, float radius = 0, std::uint32_t layers = ~0u, NetworkId ignore = {}) const;
+        /// Explicit host binding for the Physics Lua query functions. Cleared on destruction.
+        void BindPhysicsQueries();
+        [[nodiscard]] static NetworkServer *PhysicsQueryServer() noexcept;
 
     private:
         enum class ClientState : std::uint8_t
@@ -261,6 +275,7 @@ namespace N2Engine::Network
             std::uint32_t rateWindowCount = 0;
             std::uint64_t ackWindowStart = 0;
             std::uint32_t ackWindowCount = 0;
+            std::set<std::uint32_t> hidden;
             std::uint64_t inputWindowStart = 0;
             std::uint32_t inputWindowCount = 0;
             /// Made when the client joins, if the server takes input
@@ -299,6 +314,8 @@ namespace N2Engine::Network
         Fingerprint _fingerprint;
         NetworkServerStats _stats;
         ServerReplicator _replicator;
+        LagCompensation _lagCompensation;
+        std::uint64_t _lastHitboxTick = ~std::uint64_t{0};
         std::uint64_t _nextStateAt = 0;
         std::uint32_t _inputTick = 0;
         /// The input counters of clients that left
