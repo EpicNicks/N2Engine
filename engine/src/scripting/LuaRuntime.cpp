@@ -601,6 +601,7 @@ namespace N2Engine::Scripting
 
         // Engine services
         Bindings::BindTime(*this);
+        Bindings::BindNetwork(*this);
         Bindings::BindDebug(*this);
         Bindings::BindApplication(*this);
         Bindings::BindWindow(*this);
