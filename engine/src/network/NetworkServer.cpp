@@ -19,6 +19,9 @@ namespace N2Engine::Network
         constexpr std::uint32_t kMaxStateSendRateHz = 240;
         NetworkServer *g_physicsQueryServer = nullptr;
 
+        /// The server most recently constructed that is still alive (NetworkServer::Active)
+        NetworkServer *g_activeServer = nullptr;
+
         const char *FailureName(const N2Net::FailureReason reason)
         {
             switch (reason)
@@ -55,7 +58,10 @@ namespace N2Engine::Network
     {
         _options.maxClients = std::clamp<std::uint32_t>(_options.maxClients, 1u, kHardMaxClients);
         _options.stateSendRateHz = std::min<std::uint32_t>(_options.stateSendRateHz, kMaxStateSendRateHz);
-        _fingerprint = MakeFingerprint(_options.scenePath, _options.sceneHash, _world.SceneObjectCount(), _options.prefabs);
+        _fingerprint = MakeFingerprint(_options.scenePath, _options.sceneHash, _world.SceneObjectCount(), _options.prefabs,
+                                       _options.inputLayout);
+        _options.input = _options.input.Clamped();
+        g_activeServer = this;
         _world.SetDestroyedHandler([this](const NetworkId id, const bool wasSpawned)
                                    { _pendingDespawns.emplace_back(id.value, wasSpawned); });
     }
@@ -63,6 +69,10 @@ namespace N2Engine::Network
     NetworkServer::~NetworkServer()
     {
         if (g_physicsQueryServer == this) g_physicsQueryServer = nullptr;
+        if (g_activeServer == this)
+        {
+            g_activeServer = nullptr;
+        }
         _world.SetDestroyedHandler({});
     }
 
@@ -133,6 +143,7 @@ namespace N2Engine::Network
         {
             FlushPendingDespawns();
             SendState();
+            SendInputAcks();
         }
         RunTimers();
         SendPackets();
@@ -206,6 +217,7 @@ namespace N2Engine::Network
             return;
         }
         NotifyLeft(found->second, "disconnected");
+        RetireInput(found->second);
         _replicator.RemoveClient(found->second.id);
         _clients.erase(found);
     }
@@ -273,6 +285,11 @@ namespace N2Engine::Network
 
     void NetworkServer::OnUnreliable(Client &client, const std::span<const std::uint8_t> message)
     {
+        if (!message.empty() && message[0] == kInputFramesType)
+        {
+            OnInputFrames(client, message);
+            return;
+        }
         if (!AllowAck(client))
         {
             MarkDrop(client, "it sent more state acknowledgements per second than allowed",
@@ -323,6 +340,11 @@ namespace N2Engine::Network
         client.state = ClientState::Joined;
         ++_stats.clientsJoined;
         _replicator.AddClient(client.id);
+        if (!_options.inputLayout.Empty())
+        {
+            client.input = std::make_unique<ServerInputBuffer>(_options.inputLayout, _options.input, _inputTick);
+        }
+        client.inputWindowStart = _now;
         SendJoinState(client);
         if (!client.dropping && _clientObserver)
         {
@@ -535,6 +557,159 @@ namespace N2Engine::Network
         }
     }
 
+    void NetworkServer::OnInputFrames(Client &client, const std::span<const std::uint8_t> message)
+    {
+        if (!AllowInput(client))
+        {
+            MarkDrop(client, "it sent more input messages per second than allowed", &NetworkServerStats::droppedRateLimited);
+            return;
+        }
+        if (client.state != ClientState::Joined || client.input == nullptr)
+        {
+            MarkDrop(client, "it sent input before it joined, or to a server that takes no input",
+                     &NetworkServerStats::droppedProtocol);
+            return;
+        }
+        // The length of a frame is the layout's: nothing the message says decides what is allocated
+        const std::expected<std::vector<InputFrame>, DecodeError> frames =
+            DecodeInputFrames(message, _options.inputLayout.PayloadBytes());
+        if (!frames)
+        {
+            MarkDrop(client, std::format("it sent a malformed input message ({})", ToString(frames.error())),
+                     &NetworkServerStats::droppedMalformed);
+            return;
+        }
+        for (const InputFrame &frame : *frames)
+        {
+            if (client.input->Receive(frame) == InputReceive::Invalid)
+            {
+                MarkDrop(client, "it sent an input frame that is not a value its layout produces",
+                         &NetworkServerStats::droppedMalformed);
+                return;
+            }
+        }
+    }
+
+    void NetworkServer::SendInputAcks()
+    {
+        for (auto &entry : _clients)
+        {
+            Client &client = entry.second;
+            if (client.input == nullptr || client.state != ClientState::Joined || client.dropping ||
+                client.connection->IsFailed() || !client.input->AckPending())
+            {
+                continue;
+            }
+            // A lost ack is as good as none: the next input message brings another
+            (void)client.connection->SendUnreliable(Encode(client.input->TakeAck()));
+        }
+    }
+
+    void NetworkServer::RetireInput(Client &client)
+    {
+        if (client.input != nullptr)
+        {
+            _departedInput.Add(client.input->Stats());
+            client.input.reset();
+        }
+    }
+
+    void NetworkServer::SetCurrentTick(const std::uint32_t tick)
+    {
+        _inputTick = tick;
+        for (auto &entry : _clients)
+        {
+            if (entry.second.input != nullptr)
+            {
+                entry.second.input->SetNow(tick);
+            }
+        }
+    }
+
+    std::optional<ControlledInput> NetworkServer::InputFor(const NetworkId id, const std::uint32_t tick)
+    {
+        if (_worldLost)
+        {
+            return std::nullopt;
+        }
+        const NetworkObject *const object = _world.Find(id);
+        if (object == nullptr)
+        {
+            return std::nullopt;
+        }
+        // Authority: the input is the owner's and nobody else's. The server's own objects have no input.
+        const ClientId owner = object->GetOwner();
+        if (owner == kServerClientId)
+        {
+            return std::nullopt;
+        }
+        return InputForClient(owner, tick);
+    }
+
+    std::optional<ControlledInput> NetworkServer::InputForClient(const ClientId clientId, const std::uint32_t tick)
+    {
+        for (auto &entry : _clients)
+        {
+            Client &client = entry.second;
+            if (client.id != clientId)
+            {
+                continue;
+            }
+            if (client.state != ClientState::Joined || client.dropping || client.input == nullptr)
+            {
+                return std::nullopt;
+            }
+            const std::optional<ResolvedInput> resolved = client.input->Resolve(tick);
+            if (!resolved.has_value())
+            {
+                return std::nullopt;
+            }
+            std::optional<std::vector<float>> values = _options.inputLayout.Unpack(resolved->payload);
+            if (!values.has_value())
+            {
+                // Cannot happen: only payloads the layout produces are ever buffered
+                return std::nullopt;
+            }
+            ControlledInput input;
+            input.client = clientId;
+            input.tick = resolved->tick;
+            input.source = resolved->source;
+            input.values = std::move(*values);
+            return input;
+        }
+        return std::nullopt;
+    }
+
+    ServerInputStats NetworkServer::InputStats() const
+    {
+        ServerInputStats total = _departedInput;
+        for (const auto &entry : _clients)
+        {
+            if (entry.second.input != nullptr)
+            {
+                total.Add(entry.second.input->Stats());
+            }
+        }
+        return total;
+    }
+
+    std::optional<ServerInputStats> NetworkServer::InputStatsFor(const ClientId clientId) const
+    {
+        for (const auto &entry : _clients)
+        {
+            if (entry.second.id == clientId && entry.second.input != nullptr)
+            {
+                return entry.second.input->Stats();
+            }
+        }
+        return std::nullopt;
+    }
+
+    NetworkServer *NetworkServer::Active() noexcept
+    {
+        return g_activeServer;
+    }
+
     void NetworkServer::SendState()
     {
         if (_options.stateSendRateHz == 0 || _worldLost || _now < _nextStateAt)
@@ -630,6 +805,7 @@ namespace N2Engine::Network
                 continue;
             }
             NotifyLeft(client, client.dropReason);
+            RetireInput(client);
             _replicator.RemoveClient(client.id);
             _transport.Disconnect(client.peer);
             it = _clients.erase(it);
@@ -675,6 +851,17 @@ namespace N2Engine::Network
         }
         ++client.rateWindowCount;
         return client.rateWindowCount <= _options.maxClientMessagesPerSecond;
+    }
+
+    bool NetworkServer::AllowInput(Client &client)
+    {
+        if (_now - client.inputWindowStart >= kMicrosPerSecond)
+        {
+            client.inputWindowStart = _now;
+            client.inputWindowCount = 0;
+        }
+        ++client.inputWindowCount;
+        return client.inputWindowCount <= _options.input.maxMessagesPerSecond;
     }
 
     bool NetworkServer::AllowAck(Client &client)

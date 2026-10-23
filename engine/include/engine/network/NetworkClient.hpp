@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -10,8 +11,10 @@
 #include <string_view>
 #include <utility>
 
+#include "engine/network/InputLayout.hpp"
 #include "engine/network/NetworkFingerprint.hpp"
 #include "engine/network/NetworkId.hpp"
+#include "engine/network/NetworkInput.hpp"
 #include "engine/network/NetworkProtocol.hpp"
 #include "engine/network/NetworkReplication.hpp"
 #include "engine/network/NetworkWorld.hpp"
@@ -56,6 +59,12 @@ namespace N2Engine::Network
         /// After refusing, the client keeps its connection up this long at most, to get its reject out (it leaves as soon
         /// as the reject was acknowledged)
         std::uint64_t refuseLingerMicros = 1'000'000;
+        /// The networked input layout (netcode stage B4), part of the fingerprint: the same as the server's, or the
+        /// client refuses to join. Empty: this client sends no input.
+        InputLayout inputLayout;
+        /// Frames in every input message: the newest this many unacknowledged ones (the network setting
+        /// authoritative.inputRedundancy, 1 to 8; a host copies it here). Clamped to 1 to kMaxInputFramesPerMessage.
+        std::uint32_t inputRedundancy = 4;
     };
 
     struct NetworkClientStats
@@ -110,6 +119,11 @@ namespace N2Engine::Network
      * channel) to the replicated fields of the objects it has, through Component::ApplyReplicated, and acknowledges what
      * it applied. It writes nothing but replicated fields and takes values from nothing but the server's connection.
      *
+     * Player input (netcode stage B4): once Joined, the game queues the local input once per fixed tick (QueueInput); each
+     * Update sends the newest few unacknowledged frames in one unreliable message, so a lost or reordered datagram loses
+     * no input as long as one of the next few arrives; the server's acknowledgements trim the ring of unacknowledged frames,
+     * which never holds more than kMaxUnackedInputFrames. No prediction or reconciliation yet.
+     *
      * Single-threaded; call Update every frame with a monotonic microsecond clock. It must not outlive the transport
      * or the world.
      */
@@ -150,6 +164,17 @@ namespace N2Engine::Network
         [[nodiscard]] const ClientReplicationStats &ReplicationStats() const noexcept { return _replicator.Stats(); }
         [[nodiscard]] NetworkWorld &World() noexcept { return _world; }
 
+        /// Packs one tick of local input (`values`: InputLayout::ValueCount() of them, in the layout's order) into an
+        /// InputFrame and queues it for the next Update to send. `tick` is the tick the server should apply it on (the
+        /// server's own count: matching it to the client's is clock sync, a later stage) and must rise from one call to
+        /// the next. Returns the frame's sequence. Fails when the client has not joined, has no layout, the count is
+        /// wrong or the tick does not rise.
+        [[nodiscard]] std::expected<std::uint32_t, std::string> QueueInput(std::uint32_t tick, std::span<const float> values);
+        [[nodiscard]] const InputLayout &GetInputLayout() const noexcept { return _options.inputLayout; }
+        /// What the input sender did; Unacked is the frames still held for the server to acknowledge
+        [[nodiscard]] const ClientInputStats &InputStats() const noexcept { return _input.Stats(); }
+        [[nodiscard]] std::size_t UnackedInputFrames() const noexcept { return _input.Unacked(); }
+
     private:
         void HandleEvent(const N2Net::TransportEvent &event);
         void OnDatagram(std::span<const std::uint8_t> data);
@@ -158,6 +183,7 @@ namespace N2Engine::Network
         void OnSpawn(const SpawnMessage &spawn);
         void OnDespawn(const DespawnMessage &despawn);
         void OnWorldReady(const WorldReadyMessage &ready);
+        void OnInputAck(std::span<const std::uint8_t> message);
         void RefuseJoin(JoinRefusal reason, std::string text);
         void Fail(std::string text);
         void Notify(const NetworkSessionEvent &event);
@@ -170,6 +196,7 @@ namespace N2Engine::Network
         std::optional<Fingerprint> _serverFingerprint;
         NetworkClientStats _stats;
         ClientReplicator _replicator;
+        ClientInputSender _input;
         NetworkClientState _state = NetworkClientState::Connecting;
         std::string _error;
         JoinRefusal _refusal = JoinRefusal::None;

@@ -366,6 +366,28 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      # The golden replay corpus (netcode C2), on the strict Release leg only: the same steps as the Linux legs. The hashes go to
+      # the `golden-replay` job as an artifact.
+      - name: Golden replay hashes
+        if: needs.changes.outputs.docs_only != 'true' && matrix.config == 'Release' && matrix.physx == 'ON' && !cancelled()
+        shell: pwsh
+        env:
+          ALSOFT_DRIVERS: "null"
+          N2_REPLAY_LEG: windows-release
+          N2_REPLAY_HASHES_OUT: ${{ github.workspace }}\replay-hashes.json
+        run: |
+          & "./build/bin/Release/engine_tests.exe" --gtest_filter='GoldenReplayCorpusTest.*'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload the replay hashes
+        if: needs.changes.outputs.docs_only != 'true' && matrix.config == 'Release' && matrix.physx == 'ON' && !cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: replay-hashes-windows-release
+          path: replay-hashes.json
+          if-no-files-found: warn
+          retention-days: 30
+
       # Runs after a failed build or test too (not when cancelled): the hit rate of this run, from zeroed statistics
       - name: ccache statistics
         if: needs.changes.outputs.docs_only != 'true' && !cancelled()
@@ -542,6 +564,27 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      # The golden replay corpus (netcode C2): three physics-free scenes (transforms, a Lua sim script, Lua-steered transforms)
+      # replayed from the input logs of tests/golden/replays, 600 ticks each, hashed every 60 ticks; the hashes are written to
+      # replay-hashes.json and uploaded for the `golden-replay` job, which compares every leg with the others and with
+      # tests/golden/replay-determinism.json. ctest ran the same tests above; this run is the one that writes the file.
+      - name: Golden replay hashes
+        if: ${{ !cancelled() }}
+        run: ./build/bin/engine_tests --gtest_filter='GoldenReplayCorpusTest.*'
+        env:
+          ALSOFT_DRIVERS: "null"
+          N2_REPLAY_LEG: linux-x86_64-clang
+          N2_REPLAY_HASHES_OUT: ${{ github.workspace }}/replay-hashes.json
+
+      - name: Upload the replay hashes
+        if: "!cancelled()"
+        uses: actions/upload-artifact@v7
+        with:
+          name: replay-hashes-linux-x86_64-clang
+          path: replay-hashes.json
+          if-no-files-found: warn
+          retention-days: 30
+
       # Runs after a failed build or test too (not when cancelled): the hit rate of this run, from zeroed statistics
       - name: ccache statistics
         if: "!cancelled()"
@@ -703,6 +746,27 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      # The golden replay corpus (netcode C2): three physics-free scenes (transforms, a Lua sim script, Lua-steered transforms)
+      # replayed from the input logs of tests/golden/replays, 600 ticks each, hashed every 60 ticks; the hashes are written to
+      # replay-hashes.json and uploaded for the `golden-replay` job, which compares every leg with the others and with
+      # tests/golden/replay-determinism.json. ctest ran the same tests above; this run is the one that writes the file.
+      - name: Golden replay hashes
+        if: ${{ !cancelled() }}
+        run: ./build/bin/engine_tests --gtest_filter='GoldenReplayCorpusTest.*'
+        env:
+          ALSOFT_DRIVERS: "null"
+          N2_REPLAY_LEG: linux-arm64-clang
+          N2_REPLAY_HASHES_OUT: ${{ github.workspace }}/replay-hashes.json
+
+      - name: Upload the replay hashes
+        if: "!cancelled()"
+        uses: actions/upload-artifact@v7
+        with:
+          name: replay-hashes-linux-arm64-clang
+          path: replay-hashes.json
+          if-no-files-found: warn
+          retention-days: 30
+
       # Runs after a failed build or test too (not when cancelled): the hit rate of this run, from zeroed statistics
       - name: ccache statistics
         if: "!cancelled()"
@@ -837,6 +901,27 @@ jobs:
         with:
           name: determinism-hashes-linux-x86_64-gcc
           path: determinism-hashes.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      # The golden replay corpus (netcode C2): three physics-free scenes (transforms, a Lua sim script, Lua-steered transforms)
+      # replayed from the input logs of tests/golden/replays, 600 ticks each, hashed every 60 ticks; the hashes are written to
+      # replay-hashes.json and uploaded for the `golden-replay` job, which compares every leg with the others and with
+      # tests/golden/replay-determinism.json. ctest ran the same tests above; this run is the one that writes the file.
+      - name: Golden replay hashes
+        if: ${{ !cancelled() }}
+        run: ./build/bin/engine_tests --gtest_filter='GoldenReplayCorpusTest.*'
+        env:
+          ALSOFT_DRIVERS: "null"
+          N2_REPLAY_LEG: linux-x86_64-gcc
+          N2_REPLAY_HASHES_OUT: ${{ github.workspace }}/replay-hashes.json
+
+      - name: Upload the replay hashes
+        if: "!cancelled()"
+        uses: actions/upload-artifact@v7
+        with:
+          name: replay-hashes-linux-x86_64-gcc
+          path: replay-hashes.json
           if-no-files-found: warn
           retention-days: 30
 
@@ -1084,6 +1169,29 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      # The golden replay corpus (netcode C2): three physics-free scenes (transforms, a Lua sim script, Lua-steered transforms)
+      # replayed from the input logs of tests/golden/replays, 600 ticks each, hashed every 60 ticks; the hashes are written to
+      # replay-hashes.json and uploaded for the `golden-replay` job, which compares every leg with the others and with
+      # tests/golden/replay-determinism.json. ctest ran the same tests above. Under node (NODERAWFS makes the file a real one).
+      - name: Golden replay hashes
+        if: ${{ !cancelled() }}
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          node build-web/bin/engine_tests.js --gtest_filter='GoldenReplayCorpusTest.*'
+        env:
+          N2_REPLAY_LEG: web-node
+          N2_REPLAY_HASHES_OUT: ${{ github.workspace }}/replay-hashes.json
+
+      - name: Upload the replay hashes
+        if: "!cancelled()"
+        uses: actions/upload-artifact@v7
+        with:
+          name: replay-hashes-web-node
+          path: replay-hashes.json
+          if-no-files-found: warn
+          retention-days: 30
+
       # Only reports (raw and gzip sizes in the job summary); the budgets are checked on the package below
       - name: Report artifact sizes
         run: bash scripts/web-size-report.sh build-web/bin
@@ -1243,6 +1351,52 @@ jobs:
 
       - name: Compare the legs with each other and with the golden
         run: python3 scripts/physics-determinism.py compare --legs-dir determinism-legs --expect windows-release,linux-x86_64-clang,linux-arm64-clang,linux-x86_64-gcc,web-node --golden tests/golden/physics-determinism.json
+
+  # The cross-leg golden replay comparison (netcode stage C2, docs/testing.html "The golden replay job"). Every leg (windows
+  # Release, linux x86_64 Clang, linux arm64 Clang, linux x86_64 GCC 14, web under node) replayed the physics-free scenes of
+  # tests/golden/replays on a strict floating-point build and uploaded replay-hashes-<leg>; this job needs all of them,
+  # downloads the files and compares them with each other and with tests/golden/replay-determinism.json
+  # (scripts/replay-determinism.py). It runs when a leg failed too (a missing or incomplete leg is a finding, never a silent
+  # skip), and not on a docs-only pull request. NOT a required check: make it required only after two weeks green (design
+  # P9; Settings, Branches, the master rule, add "golden replay (cross-leg hashes)").
+  golden-replay:
+    name: golden replay (cross-leg hashes)
+    needs: [changes, windows, linux, linux-arm64, linux-gcc, web]
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      # Proves the comparison can fail (a differing record, a missing record, scene or leg, a golden mismatch)
+      - name: Self-test the comparison
+        run: python3 scripts/replay-determinism.py self-test
+
+      # A leg that uploaded nothing leaves no folder here: the comparison names it as missing
+      - name: Download the legs' hashes
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: replay-hashes-*
+          path: replay-legs
+
+      # What the golden would hold, made from the Linux x86_64 Clang leg: download it from this run and commit it as
+      # tests/golden/replay-determinism.json only from a green run, in a pull request that says why
+      - name: Make the golden candidate
+        continue-on-error: true
+        run: python3 scripts/replay-determinism.py golden --from replay-legs/replay-hashes-linux-x86_64-clang/replay-hashes.json --out golden-candidate/replay-determinism.json
+
+      - name: Upload the golden candidate
+        if: "!cancelled()"
+        uses: actions/upload-artifact@v7
+        with:
+          name: replay-determinism-golden-candidate
+          path: golden-candidate/replay-determinism.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Compare the legs with each other and with the golden
+        run: python3 scripts/replay-determinism.py compare --legs-dir replay-legs --expect windows-release,linux-x86_64-clang,linux-arm64-clang,linux-x86_64-gcc,web-node --golden tests/golden/replay-determinism.json
 
   # WebGPU backend, stages G1/G5 (#155): the built-in WGSL files and the loader's exact canvas shader are validated by Tint (the
   # WGSL compiler of Chrome and Edge) and by naga (Firefox's; Safari's WebKit compiler has no CI path), the pinned versions in scripts/install-wgsl-validators.sh

@@ -152,14 +152,26 @@ namespace N2Engine::Web
         return static_cast<float>(invert ? -notches : notches);
     }
 
-    RenderSize FitRenderSize(const double cssWidth, const double cssHeight, const int maxWidth)
+    namespace
+    {
+        /// Real screens report at most about 4; anything above is clamped
+        constexpr double MaxDevicePixelRatio = 16.0;
+    }
+
+    RenderSize FitRenderSize(const double cssWidth, const double cssHeight, const double devicePixelRatio, const int maxWidth)
     {
         if (!(cssWidth >= 1.0) || !(cssHeight >= 1.0))
         {
             return {};
         }
-        const double scale = cssWidth > maxWidth ? static_cast<double>(maxWidth) / cssWidth : 1.0;
-        return {std::max(1, static_cast<int>(std::lround(cssWidth * scale))),
-                std::max(1, static_cast<int>(std::lround(cssHeight * scale)))};
+        const double ratio = std::isfinite(devicePixelRatio) && devicePixelRatio > 0.0 ? std::min(devicePixelRatio, MaxDevicePixelRatio) : 1.0;
+        const double deviceWidth = cssWidth * ratio;
+        const double deviceHeight = cssHeight * ratio;
+        // Capped by width, and by area at 16:10 of that width, so a tall canvas (a phone held upright) costs no more than
+        // a wide one
+        const double maxArea = static_cast<double>(maxWidth) * maxWidth * 0.625;
+        const double scale = std::min({1.0, maxWidth / deviceWidth, std::sqrt(maxArea / (deviceWidth * deviceHeight))});
+        return {std::max(1, static_cast<int>(std::lround(deviceWidth * scale))),
+                std::max(1, static_cast<int>(std::lround(deviceHeight * scale)))};
     }
 }

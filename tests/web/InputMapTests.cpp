@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <limits>
 #include <string>
 
 #include "WebInputMap.hpp"
@@ -138,14 +139,35 @@ TEST(WebInputMap, WheelNotchesAreOneUnitWhateverTheMode)
 
 TEST(WebInputMap, RenderSizeKeepsTheShapeAndCapsTheWidth)
 {
-    EXPECT_EQ(FitRenderSize(800.0, 450.0, 1280), (RenderSize{800, 450}));
-    EXPECT_EQ(FitRenderSize(1280.0, 720.0, 1280), (RenderSize{1280, 720}));
-    EXPECT_EQ(FitRenderSize(2560.0, 1440.0, 1280), (RenderSize{1280, 720}));
-    EXPECT_EQ(FitRenderSize(1920.0, 1080.0, 1280), (RenderSize{1280, 720}));
-    EXPECT_EQ(FitRenderSize(1500.5, 700.0, 1280), (RenderSize{1280, 597}));
+    EXPECT_EQ(FitRenderSize(800.0, 450.0, 1.0, 1280), (RenderSize{800, 450}));
+    EXPECT_EQ(FitRenderSize(1280.0, 720.0, 1.0, 1280), (RenderSize{1280, 720}));
+    EXPECT_EQ(FitRenderSize(2560.0, 1440.0, 1.0, 1280), (RenderSize{1280, 720}));
+    EXPECT_EQ(FitRenderSize(1920.0, 1080.0, 1.0, 1280), (RenderSize{1280, 720}));
+    EXPECT_EQ(FitRenderSize(1500.5, 700.0, 1.0, 1280), (RenderSize{1280, 597}));
     // Never below one pixel in a dimension; nothing at all for a canvas with no size
-    EXPECT_EQ(FitRenderSize(5000.0, 1.0, 1280), (RenderSize{1280, 1}));
-    EXPECT_EQ(FitRenderSize(0.0, 450.0, 1280), (RenderSize{}));
-    EXPECT_EQ(FitRenderSize(800.0, 0.0, 1280), (RenderSize{}));
-    EXPECT_EQ(FitRenderSize(-5.0, 450.0, 1280), (RenderSize{}));
+    EXPECT_EQ(FitRenderSize(5000.0, 1.0, 1.0, 1280), (RenderSize{1280, 1}));
+    EXPECT_EQ(FitRenderSize(0.0, 450.0, 1.0, 1280), (RenderSize{}));
+    EXPECT_EQ(FitRenderSize(800.0, 0.0, 1.0, 1280), (RenderSize{}));
+    EXPECT_EQ(FitRenderSize(-5.0, 450.0, 1.0, 1280), (RenderSize{}));
+}
+
+TEST(WebInputMap, RenderSizeFollowsTheDevicePixelRatioUpToTheCap)
+{
+    // HiDPI: device resolution, so the browser does not stretch the frame
+    EXPECT_EQ(FitRenderSize(800.0, 450.0, 1.5, 1280), (RenderSize{1200, 675}));
+    EXPECT_EQ(FitRenderSize(640.0, 360.0, 2.0, 1280), (RenderSize{1280, 720}));
+    // Past the cap: capped, same shape
+    EXPECT_EQ(FitRenderSize(960.0, 600.0, 1.5, 1280), (RenderSize{1280, 800}));
+    EXPECT_EQ(FitRenderSize(1920.0, 1080.0, 2.0, 1280), (RenderSize{1280, 720}));
+    // A tall canvas (a phone held upright, ratio 3) is capped by area too: 1170x2532 would be three times 1280x720
+    EXPECT_EQ(FitRenderSize(390.0, 844.0, 3.0, 1280), (RenderSize{688, 1489}));
+    // An absurd ratio is clamped to 16
+    EXPECT_EQ(FitRenderSize(800.0, 450.0, 1e308, 1280), (RenderSize{1280, 720}));
+    // Zoomed out (a ratio below 1) renders smaller, in proportion
+    EXPECT_EQ(FitRenderSize(800.0, 400.0, 0.5, 1280), (RenderSize{400, 200}));
+    // A ratio that is not a positive number counts as 1; a canvas with no size is still nothing
+    EXPECT_EQ(FitRenderSize(800.0, 450.0, 0.0, 1280), (RenderSize{800, 450}));
+    EXPECT_EQ(FitRenderSize(800.0, 450.0, -2.0, 1280), (RenderSize{800, 450}));
+    EXPECT_EQ(FitRenderSize(800.0, 450.0, std::numeric_limits<double>::quiet_NaN(), 1280), (RenderSize{800, 450}));
+    EXPECT_EQ(FitRenderSize(0.0, 450.0, 2.0, 1280), (RenderSize{}));
 }

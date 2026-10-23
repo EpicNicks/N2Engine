@@ -942,12 +942,12 @@ TEST(NetworkClientTest, RefusesAServerOfAnotherWireVersionBeforeReadingAnythingE
 {
     RawServerRig rig;
     std::vector<std::uint8_t> hello = Encode(ServerHelloMessage{kWireVersion, rig.client->LocalFingerprint(), 1});
-    hello[1] = static_cast<std::uint8_t>(kWireVersion + 1);
+    hello[1] = 77;
     hello[2] = 0;
     rig.Send(hello);
     ASSERT_TRUE(rig.RunUntil([&] { return rig.client->State() == NetworkClientState::Refused; }));
     EXPECT_EQ(rig.client->Refusal(), JoinRefusal::WireVersion);
-    EXPECT_NE(rig.client->Error().find("wire version " + std::to_string(kWireVersion + 1)), std::string::npos);
+    EXPECT_NE(rig.client->Error().find("wire version 77"), std::string::npos);
     EXPECT_NE(rig.client->Error().find("Refusing to join"), std::string::npos);
 
     // It told the server why, and left

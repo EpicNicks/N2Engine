@@ -42,13 +42,13 @@ namespace N2Engine::Network
         return hash.Value();
     }
 
-    std::uint64_t HashRegistry(const PrefabTable &prefabs)
+    std::uint64_t HashRegistry(const PrefabTable &prefabs, const InputLayout &inputLayout)
     {
         ComponentRegistry &registry = ComponentRegistry::Instance();
         std::vector<std::string> types = registry.GetRegisteredTypes();
         std::sort(types.begin(), types.end());
         Fnv1a64 hash;
-        hash.String("n2net-registry-2");
+        hash.String("n2net-registry-3");
         hash.U32(static_cast<std::uint32_t>(types.size()));
         for (const std::string &type : types)
         {
@@ -75,6 +75,7 @@ namespace N2Engine::Network
             }
         }
         hash.U64(prefabs.Hash());
+        hash.U64(inputLayout.Hash());
         return hash.Value();
     }
 
@@ -93,12 +94,13 @@ namespace N2Engine::Network
     }
 
     Fingerprint MakeFingerprint(const std::string_view scenePath, const std::uint64_t sceneHash,
-                                const std::uint32_t sceneObjectCount, const PrefabTable &prefabs)
+                                const std::uint32_t sceneObjectCount, const PrefabTable &prefabs,
+                                const InputLayout &inputLayout)
     {
         Fingerprint fingerprint;
         fingerprint.engineVersion = SanitizeText(EngineVersion(), kMaxEngineVersionLength);
         fingerprint.sceneHash = sceneHash;
-        fingerprint.registryHash = HashRegistry(prefabs);
+        fingerprint.registryHash = HashRegistry(prefabs, inputLayout);
         fingerprint.scenePath = SanitizeText(scenePath, kMaxScenePathLength);
         fingerprint.sceneObjectCount = sceneObjectCount;
         fingerprint.prefabCount = static_cast<std::uint16_t>(prefabs.Size());
@@ -142,9 +144,9 @@ namespace N2Engine::Network
                                "(content hash 0x{:016X}): both must load the same scene file",
                                server.scenePath, server.sceneHash, client.scenePath, client.sceneHash);
         case JoinRefusal::Registry:
-            return std::format("the registered component types or prefabs differ (server: {} prefab(s), registry hash "
+            return std::format("the registered component types, prefabs or networked input layout differ (server: {} prefab(s), registry hash "
                                "0x{:016X}; this client: {} prefab(s), registry hash 0x{:016X}): both must register the "
-                               "same component types and prefabs",
+                               "same component types, prefabs and input layout",
                                server.prefabCount, server.registryHash, client.prefabCount, client.registryHash);
         case JoinRefusal::ObjectCount:
             return std::format("the server's scene has {} network object(s) and this client's has {}",

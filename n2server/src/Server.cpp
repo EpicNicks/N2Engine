@@ -27,10 +27,12 @@
 #include "engine/Application.hpp"
 #include "engine/Logger.hpp"
 #include "engine/ProjectSettings.hpp"
+#include "engine/Time.hpp"
 #include "engine/Version.hpp"
 #include "engine/io/ProjectFile.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourceUUID.hpp"
+#include "engine/network/InputLayout.hpp"
 #include "engine/network/NetworkFingerprint.hpp"
 #include "engine/network/NetworkServer.hpp"
 #include "engine/network/NetworkWorld.hpp"
@@ -644,6 +646,9 @@ namespace N2Engine::Server
             netOptions.scenePath = loadedScene->resourcePath;
             netOptions.sceneHash = loadedScene->contentHash;
             netOptions.prefabs = std::move(prefabs);
+            // The networked input layout the game's scripts declared while the scene loaded (Network.DeclareInputLayout);
+            // empty when none did, and then the server takes no input
+            netOptions.inputLayout = Network::DeclaredInputLayout();
             // How often the replicated fields are sent: the project's network.authoritative.snapshotRate (30 by default)
             netOptions.stateSendRateHz = static_cast<std::uint32_t>(
                 std::max(1, ReadNetworkSettings(project->settings).authoritative.snapshotRate));
@@ -705,6 +710,8 @@ namespace N2Engine::Server
                     }
                 }
 
+                // The tick input frames are bounded against (the most recent one begun)
+                netServer.SetCurrentTick(static_cast<std::uint32_t>(Time::GetTick()));
                 netServer.Update(elapsedMicros());
                 for (const N2Net::PeerId peer : dropAfterPoll)
                 {
