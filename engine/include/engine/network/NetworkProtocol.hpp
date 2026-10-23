@@ -49,6 +49,9 @@ namespace N2Engine::Network
     // lists are the same; an entry it cannot use (an unknown id, a hash that differs) is skipped by its payload length,
     // so one bad entry never costs the others.
     //
+    // Player input (netcode stage B4) also rides the unreliable channel, one message per datagram, and is decoded apart from
+    // the messages above (NetworkInput.hpp has the layouts): 0x84 InputFrames from a client, 0x11 InputAck from the server.
+    //
     // The first field of both hellos is the wire version, so a peer that does not know the version can say so without
     // reading what follows. A decoder reads every length against the bytes that remain and against its cap before
     // taking anything, allocates only the two bounded texts of a fingerprint (never anything a count asks for: the
@@ -56,8 +59,8 @@ namespace N2Engine::Network
     // left over, and never trusts a count to be true. No message is larger than kMaxMessageBytes.
 
     /// The version of the world messages above. A change to any message layout, or a new message, bumps it (2: state
-    /// replication, netcode stage B2).
-    inline constexpr std::uint16_t kWireVersion = 2;
+    /// replication, netcode stage B2; 3: player input, netcode stage B4).
+    inline constexpr std::uint16_t kWireVersion = 3;
 
     /// The largest world message either side sends or accepts (a ServerHello with the longest fingerprint is the
     /// largest: 1 type + 2 version + 311 fingerprint + 4 client id = 318 bytes). The Connection's reliable message size

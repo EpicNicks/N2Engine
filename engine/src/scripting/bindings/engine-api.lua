@@ -2486,6 +2486,34 @@ function GameObjectEvent:Unsubscribe(id) end
 ---@field timeScale number Time scale multiplier (1.0 = normal, 0.5 = slow motion, 0.0 = paused)
 Time = {}
 
+-- ===== NETWORK =====
+
+---One control of the networked input layout (netcode stage B4)
+---@class InputControlDeclaration
+---@field name string 1 to 32 characters of A-Z, a-z, 0-9 and _, not starting with a digit, unique in the layout
+---@field kind "button"|"axis"|"vector2"|"vector3"
+---@field bits? integer Bits per component, 1 to 16 (2 to 16 when signed); default 8; a button ignores it
+---@field range? number The largest magnitude of a component, above 0 and at most 1000000; default 1
+---@field signed? boolean true (default): [-range, range] with an exact zero; false: [0, range]
+
+---@class Network
+Network = {}
+
+---Declare the networked input layout: which controls a player input holds and how each is quantised on the wire. Call it
+---once, at the top level of a script that loads with the scene; the server and every client must declare the same layout or a
+---client is refused at join. A malformed declaration is an error and changes nothing; the last valid one wins.
+---@param controls InputControlDeclaration[]
+function Network.DeclareInputLayout(controls) end
+
+---On a server: the input of the client that OWNS this object (the owner the server gave it at spawn) for the current fixed tick.
+---Returns a table of the layout controls (a button is a boolean, an axis a number, a vector2/vector3 a Vector2/Vector3) and where
+---it came from: "frame" (a frame arrived for the tick), "repeated" (the last input again) or "neutral" (no input). Returns nothing
+---when there is no server in this process, the object has no NetworkObject, the server owns it, or its owner has no input.
+---@param gameObject GameObject
+---@return table<string, boolean|number|Vector2|Vector3>? input
+---@return ("frame"|"repeated"|"neutral")? source
+function Network.GetInput(gameObject) end
+
 -- ===== APPLICATION =====
 
 ---@class Application

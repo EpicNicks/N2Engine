@@ -293,13 +293,13 @@ TEST(NetworkProtocolTest, UnknownTypesAreRejected)
 TEST(NetworkProtocolTest, ADifferentWireVersionIsNamedNotParsed)
 {
     std::vector<std::uint8_t> hello = Encode(SampleHello());
-    hello[1] = 3;
+    hello[1] = 77;
     hello[2] = 0;
     const auto decoded = DecodeServerMessage(hello);
     ASSERT_FALSE(decoded.has_value());
     EXPECT_EQ(decoded.error(), DecodeError::UnsupportedVersion);
     ASSERT_TRUE(PeekWireVersion(hello).has_value());
-    EXPECT_EQ(*PeekWireVersion(hello), 3);
+    EXPECT_EQ(*PeekWireVersion(hello), 77);
 
     // Even a hello whose body is garbage past the version says its version
     const std::vector<std::uint8_t> bare = {static_cast<std::uint8_t>(MessageType::ServerHello), 9, 0};
