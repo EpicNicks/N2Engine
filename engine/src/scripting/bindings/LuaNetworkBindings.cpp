@@ -1,6 +1,7 @@
 #include "engine/scripting/bindings/LuaBindings.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/GameObject.hpp"
+#include "engine/GameObjectScene.hpp"
 #include "engine/Time.hpp"
 #include "engine/network/InputLayout.hpp"
 #include "engine/network/NetworkObject.hpp"
