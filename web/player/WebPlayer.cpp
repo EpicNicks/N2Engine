@@ -81,6 +81,7 @@ EM_JS(int, n2_canvas_rect, (double *out), {
 namespace
 {
     /// The most pixels wide a frame renders. The canvas is shown at its CSS size whatever this is (the browser scales it).
+    /// Below the cap the frame renders at device resolution (CSS size times devicePixelRatio), so it is not stretched.
     constexpr int MaxRenderWidth = 1280;
 
     struct Player
@@ -218,7 +219,7 @@ namespace
         {
             return false;
         }
-        const Web::RenderSize wanted = Web::FitRenderSize(rect[2], rect[3], MaxRenderWidth);
+        const Web::RenderSize wanted = Web::FitRenderSize(rect[2], rect[3], emscripten_get_device_pixel_ratio(), MaxRenderWidth);
         if (wanted.width == 0 || wanted == g_player.size)
         {
             return true;
