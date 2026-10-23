@@ -26,6 +26,8 @@ namespace N2Engine::Server
             "  --bind <address>        a numeric IPv4 or IPv6 address (default 127.0.0.1; 0.0.0.0 or :: listens on every interface)\n"
             "  -p, --port <n>          the UDP port, 0 for any free port (default 7777); the ready line reports it\n"
             "  --tokens-file <path>    the join tokens (a JSON array of {\"user\", \"role\", \"hash\"}); without one nobody can join\n"
+            "  --websocket-port <n>   enable loopback WebSocket listener, 0 for a free port; use a TLS proxy for public wss\n"
+            "  --websocket-origin <o> exact allowed browser Origin (default: non-browser clients only)\n"
             "  --max-clients <n>       the most sessions at once, 1 to 1024 (default 16)\n"
             "  --protocol-id <n>       identifies the game and its build, decimal or 0x hex (default 0x4E324E54)\n"
             "  --insecure-bind         accept a non-loopback --bind without a tokens file\n"
@@ -144,7 +146,7 @@ namespace N2Engine::Server
             }
             const bool takesValue = arg == "-p" || arg == "--port" || arg == "--bind" || arg == "--project" ||
                                     arg == "--scene" || arg == "--tokens-file" || arg == "--max-clients" ||
-                                    arg == "--protocol-id" || arg == "--log-level" || arg == "--log-file";
+                                    arg == "--websocket-port" || arg == "--websocket-origin" || arg == "--protocol-id" || arg == "--log-level" || arg == "--log-file";
             if (!takesValue)
             {
                 return std::unexpected(std::format("Unknown option: {} (see --help)", Shown(arg)));
@@ -156,6 +158,20 @@ namespace N2Engine::Server
             }
             const std::string &value = args[++i];
 
+            if (arg == "--websocket-origin")
+            {
+                if (value.size() > 2048 || value.find_first_of("\r\n") != std::string::npos)
+                    return std::unexpected("Invalid WebSocket Origin");
+                options.webSocketOrigin = value;
+                continue;
+            }
+            if (arg == "--websocket-port")
+            {
+                const auto port = Editor::ParsePort(value);
+                if (!port) return std::unexpected("Invalid WebSocket port");
+                options.webSocketPort = *port;
+                continue;
+            }
             if (arg == "-p" || arg == "--port")
             {
                 const std::optional<int> port = Editor::ParsePort(value);

@@ -56,8 +56,8 @@ namespace N2Engine::Network
     // left over, and never trusts a count to be true. No message is larger than kMaxMessageBytes.
 
     /// The version of the world messages above. A change to any message layout, or a new message, bumps it (2: state
-    /// replication, netcode stage B2).
-    inline constexpr std::uint16_t kWireVersion = 2;
+    /// replication, netcode stage B2; 3: relevance visibility, stage B9).
+    inline constexpr std::uint16_t kWireVersion = 3;
 
     /// The largest world message either side sends or accepts (a ServerHello with the longest fingerprint is the
     /// largest: 1 type + 2 version + 311 fingerprint + 4 client id = 318 bytes). The Connection's reliable message size
@@ -70,6 +70,7 @@ namespace N2Engine::Network
         Spawn = 0x02,
         Despawn = 0x03,
         WorldReady = 0x04,
+        Visibility = 0x20,
         ClientAccept = 0x81,
         ClientReject = 0x82,
     };
@@ -97,6 +98,13 @@ namespace N2Engine::Network
     {
         std::uint32_t spawned = 0;
         std::uint32_t destroyedSceneObjects = 0;
+    };
+
+    struct VisibilityMessage
+    {
+        NetworkId id;
+        bool visible = true;
+        bool active = true;
     };
 
     struct ClientAcceptMessage
@@ -137,7 +145,9 @@ namespace N2Engine::Network
         std::uint32_t bits = 0;
     };
 
-    using ServerMessage = std::variant<ServerHelloMessage, SpawnMessage, DespawnMessage, WorldReadyMessage>;
+    [[nodiscard]] std::vector<std::uint8_t> Encode(const VisibilityMessage &message);
+
+    using ServerMessage = std::variant<ServerHelloMessage, SpawnMessage, DespawnMessage, WorldReadyMessage, VisibilityMessage>;
     using ClientMessage = std::variant<ClientAcceptMessage, ClientRejectMessage>;
 
     enum class DecodeError : std::uint8_t

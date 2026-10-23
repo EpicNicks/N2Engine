@@ -1198,6 +1198,8 @@ return Bouncer
 </div>
 <p>See <a href="testing.html">Testing &amp; CI</a> for how the suite is built and run.</p>
 
+<h2 id="network-queries">Server networking queries</h2><p><code>Physics.RaycastLagCompensated(clientId, renderTimeMicros, origin, direction, maxDistance, layerMask?, ignoreNetId?)</code> and <code>Physics.SphereCastLagCompensated(clientId, renderTimeMicros, origin, radius, direction, maxDistance, layerMask?, ignoreNetId?)</code> return nil or a table containing netId, hitbox, point, normal, distance and timeMicros. Without a bound game server they return nil. See <a href="netcode.html#lag-compensation">historical hit queries</a> for the server time domain and authority requirements. Server scripts configure relevance through <a href="netcode.html#interest-management">Network.SetInterestPolicy, SetObserver and ClearObserver</a>.</p>
+
 <div class="page-footer">
 <span>Describes master through PR #34.</span>
 <a href="index.html">Back to overview</a>

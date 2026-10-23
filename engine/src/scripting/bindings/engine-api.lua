@@ -2722,3 +2722,50 @@ function Debug.Warn(message) end
 ---Log an error
 ---@param message string
 function Debug.Error(message) end
+
+
+---@class LagCompensatedHit
+---@field netId integer
+---@field hitbox integer
+---@field point Vector3
+---@field normal Vector3
+---@field distance number
+---@field timeMicros integer
+
+---Server only. renderTimeMicros is on NetworkServer.Update's monotonic clock. Rewind is capped by measured RTT.
+---@param clientId integer authenticated requesting client
+---@param renderTimeMicros integer
+---@param origin Vector3
+---@param direction Vector3
+---@param maxDistance number
+---@param layerMask integer|nil
+---@param ignoreNetId integer|nil
+---@return LagCompensatedHit|nil
+function Physics.RaycastLagCompensated(clientId, renderTimeMicros, origin, direction, maxDistance, layerMask, ignoreNetId) end
+
+---@param clientId integer
+---@param renderTimeMicros integer
+---@param origin Vector3
+---@param radius number
+---@param direction Vector3
+---@param maxDistance number
+---@param layerMask integer|nil
+---@param ignoreNetId integer|nil
+---@return LagCompensatedHit|nil
+function Physics.SphereCastLagCompensated(clientId, renderTimeMicros, origin, radius, direction, maxDistance, layerMask, ignoreNetId) end
+
+---@class Network
+Network = {}
+---@param object GameObject
+---@param mode string always, owner or radius
+---@param radius number
+---@param priority number positive, 0.001 to 1000
+---@return boolean
+function Network.SetInterestPolicy(object, mode, radius, priority) end
+---@param clientId integer
+---@param object GameObject must belong to the requesting client in the server world
+---@return boolean
+function Network.SetObserver(clientId, object) end
+---@param clientId integer
+---@return boolean
+function Network.ClearObserver(clientId) end

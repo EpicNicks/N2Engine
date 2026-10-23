@@ -1088,6 +1088,15 @@ jobs:
       - name: Report artifact sizes
         run: bash scripts/web-size-report.sh build-web/bin
 
+      - name: Test browser WebSocket transport against a native listener
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          bash scripts/build-websocket-native-smoke.sh build-web/websocket-native
+          cmake --build build-web --target websocket_client -- -k 0
+          "$EMSDK_NODE" scripts/websocket-smoke.mjs build-web/websocket-native/websocket_echo
+          "$EMSDK_NODE" scripts/websocket-smoke.mjs build-web/websocket-native/websocket_echo build-web/bin/websocket_client.js
+
       # Stage 2 (issue #155): the web player and its package folder (build-web/web-package: index.html, index.js,
       # index.wasm, index.data, static files only). Linking it also runs the packaging of lua_project's assets.
       - name: Build the web package

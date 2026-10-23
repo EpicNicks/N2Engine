@@ -10,6 +10,7 @@
 #include "engine/network/NetworkId.hpp"
 #include "engine/network/NetworkProtocol.hpp"
 #include "engine/network/ReplicationLayout.hpp"
+#include "engine/network/InterestManagement.hpp"
 
 namespace N2Engine::Network
 {
@@ -37,6 +38,8 @@ namespace N2Engine::Network
         std::uint64_t entriesTooLarge = 0;
         /// Messages not sent because the client's 32-bit sequence is spent (a client has been sent 2^32 - 2 messages)
         std::uint64_t sequencesExhausted = 0;
+        std::uint64_t entriesNotRelevant = 0;
+        std::uint64_t entriesBudgetDeferred = 0;
     };
 
     struct ServerReplicationOptions
@@ -49,6 +52,8 @@ namespace N2Engine::Network
         std::uint32_t maxInFlightMessages = 64;
         /// A message not acknowledged after this long is given up on
         std::uint64_t recordTimeoutMicros = 2'000'000;
+        /// StateUpdate byte budget per client per snapshot, including headers. 0 uses the message cap.
+        std::size_t maxBytesPerTick = 0;
     };
 
     /**
@@ -81,6 +86,8 @@ namespace N2Engine::Network
 
         void AddClient(ClientId client);
         void RemoveClient(ClientId client);
+        bool SetObserver(ClientId client, NetworkId observer);
+        [[nodiscard]] std::set<std::uint32_t> VisibleObjects(ClientId client) const;
         [[nodiscard]] bool HasClient(ClientId client) const { return _clients.contains(client); }
 
         /// The object is gone: its baselines go
@@ -152,6 +159,8 @@ namespace N2Engine::Network
             std::uint32_t nextSequence = 1;
             /// The first net id the next tick looks at (0: from the start)
             std::uint32_t cursor = 0;
+            NetworkId observer;
+            std::map<std::uint32_t, double> priorities;
         };
 
         struct PendingMessage
@@ -174,6 +183,8 @@ namespace N2Engine::Network
         LayoutCache _layouts;
         std::map<std::uint32_t, ObjectState> _current;
         std::map<ClientId, ClientState> _clients;
+        InterestGrid _interest;
+        const NetworkWorld *_world = nullptr;
     };
 
     /// Counters of the client's state replication since it was made

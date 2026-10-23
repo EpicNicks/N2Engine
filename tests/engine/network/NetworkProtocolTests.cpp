@@ -67,7 +67,7 @@ namespace
     std::vector<std::vector<std::uint8_t>> ValidServerMessages()
     {
         return {Encode(SampleHello()), Encode(SampleSpawn()), Encode(DespawnMessage{NetworkId{9}}),
-                Encode(WorldReadyMessage{5, 2})};
+                Encode(WorldReadyMessage{5, 2}), Encode(VisibilityMessage{NetworkId{9},false,true})};
     }
 
     std::vector<std::vector<std::uint8_t>> ValidClientMessages()
@@ -273,7 +273,7 @@ TEST(NetworkProtocolTest, UnknownTypesAreRejected)
 {
     for (int type = 0; type < 256; ++type)
     {
-        const bool serverType = type >= 0x01 && type <= 0x04;
+        const bool serverType = (type >= 0x01 && type <= 0x04) || type == static_cast<int>(MessageType::Visibility);
         const bool clientType = type == 0x81 || type == 0x82;
         const std::vector<std::uint8_t> message = {static_cast<std::uint8_t>(type), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
         const auto asServer = DecodeServerMessage(message);
@@ -293,13 +293,13 @@ TEST(NetworkProtocolTest, UnknownTypesAreRejected)
 TEST(NetworkProtocolTest, ADifferentWireVersionIsNamedNotParsed)
 {
     std::vector<std::uint8_t> hello = Encode(SampleHello());
-    hello[1] = 3;
+    hello[1] = static_cast<std::uint8_t>(kWireVersion + 1);
     hello[2] = 0;
     const auto decoded = DecodeServerMessage(hello);
     ASSERT_FALSE(decoded.has_value());
     EXPECT_EQ(decoded.error(), DecodeError::UnsupportedVersion);
     ASSERT_TRUE(PeekWireVersion(hello).has_value());
-    EXPECT_EQ(*PeekWireVersion(hello), 3);
+    EXPECT_EQ(*PeekWireVersion(hello), kWireVersion + 1);
 
     // Even a hello whose body is garbage past the version says its version
     const std::vector<std::uint8_t> bare = {static_cast<std::uint8_t>(MessageType::ServerHello), 9, 0};

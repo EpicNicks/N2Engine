@@ -286,3 +286,12 @@ TEST(N2ServerOptionsTest, TheReadyLineIsAPrefixAndKeyValueFields)
     EXPECT_TRUE(FormatReadyLine(9, "127.0.0.1").starts_with(ReadyLinePrefix));
     EXPECT_EQ(ReadyLinePrefix, "N2Server ready");
 }
+
+
+TEST(N2ServerOptionsTest, WebSocketListenerIsOptInAndValidatesPortAndOrigin)
+{
+    const auto parsed=ParseServerArguments({"--project","project","--websocket-port","0","--websocket-origin","https://game.example"});
+    ASSERT_TRUE(parsed);EXPECT_EQ(parsed->webSocketPort,0);EXPECT_EQ(parsed->webSocketOrigin,"https://game.example");
+    EXPECT_FALSE(ParseServerArguments({"--project","project","--websocket-port","65536"}));
+    EXPECT_FALSE(ParseServerArguments({"--project","project","--websocket-origin","https://game.example\r\nInjected: yes"}));
+}

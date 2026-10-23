@@ -35,6 +35,7 @@ namespace N2Engine::Scripting
 
         // Physics
         void BindPhysics(LuaRuntime& runtime);
+        void BindNetworkInterest(LuaRuntime& runtime);
 
         // Audio
         void BindAudio(LuaRuntime& runtime);
