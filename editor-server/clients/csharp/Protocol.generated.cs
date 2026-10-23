@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.16.0";
+        public const string ProtocolVersion = "1.17.0";
     }
 
     public enum CommandType : byte
@@ -85,6 +85,9 @@ namespace N2Engine.Editor.Protocol
         GetPlayState = 0xB3,
         SendInput = 0xB4,
         Shutdown = 0xFF,
+        SetEditorViewOptions = 0x17,
+        CheckLuaSyntax = 0xA7,
+        GetAssetPreview = 0xA8,
     }
 
     public enum ResponseType : byte
@@ -127,6 +130,8 @@ namespace N2Engine.Editor.Protocol
         EditorExtensions = 0x1D,
         EditorUi = 0x1E,
         ExtensionResult = 0x1F,
+        LuaSyntax = 0x20,
+        AssetPreview = 0xA4,
     }
 
     public struct Vec3
@@ -555,6 +560,54 @@ namespace N2Engine.Editor.Protocol
         public string[]? Warnings { get; set; }
     }
 
+    public class LuaSyntaxResult
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("ok")]
+        public bool Ok { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("line")]
+        public double Line { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("column")]
+        public double? Column { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("message")]
+        public string Message { get; set; }
+    }
+
+    public class AudioPeak
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("min")]
+        public double Min { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("max")]
+        public double Max { get; set; }
+    }
+
+    public class AssetPreviewInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("kind")]
+        public string Kind { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("uuid")]
+        public string Uuid { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("path")]
+        public string Path { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("modified")]
+        public double Modified { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("width")]
+        public double? Width { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("height")]
+        public double? Height { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("sourceWidth")]
+        public double? SourceWidth { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("sourceHeight")]
+        public double? SourceHeight { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("durationMs")]
+        public double? DurationMs { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("channels")]
+        public double? Channels { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("sampleRate")]
+        public double? SampleRate { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("peaks")]
+        public AudioPeak[]? Peaks { get; set; }
+    }
+
     public struct SetViewportSizeRequest
     {
         public int Width;
@@ -843,6 +896,23 @@ namespace N2Engine.Editor.Protocol
         public string Events;
     }
 
+    public struct SetEditorViewOptionsRequest
+    {
+        public bool Wireframe;
+    }
+
+    public struct CheckLuaSyntaxRequest
+    {
+        public string Text;
+        public string ChunkName;
+    }
+
+    public struct GetAssetPreviewRequest
+    {
+        public string UuidOrPath;
+        public uint MaxSize;
+    }
+
     public struct FrameDataResponse
     {
         public uint Width;
@@ -1097,6 +1167,19 @@ namespace N2Engine.Editor.Protocol
         public string State;
         public uint Frame;
         public float Time;
+    }
+
+    public struct LuaSyntaxResponse
+    {
+        /// <summary>JSON text: LuaSyntaxResult</summary>
+        public string Result;
+    }
+
+    public struct AssetPreviewResponse
+    {
+        /// <summary>JSON text: AssetPreviewInfo</summary>
+        public string Info;
+        public byte[] Pixels;
     }
 
     public struct ErrorCodedResponse

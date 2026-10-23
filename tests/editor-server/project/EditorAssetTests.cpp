@@ -262,6 +262,45 @@ namespace
     };
 }
 
+TEST_F(EditorAssetsTest, PreviewResolvesPathAndUuidAndReadsCurrentBytesWithoutLoading)
+{
+    std::string image(18, '\0');
+    image[2] = 2; image[12] = 1; image[14] = 1; image[16] = 32; image[17] = 0x28;
+    image.append("\x00\x00\xff\xff", 4);
+    WriteAsset("preview.tga", image);
+    Rescan();
+    const auto details = DecodeAssetDetail(Info("res://preview.tga"));
+    const auto uuid = details.at("uuid").get<std::string>();
+    ASSERT_TRUE(server.SetReadOnly(true));
+    const auto preview = [&](const std::string &path, std::uint32_t size = 256)
+    {
+        BufferWriter payload; payload.WriteString(path); payload.WriteU32(size);
+        return Execute(server, CommandType::GetAssetPreview, payload.Release());
+    };
+    const auto first = preview("res://preview.tga");
+    ASSERT_EQ(first.type, static_cast<uint8_t>(ResponseType::AssetPreview)) << first.Text();
+    BufferReader reader(first.payload);
+    const auto info = ReadJson(reader);
+    EXPECT_EQ(info.at("uuid"), uuid);
+    EXPECT_EQ(info.at("width"), 1);
+    const auto pixels = reader.ReadBytes(reader.Remaining());
+    EXPECT_EQ(std::vector<uint8_t>(pixels.begin(), pixels.end()), (std::vector<uint8_t>{255, 0, 0, 255}));
+    EXPECT_EQ(preview(uuid).payload, first.payload);
+    EXPECT_FALSE(DecodeAssetDetail(Info(uuid)).at("loaded").get<bool>());
+    image[18] = static_cast<char>(255); image[20] = 0;
+    WriteAsset("preview.tga", image);
+    Touch("preview.tga");
+    const auto changed = preview(uuid);
+    ASSERT_EQ(changed.type, static_cast<uint8_t>(ResponseType::AssetPreview));
+    EXPECT_NE(changed.payload, first.payload);
+    BufferReader changedReader(changed.payload);
+    EXPECT_NE(ReadJson(changedReader).at("modified"), info.at("modified"));
+    for (const auto &path : {"res://../outside.tga", "res://missing.tga", "/private/file.tga"})
+        EXPECT_EQ(preview(path).type, ErrorType);
+    EXPECT_EQ(preview(uuid, 0).type, ErrorType);
+    EXPECT_EQ(preview(uuid, 257).type, ErrorType);
+}
+
 // ==================== ListAssets ====================
 
 TEST_F(EditorAssetsTest, ListAssetsListsAFolderWithItsSubfoldersAndFiles)

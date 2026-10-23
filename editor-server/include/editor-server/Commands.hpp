@@ -148,6 +148,49 @@ namespace N2Engine::Editor::Protocol
     // One per command with a request in protocol.json, named <Command>Cmd with its fields, like the
     // generated clients/cpp/Protocol.generated.hpp (which only declares the structs)
 
+    struct SetEditorViewOptionsCmd
+    {
+        bool wireframe = false;
+        static SetEditorViewOptionsCmd Deserialize(BufferReader &r)
+        {
+            const auto flag = r.ReadU8();
+            if (flag > 1)
+                throw std::invalid_argument("wireframe must be a boolean");
+            return {flag != 0};
+        }
+    };
+    struct CheckLuaSyntaxCmd
+    {
+        std::string text, chunkName;
+        static CheckLuaSyntaxCmd Deserialize(BufferReader &r)
+        {
+            CheckLuaSyntaxCmd cmd;
+            const auto size = r.ReadU32();
+            if (size > 4 * 1024 * 1024)
+                throw std::invalid_argument("Lua syntax input exceeds 4 MiB");
+            const auto bytes = r.ReadBytes(size);
+            cmd.text.assign(bytes.begin(), bytes.end());
+            const auto nameSize = r.ReadU32();
+            if (nameSize > 256)
+                throw std::invalid_argument("Lua chunk name exceeds 256 bytes");
+            const auto name = r.ReadBytes(nameSize);
+            cmd.chunkName.assign(name.begin(), name.end());
+            return cmd;
+        }
+    };
+    struct GetAssetPreviewCmd
+    {
+        std::string uuidOrPath;
+        std::uint32_t maxSize = 256;
+        static GetAssetPreviewCmd Deserialize(BufferReader &r)
+        {
+            GetAssetPreviewCmd cmd;
+            cmd.uuidOrPath = r.ReadString();
+            cmd.maxSize = r.ReadU32();
+            return cmd;
+        }
+    };
+
     struct SetViewportSizeCmd
     {
         int32_t width;
@@ -1333,6 +1376,23 @@ namespace N2Engine::Editor::Protocol
 
         w.WriteU8(static_cast<uint8_t>(ResponseType::ScriptData));
         w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+    inline void WriteLuaSyntax(BufferWriter &w, const nlohmann::json &result)
+    {
+        BufferWriter payload;
+        WriteJson(payload, result);
+        w.WriteU8(static_cast<std::uint8_t>(ResponseType::LuaSyntax));
+        w.WriteU32(static_cast<std::uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+    inline void WriteAssetPreview(BufferWriter &w, const nlohmann::json &info, std::span<const std::uint8_t> pixels)
+    {
+        BufferWriter payload;
+        WriteJson(payload, info);
+        payload.WriteBytes(pixels);
+        w.WriteU8(static_cast<std::uint8_t>(ResponseType::AssetPreview));
+        w.WriteU32(static_cast<std::uint32_t>(payload.Size()));
         w.WriteBytes(payload.Data());
     }
 }

@@ -556,6 +556,28 @@ TEST_F(EditorViewportTest, ATransformNudgeBelowTheMathLibrarysEpsilonLeavesScene
     EXPECT_EQ(FrameSince(first.revision).modified, sceneChanged);
 }
 
+TEST_F(EditorViewportTest, WireframeChangesOnlyTheViewAndRepeatedOptionsDoNotInvalidate)
+{
+    ASSERT_FALSE(Create("Cube").empty());
+    const Picture solid = Frame0();
+    const auto sceneRevision = server.GetSceneRevision();
+    ASSERT_TRUE(server.SetReadOnly(true));
+    ASSERT_EQ(Execute(server, CommandType::SetEditorViewOptions, {1}).type, OkType);
+    const Picture wire = FrameSince(solid.revision);
+    ASSERT_TRUE(wire.modified);
+    // SoftwareRenderer's existing SetWireframe stores the option but has no wireframe rasterization.
+    // This host test covers the view revision and scope; drawing follows backend support.
+    EXPECT_EQ(server.GetSceneRevision(), sceneRevision);
+    ASSERT_EQ(Execute(server, CommandType::SetEditorViewOptions, {1}).type, OkType);
+    EXPECT_FALSE(FrameSince(wire.revision).modified);
+    EXPECT_EQ(Execute(server, CommandType::SetEditorViewOptions, {2}).type, ErrorType);
+    EXPECT_EQ(Execute(server, CommandType::SetEditorViewOptions, {0, 0}).type, ErrorType);
+    ASSERT_EQ(Execute(server, CommandType::SetEditorViewOptions, {0}).type, OkType);
+    const Picture restored = FrameSince(wire.revision);
+    EXPECT_TRUE(restored.modified);
+    EXPECT_EQ(restored.pixels, solid.pixels);
+}
+
 // ==================== The colour space ====================
 
 /// A project too, for SetProjectSettings

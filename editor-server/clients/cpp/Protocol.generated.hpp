@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.16.0";
+inline constexpr const char *ProtocolVersion = "1.17.0";
 
 enum class CommandType : uint8_t
 {
@@ -86,6 +86,9 @@ enum class CommandType : uint8_t
     GetPlayState = 0xB3,
     SendInput = 0xB4,
     Shutdown = 0xFF,
+    SetEditorViewOptions = 0x17,
+    CheckLuaSyntax = 0xA7,
+    GetAssetPreview = 0xA8,
 };
 
 enum class ResponseType : uint8_t
@@ -128,6 +131,8 @@ enum class ResponseType : uint8_t
     EditorExtensions = 0x1D,
     EditorUi = 0x1E,
     ExtensionResult = 0x1F,
+    LuaSyntax = 0x20,
+    AssetPreview = 0xA4,
 };
 
 // Custom types
@@ -437,6 +442,23 @@ struct SendInputCmd
     std::string events; // JSON: InputEvent[]
 };
 
+struct SetEditorViewOptionsCmd
+{
+    bool wireframe;
+};
+
+struct CheckLuaSyntaxCmd
+{
+    std::string text;
+    std::string chunkName;
+};
+
+struct GetAssetPreviewCmd
+{
+    std::string uuidOrPath;
+    uint32_t maxSize;
+};
+
 // Response structures
 struct FrameDataData
 {
@@ -671,6 +693,17 @@ struct PlayStateData
     std::string state;
     uint32_t frame;
     float time;
+};
+
+struct LuaSyntaxData
+{
+    std::string result; // JSON: LuaSyntaxResult
+};
+
+struct AssetPreviewData
+{
+    std::string info; // JSON: AssetPreviewInfo
+    std::vector<uint8_t> pixels;
 };
 
 struct ErrorCodedData
