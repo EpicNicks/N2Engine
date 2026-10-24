@@ -67,6 +67,7 @@ target_link_libraries(N2EditorServer
     # (InitializeCrypto) is what EditorTls.cpp calls for the library's one-time setup
     n2security
     PRIVATE
+    assetimport
     $<$<PLATFORM_ID:Windows>:ws2_32>
 )
 

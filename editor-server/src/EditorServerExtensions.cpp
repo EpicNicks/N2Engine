@@ -118,6 +118,7 @@ namespace N2Engine::Editor
             {CommandType::GetCameraPosition, false},
             {CommandType::SetEditorCamera, false},
             {CommandType::GetEditorCamera, false},
+            {CommandType::SetEditorViewOptions, false},
             {CommandType::PickEntity, false},
             {CommandType::GetEntityBounds, false},
             // Entities and components beyond what Editor.Scene has: the older commands and the readers it does not use
@@ -134,6 +135,8 @@ namespace N2Engine::Editor
             {CommandType::WriteTextAsset, true},
             {CommandType::CreateFolder, true},
             // The rest of the assets: not offered
+            {CommandType::CheckLuaSyntax, false},
+            {CommandType::GetAssetPreview, false},
             {CommandType::CreateScript, false},
             {CommandType::RescanAssets, false},
             {CommandType::GetAssetInfo, false},

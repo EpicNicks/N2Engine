@@ -46,7 +46,7 @@ namespace
             {"GetAllEntities", Class::Read}, {"GetEntity", Class::Read}, {"GetEngineHealth", Class::Read},
             {"GetComponentTypes", Class::Read}, {"GetComponent", Class::Read}, {"GetLuaFields", Class::Read},
             {"GetProjectInfo", Class::Read}, {"GetHistory", Class::Read}, {"GetAutosave", Class::Read},
-            {"ListAssets", Class::Read}, {"GetAssetInfo", Class::Read}, {"ReadTextAsset", Class::Read},
+            {"ListAssets", Class::Read}, {"GetAssetInfo", Class::Read}, {"SetEditorViewOptions",Class::Read}, {"CheckLuaSyntax",Class::Read}, {"GetAssetPreview",Class::Read}, {"ReadTextAsset", Class::Read},
             {"GetPlayState", Class::Read},
             // The extension lists answer from what was captured at load and run no Lua
             {"ListEditorExtensions", Class::Read}, {"GetEditorUi", Class::Read},

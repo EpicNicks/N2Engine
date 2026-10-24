@@ -943,6 +943,9 @@ namespace N2Engine::Editor
         void HandleRenderFrameIfChanged(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleSetEditorCamera(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetEditorCamera(int clientSocket);
+        void HandleSetEditorViewOptions(int clientSocket,const std::vector<uint8_t> &payload);
+        void HandleCheckLuaSyntax(int clientSocket,const std::vector<uint8_t> &payload);
+        void HandleGetAssetPreview(int clientSocket,const std::vector<uint8_t> &payload);
         void HandlePickEntity(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetEntityBounds(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleWritePlaySnapshot(int clientSocket, const std::vector<uint8_t> &payload);
@@ -1424,6 +1427,7 @@ namespace N2Engine::Editor
         bool RenderEditorView(std::string &error);
 
         EditorCameraState _editorCamera;
+        bool _editorWireframe = false;
         // Starts numbering at the event epoch, a random number (see FrameTracker)
         FrameTracker _frames{_events.Epoch()};
         uint32_t _editorFramesRendered{0};
