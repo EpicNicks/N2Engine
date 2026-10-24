@@ -56,6 +56,7 @@ namespace N2Engine::Network
                                             _options.prefabs, _options.inputLayout);
         _options.clockBurstIntervalMicros = std::max<std::uint64_t>(_options.clockBurstIntervalMicros, kMinClockIntervalMicros);
         _options.clockIntervalMicros = std::max<std::uint64_t>(_options.clockIntervalMicros, kMinClockIntervalMicros);
+        _options.rpc = _options.rpc.Clamped();
         _replicator.SetMessageObserver([this](const std::uint32_t tick) { OnStateMessage(tick); });
         _replicator.SetEntryObserver([this](NetworkObject &object, const std::uint32_t tick) { OnEntryApplied(object, tick); });
         g_activeClient = this;
@@ -90,6 +91,7 @@ namespace N2Engine::Network
 
         const auto handler = [this](const N2Net::TransportEvent &event) { HandleEvent(event); };
         _transport.Poll(handler);
+        DispatchRpcs();
 
         if (_leaveRequested && (Live() || _state == NetworkClientState::Connecting))
         {
@@ -245,6 +247,11 @@ namespace N2Engine::Network
                 OnClockPong(message);
                 return;
             }
+            if (!message.empty() && message[0] == kRpcServerUnreliableType)
+            {
+                OnRpc(message);
+                return;
+            }
             if (!message.empty() && message[0] == kStreamTickType)
             {
                 OnStreamTick(message);
@@ -266,6 +273,12 @@ namespace N2Engine::Network
             {
                 Fail("the server sent a malformed state update");
             }
+            return;
+        }
+
+        if (!message.empty() && message[0] == kRpcServerReliableType)
+        {
+            OnRpc(message);
             return;
         }
 
@@ -307,6 +320,172 @@ namespace N2Engine::Network
         {
             OnWorldReady(*ready);
         }
+    }
+
+    void NetworkClient::OnRpc(const std::span<const std::uint8_t> message)
+    {
+        if (_state != NetworkClientState::Joined)
+        {
+            // Until the join state is in, the client may lack the objects the call is about
+            return;
+        }
+        RpcHeader header;
+        if (!DecodeRpcHeader(message, header) ||
+            (header.type != kRpcServerReliableType && header.type != kRpcServerUnreliableType))
+        {
+            Fail("the server sent a malformed RPC message");
+            return;
+        }
+        ++_rpcStats.received;
+        const auto refuse = [this](std::uint64_t RpcStats::*counter, const char *why)
+        {
+            ++(_rpcStats.*counter);
+            if (_rpcLog.Allow())
+            {
+                Logger::Warn(std::format("NetworkClient: RPC from the server refused: {}", why));
+            }
+        };
+        if (_pendingRpcs.size() >= _options.rpc.maxQueued)
+        {
+            refuse(&RpcStats::droppedQueueFull, "the RPC queue is full");
+            return;
+        }
+        const RpcBudget::Verdict verdict = _rpcBudget.Admit(
+            _now, RpcBudgetKey(header.componentIndex, header.rpcIndex), message.size(), _options.rpc);
+        if (verdict != RpcBudget::Verdict::Allowed)
+        {
+            refuse(&RpcStats::droppedRate, "over the RPC budget");
+            return;
+        }
+        NetworkObject *const networked = _world.Find(header.object);
+        if (networked == nullptr)
+        {
+            // The object may have been despawned since the server sent the call
+            refuse(&RpcStats::rejectedUnknown, "no such object");
+            return;
+        }
+        const auto &components = networked->GetGameObject().GetAllComponents();
+        if (header.componentIndex >= components.size() || components[header.componentIndex] == nullptr)
+        {
+            refuse(&RpcStats::rejectedUnknown, "no such component");
+            return;
+        }
+        const std::vector<RpcDescriptor> *const table = RpcTableOf(*components[header.componentIndex]);
+        if (table == nullptr || header.rpcIndex >= table->size() || HashRpcTable(*table) != header.tableHash)
+        {
+            refuse(&RpcStats::rejectedUnknown, "no such RPC (or the RPC tables differ)");
+            return;
+        }
+        const RpcDescriptor &descriptor = (*table)[header.rpcIndex];
+        // A client never runs a client-to-server RPC, whoever asks
+        if (descriptor.direction == RpcDirection::ClientToServer)
+        {
+            refuse(&RpcStats::rejectedDirection, "the RPC is a client-to-server RPC");
+            return;
+        }
+        if (descriptor.direction == RpcDirection::ServerToOwner && networked->GetOwner() != _localClientId)
+        {
+            refuse(&RpcStats::rejectedAuthority, "the RPC is for the owner of the object, which is not this client");
+            return;
+        }
+        if (descriptor.reliable != (header.type == kRpcServerReliableType))
+        {
+            refuse(&RpcStats::rejectedUnknown, "the RPC arrived on the other channel than it is declared for");
+            return;
+        }
+        if (_options.cosmeticRpcsOnly && !descriptor.cosmetic)
+        {
+            refuse(&RpcStats::rejectedSimulation, "the RPC changes the simulation, which this preset does not allow");
+            return;
+        }
+        PendingRpc call;
+        call.sender = kServerClientId;
+        call.object = header.object;
+        call.componentIndex = header.componentIndex;
+        call.rpcIndex = header.rpcIndex;
+        call.tableHash = header.tableHash;
+        if (!DecodeRpcArgs(descriptor, header.args, call.args))
+        {
+            refuse(&RpcStats::rejectedArguments, "the arguments do not decode or are not valid");
+            return;
+        }
+        _pendingRpcs.push_back(std::move(call));
+    }
+
+    void NetworkClient::DispatchRpcs()
+    {
+        if (_pendingRpcs.empty())
+        {
+            return;
+        }
+        std::vector<PendingRpc> calls;
+        calls.swap(_pendingRpcs);
+        for (const PendingRpc &call : calls)
+        {
+            RunPendingRpc(_world, call, false, _rpcStats);
+        }
+    }
+
+    RpcSendResult NetworkClient::CallRpc(Component &component, const std::string_view name,
+                                         const std::vector<nlohmann::json> &args)
+    {
+        if (_connection == nullptr || _state != NetworkClientState::Joined || _disconnectPending)
+        {
+            return RpcSendResult::NoTarget;
+        }
+        NetworkObject *const networked = component.GetGameObject().GetComponent<NetworkObject>();
+        if (networked == nullptr || !networked->HasNetworkId() || !networked->IsRegistered() ||
+            _world.Find(networked->GetNetworkId()) != networked)
+        {
+            return RpcSendResult::UnknownObject;
+        }
+        ResolvedRpc rpc;
+        if (!FindRpc(component.GetGameObject(), component, name, rpc))
+        {
+            return RpcSendResult::UnknownRpc;
+        }
+        const RpcDescriptor &descriptor = *rpc.descriptor;
+        if (descriptor.direction != RpcDirection::ClientToServer)
+        {
+            return RpcSendResult::WrongDirection;
+        }
+        if (networked->GetOwner() != _localClientId || _localClientId == kServerClientId)
+        {
+            return RpcSendResult::NotOwner;
+        }
+        if (_options.cosmeticRpcsOnly && !descriptor.cosmetic)
+        {
+            ++_rpcStats.rejectedSimulation;
+            return RpcSendResult::NotSimulationSafe;
+        }
+        std::string error;
+        const std::optional<std::vector<std::uint8_t>> message =
+            EncodeRpcMessage(descriptor.reliable ? kRpcClientReliableType : kRpcClientUnreliableType,
+                             networked->GetNetworkId(), rpc, HashRpcTable(*RpcTableOf(component)), args, error);
+        if (!message.has_value())
+        {
+            if (_rpcLog.Allow())
+            {
+                Logger::Warn(std::format("NetworkClient::CallRpc: {}", error));
+            }
+            return RpcSendResult::BadArguments;
+        }
+        if (!_rpcBudget.AdmitSend(_now, _options.rpc))
+        {
+            ++_rpcStats.droppedSendBudget;
+            return RpcSendResult::OverBudget;
+        }
+        const bool ok = descriptor.reliable
+                            ? _connection->SendReliable(*message) == N2Net::SendResult::Ok
+                            : message->size() <= _connection->MaxUnreliableMessageSize() &&
+                                  _connection->SendUnreliable(*message) == N2Net::SendResult::Ok;
+        if (!ok)
+        {
+            ++_rpcStats.sendFailed;
+            return RpcSendResult::OverBudget;
+        }
+        ++_rpcStats.sent;
+        return RpcSendResult::Sent;
     }
 
     void NetworkClient::OnInputAck(const std::span<const std::uint8_t> message)

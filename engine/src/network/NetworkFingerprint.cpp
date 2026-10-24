@@ -6,6 +6,7 @@
 
 #include "engine/Version.hpp"
 #include "engine/network/NetworkHash.hpp"
+#include "engine/network/NetworkRpc.hpp"
 #include "engine/network/ReplicationCodec.hpp"
 #include "engine/serialization/ComponentRegistry.hpp"
 #include "engine/serialization/JsonLimits.hpp"
@@ -48,7 +49,7 @@ namespace N2Engine::Network
         std::vector<std::string> types = registry.GetRegisteredTypes();
         std::sort(types.begin(), types.end());
         Fnv1a64 hash;
-        hash.String("n2net-registry-3");
+        hash.String("n2net-registry-4");
         hash.U32(static_cast<std::uint32_t>(types.size()));
         for (const std::string &type : types)
         {
@@ -74,6 +75,8 @@ namespace N2Engine::Network
                 HashFieldFormat(hash, *field);
             }
         }
+        // The C++ RPCs: which each type declares, who may call them, their delivery and parameters
+        RpcRegistry::Instance().HashInto(hash);
         hash.U64(prefabs.Hash());
         hash.U64(inputLayout.Hash());
         return hash.Value();

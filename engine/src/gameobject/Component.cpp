@@ -1,5 +1,6 @@
 #include "engine/Component.hpp"
 #include "engine/GameObject.hpp"
+#include "engine/network/NetworkRpc.hpp"
 // ReSharper disable once CppUnusedIncludeDirective
 #include "engine/serialization/MathSerialization.hpp"
 
@@ -14,6 +15,17 @@ Component::Component(GameObject &gameObject)
 GameObject &Component::GetGameObject() const
 {
     return _gameObject;
+}
+
+const std::vector<Network::RpcDescriptor> *Component::GetRpcTable()
+{
+    return Network::RpcRegistry::Instance().Find(GetTypeName());
+}
+
+bool Component::InvokeRpc(const Network::RpcDescriptor &rpc, const Network::RpcContext &context,
+                          const std::vector<json> &args)
+{
+    return rpc.handler ? rpc.handler(*this, context, args) : false;
 }
 
 void Component::RunDestroyCallbacks(const bool objectWasActiveInHierarchy)

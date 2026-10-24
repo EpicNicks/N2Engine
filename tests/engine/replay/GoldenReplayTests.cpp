@@ -92,8 +92,8 @@ TEST(ReplayLogTest, ALogWithNoInputsIsValid)
 
 TEST(ReplayLogTest, AnUnknownVersionIsRefusedByName)
 {
-    const std::string error = Reject(WithEdit("version", 2));
-    EXPECT_NE(error.find("version 2"), std::string::npos) << error;
+    const std::string error = Reject(WithEdit("version", 3));
+    EXPECT_NE(error.find("version 3"), std::string::npos) << error;
     Reject(WithEdit("version", "1"));
 }
 

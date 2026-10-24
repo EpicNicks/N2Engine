@@ -63,10 +63,10 @@ namespace N2Engine::Network
     // counts are plain integers, checked against kMaxNetworkObjects and kMaxPrefabs), refuses a message with bytes
     // left over, and never trusts a count to be true. No message is larger than kMaxMessageBytes.
 
-    /// The version of the world messages above. A change to any message layout, or a new message, bumps it (2: state
+    /// The version of the world messages above (the RPC messages, 0x06, 0x14, 0x86 and 0x87, are in NetworkRpc.hpp). A change to any message layout, or a new message, bumps it (2: state
     /// replication, netcode stage B2; 3: relevance visibility, stage B9; 4: player input, netcode stage B4; 5: clock sync and the server tick
-    /// in every StateUpdate, netcode stage B3).
-    inline constexpr std::uint16_t kWireVersion = 5;
+    /// in every StateUpdate, netcode stage B3; 6: RPCs, netcode stage B7).
+    inline constexpr std::uint16_t kWireVersion = 6;
 
     /// The largest world message either side sends or accepts (a ServerHello with the longest fingerprint is the
     /// largest: 1 type + 2 version + 311 fingerprint + 4 client id = 318 bytes). The Connection's reliable message size

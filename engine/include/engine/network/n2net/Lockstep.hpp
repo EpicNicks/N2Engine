@@ -3,9 +3,11 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <optional>
 #include <span>
 #include <vector>
+
 
 namespace N2Engine::N2Net
 {
@@ -41,15 +43,42 @@ namespace N2Engine::N2Net
     /// Most frames in one InputBundle
     inline constexpr std::size_t kMaxBundleFrames = 32;
 
-    /// One slot's input for one tick. A stand-in with the same fields as the replay file's rows; the networked
-    /// InputFrame (PR #232) replaces it, and nothing in the scheduler looks inside it.
+    /// The largest input of one slot for one tick: the largest networked InputFrame payload (Network::kMaxInputPayloadBytes,
+    /// 32). n2net has no engine dependency, so the number is repeated here; LockstepInputMapping.cpp static_asserts it.
+    inline constexpr std::size_t kMaxLockstepInputBytes = 32;
+
+    /**
+     * One slot's input for one tick: an opaque, fixed-capacity byte string, the packed payload of a networked InputFrame
+     * (PR #232) under the session's input layout (engine/network/InputLayout.hpp; the mapping is in
+     * engine/network/LockstepInputMapping.hpp). The scheduler never looks inside it: it only checks that its length is
+     * the layout's payload size, stores it and hands it back, so two peers that submit the same bytes see the same
+     * bytes. Unused bytes are always zero, so the defaulted comparison is a comparison of the payloads. A
+     * default-constructed input is EMPTY (size 0), which is not the neutral input of a layout with controls: that is
+     * the layout's NeutralPayload() (a signed axis at rest is its middle step, not zero bits), which the scheduler keeps
+     * and uses for the ticks before the first possible input and for a dropped slot.
+     */
     struct LockstepInput
     {
-        std::int8_t moveX = 0;
-        std::int8_t moveY = 0;
-        std::uint32_t buttons = 0;
+        std::array<std::uint8_t, kMaxLockstepInputBytes> bytes{};
+        std::uint8_t size = 0;
+
+        /// The payload, or nullopt when it is longer than kMaxLockstepInputBytes
+        [[nodiscard]] static std::optional<LockstepInput> FromBytes(std::span<const std::uint8_t> payload) noexcept;
+
+        [[nodiscard]] std::span<const std::uint8_t> Bytes() const noexcept { return {bytes.data(), size}; }
 
         friend bool operator==(const LockstepInput &, const LockstepInput &) = default;
+    };
+
+    /// What the scheduler and the bundle codec need to know about the input layout every peer agreed on: how long a
+    /// payload is, the layout's hash (InputLayout::Hash(), carried in every bundle so a peer with another layout is
+    /// refused) and the neutral input. Build it from an InputLayout with MakeLockstepLayoutInfo (LockstepInputMapping.hpp).
+    /// The default is a layout with no controls: zero-byte inputs.
+    struct LockstepLayoutInfo
+    {
+        std::uint8_t payloadBytes = 0;
+        std::uint64_t hash = 0;
+        LockstepInput neutral;
     };
 
     enum class DropFill : std::uint8_t
@@ -67,6 +96,8 @@ namespace N2Engine::N2Net
         DropFill dropFill = DropFill::Neutral;
         /// The tick the session starts at (a test starts near the wrap)
         std::uint32_t startTick = 0;
+        /// The input layout every peer agreed on
+        LockstepLayoutInfo layout;
     };
 
     enum class SubmitResult : std::uint8_t
@@ -83,6 +114,8 @@ namespace N2Engine::N2Net
         BadSlot,
         /// The slot was dropped for that tick; the input is ignored
         SlotDropped,
+        /// The input's length is not the layout's payload size
+        BadPayload,
     };
 
     enum class AdvanceStatus : std::uint8_t
@@ -106,10 +139,15 @@ namespace N2Engine::N2Net
     public:
         /// An invalid config (slotCount outside [1, kMaxLockstepSlots], inputDelay above kMaxInputDelay) leaves the
         /// scheduler !Valid(): every call then refuses.
-        explicit LockstepScheduler(const LockstepConfig &config) noexcept;
+        explicit LockstepScheduler(const LockstepConfig &config);
 
         [[nodiscard]] bool Valid() const noexcept { return valid_; }
         [[nodiscard]] const LockstepConfig &Config() const noexcept { return config_; }
+        /// The layout's payload size in bytes, and its hash (the value an InputBundle must carry)
+        [[nodiscard]] std::size_t PayloadBytes() const noexcept { return payloadBytes_; }
+        [[nodiscard]] std::uint64_t LayoutHash() const noexcept { return layoutHash_; }
+        /// The layout's neutral input
+        [[nodiscard]] const LockstepInput &Neutral() const noexcept { return neutral_; }
         /// The next tick to run
         [[nodiscard]] std::uint32_t CurrentTick() const noexcept { return current_; }
 
@@ -161,6 +199,9 @@ namespace N2Engine::N2Net
 
         bool valid_ = false;
         LockstepConfig config_;
+        std::size_t payloadBytes_ = 0;
+        std::uint64_t layoutHash_ = 0;
+        LockstepInput neutral_;
         std::uint32_t current_ = 0;
         std::uint32_t stalledPolls_ = 0;
         std::array<Slot, kMaxLockstepSlots> slots_{};
@@ -168,26 +209,44 @@ namespace N2Engine::N2Net
 
     /**
      * The datagram that carries inputs: slot's frames [firstTick, firstTick + count), plus `ackTick`, the sender's
-     * CurrentTick (it needs nothing before it). Decoding is bounded by kMaxBundleFrames and by the datagram's length;
-     * it fails (nullopt) on a short, over-long or over-counted datagram and never allocates by a claimed length.
+     * CurrentTick (it needs nothing before it), and the layout the frames are packed under: the payload size and the
+     * layout hash (InputLayout::Hash). Layout: kind u8 (1), slot u8, ackTick u32, firstTick u32, count u8,
+     * payloadBytes u8, layoutHash u64, then count * payloadBytes bytes. Decoding is bounded by kMaxBundleFrames, by
+     * kMaxLockstepInputBytes and by the datagram's length; it fails on a short, over-long or over-counted datagram and
+     * never allocates by a claimed length. A bundle packed under another layout is a LayoutMismatch, not an input.
      */
     struct InputBundle
     {
         std::uint8_t slot = 0;
         std::uint32_t ackTick = 0;
         std::uint32_t firstTick = 0;
+        std::uint8_t payloadBytes = 0;
+        std::uint64_t layoutHash = 0;
         std::vector<LockstepInput> frames;
     };
 
-    /// Encoded size of a bundle with `frameCount` frames
-    [[nodiscard]] constexpr std::size_t InputBundleSize(std::size_t frameCount) noexcept
+    enum class BundleError : std::uint8_t
     {
-        return 1 + 1 + 4 + 4 + 1 + frameCount * 6;
+        /// Wrong kind, short, over-long, over-counted, payload size above the cap, or a payload the layout cannot produce
+        Malformed,
+        /// Well formed, but packed under a layout other than the receiver's (different hash or payload size)
+        LayoutMismatch,
+    };
+
+    /// Encoded size of a bundle with `frameCount` frames of `payloadBytes` bytes
+    [[nodiscard]] constexpr std::size_t InputBundleSize(std::size_t frameCount, std::size_t payloadBytes) noexcept
+    {
+        return 1 + 1 + 4 + 4 + 1 + 1 + 8 + frameCount * payloadBytes;
     }
 
-    /// Writes the bundle into `out`; the number of bytes, or 0 when it does not fit or has too many frames
+    /// Writes the bundle into `out`; the number of bytes, or 0 when it does not fit, has too many frames, or a frame's
+    /// size is not bundle.payloadBytes
     [[nodiscard]] std::size_t EncodeInputBundle(const InputBundle &bundle, std::span<std::uint8_t> out) noexcept;
-    [[nodiscard]] std::optional<InputBundle> DecodeInputBundle(std::span<const std::uint8_t> bytes);
+    /// Decodes a datagram for a session that runs under `layout`: well formed (bounded counts) and packed under the same
+    /// payload size and hash. It does not look inside the payloads: n2net does not know the layout's quantisation;
+    /// DecodeInputBundle of LockstepInputMapping.hpp also checks that every payload is one the layout can produce.
+    [[nodiscard]] std::expected<InputBundle, BundleError> DecodeInputBundle(std::span<const std::uint8_t> bytes,
+                                                                            const LockstepLayoutInfo &layout);
 
     /// Builds the bundle for `slot` that a peer reporting `peerAck` (its CurrentTick) still needs: the frames from
     /// peerAck (clamped to what is still held) up to the first one not known, at most kMaxBundleFrames. No frames when
