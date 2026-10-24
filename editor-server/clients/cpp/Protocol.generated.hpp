@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.17.0";
+inline constexpr const char *ProtocolVersion = "1.18.0";
 
 enum class CommandType : uint8_t
 {
@@ -46,6 +46,8 @@ enum class CommandType : uint8_t
     SetEntityParent = 0x36,
     SetEntityProperties = 0x37,
     DuplicateEntity = 0x38,
+    SerializeEntities = 0x3B,
+    InstantiateEntities = 0x3C,
     GetEntity = 0x39,
     SetLocalTransform = 0x3A,
     CreateScript = 0x40,
@@ -133,6 +135,8 @@ enum class ResponseType : uint8_t
     ExtensionResult = 0x1F,
     LuaSyntax = 0x20,
     AssetPreview = 0xA4,
+    SerializedEntities = 0x21,
+    EntitiesCreated = 0x22,
 };
 
 // Custom types
@@ -301,6 +305,19 @@ struct SetEntityPropertiesCmd
 struct DuplicateEntityCmd
 {
     std::string entityId;
+};
+
+struct SerializeEntitiesCmd
+{
+    std::string ids; // JSON: any
+};
+
+struct InstantiateEntitiesCmd
+{
+    std::string clipboard;
+    std::string parentId;
+    int32_t siblingIndex;
+    bool keepExternalRefs;
 };
 
 struct GetEntityCmd
@@ -573,6 +590,16 @@ struct EntityListData
 {
     uint32_t count;
     std::vector<EntityInfo> entities;
+};
+
+struct SerializedEntitiesData
+{
+    std::string clipboard; // JSON: ClipboardPayload
+};
+
+struct EntitiesCreatedData
+{
+    std::string ids; // JSON: string[]
 };
 
 struct EntityDataData

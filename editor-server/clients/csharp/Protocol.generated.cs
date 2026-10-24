@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.17.0";
+        public const string ProtocolVersion = "1.18.0";
     }
 
     public enum CommandType : byte
@@ -45,6 +45,8 @@ namespace N2Engine.Editor.Protocol
         SetEntityParent = 0x36,
         SetEntityProperties = 0x37,
         DuplicateEntity = 0x38,
+        SerializeEntities = 0x3B,
+        InstantiateEntities = 0x3C,
         GetEntity = 0x39,
         SetLocalTransform = 0x3A,
         CreateScript = 0x40,
@@ -132,6 +134,8 @@ namespace N2Engine.Editor.Protocol
         ExtensionResult = 0x1F,
         LuaSyntax = 0x20,
         AssetPreview = 0xA4,
+        SerializedEntities = 0x21,
+        EntitiesCreated = 0x22,
     }
 
     public struct Vec3
@@ -560,6 +564,18 @@ namespace N2Engine.Editor.Protocol
         public string[]? Warnings { get; set; }
     }
 
+    public class ClipboardPayload
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("format")]
+        public string Format { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("version")]
+        public double Version { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("objectCount")]
+        public double ObjectCount { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("entities")]
+        public System.Text.Json.JsonElement[] Entities { get; set; }
+    }
+
     public class LuaSyntaxResult
     {
         [System.Text.Json.Serialization.JsonPropertyName("ok")]
@@ -748,6 +764,20 @@ namespace N2Engine.Editor.Protocol
     public struct DuplicateEntityRequest
     {
         public string EntityId;
+    }
+
+    public struct SerializeEntitiesRequest
+    {
+        /// <summary>JSON text: any JSON value</summary>
+        public string Ids;
+    }
+
+    public struct InstantiateEntitiesRequest
+    {
+        public string Clipboard;
+        public string ParentId;
+        public int SiblingIndex;
+        public bool KeepExternalRefs;
     }
 
     public struct GetEntityRequest
@@ -1033,6 +1063,18 @@ namespace N2Engine.Editor.Protocol
     {
         public uint Count;
         public EntityInfo[] Entities;
+    }
+
+    public struct SerializedEntitiesResponse
+    {
+        /// <summary>JSON text: ClipboardPayload</summary>
+        public string Clipboard;
+    }
+
+    public struct EntitiesCreatedResponse
+    {
+        /// <summary>JSON text: string[]</summary>
+        public string Ids;
     }
 
     public struct EntityDataResponse

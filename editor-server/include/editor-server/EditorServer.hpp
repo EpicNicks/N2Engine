@@ -978,6 +978,8 @@ namespace N2Engine::Editor
         void HandleSetEntityParent(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleSetEntityProperties(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleDuplicateEntity(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleSerializeEntities(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleInstantiateEntities(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetEntity(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleSetLocalTransform(int clientSocket, const std::vector<uint8_t> &payload);
 

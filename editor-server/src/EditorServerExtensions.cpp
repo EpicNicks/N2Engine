@@ -119,6 +119,8 @@ namespace N2Engine::Editor
             {CommandType::SetEditorCamera, false},
             {CommandType::GetEditorCamera, false},
             {CommandType::SetEditorViewOptions, false},
+            {CommandType::SerializeEntities, false},
+            {CommandType::InstantiateEntities, false},
             {CommandType::PickEntity, false},
             {CommandType::GetEntityBounds, false},
             // Entities and components beyond what Editor.Scene has: the older commands and the readers it does not use
