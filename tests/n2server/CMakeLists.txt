@@ -74,6 +74,22 @@ foreach(NET_TOOL n2server_net_host n2server_net_client)
     add_dependencies(${NET_TOOL} N2Server)
 endforeach()
 
+# The lockstep soak (netcode stage C3): a headless client that runs the C2 replay scene from the confirmed ticks of a
+# `N2Server --relay`, started as real processes on loopback by tests/smoke/n2server_lockstep.py
+add_executable(n2server_lockstep_client LockstepClient.cpp)
+target_link_libraries(n2server_lockstep_client PRIVATE N2ServerCore)
+set_target_properties(n2server_lockstep_client PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+)
+if (MSVC)
+    target_compile_options(n2server_lockstep_client PRIVATE /W4)
+else()
+    target_compile_options(n2server_lockstep_client PRIVATE -Wall -Wextra)
+endif()
+add_dependencies(n2server_lockstep_client N2Server)
+
 # The smoke tests: Python 3 standard library only. Without an interpreter they are not registered (the unit tests above are).
 find_package(Python3 COMPONENTS Interpreter)
 if (Python3_FOUND)
@@ -87,6 +103,13 @@ if (Python3_FOUND)
             --server $<TARGET_FILE:N2Server> --host $<TARGET_FILE:n2server_net_host>
             --client $<TARGET_FILE:n2server_net_client>)
     set_tests_properties(n2server_net PROPERTIES TIMEOUT 600)
+
+    add_test(NAME n2server_lockstep
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/smoke/n2server_lockstep.py
+            --server $<TARGET_FILE:N2Server> --client $<TARGET_FILE:n2server_lockstep_client>
+            --replay $<TARGET_FILE:n2_replay>
+            $<$<AND:$<BOOL:${N2ENGINE_USE_JOLT}>,$<BOOL:${N2ENGINE_STRICT_FP}>>:--require-deterministic>)
+    set_tests_properties(n2server_lockstep PROPERTIES TIMEOUT 600)
 else()
     message(STATUS "N2Server smoke tests not registered: no Python 3 interpreter found")
 endif()

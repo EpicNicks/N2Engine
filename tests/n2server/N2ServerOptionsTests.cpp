@@ -108,7 +108,7 @@ TEST(N2ServerOptionsTest, HelpWinsOverEverythingElse)
     // Every option the parser takes is in the usage text
     const std::string usage(ServerUsage());
     for (const char *option : {"--project", "--scene", "--bind", "--port", "--tokens-file", "--max-clients", "--protocol-id",
-                               "--insecure-bind", "--relay", "--exit-on-stdin-eof", "--log-level", "--log-file",
+                               "--insecure-bind", "--relay", "--relay-players", "--relay-stall", "--relay-stall-ms", "--relay-layout", "--exit-on-stdin-eof", "--log-level", "--log-file",
                                "--new-token"})
     {
         EXPECT_NE(usage.find(option), std::string::npos) << option;
@@ -243,11 +243,32 @@ TEST(N2ServerOptionsTest, NoOptionTurnsTheDefaultIntoAWorldFacingBind)
     EXPECT_EQ(parsed->bindAddress, "127.0.0.1");
 }
 
-TEST(N2ServerOptionsTest, RelayParsesButIsOnlyAFlagForRunServerToRefuse)
+TEST(N2ServerOptionsTest, RelayAndItsOptionsParse)
 {
     const auto parsed = Parse(Serving({"--relay"}));
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_TRUE(parsed->relay);
+    EXPECT_EQ(parsed->relayPlayers, 2);
+    EXPECT_FALSE(parsed->relayStallStops);
+    EXPECT_EQ(parsed->relayStallMs, 5000);
+
+    const auto tuned = Parse(Serving({"--relay", "--relay-players", "4", "--relay-stall", "stop", "--relay-stall-ms", "1500",
+                                      "--relay-layout", "layout.json"}));
+    ASSERT_TRUE(tuned.has_value()) << tuned.error();
+    EXPECT_EQ(tuned->relayPlayers, 4);
+    EXPECT_TRUE(tuned->relayStallStops);
+    EXPECT_EQ(tuned->relayStallMs, 1500);
+    EXPECT_EQ(tuned->relayLayoutFile, "layout.json");
+}
+
+TEST(N2ServerOptionsTest, RelayOptionsAreCheckedAndNeedRelay)
+{
+    EXPECT_NE(ErrorOf(Serving({"--relay", "--relay-players", "0"})).find("--relay-players"), std::string::npos);
+    EXPECT_NE(ErrorOf(Serving({"--relay", "--relay-players", "5"})).find("--relay-players"), std::string::npos);
+    EXPECT_NE(ErrorOf(Serving({"--relay", "--relay-stall", "pause"})).find("--relay-stall"), std::string::npos);
+    EXPECT_NE(ErrorOf(Serving({"--relay", "--relay-stall-ms", "5"})).find("--relay-stall-ms"), std::string::npos);
+    EXPECT_NE(ErrorOf(Serving({"--relay-stall", "stop"})).find("only apply with --relay"), std::string::npos);
+    EXPECT_NE(ErrorOf(Serving({"--relay", "--relay-layout"})).find("missing a value"), std::string::npos);
 }
 
 TEST(N2ServerOptionsTest, NewTokenTakesAUserAndARoleAndNeedsATokensFile)
