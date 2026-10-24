@@ -3,7 +3,7 @@
 
 Runs the real N2Server end to end on loopback:
   - --new-token makes join tokens in a tokens file (the secret is printed once, the file keeps only the hash);
-  - --relay and a non-loopback --bind without a tokens file are refused;
+  - --relay on a project that is not deterministic and a non-loopback --bind without a tokens file are refused;
   - the server starts on a small project, prints its ready line, and a test client (n2server_smoke_client: the A5
     handshake over UDP) joins as a player and as a spectator, while a client with a wrong token never connects;
   - the server logs the connects and disconnects, and never a token;
@@ -213,7 +213,7 @@ def scenario_refusals(servers, project, work):
     say("refusals")
     result = servers.run(["--relay", "--project", str(project)])
     check(result.returncode == 1, "--relay must be refused (exit code 1), got %d" % result.returncode)
-    check("not implemented" in text_of(result.stderr), "--relay's refusal must say it is not implemented")
+    check("not deterministic" in text_of(result.stderr), "--relay's refusal must say the project is not deterministic")
     check(result.stdout == b"", "a refused --relay must print nothing on stdout (no ready line)")
 
     result = servers.run(["--project", str(project), "--bind", "0.0.0.0"])
