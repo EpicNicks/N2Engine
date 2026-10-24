@@ -354,6 +354,12 @@ TEST(LockstepRelayTest, AnInjectedDivergenceIsFoundBisectedAndReportedByBothPeer
         EXPECT_EQ(client->runtime->State(), LockstepState::Stopped);
         EXPECT_EQ(stop->reason, StopReason::Desync);
         EXPECT_EQ(stop->tick, 60u) << "the first checkpoint at or after the injected tick";
+#if defined(__EMSCRIPTEN__)
+        // No threads on the web: the bisection is skipped, the report is still written
+        EXPECT_EQ(stop->divergence.kind, Divergence::Kind::None);
+        if (!stop->reportWritten) { ADD_FAILURE() << stop->reportError; }
+        continue;
+#endif
         EXPECT_EQ(stop->divergence.kind, Divergence::Kind::FieldDiffers);
         EXPECT_EQ(stop->divergence.objectId, 2u) << "rounds " << stop->divergence.rounds << " slot " << client->runtime->Slot() << " kind " << int(stop->divergence.kind) << " failure " << int(stop->bisectFailure);
         EXPECT_EQ(stop->divergence.fieldId, 0u);

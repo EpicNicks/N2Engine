@@ -104,11 +104,16 @@ if (Python3_FOUND)
             --client $<TARGET_FILE:n2server_net_client>)
     set_tests_properties(n2server_net PROPERTIES TIMEOUT 600)
 
+    # A build that has Jolt and the strict floating-point profile can start the Deterministic preset: for it, a refusal to
+    # start is a failure, not a skip
+    set(N2_LOCKSTEP_TEST_EXTRA_ARGS "")
+    if (N2ENGINE_USE_JOLT AND N2ENGINE_STRICT_FP)
+        set(N2_LOCKSTEP_TEST_EXTRA_ARGS --require-deterministic)
+    endif()
     add_test(NAME n2server_lockstep
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/smoke/n2server_lockstep.py
             --server $<TARGET_FILE:N2Server> --client $<TARGET_FILE:n2server_lockstep_client>
-            --replay $<TARGET_FILE:n2_replay>
-            $<$<AND:$<BOOL:${N2ENGINE_USE_JOLT}>,$<BOOL:${N2ENGINE_STRICT_FP}>>:--require-deterministic>)
+            --replay $<TARGET_FILE:n2_replay> ${N2_LOCKSTEP_TEST_EXTRA_ARGS})
     set_tests_properties(n2server_lockstep PROPERTIES TIMEOUT 600)
 else()
     message(STATUS "N2Server smoke tests not registered: no Python 3 interpreter found")
