@@ -1,5 +1,5 @@
 {
-  "version": "1.17.0",
+  "version": "1.18.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -426,6 +426,35 @@
         "type": "EntityCreated",
         "fields": {
           "entityId": "string"
+        }
+      }
+    },
+    "SerializeEntities": {
+      "id": "0x3B",
+      "description": "Since 1.18.0. Read command (a viewer may copy; it changes nothing and records no history). ids is a JSON array of 1..4096 object UUID strings. The host keeps the topmost objects among them (an object whose ancestor is also listed is covered by that ancestor's subtree; an id listed twice counts once), in hierarchy order (the order a scene saves them), and answers ClipboardPayload: {format: \"n2engine.entities\", version: 1, objectCount, entities}. entities is an array with one entry per topmost object: that object's saved form with its whole subtree (what Scene saves: components with their values, children, transforms local to the parent), UUIDs as they are in the open scene. The payload is self-contained: a reference between objects or components inside the copied set is kept as it is (InstantiateEntities remaps it to the copies), a reference to anything outside the set is kept as the UUID text it is saved with (InstantiateEntities keeps it when asked to and the target exists, else leaves it empty), and asset references are the asset UUIDs or res:// paths the components save, so a payload carries no file contents and no host path. Limits: at most 4096 ids, 10000 objects in the copied subtrees and 16 MiB of payload text, else Error (nothing partial is answered). Error without a scene, for an id that is not a UUID or names no object, and for an empty list. The client may keep the payload in memory or as text on the system clipboard; the host validates everything again when it is pasted, so the text is never trusted.",
+      "request": {
+        "ids": "json"
+      },
+      "response": {
+        "type": "SerializedEntities",
+        "fields": {
+          "clipboard": "json:ClipboardPayload"
+        }
+      }
+    },
+    "InstantiateEntities": {
+      "id": "0x3C",
+      "description": "Since 1.18.0. Write command (a viewer is refused with forbidden, a --read-only host with readOnly). Builds the objects of a ClipboardPayload (SerializeEntities' answer, from this scene, another scene or another project) as new objects in the open scene, as ONE undo step labelled \"Paste N objects\" (\"Paste <name>\" for one). clipboard is the payload as JSON text (at most 16 MiB; it is checked for nesting depth before it is parsed, and its shape, format, version, object count and depth are validated before anything is built, so a refused payload changes nothing). parentId is the UUID of the object to paste under (empty: the scene's root); siblingIndex is the place among the siblings of the first pasted object (-1: after the last sibling; larger than the count is clamped; the rest follow in order). Every object and component gets a fresh UUID. References between the pasted objects and components point at the copies. keepExternalRefs: when true, a reference to an object or component that is not in the payload is looked up in the open scene by its UUID and kept when found (pasting into the scene the payload came from), else left empty; when false every such reference is left empty. Names are made unique among the siblings the objects are pasted next to, as DuplicateEntity does (Cube gives Cube (1)); a name that no sibling has is kept. A payload from the same scene pasted twice therefore does not collide. Limits: 1..1024 roots, at most 10000 objects in all, at most 512 levels (MaxHierarchyDepth) counting the levels above parentId, 16 MiB of text; a payload with an unknown format, a version other than 1, entries that are not objects, or data a component refuses is an Error with a sanitised message and no change (no host path, no payload text). A res:// string anywhere in the payload that leaves the project's assets folder (a .. part, a drive, a backslash, a name a file cannot have) is refused with the whole payload; the paste reads no file. Answers EntitiesCreated: ids, the UUIDs of the new topmost objects in the order pasted. sceneChanged follows for every new object. Error without a scene, for a parentId that names no object, and in a scene that is not open for editing the objects are built but no undo step is made, as for DuplicateEntity.",
+      "request": {
+        "clipboard": "string",
+        "parentId": "string",
+        "siblingIndex": "int32",
+        "keepExternalRefs": "bool"
+      },
+      "response": {
+        "type": "EntitiesCreated",
+        "fields": {
+          "ids": "json:string[]"
         }
       }
     },
@@ -1165,6 +1194,12 @@
       "select?": "string[]",
       "warnings?": "string[]"
     },
+    "ClipboardPayload": {
+      "format": "string",
+      "version": "number",
+      "objectCount": "number",
+      "entities": "json[]"
+    },
     "LuaSyntaxResult": {
       "ok": "bool",
       "line": "number",
@@ -1230,7 +1265,9 @@
     "EditorUi": "0x1E",
     "ExtensionResult": "0x1F",
     "LuaSyntax": "0x20",
-    "AssetPreview": "0xA4"
+    "AssetPreview": "0xA4",
+    "SerializedEntities": "0x21",
+    "EntitiesCreated": "0x22"
   },
   "extraResponses": {
     "ErrorCoded": {

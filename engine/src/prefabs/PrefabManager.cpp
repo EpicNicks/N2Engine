@@ -190,10 +190,10 @@ std::shared_ptr<GameObject> PrefabManager::InstantiatePrefab(const nlohmann::jso
 
 namespace
 {
-std::shared_ptr<GameObject> Instantiate(const nlohmann::json &prefabJson, const ReferenceResolver *outside)
+// The root object's JSON of prefab data (Prefab JSON wraps the root; bare GameObject JSON is the root itself), or
+// nullptr (logged) for a prefab with no root
+const nlohmann::json *UnwrapRoot(const nlohmann::json &prefabJson)
 {
-    // Prefab JSON wraps the root; bare GameObject JSON (what this function used to require) is the root
-    const nlohmann::json *rootJson = &prefabJson;
     if (prefabJson.is_object())
     {
         if (const auto it = prefabJson.find("rootObject"); it != prefabJson.end())
@@ -203,48 +203,97 @@ std::shared_ptr<GameObject> Instantiate(const nlohmann::json &prefabJson, const 
                 Logger::Error("InstantiatePrefab: the prefab has no root object");
                 return nullptr;
             }
-            rootJson = &*it;
+            return &*it;
         }
     }
+    return &prefabJson;
+}
 
+std::vector<std::shared_ptr<GameObject>> InstantiateMany(const std::vector<const nlohmann::json *> &rootJsons,
+                                                         const ReferenceResolver *outside)
+{
     // Refused before anything walks it: Deserialize recurses once per GameObject level. The text a prefab came from
     // is checked where it is parsed; this covers a value built or kept some other way.
-    if (JsonLimits::SceneValueTooDeep(*rootJson))
+    for (const nlohmann::json *rootJson : rootJsons)
     {
-        Logger::Error(std::format("InstantiatePrefab: malformed prefab data: {}", JsonLimits::SceneJsonTooDeepMessage()));
-        return nullptr;
+        if (JsonLimits::SceneValueTooDeep(*rootJson))
+        {
+            Logger::Error(
+                std::format("InstantiatePrefab: malformed prefab data: {}", JsonLimits::SceneJsonTooDeepMessage()));
+            return {};
+        }
     }
 
     // Renumber in the data, before anything is built: every id, every reference to one (pointer members
     // and Lua "$ref" fields alike) and so the saved form of the instance all use the new UUIDs. The
-    // resolver then links references to the objects built here, never to the prefab's source objects.
+    // resolver then links references to the objects built here, never to the prefab's source objects. With several
+    // roots the ids of all of them are renumbered together, so a reference from one root's tree into another's
+    // follows to the copy, as it does inside one tree.
     ReferenceResolver resolver;
     resolver.SetFallback(outside);
-    std::shared_ptr<GameObject> root;
+    std::vector<std::shared_ptr<GameObject>> roots;
     try
     {
         // Copied without recursion (nlohmann's copy recurses once per JSON level)
-        nlohmann::json data = JsonLimits::IterativeCopy(*rootJson);
+        std::vector<nlohmann::json> copies;
+        copies.reserve(rootJsons.size());
         UUIDMap ids;
-        CollectIds(data, ids);
-        Renumber(data, ids, outside != nullptr);
-        root = GameObject::Deserialize(data, &resolver);
+        for (const nlohmann::json *rootJson : rootJsons)
+        {
+            copies.push_back(JsonLimits::IterativeCopy(*rootJson));
+            CollectIds(copies.back(), ids);
+        }
+        for (nlohmann::json &data : copies)
+        {
+            Renumber(data, ids, outside != nullptr);
+            roots.push_back(GameObject::Deserialize(data, &resolver));
+        }
         resolver.ResolveAll();
     }
     catch (const std::exception &e)
     {
         Logger::Error(std::format("InstantiatePrefab: malformed prefab data: {}", e.what()));
-        return nullptr;
+        return {};
     }
-    if (!root)
+    for (const auto &root : roots)
     {
-        Logger::Error("InstantiatePrefab: failed to build the root object");
+        if (!root)
+        {
+            Logger::Error("InstantiatePrefab: failed to build the root object");
+            return {};
+        }
+        ReplaceZeroUUIDs(*root);
+    }
+    return roots;
+}
+
+std::shared_ptr<GameObject> Instantiate(const nlohmann::json &prefabJson, const ReferenceResolver *outside)
+{
+    const nlohmann::json *rootJson = UnwrapRoot(prefabJson);
+    if (rootJson == nullptr)
+    {
         return nullptr;
     }
-
-    ReplaceZeroUUIDs(*root);
-    return root;
+    auto roots = InstantiateMany({rootJson}, outside);
+    return roots.empty() ? nullptr : std::move(roots.front());
 }
+}
+
+std::vector<std::shared_ptr<GameObject>> PrefabManager::InstantiatePrefabs(
+    const std::vector<const nlohmann::json *> &rootObjects, const ReferenceResolver *outside)
+{
+    std::vector<const nlohmann::json *> roots;
+    roots.reserve(rootObjects.size());
+    for (const nlohmann::json *rootObject : rootObjects)
+    {
+        const nlohmann::json *root = UnwrapRoot(*rootObject);
+        if (root == nullptr)
+        {
+            return {};
+        }
+        roots.push_back(root);
+    }
+    return InstantiateMany(roots, outside);
 }
 
 bool PrefabManager::RegisterPrefab(std::string prefabName, std::shared_ptr<GameObject> rootObject)

@@ -234,6 +234,15 @@ namespace ProtocolVectors
             }},
             {"DuplicateEntity", [](BufferReader &r) { return json{{"entityId", DuplicateEntityCmd::Deserialize(r).entityId}}; }},
             {"GetEntity", [](BufferReader &r) { return json{{"entityId", GetEntityCmd::Deserialize(r).entityId}}; }},
+            {"SerializeEntities", [](BufferReader &r) { return json{{"ids", SerializeEntitiesCmd::Deserialize(r).ids}}; }},
+            {"InstantiateEntities", [](BufferReader &r)
+            {
+                const auto cmd = InstantiateEntitiesCmd::Deserialize(r);
+                return json{{"clipboard", cmd.clipboard},
+                            {"parentId", cmd.parentId},
+                            {"siblingIndex", cmd.siblingIndex},
+                            {"keepExternalRefs", cmd.keepExternalRefs}};
+            }},
             {"SetLocalTransform", [](BufferReader &r)
             {
                 const auto cmd = SetLocalTransformCmd::Deserialize(r);
@@ -346,6 +355,8 @@ namespace ProtocolVectors
             }},
             {"AssetList", [](BufferWriter &w, const json &f) { WriteAssetList(w, f.at("folders"), f.at("assets")); }},
             {"LuaSyntax",[](BufferWriter &w,const json &f){WriteLuaSyntax(w,f.at("result"));}},
+            {"SerializedEntities", [](BufferWriter &w, const json &f) { WriteSerializedEntities(w, f.at("clipboard")); }},
+            {"EntitiesCreated", [](BufferWriter &w, const json &f) { WriteEntitiesCreated(w, f.at("ids")); }},
             {"AssetPreview",[](BufferWriter &w,const json &f){const auto pixels=FromHex(StringField(f,"pixels"));WriteAssetPreview(w,f.at("info"),pixels);}},
             {"AssetDetail", [](BufferWriter &w, const json &f) { WriteAssetDetail(w, f.at("info")); }},
             {"TextData", [](BufferWriter &w, const json &f) { WriteTextData(w, StringField(f, "text")); }},

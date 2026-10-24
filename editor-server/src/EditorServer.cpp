@@ -467,11 +467,18 @@ namespace N2Engine::Editor
             return presets;
         }
 
+        std::string CopyName(std::string base, const std::vector<std::shared_ptr<GameObject>> &siblings);
+
         /// The name a duplicate of `source` gets among `siblings`, as Unity names it: "Cube" and "Cube (3)" give
         /// "Cube (1)", then "Cube (2)", ... the first of those no sibling has
         std::string DuplicateName(const GameObject &source, const std::vector<std::shared_ptr<GameObject>> &siblings)
         {
-            std::string base = source.GetName();
+            return CopyName(source.GetName(), siblings);
+        }
+
+        /// DuplicateName for a name (also what a pasted object is named when a sibling has its name)
+        std::string CopyName(std::string base, const std::vector<std::shared_ptr<GameObject>> &siblings)
+        {
             // "Cube (3)" is a duplicate of "Cube", not of itself
             if (base.size() > 4 && base.back() == ')')
             {
@@ -512,6 +519,155 @@ namespace N2Engine::Editor
                 }
             });
             return references;
+        }
+
+        // ==================== Copy and paste (EN2) ====================
+
+        constexpr std::size_t MaxSerializeIds = 4096;
+        constexpr std::size_t MaxClipboardRoots = 1024;
+        constexpr std::size_t MaxClipboardObjects = 10000;
+        constexpr std::size_t MaxClipboardBytes = 16u * 1024u * 1024u;
+        constexpr std::size_t MaxClipboardValues = 4u * 1000u * 1000u;
+        constexpr std::string_view ClipboardFormat = "n2engine.entities";
+
+        /// The name an object pasted among `siblings` gets: its own when no sibling has it, else a copy's name
+        std::string PasteName(const std::string &name, const std::vector<std::shared_ptr<GameObject>> &siblings)
+        {
+            const bool taken = std::ranges::any_of(siblings, [&name](const std::shared_ptr<GameObject> &sibling)
+            {
+                return sibling && sibling->GetName() == name;
+            });
+            return taken ? CopyName(name, siblings) : name;
+        }
+
+        /// One undo step out of several ops: undone in reverse order, redone in order
+        EditOp CombineOps(std::vector<EditOp> ops)
+        {
+            auto shared = std::make_shared<std::vector<EditOp>>(std::move(ops));
+            EditOp combined;
+            combined.undo = [shared]() -> EditOutcome
+            {
+                EditEffect effect;
+                for (auto it = shared->rbegin(); it != shared->rend(); ++it)
+                {
+                    auto outcome = it->undo();
+                    if (!outcome)
+                    {
+                        return outcome;
+                    }
+                    effect.Merge(std::move(*outcome));
+                }
+                return effect;
+            };
+            combined.redo = [shared]() -> EditOutcome
+            {
+                EditEffect effect;
+                for (EditOp &op : *shared)
+                {
+                    auto outcome = op.redo();
+                    if (!outcome)
+                    {
+                        return outcome;
+                    }
+                    effect.Merge(std::move(*outcome));
+                }
+                return effect;
+            };
+            for (const EditOp &op : *shared)
+            {
+                combined.undoBytes += op.undoBytes;
+                combined.redoBytes += op.redoBytes;
+            }
+            return combined;
+        }
+
+        /// What a pasted payload holds, counted without recursion
+        struct ClipboardScan
+        {
+            std::size_t objects = 0;
+            std::size_t levels = 0;
+            std::size_t values = 0;
+            bool badAssetPath = false;
+        };
+
+        /// Whether a res:// string stays inside the assets folder by name (every part a valid asset name, which rules
+        /// out dot parts, backslashes and drives); the file system is not touched, a paste reads no file
+        bool AssetPathStaysInside(const std::string_view text, const std::function<bool(std::string_view)> &validName)
+        {
+            std::string_view rest = text.substr(6);
+            while (!rest.empty())
+            {
+                const std::size_t slash = rest.find('/');
+                if (!validName(rest.substr(0, slash)))
+                {
+                    return false;
+                }
+                if (slash == std::string_view::npos)
+                {
+                    break;
+                }
+                rest.remove_prefix(slash + 1);
+            }
+            return true;
+        }
+
+        ClipboardScan ScanClipboard(const nlohmann::json &entities, const std::function<bool(std::string_view)> &validName)
+        {
+            ClipboardScan scan;
+            // Every value of the payload, whatever it is for
+            std::vector<const nlohmann::json *> values{&entities};
+            while (!values.empty())
+            {
+                const nlohmann::json *value = values.back();
+                values.pop_back();
+                if (++scan.values > MaxClipboardValues)
+                {
+                    return scan;
+                }
+                if (value->is_string())
+                {
+                    const std::string &text = value->get_ref<const std::string &>();
+                    if (text.starts_with("res://") && !AssetPathStaysInside(text, validName))
+                    {
+                        scan.badAssetPath = true;
+                    }
+                }
+                else if (value->is_structured())
+                {
+                    for (const nlohmann::json &child : *value)
+                    {
+                        values.push_back(&child);
+                    }
+                }
+            }
+            // The object tree: every entry of "children" is an object one level down
+            std::vector<std::pair<const nlohmann::json *, std::size_t>> pending;
+            for (const nlohmann::json &root : entities)
+            {
+                pending.emplace_back(&root, 1);
+            }
+            while (!pending.empty())
+            {
+                const auto [object, level] = pending.back();
+                pending.pop_back();
+                ++scan.objects;
+                scan.levels = std::max(scan.levels, level);
+                if (scan.objects > MaxClipboardObjects)
+                {
+                    return scan;
+                }
+                if (const auto children = object->find("children"); children != object->end() && children->is_array())
+                {
+                    for (const nlohmann::json &child : *children)
+                    {
+                        if (child.is_object())
+                        {
+                            pending.emplace_back(&child, level + 1);
+                        }
+                    }
+                }
+            }
+            return scan;
         }
 
         // ==================== Components (#6, E5) ====================
@@ -2616,7 +2772,7 @@ namespace N2Engine::Editor
 
     std::vector<std::string> EditorServer::Capabilities()
     {
-        return {"editorExtensions","editorTooling","luaSyntax","assetPreviews"};
+        return {"editorExtensions","editorTooling","luaSyntax","assetPreviews","entityClipboard"};
     }
 
     bool EditorServer::EnableEditorExtensions(std::filesystem::path projectRoot)
@@ -4012,6 +4168,7 @@ namespace N2Engine::Editor
         {CommandType::GetEntityTransform, "GetEntityTransform", EditorServer::CommandClass::Read},
         {CommandType::GetAllEntities, "GetAllEntities", EditorServer::CommandClass::Read},
         {CommandType::GetEntity, "GetEntity", EditorServer::CommandClass::Read},
+        {CommandType::SerializeEntities, "SerializeEntities", EditorServer::CommandClass::Read},
         {CommandType::ListAssets, "ListAssets", EditorServer::CommandClass::Read},
         {CommandType::GetAssetInfo, "GetAssetInfo", EditorServer::CommandClass::Read},
         {CommandType::ReadTextAsset, "ReadTextAsset", EditorServer::CommandClass::Read},
@@ -4044,6 +4201,7 @@ namespace N2Engine::Editor
         {CommandType::SetEntityParent, "SetEntityParent", EditorServer::CommandClass::Write},
         {CommandType::SetEntityProperties, "SetEntityProperties", EditorServer::CommandClass::Write},
         {CommandType::DuplicateEntity, "DuplicateEntity", EditorServer::CommandClass::Write},
+        {CommandType::InstantiateEntities, "InstantiateEntities", EditorServer::CommandClass::Write},
         {CommandType::SetLocalTransform, "SetLocalTransform", EditorServer::CommandClass::Write},
         {CommandType::CreateScript, "CreateScript", EditorServer::CommandClass::Write},
         {CommandType::RescanAssets, "RescanAssets", EditorServer::CommandClass::Write},
@@ -4363,6 +4521,12 @@ namespace N2Engine::Editor
             break;
         case CommandType::DuplicateEntity:
             HandleDuplicateEntity(clientSocket, payload);
+            break;
+        case CommandType::SerializeEntities:
+            HandleSerializeEntities(clientSocket, payload);
+            break;
+        case CommandType::InstantiateEntities:
+            HandleInstantiateEntities(clientSocket, payload);
             break;
         case CommandType::GetEntity:
             HandleGetEntity(clientSocket, payload);
@@ -6432,6 +6596,284 @@ namespace N2Engine::Editor
         RecordEdit(Labelled("Duplicate", source->GetName()), CreatedOp(*copy));
         BufferWriter response;
         WriteEntityCreated(response, copy->GetUUID().ToString());
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleSerializeEntities(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const SerializeEntitiesCmd cmd = SerializeEntitiesCmd::Deserialize(reader);
+        if (reader.HasData())
+        {
+            SendError(clientSocket, "Malformed payload: trailing bytes");
+            return;
+        }
+
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            SendError(clientSocket, "No scene loaded");
+            return;
+        }
+        if (!cmd.ids.is_array() || cmd.ids.empty())
+        {
+            SendError(clientSocket, "ids must be a non-empty JSON array of entity ids");
+            return;
+        }
+        if (cmd.ids.size() > MaxSerializeIds)
+        {
+            SendError(clientSocket, std::format("ids has more than {} entries", MaxSerializeIds));
+            return;
+        }
+
+        std::unordered_set<const GameObject *> selected;
+        for (const nlohmann::json &id : cmd.ids)
+        {
+            if (!id.is_string())
+            {
+                SendError(clientSocket, "ids must hold entity ids (UUID strings)");
+                return;
+            }
+            const std::shared_ptr<GameObject> entity = FindEntity(*scene, id.get<std::string>());
+            if (entity == nullptr)
+            {
+                SendError(clientSocket, NotFoundMessage("Entity", id.get<std::string>()));
+                return;
+            }
+            selected.insert(entity.get());
+        }
+
+        // The topmost of them, in the order the scene saves them (TraverseAll visits an object before its children)
+        std::vector<std::shared_ptr<GameObject>> topmost;
+        scene->TraverseAll([&selected, &topmost](const std::shared_ptr<GameObject> &gameObject)
+        {
+            if (!selected.contains(gameObject.get()))
+            {
+                return;
+            }
+            for (std::shared_ptr<GameObject> ancestor = gameObject->GetParent(); ancestor != nullptr;
+                 ancestor = ancestor->GetParent())
+            {
+                if (selected.contains(ancestor.get()))
+                {
+                    return;
+                }
+            }
+            topmost.push_back(gameObject);
+        });
+
+        std::size_t objectCount = 0;
+        for (const auto &root : topmost)
+        {
+            objectCount += SubtreeIds(*root).size();
+        }
+        if (objectCount > MaxClipboardObjects)
+        {
+            SendError(clientSocket, std::format("The selection has {} objects; at most {} can be copied", objectCount,
+                                                MaxClipboardObjects));
+            return;
+        }
+
+        nlohmann::json entities = nlohmann::json::array();
+        for (const auto &root : topmost)
+        {
+            entities.push_back(root->Serialize());
+        }
+        nlohmann::json clipboard = {{"format", std::string(ClipboardFormat)},
+                                    {"version", 1},
+                                    {"objectCount", objectCount},
+                                    {"entities", std::move(entities)}};
+        if (JsonLimits::IterativeDump(clipboard, -1, ' ', false, nlohmann::json::error_handler_t::replace).size() >
+            MaxClipboardBytes)
+        {
+            SendError(clientSocket, std::format("The selection is larger than {} MiB as text and can't be copied",
+                                                MaxClipboardBytes / (1024 * 1024)));
+            return;
+        }
+
+        BufferWriter response;
+        WriteSerializedEntities(response, clipboard);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleInstantiateEntities(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const InstantiateEntitiesCmd cmd = InstantiateEntitiesCmd::Deserialize(reader);
+        if (reader.HasData())
+        {
+            SendError(clientSocket, "Malformed payload: trailing bytes");
+            return;
+        }
+
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            SendError(clientSocket, "No scene loaded");
+            return;
+        }
+
+        // Everything about the payload is checked before anything is built, so a refused one changes nothing. The
+        // messages say what is wrong with the payload's shape, never what the payload says.
+        if (cmd.clipboard.size() > MaxClipboardBytes)
+        {
+            SendError(clientSocket, std::format("The clipboard payload is larger than {} MiB",
+                                                MaxClipboardBytes / (1024 * 1024)));
+            return;
+        }
+        if (JsonLimits::SceneJsonTooDeep(cmd.clipboard))
+        {
+            SendError(clientSocket, "The clipboard payload was refused: " + JsonLimits::SceneJsonTooDeepMessage());
+            return;
+        }
+        nlohmann::json clipboard;
+        try
+        {
+            clipboard = nlohmann::json::parse(cmd.clipboard);
+        }
+        catch (const nlohmann::json::exception &)
+        {
+            SendError(clientSocket, "The clipboard payload is not valid JSON");
+            return;
+        }
+        if (!clipboard.is_object() || !clipboard.contains("format") || !clipboard["format"].is_string() ||
+            clipboard["format"].get<std::string>() != ClipboardFormat)
+        {
+            SendError(clientSocket, "The clipboard payload is not an n2engine.entities payload");
+            return;
+        }
+        if (!clipboard.contains("version") || !clipboard["version"].is_number_integer() ||
+            clipboard["version"].get<int64_t>() != 1)
+        {
+            SendError(clientSocket, "The clipboard payload has an unsupported version");
+            return;
+        }
+        if (!clipboard.contains("entities") || !clipboard["entities"].is_array() || clipboard["entities"].empty())
+        {
+            SendError(clientSocket, "The clipboard payload has no entities");
+            return;
+        }
+        const nlohmann::json &entities = clipboard["entities"];
+        if (entities.size() > MaxClipboardRoots)
+        {
+            SendError(clientSocket,
+                      std::format("The clipboard payload has more than {} top-level objects", MaxClipboardRoots));
+            return;
+        }
+        for (const nlohmann::json &entity : entities)
+        {
+            if (!entity.is_object())
+            {
+                SendError(clientSocket, "The clipboard payload's entities must be objects");
+                return;
+            }
+        }
+        const ClipboardScan scan = ScanClipboard(entities, [](std::string_view name) { return IsValidAssetName(name); });
+        if (scan.values > MaxClipboardValues)
+        {
+            SendError(clientSocket, std::format("The clipboard payload has more than {} values", MaxClipboardValues));
+            return;
+        }
+        if (scan.objects > MaxClipboardObjects)
+        {
+            SendError(clientSocket, std::format("The clipboard payload has more than {} objects", MaxClipboardObjects));
+            return;
+        }
+        if (scan.badAssetPath)
+        {
+            SendError(clientSocket, "The clipboard payload names an asset path outside the project's assets folder");
+            return;
+        }
+
+        std::shared_ptr<GameObject> parent;
+        if (!cmd.parentId.empty())
+        {
+            parent = FindEntity(*scene, cmd.parentId);
+            if (parent == nullptr)
+            {
+                SendError(clientSocket, NotFoundMessage("Parent", cmd.parentId));
+                return;
+            }
+        }
+        // The tallest pasted tree, the root being level 1, below the levels the parent and its ancestors take
+        const std::size_t levelsAbove = parent != nullptr ? parent->GetHierarchyDepth() + 1 : 0;
+        if (levelsAbove + scan.levels > JsonLimits::MaxHierarchyDepth)
+        {
+            SendError(clientSocket,
+                      std::format("The pasted objects would nest deeper than the {} levels a scene may have",
+                                  JsonLimits::MaxHierarchyDepth));
+            return;
+        }
+
+        // Fresh UUIDs for every object and component; references between the pasted objects point at the copies. A
+        // reference to anything else is kept only when asked, and only when the open scene has it.
+        const ReferenceResolver sceneReferences = SceneReferences(*scene);
+        std::vector<const nlohmann::json *> rootJson;
+        for (const nlohmann::json &entity : entities)
+        {
+            rootJson.push_back(&entity);
+        }
+        std::vector<std::shared_ptr<GameObject>> roots =
+            PrefabManager::InstantiatePrefabs(rootJson, cmd.keepExternalRefs ? &sceneReferences : nullptr);
+        if (roots.empty())
+        {
+            SendError(clientSocket, "The clipboard payload couldn't be pasted (see the log)");
+            return;
+        }
+
+        const auto siblingsOf = [&]() -> const std::vector<std::shared_ptr<GameObject>> &
+        {
+            return parent != nullptr ? parent->GetChildren() : scene->GetRootGameObjects();
+        };
+        const std::size_t siblingCount = siblingsOf().size();
+        const std::size_t first =
+            cmd.siblingIndex < 0 ? siblingCount : std::min(static_cast<std::size_t>(cmd.siblingIndex), siblingCount);
+        for (std::size_t i = 0; i < roots.size(); ++i)
+        {
+            const std::shared_ptr<GameObject> &root = roots[i];
+            root->SetName(PasteName(root->GetName(), siblingsOf()));
+            if (parent != nullptr)
+            {
+                // Checked above, so this holds; checked all the same, as nothing may be recorded for an object that
+                // isn't in the scene
+                if (!parent->CanAddChild(root))
+                {
+                    for (std::size_t added = 0; added < i; ++added)
+                    {
+                        scene->DestroyGameObject(roots[added]);
+                    }
+                    scene->ProcessDestroyed();
+                    SendError(clientSocket, TooDeepMessage(root->GetName(), parent->GetName()));
+                    return;
+                }
+                parent->AddChild(root, false);
+            }
+            else
+            {
+                scene->AddRootGameObject(root);
+            }
+            root->SetSiblingIndex(first + i);
+        }
+
+        std::vector<EditOp> ops;
+        std::vector<std::string> allIds;
+        nlohmann::json newIds = nlohmann::json::array();
+        for (const auto &root : roots)
+        {
+            ops.push_back(CreatedOp(*root));
+            for (std::string &id : SubtreeIds(*root))
+            {
+                allIds.push_back(std::move(id));
+            }
+            newIds.push_back(root->GetUUID().ToString());
+        }
+        MarkSceneChanged(allIds);
+        const std::string label = roots.size() == 1 ? Labelled("Paste", roots.front()->GetName())
+                                                    : std::format("Paste {} objects", roots.size());
+        RecordEdit(label, CombineOps(std::move(ops)));
+
+        BufferWriter response;
+        WriteEntitiesCreated(response, newIds);
         SendResponse(clientSocket, response.Release());
     }
 
