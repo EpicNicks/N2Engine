@@ -17,6 +17,7 @@ set(PHYSX_WEB_LIB_NAMES
     PhysXExtensions_static_32
     PhysX_static_32
     PhysXPvdSDK_static_32
+    PhysXCooking_static_32
     PhysXCommon_static_32
     PhysXFoundation_static_32
 )

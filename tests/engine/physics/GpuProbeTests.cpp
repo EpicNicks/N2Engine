@@ -353,8 +353,10 @@ TEST(PhysicsBackendParticleFailureTest, ADriverFailureDropsTheBackendAndChangesT
     }
 }
 
-TEST(PhysicsBackendSoftBodyFailureTest, AReadyGpuSceneHasNoSoftBodyBackendYet)
+TEST(PhysicsBackendSoftBodyFailureTest, AReadyGpuSceneWithoutASoftBodyBackendReportsUnavailable)
 {
+    // Only the particle driver is installed: the scene is Ready but there is no soft-body backend (the deformable
+    // driver's seam is covered by PhysXSoftBodiesBackendTests)
     InjectedBackend rig(GpuMode::Auto);
     ASSERT_TRUE(rig.ready);
     EXPECT_EQ(rig.backend->GetSoftBodyBackend(), nullptr);
