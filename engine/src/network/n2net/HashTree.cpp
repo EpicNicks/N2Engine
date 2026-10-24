@@ -1,6 +1,7 @@
 #include "engine/network/n2net/HashTree.hpp"
 
 #include <algorithm>
+#include <utility>
 
 #include "engine/network/NetworkHash.hpp"
 #include "engine/network/n2net/ByteIO.hpp"
@@ -209,6 +210,11 @@ namespace N2Engine::N2Net
             }
         }
         return nullptr;
+    }
+
+    HashTree *HashTreeHistory::Find(const std::uint32_t tick) noexcept
+    {
+        return const_cast<HashTree *>(std::as_const(*this).Find(tick));
     }
 
     namespace
