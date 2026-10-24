@@ -16,9 +16,75 @@ namespace N2Engine::Replay
         _log.hashInterval = hashInterval;
     }
 
+    LockstepRecorder::LockstepRecorder(std::string scene, const std::uint32_t seed, const int hashInterval, const int slotCount,
+                                       const Network::InputLayout &layout)
+        : LockstepRecorder(std::move(scene), seed, hashInterval, slotCount)
+    {
+        _layoutMode = true;
+        _layout = layout;
+        _log.version = kReplayFormatVersionLayout;
+        for (std::size_t i = 0; i < layout.ControlCount(); ++i)
+        {
+            _log.layout.push_back(layout.Control(i));
+        }
+        // A slot with no row holds the layout's neutral input
+        for (auto &held : _heldPayload)
+        {
+            held = layout.NeutralPayload();
+        }
+    }
+
+    bool SceneStateFromInput(const Network::InputLayout &layout, const N2Net::LockstepInput &input, SlotState &out)
+    {
+        return DeriveSceneInput(layout, input.Bytes(), out.moveX, out.moveY, out.buttons);
+    }
+
+    bool LockstepRecorder::RecordInputs(const std::span<const N2Net::LockstepInput> inputs)
+    {
+        if (!_layoutMode || _slotCount < 1 || _slotCount > kMaxSlots || _log.ticks >= kMaxTicks)
+        {
+            return false;
+        }
+        std::array<ReplayInput, kMaxSlots> rows{};
+        std::array<bool, kMaxSlots> changed{};
+        for (int slot = 0; slot < _slotCount; ++slot)
+        {
+            const auto index = static_cast<std::size_t>(slot);
+            std::vector<std::uint8_t> next;
+            if (index < inputs.size())
+            {
+                next.assign(inputs[index].Bytes().begin(), inputs[index].Bytes().end());
+            }
+            else
+            {
+                next = _layout.NeutralPayload();
+            }
+            ReplayInput &row = rows[index];
+            if (!DeriveSceneInput(_layout, next, row.moveX, row.moveY, row.buttons))
+            {
+                return false;
+            }
+            row.tick = _log.ticks;
+            row.slot = slot;
+            row.payload = std::move(next);
+            changed[index] = row.payload != _heldPayload[index];
+        }
+        for (int slot = 0; slot < _slotCount; ++slot)
+        {
+            const auto index = static_cast<std::size_t>(slot);
+            if (changed[index])
+            {
+                _heldPayload[index] = rows[index].payload;
+                _log.inputs.push_back(std::move(rows[index]));
+            }
+        }
+        ++_log.ticks;
+        return true;
+    }
+
     bool LockstepRecorder::RecordTick(const std::span<const SlotState> slots)
     {
-        if (_slotCount < 1 || _slotCount > kMaxSlots || _log.ticks >= kMaxTicks)
+        if (_layoutMode || _slotCount < 1 || _slotCount > kMaxSlots || _log.ticks >= kMaxTicks)
         {
             return false;
         }

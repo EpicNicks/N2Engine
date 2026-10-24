@@ -12,6 +12,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "engine/network/LockstepInputMapping.hpp"
 #include "engine/network/n2net/HashTree.hpp"
 #include "engine/network/n2net/Lockstep.hpp"
 #include "engine/network/n2net/SimTransport.hpp"
@@ -33,12 +34,39 @@ namespace
     constexpr int kHashInterval = 30;
     constexpr std::uint32_t kHistory = 4;
 
-    LockstepInput InputFor(const std::uint32_t slot, const std::uint32_t tick)
+    // A layout with every control type, and the scene reading "move" and the buttons: the version 2 sessions run under it
+    Network::InputLayout RichLayout()
     {
-        // Held for a few ticks at a time, like a player's input (so the recorder has runs to collapse)
+        using Network::InputControlKind;
+        auto created = Network::InputLayout::Create({
+            {"move", InputControlKind::Vector2, 8, 1.0f, true},
+            {"jump", InputControlKind::Button, 1, 1.0f, false},
+            {"fire", InputControlKind::Button, 1, 1.0f, false},
+            {"throttle", InputControlKind::Axis, 5, 4.0f, false},
+            {"look", InputControlKind::Vector3, 6, 2.0f, true},
+        });
+        EXPECT_TRUE(created.has_value());
+        return created.has_value() ? *created : Network::InputLayout{};
+    }
+
+    // Held for a few ticks at a time, like a player's input (so the recorder has runs to collapse). Under the legacy
+    // layout (layout == nullptr) this is the original (moveX, moveY, buttons) input.
+    LockstepInput InputFor(const Network::InputLayout *layout, const std::uint32_t slot, const std::uint32_t tick)
+    {
         const std::uint32_t phase = tick / 5;
-        return LockstepInput{static_cast<std::int8_t>(static_cast<int>((phase * 37 + slot * 11) % 255) - 127),
-                             static_cast<std::int8_t>(static_cast<int>((phase * 17 + slot * 5) % 255) - 127), (phase * 2654435761u + slot) & 0xFFu};
+        if (layout == nullptr)
+        {
+            return Network::LegacyInput(static_cast<int>((phase * 37 + slot * 11) % 255) - 127,
+                                        static_cast<int>((phase * 17 + slot * 5) % 255) - 127, (phase * 2654435761u + slot) & 0xFFu);
+        }
+        std::vector<float> values(layout->ValueCount());
+        for (std::size_t i = 0; i < values.size(); ++i)
+        {
+            values[i] = static_cast<float>((phase * 37 + slot * 11 + i * 29) % 201) / 100.0f - 1.0f;
+        }
+        const auto packed = layout->Pack(values);
+        EXPECT_TRUE(packed.has_value());
+        return LockstepInput::FromBytes(*packed).value_or(LockstepInput{});
     }
 
     std::array<std::uint8_t, 8> Bytes(const std::uint64_t value)
@@ -54,9 +82,12 @@ namespace
     struct SessionPeer
     {
         SessionPeer(const LockstepConfig &config, const std::string &scene, const std::uint32_t seed, const std::uint32_t slot,
-                    SimTransport *transport, const int totalTicks)
+                    SimTransport *transport, const int totalTicks, const Network::InputLayout *layoutPtr)
             : scheduler(config), slot(slot), transport(transport), history(kHistory),
-              recorder(scene, seed, kHashInterval, static_cast<int>(config.slotCount)), ticksWanted(totalTicks)
+              recorder(layoutPtr != nullptr
+                           ? LockstepRecorder(scene, seed, kHashInterval, static_cast<int>(config.slotCount), *layoutPtr)
+                           : LockstepRecorder(scene, seed, kHashInterval, static_cast<int>(config.slotCount))),
+              ticksWanted(totalTicks), layout(layoutPtr)
         {
             std::string error;
             simulation = ReplaySimulation::Create(scene, seed, error);
@@ -70,6 +101,8 @@ namespace
         HashTreeHistory history;
         LockstepRecorder recorder;
         int ticksWanted;
+        /// nullptr: the legacy layout, recorded as a version 1 file
+        const Network::InputLayout *layout;
         std::uint32_t localCount = 0;
         std::array<std::uint32_t, kMaxLockstepSlots> peerAck{};
         std::vector<ReplayHash> liveHashes;
@@ -87,8 +120,8 @@ namespace
     struct Session
     {
         Session(const std::uint64_t seed, const SimLinkConfig &link, const std::uint32_t peers, const std::string &scene,
-                const std::uint32_t simSeed, const int ticks)
-            : network(seed), scene(scene), seed(simSeed), ticks(ticks)
+                const std::uint32_t simSeed, const int ticks, const Network::InputLayout *sessionLayout = nullptr)
+            : network(seed), scene(scene), seed(simSeed), ticks(ticks), layout(sessionLayout)
         {
             for (std::uint32_t i = 0; i < peers; ++i)
             {
@@ -104,9 +137,10 @@ namespace
             LockstepConfig config;
             config.slotCount = peers;
             config.inputDelay = 2;
+            config.layout = *Network::MakeLockstepLayoutInfo(layout != nullptr ? *layout : Network::LegacyMoveLayout());
             for (std::uint32_t i = 0; i < peers; ++i)
             {
-                this->peers.push_back(std::make_unique<SessionPeer>(config, scene, simSeed, i, transports[i], ticks));
+                this->peers.push_back(std::make_unique<SessionPeer>(config, scene, simSeed, i, transports[i], ticks, layout));
             }
         }
 
@@ -149,7 +183,7 @@ namespace
                     }
                     if (event.data[0] == 1)
                     {
-                        const auto bundle = DecodeInputBundle(event.data);
+                        const auto bundle = Network::DecodeInputBundleFor(peer.layout != nullptr ? *peer.layout : Network::LegacyMoveLayout(), event.data);
                         if (!bundle || bundle->slot != from)
                         {
                             return;
@@ -170,7 +204,7 @@ namespace
 
             std::uint32_t assigned = 0;
             const std::uint32_t wanted = 2 + peer.localCount;
-            if (peer.scheduler.SubmitLocal(peer.slot, InputFor(peer.slot, wanted), assigned) == SubmitResult::Accepted)
+            if (peer.scheduler.SubmitLocal(peer.slot, InputFor(peer.layout, peer.slot, wanted), assigned) == SubmitResult::Accepted)
             {
                 ++peer.localCount;
             }
@@ -180,11 +214,19 @@ namespace
             {
                 for (std::uint32_t s = 0; s < count; ++s)
                 {
-                    peer.held[s] = SlotState{out.inputs[s].moveX, out.inputs[s].moveY, out.inputs[s].buttons};
+                    ASSERT_TRUE(SceneStateFromInput(peer.layout != nullptr ? *peer.layout : Network::LegacyMoveLayout(), out.inputs[s],
+                                                    peer.held[s]));
                 }
                 std::string error;
                 ASSERT_TRUE(peer.simulation->Step(std::span<const SlotState>(peer.held.data(), count), error)) << error;
-                ASSERT_TRUE(peer.recorder.RecordTick(std::span<const SlotState>(peer.held.data(), count)));
+                if (peer.layout != nullptr)
+                {
+                    ASSERT_TRUE(peer.recorder.RecordInputs(std::span<const LockstepInput>(out.inputs.data(), count)));
+                }
+                else
+                {
+                    ASSERT_TRUE(peer.recorder.RecordTick(std::span<const SlotState>(peer.held.data(), count)));
+                }
                 const int done = peer.simulation->TicksRun();
                 if (done % kHashInterval == 0)
                 {
@@ -195,7 +237,7 @@ namespace
             }
 
             // The root exchange: the latest few checkpoints go to everyone every frame (a lost one is covered by the next)
-            std::array<std::uint8_t, 256> buffer{};
+            std::array<std::uint8_t, 1100> buffer{};
             for (std::uint32_t other = 0; other < count; ++other)
             {
                 if (other == peer.slot)
@@ -261,6 +303,7 @@ namespace
         std::string scene;
         std::uint32_t seed;
         int ticks;
+        const Network::InputLayout *layout;
     };
 
     SimLinkConfig RoughLink()
@@ -478,6 +521,44 @@ TEST(LockstepSession, AnInjectedDivergenceIsFoundAndReported)
     ASSERT_TRUE(result.ok) << result.error;
     ASSERT_EQ(result.hashes.size(), reporter.liveHashes.size());
     EXPECT_EQ(result.hashes.back().hash, reporter.liveHashes.back().hash);
+}
+
+TEST(LockstepSession, VersionTwoSessionUnderARichLayoutReplaysToIdenticalHashes)
+{
+    const Network::InputLayout layout = RichLayout();
+    for (const std::string scene : {"transforms", "lua_driven"})
+    {
+        constexpr int kTicks = 240;
+        Session session(0xC0DE5, RoughLink(), 3, scene, 777, kTicks, &layout);
+        session.Run(8000);
+        const SessionPeer &first = *session.peers[0];
+        for (auto &peer : session.peers)
+        {
+            ASSERT_EQ(peer->recorder.TicksRecorded(), kTicks) << scene << ": a peer did not finish";
+            EXPECT_FALSE(peer->desync) << scene;
+            EXPECT_EQ(peer->recorder.Log().inputs, first.recorder.Log().inputs) << scene;
+            ASSERT_EQ(peer->liveHashes.size(), first.liveHashes.size());
+            for (std::size_t i = 0; i < first.liveHashes.size(); ++i)
+            {
+                EXPECT_EQ(peer->liveHashes[i].hash, first.liveHashes[i].hash) << scene << " checkpoint " << i;
+            }
+        }
+        const ReplayLog &log = first.recorder.Log();
+        EXPECT_EQ(log.version, kReplayFormatVersionLayout);
+        ASSERT_GT(log.inputs.size(), 3u);
+
+        std::string error;
+        const auto parsed = ParseReplayLog(SerializeReplayLog(log), error);
+        ASSERT_TRUE(parsed.has_value()) << error;
+        EXPECT_EQ(parsed->inputs, log.inputs);
+        const ReplayResult replay = RunReplay(*parsed);
+        ASSERT_TRUE(replay.ok) << scene << ": " << replay.error;
+        ASSERT_EQ(replay.hashes.size(), first.liveHashes.size());
+        for (std::size_t i = 0; i < replay.hashes.size(); ++i)
+        {
+            EXPECT_EQ(replay.hashes[i].hash, first.liveHashes[i].hash) << scene << " replay vs live at tick " << replay.hashes[i].tick;
+        }
+    }
 }
 
 TEST(DesyncReport, UnwritablePathFailsWithAnError)

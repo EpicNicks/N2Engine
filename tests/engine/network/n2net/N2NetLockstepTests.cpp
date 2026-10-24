@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "N2NetTestUtil.hpp"
+#include "engine/network/LockstepInputMapping.hpp"
 #include "engine/network/n2net/Lockstep.hpp"
 #include "engine/network/n2net/SimRandom.hpp"
 #include "engine/network/n2net/SimTransport.hpp"
@@ -17,14 +18,36 @@ using namespace N2Engine::N2Net;
 
 namespace
 {
+    // The scheduler is layout-agnostic; these tests run it under the legacy (moveX, moveY, buttons) layout, six bytes
+    const LockstepLayoutInfo &Layout()
+    {
+        static const LockstepLayoutInfo info = *N2Engine::Network::MakeLockstepLayoutInfo(N2Engine::Network::LegacyMoveLayout());
+        return info;
+    }
+
+    const LockstepInput &Neutral() { return Layout().neutral; }
+
     LockstepInput In(const int x, const int y = 0, const std::uint32_t buttons = 0)
     {
-        return LockstepInput{static_cast<std::int8_t>(x), static_cast<std::int8_t>(y), buttons};
+        return N2Engine::Network::LegacyInput(x, y, buttons);
+    }
+
+    InputBundle MakeBundle(const std::size_t frames)
+    {
+        InputBundle bundle;
+        bundle.payloadBytes = Layout().payloadBytes;
+        bundle.layoutHash = Layout().hash;
+        for (std::size_t i = 0; i < frames; ++i)
+        {
+            bundle.frames.push_back(In(static_cast<int>(i)));
+        }
+        return bundle;
     }
 
     LockstepConfig Config(const std::uint32_t slots = 2, const std::uint32_t delay = 2)
     {
         LockstepConfig config;
+        config.layout = Layout();
         config.slotCount = slots;
         config.inputDelay = delay;
         return config;
@@ -51,7 +74,7 @@ TEST(LockstepScheduler, FirstTicksAreNeutralThenWaitsForEverySlot)
     // Ticks 0 and 1 have no possible sender: neutral for everyone
     ASSERT_EQ(scheduler.TryAdvance(out), AdvanceStatus::Runnable);
     EXPECT_EQ(out.tick, 0u);
-    EXPECT_EQ(out.inputs[0], LockstepInput{});
+    EXPECT_EQ(out.inputs[0], Neutral());
     ASSERT_EQ(scheduler.TryAdvance(out), AdvanceStatus::Runnable);
     EXPECT_EQ(out.tick, 1u);
     // Tick 2 needs both slots
@@ -194,10 +217,10 @@ TEST(LockstepScheduler, DroppedSlotIsNeutralOrHoldsItsLastInput)
         EXPECT_EQ(scheduler.Submit(1, 1, In(2)), SubmitResult::SlotDropped);
         scheduler.Submit(0, 1, In(2));
         ASSERT_EQ(scheduler.TryAdvance(out), AdvanceStatus::Runnable) << "the dropped slot no longer gates";
-        EXPECT_EQ(out.inputs[1], fill == DropFill::Neutral ? LockstepInput{} : In(7));
+        EXPECT_EQ(out.inputs[1], fill == DropFill::Neutral ? Neutral() : In(7));
         scheduler.Submit(0, 2, In(3));
         ASSERT_EQ(scheduler.TryAdvance(out), AdvanceStatus::Runnable);
-        EXPECT_EQ(out.inputs[1], fill == DropFill::Neutral ? LockstepInput{} : In(7));
+        EXPECT_EQ(out.inputs[1], fill == DropFill::Neutral ? Neutral() : In(7));
         EXPECT_EQ(out.inputs[0], In(3));
     }
 }
@@ -275,18 +298,18 @@ TEST(LockstepScheduler, NextNeededIsTheFirstGap)
 
 TEST(InputBundle, RoundTrips)
 {
-    InputBundle bundle;
+    InputBundle bundle = MakeBundle(0);
     bundle.slot = 3;
     bundle.ackTick = 0xFFFFFFFEu;
     bundle.firstTick = 0xFFFFFFFFu;
     for (int i = 0; i < 10; ++i)
     {
-        bundle.frames.push_back(In(i - 5, 127 - i, 0xA0000000u + static_cast<std::uint32_t>(i)));
+        bundle.frames.push_back(In(i - 5, 127 - i, 0x20000000u + static_cast<std::uint32_t>(i)));
     }
     std::array<std::uint8_t, 256> buffer{};
     const std::size_t size = EncodeInputBundle(bundle, buffer);
-    ASSERT_EQ(size, InputBundleSize(10));
-    const auto decoded = DecodeInputBundle(std::span<const std::uint8_t>(buffer.data(), size));
+    ASSERT_EQ(size, InputBundleSize(10, 6));
+    const auto decoded = DecodeInputBundle(std::span<const std::uint8_t>(buffer.data(), size), Layout());
     ASSERT_TRUE(decoded.has_value());
     EXPECT_EQ(decoded->slot, 3);
     EXPECT_EQ(decoded->ackTick, 0xFFFFFFFEu);
@@ -296,43 +319,41 @@ TEST(InputBundle, RoundTrips)
 
 TEST(InputBundle, EncodeRefusesTooManyFramesAndTooSmallBuffers)
 {
-    InputBundle bundle;
-    bundle.frames.resize(kMaxBundleFrames + 1);
+    InputBundle bundle = MakeBundle(kMaxBundleFrames + 1);
     std::array<std::uint8_t, 1024> big{};
     EXPECT_EQ(EncodeInputBundle(bundle, big), 0u);
-    bundle.frames.resize(4);
+    bundle = MakeBundle(4);
     std::array<std::uint8_t, 10> small{};
     EXPECT_EQ(EncodeInputBundle(bundle, small), 0u);
 }
 
 TEST(InputBundle, DecodeRefusesHostileBytes)
 {
-    InputBundle bundle;
-    bundle.frames.resize(3);
+    InputBundle bundle = MakeBundle(3);
     std::array<std::uint8_t, 64> buffer{};
     const std::size_t size = EncodeInputBundle(bundle, buffer);
     ASSERT_GT(size, 0u);
     auto view = [&](const std::size_t length) { return std::span<const std::uint8_t>(buffer.data(), length); };
 
-    EXPECT_TRUE(DecodeInputBundle(view(size)).has_value());
-    EXPECT_FALSE(DecodeInputBundle(view(0)).has_value());
+    EXPECT_TRUE(DecodeInputBundle(view(size), Layout()).has_value());
+    EXPECT_FALSE(DecodeInputBundle(view(0), Layout()).has_value());
     for (std::size_t length = 1; length < size; ++length)
     {
-        EXPECT_FALSE(DecodeInputBundle(view(length)).has_value()) << "truncated to " << length;
+        EXPECT_FALSE(DecodeInputBundle(view(length), Layout()).has_value()) << "truncated to " << length;
     }
     buffer[size] = 0;
-    EXPECT_FALSE(DecodeInputBundle(view(size + 1)).has_value()) << "trailing byte";
+    EXPECT_FALSE(DecodeInputBundle(view(size + 1), Layout()).has_value()) << "trailing byte";
 
     std::array<std::uint8_t, 64> wrongKind = buffer;
     wrongKind[0] = 9;
-    EXPECT_FALSE(DecodeInputBundle(std::span<const std::uint8_t>(wrongKind.data(), size)).has_value());
+    EXPECT_FALSE(DecodeInputBundle(std::span<const std::uint8_t>(wrongKind.data(), size), Layout()).has_value());
 
     // A count above the cap, and a count the bytes cannot back, are refused before anything is reserved
     std::array<std::uint8_t, 64> counted = buffer;
     counted[10] = 255;
-    EXPECT_FALSE(DecodeInputBundle(std::span<const std::uint8_t>(counted.data(), size)).has_value());
+    EXPECT_FALSE(DecodeInputBundle(std::span<const std::uint8_t>(counted.data(), size), Layout()).has_value());
     counted[10] = static_cast<std::uint8_t>(kMaxBundleFrames);
-    EXPECT_FALSE(DecodeInputBundle(std::span<const std::uint8_t>(counted.data(), size)).has_value());
+    EXPECT_FALSE(DecodeInputBundle(std::span<const std::uint8_t>(counted.data(), size), Layout()).has_value());
 }
 
 TEST(InputBundle, RandomBytesNeverCrashAndNeverExceedTheCap)
@@ -351,7 +372,7 @@ TEST(InputBundle, RandomBytesNeverCrashAndNeverExceedTheCap)
         {
             bytes[0] = 1;
         }
-        const auto decoded = DecodeInputBundle(std::span<const std::uint8_t>(bytes.data(), length));
+        const auto decoded = DecodeInputBundle(std::span<const std::uint8_t>(bytes.data(), length), Layout());
         if (decoded)
         {
             ++accepted;
@@ -457,7 +478,7 @@ namespace
                         {
                             return;
                         }
-                        const auto bundle = DecodeInputBundle(event.data);
+                        const auto bundle = DecodeInputBundle(event.data, Layout());
                         if (!bundle || bundle->slot >= peers)
                         {
                             return;
@@ -537,7 +558,7 @@ namespace
                 ASSERT_EQ(runs[peer][i].tick, tick);
                 for (std::uint32_t slot = 0; slot < runs.size(); ++slot)
                 {
-                    const LockstepInput expected = i < 2 ? LockstepInput{} : InputFor(slot, tick);
+                    const LockstepInput expected = i < 2 ? Neutral() : InputFor(slot, tick);
                     ASSERT_EQ(runs[peer][i].inputs[slot], expected) << "peer " << peer << " slot " << slot << " tick " << i;
                 }
             }
