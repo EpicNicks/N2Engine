@@ -6808,7 +6808,11 @@ namespace N2Engine::Editor
         // Fresh UUIDs for every object and component; references between the pasted objects point at the copies. A
         // reference to anything else is kept only when asked, and only when the open scene has it.
         const ReferenceResolver sceneReferences = SceneReferences(*scene);
-        const std::vector<nlohmann::json> rootJson(entities.begin(), entities.end());
+        std::vector<const nlohmann::json *> rootJson;
+        for (const nlohmann::json &entity : entities)
+        {
+            rootJson.push_back(&entity);
+        }
         std::vector<std::shared_ptr<GameObject>> roots =
             PrefabManager::InstantiatePrefabs(rootJson, cmd.keepExternalRefs ? &sceneReferences : nullptr);
         if (roots.empty())

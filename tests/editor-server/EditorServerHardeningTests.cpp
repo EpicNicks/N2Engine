@@ -209,6 +209,15 @@ TEST_F(EditorServerNoSceneTest, HierarchyAndEntityCommandsAreErrors)
     expectNoScene(Execute(server, CommandType::GetHierarchy), "GetHierarchy");
     expectNoScene(Execute(server, CommandType::GetEntity, StringPayload(id)), "GetEntity");
     expectNoScene(Execute(server, CommandType::DuplicateEntity, StringPayload(id)), "DuplicateEntity");
+    expectNoScene(Execute(server, CommandType::SerializeEntities, StringPayload("[\"" + id + "\"]")), "SerializeEntities");
+    {
+        BufferWriter paste;
+        paste.WriteString(R"({"format":"n2engine.entities","version":1,"entities":[{"name":"x"}]})");
+        paste.WriteString("");
+        paste.WriteI32(-1);
+        paste.WriteBool(false);
+        expectNoScene(Execute(server, CommandType::InstantiateEntities, paste.Release()), "InstantiateEntities");
+    }
 
     BufferWriter create;
     create.WriteString("Thing");

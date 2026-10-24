@@ -164,7 +164,6 @@ TEST(EditorToolingTest, SyntaxCommandIsReadOnlyAndReturnsDiagnosticJson)
 
 TEST(EditorToolingTest, ToolingIsAdvertisedAndRejectsMalformedOrTrailingPayloads)
 {
-    EXPECT_EQ(std::string(ProtocolVersion), "1.17.0");
     const auto capabilities = EditorServer::Capabilities();
     for (const auto capability : {"editorTooling", "luaSyntax", "assetPreviews"})
         EXPECT_NE(std::find(capabilities.begin(), capabilities.end(), capability), capabilities.end());

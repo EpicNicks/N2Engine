@@ -33,9 +33,9 @@ namespace N2Engine
 
         /// InstantiatePrefab for several roots at once (each Prefab JSON or bare GameObject JSON), all or nothing: the
         /// ids of every root are renumbered together, so a reference from one root's tree to an object or component of
-        /// another root (all copied together) points at the new copy. `outside` (nullable) is as in the overload
+        /// another root (all copied together; passed by pointer because copying deep JSON recurses) points at the new copy. `outside` (nullable) is as in the overload
         /// above. The roots come back in the order given; an empty vector (logged) when any of them is malformed.
-        std::vector<std::shared_ptr<GameObject>> InstantiatePrefabs(const std::vector<nlohmann::json> &rootObjects,
+        std::vector<std::shared_ptr<GameObject>> InstantiatePrefabs(const std::vector<const nlohmann::json *> &rootObjects,
                                                                     const ReferenceResolver *outside = nullptr);
 
         /// Stores a snapshot of rootObject (its hierarchy as serialized now) as the prefab prefabName,

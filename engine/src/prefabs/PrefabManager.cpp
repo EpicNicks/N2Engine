@@ -280,13 +280,13 @@ std::shared_ptr<GameObject> Instantiate(const nlohmann::json &prefabJson, const 
 }
 
 std::vector<std::shared_ptr<GameObject>> PrefabManager::InstantiatePrefabs(
-    const std::vector<nlohmann::json> &rootObjects, const ReferenceResolver *outside)
+    const std::vector<const nlohmann::json *> &rootObjects, const ReferenceResolver *outside)
 {
     std::vector<const nlohmann::json *> roots;
     roots.reserve(rootObjects.size());
-    for (const auto &rootObject : rootObjects)
+    for (const nlohmann::json *rootObject : rootObjects)
     {
-        const nlohmann::json *root = UnwrapRoot(rootObject);
+        const nlohmann::json *root = UnwrapRoot(*rootObject);
         if (root == nullptr)
         {
             return {};
