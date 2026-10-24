@@ -1,5 +1,5 @@
 {
-  "version": "1.16.0",
+  "version": "1.17.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -904,6 +904,43 @@
       "id": "0xFF",
       "request": {},
       "response": { "type": "Ok" }
+    },
+    "SetEditorViewOptions": {
+      "id": "0x17",
+      "description": "Since 1.17.0. Read/view-only command; sets editor wireframe drawing without changing the scene, history or saved project. A changed value invalidates the editor frame; a no-op does not. Applied only around editor-frame rendering and restored afterwards. Refused by play hosts.",
+      "request": {
+        "wireframe": "bool"
+      },
+      "response": { "type": "Ok" }
+    },
+    "CheckLuaSyntax": {
+      "id": "0xA7",
+      "description": "Since 1.17.0. Read command, including viewers/read-only hosts. Compiles at most 4 MiB of text-only Lua in a fresh allocation-bounded state (64 MiB), opens no libraries and never invokes the chunk. chunkName is a diagnostic label of at most 256 bytes; only its sanitized basename is used. Syntax errors return ok=false with a 1-based line when available (0 when unavailable), no column when Lua provides none, and the diagnostic message. Valid code returns ok=true,line=0,message=\"\". Oversize input or memory exhaustion answers Error. No project is required.",
+      "request": {
+        "text": "string",
+        "chunkName": "string"
+      },
+      "response": {
+        "type": "LuaSyntax",
+        "fields": {
+          "result": "json:LuaSyntaxResult"
+        }
+      }
+    },
+    "GetAssetPreview": {
+      "id": "0xA8",
+      "description": "Since 1.17.0. Read command. uuidOrPath is a top-level asset UUID or contained res:// path, resolved under the project assets folder with the same boundary checks as ReadTextAsset. maxSize must be 1..256. Texture: CPU box-downscaled RGBA8 top-row-first bytes, preserving aspect and never upscaling; longest edge <=maxSize. AudioClip: empty pixels, duration/channels/sampleRate and <=2*maxSize min/max bins across all channels from one bounded decode. Supported WAV/MP3/FLAC/Vorbis. No renderer or audio device is used and nothing is kept loaded/cached. Unsupported types, unknown/sub-assets, invalid data, absent project or resource caps answer Error. Limits: encoded file 64 MiB, decoded image 64 MiB, decoded audio 64 million interleaved sample values, 1..8 channels, <=384kHz. Identity and modification time accompany the preview for client caches.",
+      "request": {
+        "uuidOrPath": "string",
+        "maxSize": "uint32"
+      },
+      "response": {
+        "type": "AssetPreview",
+        "fields": {
+          "info": "json:AssetPreviewInfo",
+          "pixels": "bytes"
+        }
+      }
     }
   },
   "types": {
@@ -1127,6 +1164,30 @@
       "message?": "string",
       "select?": "string[]",
       "warnings?": "string[]"
+    },
+    "LuaSyntaxResult": {
+      "ok": "bool",
+      "line": "number",
+      "column?": "number",
+      "message": "string"
+    },
+    "AudioPeak": {
+      "min": "number",
+      "max": "number"
+    },
+    "AssetPreviewInfo": {
+      "kind": "string",
+      "uuid": "string",
+      "path": "string",
+      "modified": "number",
+      "width?": "number",
+      "height?": "number",
+      "sourceWidth?": "number",
+      "sourceHeight?": "number",
+      "durationMs?": "number",
+      "channels?": "number",
+      "sampleRate?": "number",
+      "peaks?": "AudioPeak[]"
     }
   },
   "responses": {
@@ -1167,7 +1228,9 @@
     "ErrorCoded": "0x1C",
     "EditorExtensions": "0x1D",
     "EditorUi": "0x1E",
-    "ExtensionResult": "0x1F"
+    "ExtensionResult": "0x1F",
+    "LuaSyntax": "0x20",
+    "AssetPreview": "0xA4"
   },
   "extraResponses": {
     "ErrorCoded": {
@@ -1179,8 +1242,15 @@
     }
   },
   "optionalTrailing": {
-    "HelloRequest": ["errorCodes", "user"],
-    "ServerInfoResponse": ["readOnly", "user", "role"]
+    "HelloRequest": [
+      "errorCodes",
+      "user"
+    ],
+    "ServerInfoResponse": [
+      "readOnly",
+      "user",
+      "role"
+    ]
   },
   "errorCodes": {
     "readOnly": "The host was started with --read-only and the command is not a read (it would change the project, the scene, the game, the assets or the host). Shutdown is refused too. The connection stays open and reads keep working.",

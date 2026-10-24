@@ -100,8 +100,8 @@ namespace N2Engine::Physics
     }
 
     /// The soft-body status: ComposeFeatureGpuStatus, and while the scene is Ready but there is no GPU soft-body
-    /// backend (`hasBackend` false: none exists yet) Unavailable, so the row never says Running for a feature that
-    /// is not there.
+    /// backend (`hasBackend` false: the scene is not a real GPU scene, or the backend was dropped) Unavailable, so
+    /// the row never says Running for a feature that is not there.
     [[nodiscard]] inline GpuStatus ComposeSoftBodiesGpuStatus(const GpuStatus &scene, const std::optional<GpuStatus> &failure,
                                                               const bool hasBackend)
     {

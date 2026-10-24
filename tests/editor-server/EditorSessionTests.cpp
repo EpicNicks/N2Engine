@@ -103,8 +103,7 @@ TEST(EditorSessionTest, HelloAnswersWithTheServersVersionsAndCapabilities)
     EXPECT_EQ(info.engineVersion, EditorServer::EngineVersion());
     EXPECT_FALSE(info.engineVersion.empty());
     EXPECT_TRUE(ParseProtocolVersion(info.engineVersion).has_value()) << info.engineVersion;
-    EXPECT_EQ(info.capabilities, nlohmann::json::array({"editorExtensions"}))
-        << "since 1.14.0 the host has the Lua editor extension commands (whether it loaded any is ListEditorExtensions' enabled)";
+    EXPECT_EQ(info.capabilities, nlohmann::json(EditorServer::Capabilities()));
     EXPECT_FALSE(info.projectLoaded) << "a server without SetProject has no project";
     EXPECT_FALSE(info.readOnly) << "a server without SetReadOnly serves writes";
     EXPECT_EQ(info.user, "") << "a server without authentication names nobody";

@@ -4,6 +4,8 @@
 #include <cmath>
 #include <utility>
 
+#include "engine/softbody/TetSkinning.hpp"
+
 namespace N2Engine::Physics
 {
     namespace
@@ -424,23 +426,8 @@ namespace N2Engine::Physics
         {
             return;
         }
-        const auto &embedding = body->mesh->surfaceEmbedding;
-        out.reserve(embedding.size());
-        for (const TetEmbedding &e : embedding)
-        {
-            const auto &tet = body->tets[e.tet];
-            float x = 0.0f, y = 0.0f, z = 0.0f;
-            const bool flipped = body->flipped[e.tet] != 0;
-            for (int c = 0; c < 4; ++c)
-            {
-                const V3 &p = body->position[tet[c]];
-                const float weight = e.weights[flipped && c >= 2 ? 5 - c : c]; // corners 2 and 3 were swapped
-                x += weight * p.x;
-                y += weight * p.y;
-                z += weight * p.z;
-            }
-            out.emplace_back(x, y, z);
-        }
+        // The embedding and skinning code both soft-body backends share
+        SoftBodies::SkinSurface<V3>(*body->mesh, body->tets, body->flipped, body->position, out);
     }
 
     void CpuSoftBodyBackend::CopyNodePositions(const SoftBodyHandle handle, std::vector<Math::Vector3> &out) const

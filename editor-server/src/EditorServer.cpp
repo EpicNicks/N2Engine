@@ -61,6 +61,7 @@
 #include "editor-server/Commands.hpp"
 #include "editor-server/Serialization.hpp"
 #include "editor-server/ServerLog.hpp"
+#include "editor-server/EditorTooling.hpp"
 
 #ifdef _WIN32
 #define NOMINMAX
@@ -2615,7 +2616,7 @@ namespace N2Engine::Editor
 
     std::vector<std::string> EditorServer::Capabilities()
     {
-        return {"editorExtensions"};
+        return {"editorExtensions","editorTooling","luaSyntax","assetPreviews"};
     }
 
     bool EditorServer::EnableEditorExtensions(std::filesystem::path projectRoot)
@@ -4000,6 +4001,9 @@ namespace N2Engine::Editor
         {CommandType::GetCameraPosition, "GetCameraPosition", EditorServer::CommandClass::Read},
         {CommandType::SetEditorCamera, "SetEditorCamera", EditorServer::CommandClass::Read},
         {CommandType::GetEditorCamera, "GetEditorCamera", EditorServer::CommandClass::Read},
+        {CommandType::SetEditorViewOptions, "SetEditorViewOptions", EditorServer::CommandClass::Read},
+        {CommandType::CheckLuaSyntax, "CheckLuaSyntax", EditorServer::CommandClass::Read},
+        {CommandType::GetAssetPreview, "GetAssetPreview", EditorServer::CommandClass::Read},
         {CommandType::PickEntity, "PickEntity", EditorServer::CommandClass::Read},
         {CommandType::GetEntityBounds, "GetEntityBounds", EditorServer::CommandClass::Read},
         {CommandType::GetCurrentScene, "GetCurrentScene", EditorServer::CommandClass::Read},
@@ -4137,6 +4141,9 @@ namespace N2Engine::Editor
         case CommandType::RenderFrame:        // every animation frame
         case CommandType::RenderFrameIfChanged: // every animation frame (mostly answered "not modified")
         case CommandType::SetEditorCamera:    // every animation frame of a camera drag
+        case CommandType::SetEditorViewOptions:
+        case CommandType::CheckLuaSyntax:
+        case CommandType::GetAssetPreview:
         case CommandType::GetEditorCamera:    // the scene view, with each frame, for its gizmos
         case CommandType::PickEntity:         // a click, or the mouse moving over the scene view
         case CommandType::GetEntityBounds:    // the selection box, whenever the selection or the scene changes
@@ -4245,6 +4252,15 @@ namespace N2Engine::Editor
             break;
         case CommandType::SetEditorCamera:
             HandleSetEditorCamera(clientSocket, payload);
+            break;
+        case CommandType::SetEditorViewOptions:
+            HandleSetEditorViewOptions(clientSocket,payload);
+            break;
+        case CommandType::CheckLuaSyntax:
+            HandleCheckLuaSyntax(clientSocket,payload);
+            break;
+        case CommandType::GetAssetPreview:
+            HandleGetAssetPreview(clientSocket,payload);
             break;
         case CommandType::GetEditorCamera:
             HandleGetEditorCamera(clientSocket);
@@ -4766,6 +4782,12 @@ namespace N2Engine::Editor
 
         // The open scene, drawn from the editor camera (not the scene's, nor the game's main camera), without simulating
         const Camera camera = _editorCamera.ToCamera(GetViewportAspect());
+        struct RestoreWireframe
+        {
+            Renderer::Common::IRenderer *renderer;
+            ~RestoreWireframe() { renderer->SetWireframe(false); }
+        } restoreWireframe{renderer};
+        renderer->SetWireframe(_editorWireframe);
         app.RenderEditorFrame(camera);
         ReadFrame(*renderer, _viewportWidth, _viewportHeight, _frameBuffer);
 
@@ -4840,6 +4862,119 @@ namespace N2Engine::Editor
         }
         BufferWriter response;
         WriteOk(response);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleSetEditorViewOptions(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        if (_playMode)
+        {
+            SendError(clientSocket, "Editor view options are unavailable in a play host");
+            return;
+        }
+        BufferReader reader(payload);
+        const auto cmd = SetEditorViewOptionsCmd::Deserialize(reader);
+        if (reader.HasData())
+        {
+            SendError(clientSocket, "Malformed payload: trailing bytes");
+            return;
+        }
+        if (cmd.wireframe != _editorWireframe)
+        {
+            _editorWireframe = cmd.wireframe;
+            NoteViewChanged();
+        }
+        BufferWriter response;
+        WriteOk(response);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleCheckLuaSyntax(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const auto cmd = CheckLuaSyntaxCmd::Deserialize(reader);
+        if (reader.HasData())
+        {
+            SendError(clientSocket, "Malformed payload: trailing bytes");
+            return;
+        }
+        const auto result = Tooling::CheckLuaSyntax(cmd.text, cmd.chunkName);
+        if (!result)
+        {
+            SendError(clientSocket, result.error());
+            return;
+        }
+        BufferWriter response;
+        WriteLuaSyntax(response, *result);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleGetAssetPreview(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const auto cmd = GetAssetPreviewCmd::Deserialize(reader);
+        if (reader.HasData())
+        {
+            SendError(clientSocket, "Malformed payload: trailing bytes");
+            return;
+        }
+        if (!_project)
+        {
+            SendNoProject(clientSocket);
+            return;
+        }
+        auto &loader = IO::ResourceLoader::Instance();
+        const IO::AssetMetadata *meta = nullptr;
+        if (cmd.uuidOrPath.starts_with("res://"))
+        {
+            const auto resolved = ResolveAssetPath(_project->root / "assets", cmd.uuidOrPath);
+            if (!resolved)
+            {
+                SendError(clientSocket, resolved.error());
+                return;
+            }
+            meta = loader.GetMetadata(resolved->resourcePath);
+        }
+        else if (const auto uuid = Math::UUID::FromString(cmd.uuidOrPath))
+            meta = loader.GetMetadata(*uuid);
+        if (!meta)
+        {
+            SendError(clientSocket, "Expected an indexed top-level asset UUID or res:// path");
+            return;
+        }
+        // Resolve UUID lookups too: never trust an index entry to authorize a file outside assets.
+        const auto resolved = ResolveAssetPath(_project->root / "assets", meta->resourcePath.ToString());
+        if (!resolved)
+        {
+            SendError(clientSocket, resolved.error());
+            return;
+        }
+        std::error_code fileError;
+        const auto modified = std::filesystem::last_write_time(resolved->file, fileError);
+        if (fileError)
+        {
+            SendError(clientSocket, "Could not read preview asset modification time");
+            return;
+        }
+        auto preview = Tooling::BuildAssetPreview(resolved->file, meta->resourceType, cmd.maxSize);
+        if (!preview)
+        {
+            SendError(clientSocket, preview.error());
+            return;
+        }
+        const auto after = std::filesystem::last_write_time(resolved->file, fileError);
+        if (fileError || after != modified)
+        {
+            SendError(clientSocket, "Asset changed while generating its preview; retry");
+            return;
+        }
+        preview->info["uuid"] = meta->uuid.ToString();
+        preview->info["path"] = meta->resourcePath.ToString();
+        const auto milliseconds = std::chrono::floor<std::chrono::milliseconds>(
+            std::chrono::clock_cast<std::chrono::system_clock>(modified)).time_since_epoch().count();
+        preview->info["modified"] = milliseconds > 0 ? static_cast<std::uint64_t>(milliseconds) : 0u;
+        BufferWriter response;
+        WriteAssetPreview(response, preview->info, preview->pixels);
         SendResponse(clientSocket, response.Release());
     }
 

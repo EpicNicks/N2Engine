@@ -16,7 +16,7 @@
 # What it builds: the PhysX public CMake project (physx/compiler/public) with its Linux platform files, which is how
 # the PhysX source itself supports Emscripten (the headers define PX_EMSCRIPTEN, PX_LINUX and PX_X86 for __EMSCRIPTEN__):
 # CPU only (no CUDA, no GPU library), static libraries, Release, no snippets, no OmniPVD, no PVD runtime. Only the
-# libraries the engine links are built: PhysX, PhysXCommon, PhysXFoundation, PhysXExtensions, PhysXPvdSDK.
+# libraries the engine links are built: PhysX, PhysXCommon, PhysXFoundation, PhysXExtensions, PhysXPvdSDK, PhysXCooking (the soft-body tetrahedra cooking, DeformableCooking.cpp).
 #
 # Flags: -DPX_SIMD_DISABLED (PhysX's scalar math path: the SSE2 path needs -msimd128, which would make the whole module
 # need WebAssembly SIMD; the engine defines the same macro, see engine/CMakeLists.txt), -w, and PhysX's own -O3.
@@ -120,7 +120,7 @@ BUILD="$WORK/build"
     -DPX_GENERATE_STATIC_LIBRARIES=True -DPX_BUILDSNIPPETS=False -DPX_BUILDPUBLICSAMPLES=False \
     -DPX_BUILDPVDRUNTIME=False -DPX_GENERATE_GPU_PROJECTS=False -DPX_GENERATE_GPU_PROJECTS_ONLY=False
 
-LIBS=(PhysX PhysXCommon PhysXFoundation PhysXExtensions PhysXPvdSDK)
+LIBS=(PhysX PhysXCommon PhysXFoundation PhysXExtensions PhysXPvdSDK PhysXCooking)
 START="$(date +%s)"
 cmake --build "$BUILD" --parallel "$JOBS" --target "${LIBS[@]}"
 echo "PhysX built in $(( $(date +%s) - START )) s on $JOBS jobs"

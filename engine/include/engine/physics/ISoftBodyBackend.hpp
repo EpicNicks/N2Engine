@@ -9,6 +9,7 @@
 #include <math/Vector3.hpp>
 
 #include "engine/physics/BackendHandle.hpp"
+#include "engine/physics/SoftMaterialModel.hpp"
 #include "engine/physics/TetMeshData.hpp"
 
 namespace N2Engine::Physics
@@ -51,9 +52,13 @@ namespace N2Engine::Physics
         std::uint32_t solverIterations = 8;
         /// World gravity (the CPU backend applies it; a GPU backend simulates inside the physics scene, which has its own)
         Math::Vector3 gravity{0.0f, -9.81f, 0.0f};
-        /// The body collides with the plane y = groundHeight (world space). The only collision the CPU backend does.
+        /// The body collides with the plane y = groundHeight (world space). The only collision the CPU backend does;
+        /// the PhysX backend ignores it (its body collides with the scene's colliders instead).
         bool groundEnabled = false;
         float groundHeight = 0.0f;
+        /// The PhysX backend's material model and self-collision switch; the CPU backend ignores both
+        SoftMaterialModel materialModel = SoftMaterialModel::CoRotational;
+        bool selfCollision = false;
     };
 
     /// What CreateBody takes: the tetrahedral mesh with the render-vertex embedding (shared, never changed; a

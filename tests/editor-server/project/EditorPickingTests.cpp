@@ -407,6 +407,28 @@ TEST_F(EditorPickingTest, TheEditorCameraDecidesWhereTheRayGoes)
     EXPECT_FALSE(PickAt(32.0f, 6.0f).Hit());
 }
 
+TEST_F(EditorPickingTest, OrthographicPicksUseParallelRaysWithDifferentOrigins)
+{
+    const std::string cube = Create("Cube");
+    CameraArgs camera;
+    camera.orthographic = true;
+    camera.orthoSize = 1.0f;
+    SetCamera(camera);
+    const auto left = PickAt(28.0f, 24.0f);
+    const auto right = PickAt(36.0f, 24.0f);
+    ASSERT_EQ(left.entityId, cube);
+    ASSERT_EQ(right.entityId, cube);
+    EXPECT_LT(left.point[0], right.point[0]);
+    EXPECT_NEAR(left.point[2], right.point[2], 1.0e-4f);
+    EXPECT_NEAR(left.distance, right.distance, 1.0e-4f);
+    camera.position[2] = 8.0f;
+    SetCamera(camera);
+    const auto farther = PickAt(28.0f, 24.0f);
+    ASSERT_EQ(farther.entityId, cube);
+    EXPECT_NEAR(farther.point[0], left.point[0], 1.0e-4f);
+    EXPECT_NEAR(farther.distance - left.distance, 5.0f, 1.0e-4f);
+}
+
 TEST_F(EditorPickingTest, ThePointIsInViewportPixelsWhateverItsSize)
 {
     const std::string cube = Create("Cube");

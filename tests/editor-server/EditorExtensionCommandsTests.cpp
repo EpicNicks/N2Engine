@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <algorithm>
 
 #include <atomic>
 #include <chrono>
@@ -584,7 +585,7 @@ TEST(EditorExtensionCommandsTest, TheSpecHasTheEventKeyTheShapesAndTheResponsesT
     const json spec = json::parse(file);
     for (const auto &[code, meaning] : spec.at("errorCodes").items())
         EXPECT_FALSE(meaning.get<std::string>().empty()) << code;
-    EXPECT_EQ(spec.at("version"), "1.16.0");
+    EXPECT_EQ(spec.at("version"), std::string{ProtocolVersion});
 
     // The event keys and the JSON shapes the extension commands answer with
     EXPECT_TRUE(spec.at("jsonTypes").at("EditorEvent").contains("uiRevision?"));
@@ -599,12 +600,10 @@ TEST(EditorExtensionCommandsTest, TheSpecHasTheEventKeyTheShapesAndTheResponsesT
     EXPECT_EQ(spec.at("responses").at("ExtensionResult"), "0x1F");
 }
 
-TEST(EditorExtensionCommandsTest, TheProtocolVersionAndCapabilityAreThoseOf1_16_0)
+TEST(EditorExtensionCommandsTest, ExtensionCapabilitiesAndIdsRemainAvailable)
 {
-    EXPECT_EQ(std::string{ProtocolVersion}, "1.16.0");
     const std::vector<std::string> capabilities = EditorServer::Capabilities();
-    ASSERT_EQ(capabilities.size(), 1u);
-    EXPECT_EQ(capabilities[0], "editorExtensions");
+    EXPECT_NE(std::find(capabilities.begin(), capabilities.end(), "editorExtensions"), capabilities.end());
     // The codes a client branches on (InvokeMenuItem and InvokeInspectorAction answer the last four)
     EXPECT_EQ(std::string{ErrorCodeExtensionsDisabled}, "extensionsDisabled");
     EXPECT_EQ(std::string{ErrorCodeExtensionFailed}, "extensionFailed");

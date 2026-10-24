@@ -59,6 +59,12 @@ namespace N2Engine::Particles
     class IPbdDriver;
 }
 
+namespace N2Engine::SoftBodies
+{
+    class DeformableSoftBodyBackend;
+    class IDeformableDriver;
+}
+
 namespace N2Engine::Physics
 {
     class ICollider;
@@ -120,11 +126,11 @@ namespace N2Engine::Physics
         {
             return ComposeFeatureGpuStatus(_gpuStatus, _particlesFailure);
         }
-        /// As GetParticlesGpuStatus, for soft bodies. There is no PhysX soft-body backend yet, so a Ready scene
-        /// reports Unavailable here (see ComposeSoftBodiesGpuStatus).
+        /// As GetParticlesGpuStatus, for soft bodies: Running only while the PhysX soft-body backend exists (a Ready
+        /// scene without one reports Unavailable, see ComposeSoftBodiesGpuStatus)
         [[nodiscard]] GpuStatus GetSoftBodiesGpuStatus() const override
         {
-            return ComposeSoftBodiesGpuStatus(_gpuStatus, _softBodiesFailure, false);
+            return ComposeSoftBodiesGpuStatus(_gpuStatus, _softBodiesFailure, _softBodies != nullptr);
         }
 
         bool Initialize() override;
@@ -301,6 +307,10 @@ namespace N2Engine::Physics
         // row is the scene status with its own failure on top; no feature's failure touches another's or the scene's.
         std::optional<GpuStatus> _particlesFailure;
         std::optional<GpuStatus> _softBodiesFailure;
+        /// The PhysX soft-body backend: only with a GPU scene (the same condition as the particle backend) and until
+        /// the GPU refuses a body or transfer; nullptr otherwise (the SoftBodies then use the CPU backend). Created
+        /// with the scene, released in Shutdown before the scene and the CUDA context.
+        std::unique_ptr<SoftBodies::DeformableSoftBodyBackend> _softBodies;
         // Outside the PhysX guard like _gpuMode: the inline SetRefilterObserver is declared in every build
         std::function<void(const GameObject&)> _refilterObserver;
 
@@ -316,10 +326,20 @@ namespace N2Engine::Physics
         /// (PollParticleFailure / FailParticles) can run without a GPU. Needs an initialised backend that has no
         /// particle backend yet; returns false (and does nothing) otherwise.
         bool InstallParticleDriverForTesting(std::unique_ptr<Particles::IPbdDriver> driver);
-        /// Records that the soft-body feature stopped working (or never could): Failed (physics.gpu=on) or
-        /// Unavailable (auto) on the SoftBodies status only, one warning. The scene status, the particle backend and
-        /// the Particles row are untouched. The PhysX soft-body backend (a later stage) calls it when its GPU work
-        /// fails; the tests call it directly, as there is no such backend yet.
+        /// The PhysX soft-body backend (deformable volumes): only with a GPU scene and until the GPU refuses a body or
+        /// transfer; nullptr otherwise (no GPU, physics.gpu off, a build without the GPU library, or after a failure),
+        /// and the SoftBody components then use the CPU backend. Looking at it first notices a failure (see
+        /// PollSoftBodyFailure). It belongs to this object and is valid until Shutdown.
+        [[nodiscard]] ISoftBodyBackend* GetSoftBodyBackend() override;
+
+        /// Test seam, not used by the engine: puts a soft-body backend over `driver` (a fake in the tests) in place
+        /// of the one a real GPU scene would create, and reports the GPU as Ready (if it is not already), so the
+        /// failure chain can run without a GPU. Needs an initialised backend that has no soft-body backend yet;
+        /// returns false (and does nothing) otherwise.
+        bool InstallDeformableDriverForTesting(std::unique_ptr<SoftBodies::IDeformableDriver> driver);
+        /// Records that the soft-body feature stopped working (or never could): drops its bodies, and sets Failed
+        /// (physics.gpu=on) or Unavailable (auto) on the SoftBodies status only, with one warning. The scene
+        /// status, the particle backend and the Particles row are untouched.
         void FailSoftBodies(const std::string& reason);
         /// For tests: the scene has eENABLE_GPU_DYNAMICS set
         [[nodiscard]] bool SceneUsesGpuDynamics() const;
@@ -379,6 +399,8 @@ namespace N2Engine::Physics
         void FailParticles(const std::string& reason);
         /// Drops the particle backend (once) if it has failed, as FailParticles
         void PollParticleFailure();
+        /// Drops the soft-body backend (once) if it has failed, as FailSoftBodies: only the SoftBodies status changes
+        void PollSoftBodyFailure();
 
 #if N2ENGINE_PHYSX_HAS_PVD
         physx::PxPvd* _pvd = nullptr;
