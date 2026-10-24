@@ -17,6 +17,12 @@ namespace N2Engine
     class Scene;
     class ReferenceResolver;
 
+    namespace Network
+    {
+        struct RpcDescriptor;
+        struct RpcContext;
+    }
+
     /**
      * Base class for all components
      * Components are attached to GameObjects and provide functionality
@@ -107,6 +113,17 @@ namespace N2Engine
                 OnEditorFieldsChanged(changed);
             }
         }
+
+        // Network RPCs (netcode stage B7, see docs/netcode.html)
+
+        /// The RPCs this component declares, sorted by name; nullptr when it has none. The default is the C++ registry's
+        /// list for GetTypeName() (RegisterRpc). A LuaComponent returns the `Rpcs` table of its script.
+        [[nodiscard]] virtual const std::vector<Network::RpcDescriptor> *GetRpcTable();
+
+        /// Runs the handler of `rpc` (an entry of GetRpcTable()) with arguments already decoded and validated. False when
+        /// the handler could not take them. The default calls the descriptor's C++ handler (false when it has none).
+        virtual bool InvokeRpc(const Network::RpcDescriptor &rpc, const Network::RpcContext &context,
+                               const std::vector<nlohmann::json> &args);
 
         /// `removed` is being removed from its object (in a scene opened for editing: the editor can undo it, so
         /// nothing may keep a raw pointer to it). A component that holds a pointer to another component drops it

@@ -140,9 +140,9 @@ TEST(NetworkClockMessageTest, MalformedMessagesAreRefusedWithAReason)
     EXPECT_EQ(DecodeStreamTick(beat).error(), DecodeError::TrailingBytes);
 }
 
-TEST(NetworkClockMessageTest, AStateUpdateCarriesTheServerTickAndTheWireVersionIsFive)
+TEST(NetworkClockMessageTest, AStateUpdateCarriesTheServerTickAndTheWireVersionIsSix)
 {
-    EXPECT_EQ(kWireVersion, 5);
+    EXPECT_EQ(kWireVersion, 6);
     EXPECT_EQ(kStateUpdateHeaderBytes, 11u);
     StateUpdateHeader header;
     header.sequence = 3;

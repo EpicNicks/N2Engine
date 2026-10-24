@@ -9,7 +9,10 @@
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/GameObject.hpp"
 #include "engine/Logger.hpp"
+#include "engine/network/NetworkClient.hpp"
+#include "engine/network/NetworkServer.hpp"
 #include "engine/serialization/ComponentRegistry.hpp"
+#include "engine/serialization/MathSerialization.hpp"
 #include "engine/serialization/ComponentSerializer.hpp"
 #include "engine/serialization/JsonLimits.hpp"
 
@@ -23,6 +26,8 @@
 #include <stdexcept>
 #include <utility>
 #include <vector>
+
+#include <math/Vector3.hpp>
 
 namespace N2Engine::Scripting
 {
@@ -304,6 +309,399 @@ namespace N2Engine::Scripting
         }, this);
     }
 
+    // ---- Network RPCs (netcode stage B7) ----------------------------------------------------------------------------------
+
+    namespace
+    {
+        [[noreturn]] void RpcDeclarationError(const std::string &script, const std::string &rpc, const std::string &text)
+        {
+            throw std::runtime_error(std::format("{}: Rpcs.{}: {}", script, rpc, text));
+        }
+
+        /// One entry of an `args` list: "float", or { type = "float", min = 0, max = 10 }
+        FieldInfo ParseRpcParam(const sol::object &entry, const std::size_t index, const std::string &script,
+                                const std::string &rpc)
+        {
+            std::string type;
+            std::optional<double> low;
+            std::optional<double> high;
+            if (entry.get_type() == sol::type::string)
+            {
+                type = entry.as<std::string>();
+            }
+            else if (entry.get_type() == sol::type::table)
+            {
+                for (const auto &pair : entry.as<sol::table>())
+                {
+                    if (pair.first.get_type() != sol::type::string)
+                    {
+                        RpcDeclarationError(script, rpc, std::format("argument {} has a key that is not a name", index));
+                    }
+                    const std::string key = pair.first.as<std::string>();
+                    if (key == "type" && pair.second.get_type() == sol::type::string)
+                    {
+                        type = pair.second.as<std::string>();
+                    }
+                    else if (key == "min" && pair.second.get_type() == sol::type::number)
+                    {
+                        low = pair.second.as<double>();
+                    }
+                    else if (key == "max" && pair.second.get_type() == sol::type::number)
+                    {
+                        high = pair.second.as<double>();
+                    }
+                    else
+                    {
+                        RpcDeclarationError(script, rpc,
+                                            std::format("argument {}: only type (a string), min and max (numbers) are allowed",
+                                                        index));
+                    }
+                }
+            }
+            else
+            {
+                RpcDeclarationError(script, rpc, std::format("argument {} must be a type name or a table", index));
+            }
+
+            FieldInfo field;
+            field.name = "arg" + std::to_string(index);
+            field.displayName = field.name;
+            field.typeName = type;
+            if (type == "bool")
+            {
+                field.kind = FieldKind::Bool;
+            }
+            else if (type == "int")
+            {
+                field.kind = FieldKind::Int;
+            }
+            else if (type == "float")
+            {
+                field.kind = FieldKind::Float;
+            }
+            else if (type == "string")
+            {
+                field.kind = FieldKind::String;
+            }
+            else if (type == "Vector3")
+            {
+                field.kind = FieldKind::Vector3;
+            }
+            else
+            {
+                RpcDeclarationError(script, rpc,
+                                    std::format("argument {}: type must be bool, int, float, string or Vector3", index));
+            }
+            if (low.has_value() || high.has_value())
+            {
+                if (!low.has_value() || !high.has_value() || !(*low < *high) || (field.kind != FieldKind::Int && field.kind != FieldKind::Float))
+                {
+                    RpcDeclarationError(script, rpc,
+                                        std::format("argument {}: min and max go together, min below max, on an int or a float",
+                                                    index));
+                }
+                field.range = std::make_pair(*low, *high);
+            }
+            return field;
+        }
+
+        sol::object RpcArgumentToLua(sol::state &lua, const FieldInfo &field, const nlohmann::json &value)
+        {
+            switch (field.kind)
+            {
+            case FieldKind::Bool:
+                return sol::make_object(lua, value.get<bool>());
+            case FieldKind::Int:
+                return sol::make_object(lua, value.get<std::int64_t>());
+            case FieldKind::Float:
+                return sol::make_object(lua, value.get<double>());
+            case FieldKind::String:
+                return sol::make_object(lua, value.get<std::string>());
+            case FieldKind::Vector3:
+                return sol::make_object(lua, value.get<Math::Vector3>());
+            default:
+                return sol::object();
+            }
+        }
+
+        nlohmann::json RpcArgumentFromLua(const sol::stack_proxy &value, const FieldInfo &field, const std::size_t index)
+        {
+            const auto fail = [&](const char *expected)
+            {
+                throw std::runtime_error(std::format("Rpc argument {} must be {}", index, expected));
+            };
+            switch (field.kind)
+            {
+            case FieldKind::Bool:
+                if (value.get_type() != sol::type::boolean)
+                {
+                    fail("a boolean");
+                }
+                return nlohmann::json(value.get<bool>());
+            case FieldKind::Int:
+            {
+                if (value.get_type() != sol::type::number)
+                {
+                    fail("a whole number");
+                }
+                const double number = value.get<double>();
+                if (!std::isfinite(number) || number != std::floor(number) || std::fabs(number) > 9.0e15)
+                {
+                    fail("a whole number");
+                }
+                return nlohmann::json(static_cast<std::int64_t>(number));
+            }
+            case FieldKind::Float:
+            {
+                if (value.get_type() != sol::type::number)
+                {
+                    fail("a number");
+                }
+                const double number = value.get<double>();
+                if (!std::isfinite(number))
+                {
+                    fail("a finite number");
+                }
+                return nlohmann::json(number);
+            }
+            case FieldKind::String:
+                if (value.get_type() != sol::type::string)
+                {
+                    fail("a string");
+                }
+                return nlohmann::json(value.get<std::string>());
+            case FieldKind::Vector3:
+                if (!value.is<Math::Vector3>())
+                {
+                    fail("a Vector3");
+                }
+                return nlohmann::json(value.get<Math::Vector3>());
+            default:
+                fail("a supported type");
+            }
+            return nlohmann::json();
+        }
+    }
+
+    void LuaComponent::BuildRpcTable()
+    {
+        _rpcs.clear();
+        _rpcsBuilt = true;
+        if (!_scriptInstance.valid() || !LuaRuntime::RunsScripts() || _hasMissingScript)
+        {
+            return;
+        }
+        const std::string script = _scriptPath.ToString();
+        GuardedAccess([&]
+        {
+            const sol::optional<sol::table> declared = _scriptInstance["Rpcs"];
+            if (!declared)
+            {
+                return;
+            }
+            for (const auto &pair : *declared)
+            {
+                try
+                {
+                    if (pair.first.get_type() != sol::type::string || pair.second.get_type() != sol::type::table)
+                    {
+                        throw std::runtime_error(script + ": Rpcs: every entry is a name and a table");
+                    }
+                    if (_rpcs.size() >= Network::kMaxRpcsPerComponent)
+                    {
+                        throw std::runtime_error(std::format("{}: Rpcs: at most {} RPCs", script, Network::kMaxRpcsPerComponent));
+                    }
+                    Network::RpcDescriptor rpc;
+                    rpc.name = pair.first.as<std::string>();
+                    bool haveTarget = false;
+                    for (const auto &field : pair.second.as<sol::table>())
+                    {
+                        if (field.first.get_type() != sol::type::string)
+                        {
+                            RpcDeclarationError(script, rpc.name, "has a key that is not a name");
+                        }
+                        const std::string key = field.first.as<std::string>();
+                        if (key == "target" && field.second.get_type() == sol::type::string)
+                        {
+                            const std::string target = field.second.as<std::string>();
+                            haveTarget = true;
+                            if (target == "server")
+                            {
+                                rpc.direction = Network::RpcDirection::ClientToServer;
+                            }
+                            else if (target == "client")
+                            {
+                                rpc.direction = Network::RpcDirection::ServerToClient;
+                            }
+                            else if (target == "owner")
+                            {
+                                rpc.direction = Network::RpcDirection::ServerToOwner;
+                            }
+                            else
+                            {
+                                RpcDeclarationError(script, rpc.name, "target must be \"server\", \"client\" or \"owner\"");
+                            }
+                        }
+                        else if (key == "reliable" && field.second.get_type() == sol::type::boolean)
+                        {
+                            rpc.reliable = field.second.as<bool>();
+                        }
+                        else if (key == "cosmetic" && field.second.get_type() == sol::type::boolean)
+                        {
+                            rpc.cosmetic = field.second.as<bool>();
+                        }
+                        else if (key == "args" && field.second.get_type() == sol::type::table)
+                        {
+                            const sol::table list = field.second.as<sol::table>();
+                            const std::size_t count = list.size();
+                            if (count > Network::kMaxRpcParams)
+                            {
+                                RpcDeclarationError(script, rpc.name,
+                                                    std::format("at most {} arguments", Network::kMaxRpcParams));
+                            }
+                            for (std::size_t i = 1; i <= count; ++i)
+                            {
+                                rpc.params.push_back(ParseRpcParam(list.get<sol::object>(i), i, script, rpc.name));
+                            }
+                        }
+                        else
+                        {
+                            RpcDeclarationError(script, rpc.name,
+                                                "only target (a string), reliable and cosmetic (booleans) and args (a list) are allowed");
+                        }
+                    }
+                    if (!haveTarget)
+                    {
+                        RpcDeclarationError(script, rpc.name, "needs a target");
+                    }
+                    const std::string problem = Network::ValidateRpcDescriptor(rpc);
+                    if (!problem.empty())
+                    {
+                        RpcDeclarationError(script, rpc.name, problem);
+                    }
+                    _rpcs.push_back(std::move(rpc));
+                }
+                catch (const std::exception &e)
+                {
+                    // The one RPC is left out; the others still declare
+                    Logger::Error(e.what());
+                }
+            }
+        }, 4);
+        std::sort(_rpcs.begin(), _rpcs.end(),
+                  [](const Network::RpcDescriptor &a, const Network::RpcDescriptor &b) { return a.name < b.name; });
+        // A duplicate name cannot come out of a table, but keep the list strictly sorted whatever it holds
+        _rpcs.erase(std::unique(_rpcs.begin(), _rpcs.end(),
+                                [](const Network::RpcDescriptor &a, const Network::RpcDescriptor &b) { return a.name == b.name; }),
+                    _rpcs.end());
+    }
+
+    const std::vector<Network::RpcDescriptor> *LuaComponent::GetRpcTable()
+    {
+        if (!_rpcsBuilt)
+        {
+            BuildRpcTable();
+        }
+        return _rpcs.empty() ? nullptr : &_rpcs;
+    }
+
+    bool LuaComponent::InvokeRpc(const Network::RpcDescriptor &rpc, const Network::RpcContext &context,
+                                 const std::vector<nlohmann::json> &args)
+    {
+        if (_hasMissingScript || _faulted || !LuaRuntime::RunsScripts() || !_scriptInstance.valid())
+        {
+            return false;
+        }
+        const std::string method = "OnRpc_" + rpc.name;
+        if (!HasMethod(method.c_str()))
+        {
+            return false;
+        }
+        if (args.size() != rpc.params.size())
+        {
+            return false;
+        }
+
+        // The argument objects are registry references made outside a protected call: free slots first (as
+        // CallLuaMethodWithArgument does), and a failure at the memory cap is reported, not thrown
+        std::string reserveError;
+        if (!LuaRuntime::Instance().ReserveReferences(static_cast<int>(args.size()) + 2, reserveError))
+        {
+            ReportScriptError(method, LuaRuntime::Instance().LimitAwareError(reserveError));
+            return false;
+        }
+        const std::uint64_t panicsBefore = LuaRuntime::Instance().PanicCount();
+        std::vector<sol::object> objects;
+        try
+        {
+            sol::state &lua = LuaRuntime::Instance().GetState();
+            objects.reserve(args.size());
+            for (std::size_t i = 0; i < args.size(); ++i)
+            {
+                objects.push_back(RpcArgumentToLua(lua, rpc.params[i], args[i]));
+            }
+        }
+        catch (const std::exception &e)
+        {
+            LuaRuntime::Instance().RecoverAfterPanic(panicsBefore);
+            ReportScriptError(method, LuaRuntime::Instance().LimitAwareError(e.what()));
+            return false;
+        }
+        catch (...)
+        {
+            LuaRuntime::Instance().RecoverAfterPanic(panicsBefore);
+            ReportScriptError(method, LuaRuntime::Instance().LimitAwareError("unknown error"));
+            return false;
+        }
+        // The handler runs in the same budget scope as every other call into the script (CallLuaMethod)
+        CallLuaMethod(method, static_cast<std::uint32_t>(context.sender), sol::as_args(objects));
+        return !_faulted;
+    }
+
+    bool LuaComponent::SendRpcFromScript(const std::string &name, const sol::variadic_args &arguments,
+                                         const std::optional<Network::ClientId> client)
+    {
+        const std::vector<Network::RpcDescriptor> *const table = GetRpcTable();
+        if (table == nullptr)
+        {
+            throw std::runtime_error("Rpc: this script declares no Rpcs");
+        }
+        const auto found = std::find_if(table->begin(), table->end(),
+                                        [&](const Network::RpcDescriptor &rpc) { return rpc.name == name; });
+        if (found == table->end())
+        {
+            throw std::runtime_error(std::format("Rpc: this script declares no RPC named '{}'", name));
+        }
+        if (arguments.size() != found->params.size())
+        {
+            throw std::runtime_error(
+                std::format("Rpc {}: expected {} arguments, got {}", name, found->params.size(), arguments.size()));
+        }
+        std::vector<nlohmann::json> args;
+        args.reserve(arguments.size());
+        for (std::size_t i = 0; i < arguments.size(); ++i)
+        {
+            args.push_back(RpcArgumentFromLua(arguments[i], found->params[i], i + 1));
+        }
+
+        Network::RpcSendResult result = Network::RpcSendResult::NoTarget;
+        if (found->direction == Network::RpcDirection::ClientToServer)
+        {
+            if (Network::NetworkClient *const active = Network::NetworkClient::Active())
+            {
+                result = active->CallRpc(*this, name, args);
+            }
+        }
+        else if (Network::NetworkServer *const active = Network::NetworkServer::Active())
+        {
+            const Network::RpcTarget target = found->direction == Network::RpcDirection::ServerToOwner
+                                                  ? Network::RpcTarget::Owner
+                                                  : (client.has_value() ? Network::RpcTarget::Client : Network::RpcTarget::All);
+            result = active->CallRpc(*this, name, args, target, client.value_or(Network::kServerClientId));
+        }
+        return result == Network::RpcSendResult::Sent;
+    }
+
     void LuaComponent::ClearScript()
     {
         const EntryScope budget;
@@ -393,6 +791,29 @@ namespace N2Engine::Scripting
             instance[sol::metatable_key] = scriptClass;
             instance["component"] = ComponentRef<LuaComponent>(*this);
             instance["gameObject"] = GameObjectRef(_gameObject);
+            // self:Rpc(name, ...) and self:RpcTo(client, name, ...): the token expires with the component
+            const std::weak_ptr<const bool> token = GetLifetimeToken();
+            instance["Rpc"] = [this, token](const sol::object &, const std::string &name, const sol::variadic_args arguments) -> bool
+            {
+                if (token.expired())
+                {
+                    return false;
+                }
+                return SendRpcFromScript(name, arguments, std::nullopt);
+            };
+            instance["RpcTo"] = [this, token](const sol::object &, const double target, const std::string &name,
+                                              const sol::variadic_args arguments) -> bool
+            {
+                if (token.expired())
+                {
+                    return false;
+                }
+                if (!(target >= 1.0 && target <= 4294967295.0) || target != std::floor(target))
+                {
+                    throw std::runtime_error("RpcTo: the first argument is a client id");
+                }
+                return SendRpcFromScript(name, arguments, static_cast<Network::ClientId>(target));
+            };
         });
         if (definesFinalizer)
         {
@@ -611,6 +1032,8 @@ namespace N2Engine::Scripting
         // Its subscriptions stop firing; the next instance's get a flag of their own
         *_alive = false;
         _alive = std::make_shared<bool>(true);
+        _rpcsBuilt = false;
+        _rpcs.clear();
         GuardedAccess([&]
         {
             _scriptInstance["component"] = sol::lua_nil;
