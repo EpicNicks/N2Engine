@@ -22,7 +22,7 @@ namespace N2Engine::Network
     ServerReplicator::ServerReplicator(ServerReplicationOptions options) : _options(options)
     {
         _options.maxMessageBytes = std::clamp<std::size_t>(_options.maxMessageBytes, kMinMessageBytes, kMaxStateUpdateBytes);
-        _options.maxMessagesPerTick = std::max<std::uint32_t>(_options.maxMessagesPerTick, 1);
+        _options.maxMessagesPerTick = std::clamp<std::uint32_t>(_options.maxMessagesPerTick, 1, 256);
         _options.maxInFlightMessages =
             std::clamp<std::uint32_t>(_options.maxInFlightMessages, kMinInFlightMessages, kMaxInFlightMessagesCap);
     }
@@ -37,6 +37,20 @@ namespace N2Engine::Network
         _clients.erase(client);
     }
 
+    std::set<std::uint32_t> ServerReplicator::VisibleObjects(ClientId client) const
+    {
+        const auto found = _clients.find(client);
+        return found == _clients.end() ? std::set<std::uint32_t>{} : _interest.Visible(client,found->second.observer);
+    }
+
+    bool ServerReplicator::SetObserver(ClientId client, NetworkId observer)
+    {
+        const auto found = _clients.find(client);
+        if (found == _clients.end()) return false;
+        found->second.observer = observer;
+        return true;
+    }
+
     void ServerReplicator::ForgetObject(const NetworkId id)
     {
         _layouts.Forget(id);
@@ -44,11 +58,14 @@ namespace N2Engine::Network
         for (auto &entry : _clients)
         {
             entry.second.baselines.erase(id.value);
+            entry.second.priorities.erase(id.value);
         }
     }
 
     void ServerReplicator::BeginTick(const NetworkWorld &world)
     {
+        _world = &world;
+        _interest.Rebuild(world);
         _current.clear();
         const WorldReferences references(world);
         for (const auto &entry : world.Objects())
@@ -196,7 +213,7 @@ namespace N2Engine::Network
     }
 
     void ServerReplicator::Flush(ClientState &state, PendingMessage &pending, const std::uint64_t nowMicros,
-                                 std::vector<std::vector<std::uint8_t>> &messages)
+                                 const std::uint32_t serverTick, std::vector<std::vector<std::uint8_t>> &messages)
     {
         if (pending.sent.empty())
         {
@@ -226,6 +243,7 @@ namespace N2Engine::Network
         StateUpdateHeader header;
         header.sequence = record.sequence;
         header.entryCount = static_cast<std::uint16_t>(record.entries.size());
+        header.tick = serverTick;
         std::vector<std::uint8_t> message = EncodeStateUpdateHeader(header);
         message.insert(message.end(), pending.entries.begin(), pending.entries.end());
 
@@ -259,7 +277,8 @@ namespace N2Engine::Network
 
     std::vector<std::vector<std::uint8_t>> ServerReplicator::BuildForClient(const ClientId client,
                                                                             const std::uint64_t nowMicros,
-                                                                            const std::size_t maxMessageBytes)
+                                                                            const std::size_t maxMessageBytes,
+                                                                            const std::uint32_t serverTick)
     {
         std::vector<std::vector<std::uint8_t>> messages;
         const auto found = _clients.find(client);
@@ -275,54 +294,67 @@ namespace N2Engine::Network
             return messages;
         }
 
-        const std::size_t limit = std::max(std::min(maxMessageBytes, _options.maxMessageBytes), kMinMessageBytes);
-        PendingMessage pending;
-        auto position = _current.lower_bound(state.cursor);
-        std::uint32_t nextCursor = 0;
-        bool stopped = false;
-        for (std::size_t visited = 0; visited < _current.size(); ++visited)
+        const std::size_t limit = std::min(maxMessageBytes, _options.maxMessageBytes);
+        if (limit < kStateUpdateHeaderBytes || !_world || !_world->HasScene()) return messages;
+        const auto visible = _interest.Visible(client, state.observer);
+        // Forget hidden baselines AND outstanding references to them. An old ack must not restore a hidden baseline.
+        std::erase_if(state.baselines, [&](const auto &e){ return !visible.contains(e.first); });
+        std::erase_if(state.priorities, [&](const auto &e){ return !visible.contains(e.first) || !_current.contains(e.first); });
+        for (auto &record : state.records)
+            std::erase_if(record.entries, [&](const auto &e){ return !visible.contains(e.id); });
+        class References final : public IReplicationReferences
         {
-            if (position == _current.end())
-            {
-                position = _current.begin();
-            }
-            const std::uint32_t id = position->first;
-            std::vector<std::uint8_t> entryBytes;
+        public:
+            References(const NetworkWorld &w, const std::set<std::uint32_t> &v) : all(w), visible(v) {}
+            std::uint32_t NetIdOf(const std::string &uuid) const override
+            { const auto id=all.NetIdOf(uuid); return visible.contains(id) ? id : 0; }
+            std::optional<std::string> UuidOf(std::uint32_t id) const override
+            { return visible.contains(id) ? all.UuidOf(id) : std::nullopt; }
+            WorldReferences all;
+            const std::set<std::uint32_t> &visible;
+        } references(*_world,visible);
+        std::vector<std::uint32_t> order;
+        for (const auto &[id, object] : _current)
+        {
+            if (!visible.contains(id)) { ++_stats.entriesNotRelevant; continue; }
+            auto &score = state.priorities[id];
+            score = std::min(score + _interest.Priority(id), 1e12);
+            order.push_back(id);
+        }
+        std::sort(order.begin(),order.end(),[&](auto a, auto b) {
+            const auto x=state.priorities.at(a), y=state.priorities.at(b);
+            return x == y ? a < b : x > y;
+        });
+        std::size_t budget = _options.maxBytesPerTick == 0 ? limit * _options.maxMessagesPerTick :
+            std::min(_options.maxBytesPerTick, limit * _options.maxMessagesPerTick);
+        PendingMessage pending;
+        auto flush = [&] {
+            const auto size = pending.entries.empty() ? 0 : kStateUpdateHeaderBytes + pending.entries.size();
+            Flush(state,pending,nowMicros,serverTick,messages);
+            budget -= size;
+        };
+        for (auto id : order)
+        {
+            auto *networkObject = _world->Find(NetworkId{id});
+            if (!networkObject) continue;
+            auto &go = networkObject->GetGameObject();
+            const auto object = EncodeObjectState(_layouts.Get(NetworkId{id},go),go,&references);
+            std::vector<std::uint8_t> bytes;
             SentEntry sent;
             bool full = false;
-            if (BuildEntry(state, id, position->second, entryBytes, sent, full))
-            {
-                if (kStateUpdateHeaderBytes + entryBytes.size() > limit)
-                {
-                    ++_stats.entriesTooLarge;
-                }
-                else
-                {
-                    if (kStateUpdateHeaderBytes + pending.entries.size() + entryBytes.size() > limit)
-                    {
-                        Flush(state, pending, nowMicros, messages);
-                        if (messages.size() >= _options.maxMessagesPerTick)
-                        {
-                            nextCursor = id;
-                            stopped = true;
-                            break;
-                        }
-                    }
-                    pending.entries.insert(pending.entries.end(), entryBytes.begin(), entryBytes.end());
-                    pending.sent.push_back(std::move(sent));
-                    if (full)
-                    {
-                        ++_stats.fullEntriesSent;
-                    }
-                }
-            }
-            ++position;
+            if (!BuildEntry(state,id,object,bytes,sent,full)) continue;
+            if (kStateUpdateHeaderBytes + bytes.size() > limit) { ++_stats.entriesTooLarge; continue; }
+            if (!pending.sent.empty() && kStateUpdateHeaderBytes + pending.entries.size() + bytes.size() > limit)
+                flush();
+            if (messages.size() >= _options.maxMessagesPerTick ||
+                kStateUpdateHeaderBytes + pending.entries.size() + bytes.size() > budget)
+            { ++_stats.entriesBudgetDeferred; continue; }
+            pending.entries.insert(pending.entries.end(),bytes.begin(),bytes.end());
+            pending.sent.push_back(std::move(sent));
+            state.priorities[id] = 0;
+            if (full) ++_stats.fullEntriesSent;
         }
-        if (!stopped)
-        {
-            Flush(state, pending, nowMicros, messages);
-        }
-        state.cursor = nextCursor;
+        flush();
         return messages;
     }
 
@@ -392,6 +424,10 @@ namespace N2Engine::Network
             return Result::Stale;
         }
         _highestSeen = view.header.sequence;
+        if (_messageObserver)
+        {
+            _messageObserver(view.header.tick);
+        }
 
         N2Net::ByteReader reader(view.entries);
         const WorldReferences references(world);
@@ -440,6 +476,10 @@ namespace N2Engine::Network
             {
             case EntryResult::Applied:
                 ++_stats.entriesApplied;
+                if (_entryObserver)
+                {
+                    _entryObserver(*object, view.header.tick);
+                }
                 break;
             case EntryResult::Skipped:
                 ++_stats.entriesUnknownReference;

@@ -4,6 +4,7 @@
 
 #include "engine/Component.hpp"
 #include "engine/network/NetworkId.hpp"
+#include "engine/network/InterestManagement.hpp"
 
 namespace N2Engine::Network
 {
@@ -49,6 +50,9 @@ namespace N2Engine::Network
 
         static constexpr bool IsSingleton = true;
 
+        bool SetInterestPolicy(InterestPolicy policy);
+        [[nodiscard]] const InterestPolicy &GetInterestPolicy() const { return _interest; }
+
     private:
         friend class NetworkWorld;
 
@@ -60,5 +64,6 @@ namespace N2Engine::Network
         ClientId _owner = kServerClientId;
         bool _spawned = false;
         std::string _prefabName;
+        InterestPolicy _interest;
     };
 }

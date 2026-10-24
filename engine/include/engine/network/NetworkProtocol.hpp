@@ -36,7 +36,9 @@ namespace N2Engine::Network
     //
     //   server to client
     //     0x10 StateUpdate   u32 sequence (not 0, +1 per message the server sends this client), u16 entry count (1 to
-    //                        kMaxNetworkObjects), then that many entries:
+    //                        kMaxNetworkObjects), u32 server tick (the fixed tick the
+    //                        states were read on, modulo 2^32; netcode stage B3: what the client interpolates remote
+    //                        objects by), then that many entries:
     //                          varint net id, u16 layout hash, varint payload length, payload
     //                        payload: the field mask (one bit per replicated field of the object, low bit first, in
     //                        ceil(fields / 8) bytes; bits past the last field must be 0), then the wire bytes of each
@@ -49,6 +51,12 @@ namespace N2Engine::Network
     // lists are the same; an entry it cannot use (an unknown id, a hash that differs) is skipped by its payload length,
     // so one bad entry never costs the others.
     //
+    // Player input (netcode stage B4) also rides the unreliable channel, one message per datagram, and is decoded apart from
+    // the messages above (NetworkInput.hpp has the layouts): 0x84 InputFrames from a client, 0x11 InputAck from the server.
+    //
+    // Clock synchronisation (netcode stage B3) is the last on the unreliable channel (NetworkClock.hpp has the layouts):
+    // 0x85 ClockPing from a client, 0x12 ClockPong and 0x13 StreamTick from the server.
+    //
     // The first field of both hellos is the wire version, so a peer that does not know the version can say so without
     // reading what follows. A decoder reads every length against the bytes that remain and against its cap before
     // taking anything, allocates only the two bounded texts of a fingerprint (never anything a count asks for: the
@@ -56,8 +64,9 @@ namespace N2Engine::Network
     // left over, and never trusts a count to be true. No message is larger than kMaxMessageBytes.
 
     /// The version of the world messages above. A change to any message layout, or a new message, bumps it (2: state
-    /// replication, netcode stage B2).
-    inline constexpr std::uint16_t kWireVersion = 2;
+    /// replication, netcode stage B2; 3: relevance visibility, stage B9; 4: player input, netcode stage B4; 5: clock sync and the server tick
+    /// in every StateUpdate, netcode stage B3).
+    inline constexpr std::uint16_t kWireVersion = 5;
 
     /// The largest world message either side sends or accepts (a ServerHello with the longest fingerprint is the
     /// largest: 1 type + 2 version + 311 fingerprint + 4 client id = 318 bytes). The Connection's reliable message size
@@ -70,6 +79,7 @@ namespace N2Engine::Network
         Spawn = 0x02,
         Despawn = 0x03,
         WorldReady = 0x04,
+        Visibility = 0x20,
         ClientAccept = 0x81,
         ClientReject = 0x82,
     };
@@ -99,6 +109,13 @@ namespace N2Engine::Network
         std::uint32_t destroyedSceneObjects = 0;
     };
 
+    struct VisibilityMessage
+    {
+        NetworkId id;
+        bool visible = true;
+        bool active = true;
+    };
+
     struct ClientAcceptMessage
     {
         std::uint16_t wireVersion = kWireVersion;
@@ -113,8 +130,8 @@ namespace N2Engine::Network
     /// The type bytes of the unreliable state messages
     inline constexpr std::uint8_t kStateUpdateType = 0x10;
     inline constexpr std::uint8_t kStateAckType = 0x83;
-    /// The bytes before a StateUpdate's entries: type, sequence, entry count
-    inline constexpr std::size_t kStateUpdateHeaderBytes = 7;
+    /// The bytes before a StateUpdate's entries: type, sequence, entry count, server tick
+    inline constexpr std::size_t kStateUpdateHeaderBytes = 11;
     /// The most a StateUpdate carries, whatever the transport allows (it must fit one datagram: it never fragments)
     inline constexpr std::size_t kMaxStateUpdateBytes = 1100;
 
@@ -122,6 +139,8 @@ namespace N2Engine::Network
     {
         std::uint32_t sequence = 0;
         std::uint16_t entryCount = 0;
+        /// The server's fixed tick (32 bits, wrapping) the states in the message were read on
+        std::uint32_t tick = 0;
     };
 
     /// A decoded StateUpdate: the header and the entries' bytes (a view into the message)
@@ -137,7 +156,9 @@ namespace N2Engine::Network
         std::uint32_t bits = 0;
     };
 
-    using ServerMessage = std::variant<ServerHelloMessage, SpawnMessage, DespawnMessage, WorldReadyMessage>;
+    [[nodiscard]] std::vector<std::uint8_t> Encode(const VisibilityMessage &message);
+
+    using ServerMessage = std::variant<ServerHelloMessage, SpawnMessage, DespawnMessage, WorldReadyMessage, VisibilityMessage>;
     using ClientMessage = std::variant<ClientAcceptMessage, ClientRejectMessage>;
 
     enum class DecodeError : std::uint8_t
@@ -176,7 +197,7 @@ namespace N2Engine::Network
     /// Decodes a StateAck: the type byte, exactly 9 bytes, a latest sequence that is not 0
     [[nodiscard]] std::expected<StateAckMessage, DecodeError> DecodeStateAck(std::span<const std::uint8_t> bytes);
 
-    /// The seven header bytes of a StateUpdate; the caller appends the entries
+    /// The eleven header bytes of a StateUpdate; the caller appends the entries
     [[nodiscard]] std::vector<std::uint8_t> EncodeStateUpdateHeader(const StateUpdateHeader &header);
     [[nodiscard]] std::vector<std::uint8_t> Encode(const StateAckMessage &message);
 

@@ -5,6 +5,9 @@
 #include <optional>
 
 #include "engine/Logger.hpp"
+#include "engine/GameObjectScene.hpp"
+#include "engine/Time.hpp"
+#include "engine/network/LagCompensatedHitbox.hpp"
 #include "engine/network/NetworkProtocol.hpp"
 
 namespace N2Engine::Network
@@ -14,6 +17,10 @@ namespace N2Engine::Network
         constexpr std::uint64_t kMicrosPerSecond = 1'000'000;
         constexpr std::uint32_t kHardMaxClients = 1024;
         constexpr std::uint32_t kMaxStateSendRateHz = 240;
+        NetworkServer *g_physicsQueryServer = nullptr;
+
+        /// The server most recently constructed that is still alive (NetworkServer::Active)
+        NetworkServer *g_activeServer = nullptr;
 
         const char *FailureName(const N2Net::FailureReason reason)
         {
@@ -46,23 +53,81 @@ namespace N2Engine::Network
     }
 
     NetworkServer::NetworkServer(N2Net::ITransport &transport, NetworkWorld &world, NetworkServerOptions options)
-        : _transport(transport), _world(world), _options(std::move(options)), _replicator(_options.replication)
+        : _transport(transport), _world(world), _options(std::move(options)), _replicator(_options.replication),
+          _lagCompensation(_options.lagCompMaxMicros,256)
     {
         _options.maxClients = std::clamp<std::uint32_t>(_options.maxClients, 1u, kHardMaxClients);
         _options.stateSendRateHz = std::min<std::uint32_t>(_options.stateSendRateHz, kMaxStateSendRateHz);
-        _fingerprint = MakeFingerprint(_options.scenePath, _options.sceneHash, _world.SceneObjectCount(), _options.prefabs);
+        _fingerprint = MakeFingerprint(_options.scenePath, _options.sceneHash, _world.SceneObjectCount(), _options.prefabs,
+                                       _options.inputLayout);
+        _options.input = _options.input.Clamped();
+        _options.tickRate = std::clamp<std::uint32_t>(_options.tickRate, 1u, kMaxClockTickRate);
+        g_activeServer = this;
         _world.SetDestroyedHandler([this](const NetworkId id, const bool wasSpawned)
                                    { _pendingDespawns.emplace_back(id.value, wasSpawned); });
     }
 
     NetworkServer::~NetworkServer()
     {
+        if (g_physicsQueryServer == this) g_physicsQueryServer = nullptr;
+        if (g_activeServer == this)
+        {
+            g_activeServer = nullptr;
+        }
         _world.SetDestroyedHandler({});
+    }
+
+    void NetworkServer::BindPhysicsQueries() { g_physicsQueryServer = this; }
+    bool NetworkServer::SetObserver(ClientId client, NetworkId observer)
+    {
+        const auto *object = _world.Find(observer);
+        if (!IsClientJoined(client) || (observer.IsValid() && (!object || object->GetOwner() != client))) return false;
+        return _replicator.SetObserver(client,observer);
+    }
+    NetworkServer *NetworkServer::PhysicsQueryServer() noexcept { return g_physicsQueryServer; }
+
+    bool NetworkServer::CaptureHitboxes(std::uint64_t now, std::span<const HistoricalHitbox> boxes)
+    {
+        if (!_world.HasScene()) return false;
+        for (const auto &box : boxes) if (!_world.Find(box.object)) return false;
+        return _lagCompensation.Capture(now, boxes);
+    }
+
+    std::optional<LagCompensatedHit> NetworkServer::CastLagCompensated(ClientId requester,
+        std::uint64_t renderTime, const Math::Vector3 &origin, const Math::Vector3 &direction,
+        float maxDistance, float radius, std::uint32_t layers, NetworkId ignore) const
+    {
+        if (!_world.HasScene()) return {};
+        for (const auto &[peer, client] : _clients)
+        {
+            if (client.id != requester || client.state != ClientState::Joined || client.dropping ||
+                !client.connection->Rtt().HasSample()) continue;
+            return _lagCompensation.Cast(_now, renderTime, client.connection->Rtt().SmoothedMicros(),
+                origin, direction, maxDistance, radius, layers, ignore);
+        }
+        return {};
     }
 
     void NetworkServer::Update(const std::uint64_t nowMicros)
     {
         _now = nowMicros;
+        if (!_haveSeenTick || _seenTick != _inputTick)
+        {
+            // The host moved to another tick since the last update: the part of a tick that has passed counts from here
+            _haveSeenTick = true;
+            _seenTick = _inputTick;
+            _seenTickAt = _now;
+        }
+
+        if (_options.autoCaptureHitboxes && _world.HasScene() && _lastHitboxTick != Time::GetTick())
+        {
+            _lastHitboxTick = Time::GetTick();
+            std::vector<HistoricalHitbox> boxes;
+            for (const auto &[id,object] : _world.Objects())
+                if (const auto *hitbox = object->GetGameObject().GetComponent<LagCompensatedHitbox>())
+                    if (const auto box = hitbox->Snapshot(NetworkId{id})) boxes.push_back(*box);
+            (void)_lagCompensation.Capture(_now,boxes);
+        }
 
         if (!_worldLost && !_world.HasScene())
         {
@@ -86,6 +151,8 @@ namespace N2Engine::Network
         {
             FlushPendingDespawns();
             SendState();
+            SendInputAcks();
+            SendClockPongs();
         }
         RunTimers();
         SendPackets();
@@ -129,8 +196,12 @@ namespace N2Engine::Network
         client.peer = peer;
         client.id = _nextClientId;
         ++_nextClientId;
-        client.connection =
-            std::make_unique<N2Net::Connection>(MakeWorldConnectionConfig(_options.protocolId, _transport), _now);
+        // A multiplexer may contain both datagram and stream peers.
+        auto connectionOptions = MakeWorldConnectionConfig(_options.protocolId, _transport);
+        connectionOptions.reliableStream = _transport.IsReliablePeer(peer);
+        connectionOptions.maxPacketSize = static_cast<std::uint32_t>(
+            std::min(_transport.MaxPeerPacketSize(peer),N2Net::kMaxPacketSize));
+        client.connection = std::make_unique<N2Net::Connection>(connectionOptions, _now);
         client.connectedAt = _now;
         client.rateWindowStart = _now;
         client.ackWindowStart = _now;
@@ -155,6 +226,7 @@ namespace N2Engine::Network
             return;
         }
         NotifyLeft(found->second, "disconnected");
+        RetireInput(found->second);
         _replicator.RemoveClient(found->second.id);
         _clients.erase(found);
     }
@@ -222,6 +294,16 @@ namespace N2Engine::Network
 
     void NetworkServer::OnUnreliable(Client &client, const std::span<const std::uint8_t> message)
     {
+        if (!message.empty() && message[0] == kInputFramesType)
+        {
+            OnInputFrames(client, message);
+            return;
+        }
+        if (!message.empty() && message[0] == kClockPingType)
+        {
+            OnClockPing(client, message);
+            return;
+        }
         if (!AllowAck(client))
         {
             MarkDrop(client, "it sent more state acknowledgements per second than allowed",
@@ -272,6 +354,11 @@ namespace N2Engine::Network
         client.state = ClientState::Joined;
         ++_stats.clientsJoined;
         _replicator.AddClient(client.id);
+        if (!_options.inputLayout.Empty())
+        {
+            client.input = std::make_unique<ServerInputBuffer>(_options.inputLayout, _options.input, _inputTick);
+        }
+        client.inputWindowStart = _now;
         SendJoinState(client);
         if (!client.dropping && _clientObserver)
         {
@@ -406,6 +493,7 @@ namespace N2Engine::Network
             _destroyedSceneIds.insert(id.value);
         }
         _replicator.ForgetObject(id);
+        _lagCompensation.Forget(id);
         DespawnMessage message;
         message.id = id;
         Broadcast(Encode(message));
@@ -475,11 +563,236 @@ namespace N2Engine::Network
                 _destroyedSceneIds.insert(entry.first);
             }
             _replicator.ForgetObject(NetworkId{entry.first});
+            _lagCompensation.Forget(NetworkId{entry.first});
             DespawnMessage message;
             message.id = NetworkId{entry.first};
             Broadcast(Encode(message));
             ++_stats.despawnsSent;
         }
+    }
+
+    void NetworkServer::OnInputFrames(Client &client, const std::span<const std::uint8_t> message)
+    {
+        if (!AllowInput(client))
+        {
+            MarkDrop(client, "it sent more input messages per second than allowed", &NetworkServerStats::droppedRateLimited);
+            return;
+        }
+        if (client.state != ClientState::Joined || client.input == nullptr)
+        {
+            MarkDrop(client, "it sent input before it joined, or to a server that takes no input",
+                     &NetworkServerStats::droppedProtocol);
+            return;
+        }
+        // The length of a frame is the layout's: nothing the message says decides what is allocated
+        const std::expected<std::vector<InputFrame>, DecodeError> frames =
+            DecodeInputFrames(message, _options.inputLayout.PayloadBytes());
+        if (!frames)
+        {
+            MarkDrop(client, std::format("it sent a malformed input message ({})", ToString(frames.error())),
+                     &NetworkServerStats::droppedMalformed);
+            return;
+        }
+        for (const InputFrame &frame : *frames)
+        {
+            if (client.input->Receive(frame) == InputReceive::Invalid)
+            {
+                MarkDrop(client, "it sent an input frame that is not a value its layout produces",
+                         &NetworkServerStats::droppedMalformed);
+                return;
+            }
+        }
+    }
+
+    void NetworkServer::SendInputAcks()
+    {
+        for (auto &entry : _clients)
+        {
+            Client &client = entry.second;
+            if (client.input == nullptr || client.state != ClientState::Joined || client.dropping ||
+                client.connection->IsFailed() || !client.input->AckPending())
+            {
+                continue;
+            }
+            // A lost ack is as good as none: the next input message brings another
+            (void)client.connection->SendUnreliable(Encode(client.input->TakeAck()));
+        }
+    }
+
+    void NetworkServer::OnClockPing(Client &client, const std::span<const std::uint8_t> message)
+    {
+        if (!AllowClockPing(client))
+        {
+            MarkDrop(client, "it sent more clock pings per second than allowed", &NetworkServerStats::droppedRateLimited);
+            return;
+        }
+        if (client.state != ClientState::Joined)
+        {
+            MarkDrop(client, "it sent a clock ping before it joined", &NetworkServerStats::droppedProtocol);
+            return;
+        }
+        const std::expected<ClockPingMessage, DecodeError> ping = DecodeClockPing(message);
+        if (!ping)
+        {
+            MarkDrop(client, std::format("it sent a malformed clock ping ({})", ToString(ping.error())),
+                     &NetworkServerStats::droppedMalformed);
+            return;
+        }
+        // The answer is stamped now and sent by the next SendClockPongs (never from inside the connection's receive).
+        // The pings of one update beyond the cap get no answer: the client asks again.
+        constexpr std::size_t kMaxPendingPongs = 8;
+        if (client.pendingPongs.size() >= kMaxPendingPongs)
+        {
+            return;
+        }
+        const std::uint32_t microsPerTick = 1'000'000u / _options.tickRate;
+        const std::uint64_t sinceTick = _now > _seenTickAt ? _now - _seenTickAt : 0;
+        ClockPongMessage pong;
+        pong.sequence = ping->sequence;
+        pong.tick = _inputTick;
+        pong.tickMicros = static_cast<std::uint32_t>(std::min<std::uint64_t>(sinceTick, microsPerTick));
+        pong.tickRate = static_cast<std::uint16_t>(_options.tickRate);
+        client.pendingPongs.push_back(pong);
+    }
+
+    void NetworkServer::SendClockPongs()
+    {
+        for (auto &entry : _clients)
+        {
+            Client &client = entry.second;
+            if (client.pendingPongs.empty())
+            {
+                continue;
+            }
+            if (client.state == ClientState::Joined && !client.dropping && !client.connection->IsFailed())
+            {
+                for (const ClockPongMessage &pong : client.pendingPongs)
+                {
+                    // A lost pong is as good as none: the client pings again
+                    if (client.connection->SendUnreliable(Encode(pong)) == N2Net::SendResult::Ok)
+                    {
+                        ++_stats.clockPongsSent;
+                    }
+                }
+            }
+            client.pendingPongs.clear();
+        }
+    }
+
+    bool NetworkServer::AllowClockPing(Client &client)
+    {
+        if (_now - client.clockWindowStart >= kMicrosPerSecond)
+        {
+            client.clockWindowStart = _now;
+            client.clockWindowCount = 0;
+        }
+        ++client.clockWindowCount;
+        return client.clockWindowCount <= _options.maxClockPingsPerSecond;
+    }
+
+    void NetworkServer::RetireInput(Client &client)
+    {
+        if (client.input != nullptr)
+        {
+            _departedInput.Add(client.input->Stats());
+            client.input.reset();
+        }
+    }
+
+    void NetworkServer::SetCurrentTick(const std::uint32_t tick)
+    {
+        _inputTick = tick;
+        for (auto &entry : _clients)
+        {
+            if (entry.second.input != nullptr)
+            {
+                entry.second.input->SetNow(tick);
+            }
+        }
+    }
+
+    std::optional<ControlledInput> NetworkServer::InputFor(const NetworkId id, const std::uint32_t tick)
+    {
+        if (_worldLost)
+        {
+            return std::nullopt;
+        }
+        const NetworkObject *const object = _world.Find(id);
+        if (object == nullptr)
+        {
+            return std::nullopt;
+        }
+        // Authority: the input is the owner's and nobody else's. The server's own objects have no input.
+        const ClientId owner = object->GetOwner();
+        if (owner == kServerClientId)
+        {
+            return std::nullopt;
+        }
+        return InputForClient(owner, tick);
+    }
+
+    std::optional<ControlledInput> NetworkServer::InputForClient(const ClientId clientId, const std::uint32_t tick)
+    {
+        for (auto &entry : _clients)
+        {
+            Client &client = entry.second;
+            if (client.id != clientId)
+            {
+                continue;
+            }
+            if (client.state != ClientState::Joined || client.dropping || client.input == nullptr)
+            {
+                return std::nullopt;
+            }
+            const std::optional<ResolvedInput> resolved = client.input->Resolve(tick);
+            if (!resolved.has_value())
+            {
+                return std::nullopt;
+            }
+            std::optional<std::vector<float>> values = _options.inputLayout.Unpack(resolved->payload);
+            if (!values.has_value())
+            {
+                // Cannot happen: only payloads the layout produces are ever buffered
+                return std::nullopt;
+            }
+            ControlledInput input;
+            input.client = clientId;
+            input.tick = resolved->tick;
+            input.source = resolved->source;
+            input.values = std::move(*values);
+            return input;
+        }
+        return std::nullopt;
+    }
+
+    ServerInputStats NetworkServer::InputStats() const
+    {
+        ServerInputStats total = _departedInput;
+        for (const auto &entry : _clients)
+        {
+            if (entry.second.input != nullptr)
+            {
+                total.Add(entry.second.input->Stats());
+            }
+        }
+        return total;
+    }
+
+    std::optional<ServerInputStats> NetworkServer::InputStatsFor(const ClientId clientId) const
+    {
+        for (const auto &entry : _clients)
+        {
+            if (entry.second.id == clientId && entry.second.input != nullptr)
+            {
+                return entry.second.input->Stats();
+            }
+        }
+        return std::nullopt;
+    }
+
+    NetworkServer *NetworkServer::Active() noexcept
+    {
+        return g_activeServer;
     }
 
     void NetworkServer::SendState()
@@ -501,12 +814,28 @@ namespace N2Engine::Network
             {
                 continue;
             }
+            const auto visible = _replicator.VisibleObjects(client.id);
+            std::erase_if(client.hidden,[&](auto id){ return !_world.Find(NetworkId{id}); });
+            for (const auto &[id,object] : _world.Objects())
+            {
+                const bool shown = visible.contains(id);
+                const bool wasShown = !client.hidden.contains(id);
+                if (shown == wasShown) continue;
+                if (!Send(client,Encode(VisibilityMessage{NetworkId{id},shown,object->GetGameObject().IsActive()}))) break;
+                if (shown) client.hidden.erase(id); else client.hidden.insert(id);
+            }
             const std::vector<std::vector<std::uint8_t>> messages =
-                _replicator.BuildForClient(client.id, _now, client.connection->MaxUnreliableMessageSize());
+                _replicator.BuildForClient(client.id, _now, client.connection->MaxUnreliableMessageSize(), _inputTick);
             for (const std::vector<std::uint8_t> &message : messages)
             {
                 // A message that does not get out is as good as a lost one: the next tick sends what is still needed
                 (void)client.connection->SendUnreliable(message);
+            }
+            if (messages.empty())
+            {
+                // Nothing changed for this client: say how far the stream has got, so it can tell objects that stopped
+                // from snapshots that are late (netcode stage B3)
+                (void)client.connection->SendUnreliable(Encode(StreamTickMessage{_inputTick}));
             }
         }
     }
@@ -567,6 +896,7 @@ namespace N2Engine::Network
                 continue;
             }
             NotifyLeft(client, client.dropReason);
+            RetireInput(client);
             _replicator.RemoveClient(client.id);
             _transport.Disconnect(client.peer);
             it = _clients.erase(it);
@@ -612,6 +942,17 @@ namespace N2Engine::Network
         }
         ++client.rateWindowCount;
         return client.rateWindowCount <= _options.maxClientMessagesPerSecond;
+    }
+
+    bool NetworkServer::AllowInput(Client &client)
+    {
+        if (_now - client.inputWindowStart >= kMicrosPerSecond)
+        {
+            client.inputWindowStart = _now;
+            client.inputWindowCount = 0;
+        }
+        ++client.inputWindowCount;
+        return client.inputWindowCount <= _options.input.maxMessagesPerSecond;
     }
 
     bool NetworkServer::AllowAck(Client &client)

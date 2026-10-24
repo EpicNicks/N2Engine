@@ -802,7 +802,7 @@ function GameObject:FindChildRecursive(name) end
 function GameObject:Destroy() end
 
 ---Add a component by type name and return it.
----Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CubeRenderer",
+---Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CharacterController", "CubeRenderer",
 ---"SphereRenderer", "QuadRenderer", "MeshRenderer", "TextRenderer", "ParticleSystem", "SoftBody", "Light", "AudioSource", "AudioListener",
 ---"LuaComponent", "RectTransform", "Canvas", "Image", "UIText", "Button". Unknown names raise an error.
 ---@param typeName string
@@ -2131,6 +2131,102 @@ function CapsuleCollider:SetOffset(offset) end
 ---@return Vector3
 function CapsuleCollider:GetOffset() end
 
+---An engine-owned character controller (docs/physics.html, "Character controller"): an upright capsule moved once per
+---fixed tick over the physics backend's capsule casts, so it behaves the same on PhysX and Jolt. It has no body of its
+---own (other bodies do not see it) and moves the object. Leave the layer of the object's own colliders out of its
+---layer mask. The input is held until the next SetInput, except the jump, which is one press. Settings are read at
+---every step; a value that is not a finite number in the setting's range raises an error.
+---@class CharacterController : Component
+CharacterController = {}
+
+---The input of the next ticks
+---@param move Vector3 the wanted horizontal velocity in world units per second (y is ignored)
+---@param jump boolean|nil jump on the next tick (only a grounded character jumps); nil is false
+function CharacterController:SetInput(move, jump) end
+
+---@return {move: Vector3, jump: boolean}
+function CharacterController:GetInput() end
+
+---A copy of the state (what a prediction saves)
+---@return {position: Vector3, velocity: Vector3, grounded: boolean, groundNormal: Vector3}
+function CharacterController:GetState() end
+
+---Restores a saved state (what a server correction does) and moves the object to its position
+---@param state {position: Vector3, velocity: Vector3|nil, grounded: boolean|nil, groundNormal: Vector3|nil} position is required; velocity defaults to rest, grounded to false, groundNormal to up
+function CharacterController:SetState(state) end
+
+---The state at `position`, at rest and not grounded (the next step finds the ground)
+---@param position Vector3
+function CharacterController:Teleport(position) end
+
+---One step now with the held input (what the fixed tick does)
+---@param dt number seconds, above 0
+---@return boolean ran false when there is no physics backend or the settings are not valid
+function CharacterController:Step(dt) end
+
+---@return boolean
+function CharacterController:IsGrounded() end
+
+---@return Vector3 the centre of the capsule
+function CharacterController:GetPosition() end
+
+---@return Vector3 x and z: the horizontal velocity the last step achieved; y: the vertical velocity
+function CharacterController:GetVelocity() end
+
+---@param radius number 0.01 to 100 (default 0.5)
+function CharacterController:SetRadius(radius) end
+
+---@return number
+function CharacterController:GetRadius() end
+
+---@param height number the whole height, caps included, 0.02 to 1000 (default 2); a height under twice the radius is a sphere
+function CharacterController:SetHeight(height) end
+
+---@return number
+function CharacterController:GetHeight() end
+
+---@param stepOffset number the tallest step it walks up, 0 to 100 (default 0.3)
+function CharacterController:SetStepOffset(stepOffset) end
+
+---@return number
+function CharacterController:GetStepOffset() end
+
+---@param degrees number the steepest ground it stands on or walks up, 0 to 89 (default 45)
+function CharacterController:SetSlopeLimit(degrees) end
+
+---@return number
+function CharacterController:GetSlopeLimit() end
+
+---@param skinWidth number the gap kept to what it touches, 0.0001 to 1 (default 0.02); at most half the radius is used
+function CharacterController:SetSkinWidth(skinWidth) end
+
+---@return number
+function CharacterController:GetSkinWidth() end
+
+---@param speed number the upward speed of a jump, 0 to 1000 (default 5)
+function CharacterController:SetJumpSpeed(speed) end
+
+---@return number
+function CharacterController:GetJumpSpeed() end
+
+---@param scale number multiplies the physics gravity's y, -100 to 100 (default 1)
+function CharacterController:SetGravityScale(scale) end
+
+---@return number
+function CharacterController:GetGravityScale() end
+
+---@param speed number the fastest it falls, 0.01 to 100000 (default 50)
+function CharacterController:SetMaxFallSpeed(speed) end
+
+---@return number
+function CharacterController:GetMaxFallSpeed() end
+
+---@param layerMask integer the layers it collides with, cut to 32 bits so -1 means every layer (default: every layer but Ignore Raycast)
+function CharacterController:SetLayerMask(layerMask) end
+
+---@return integer
+function CharacterController:GetLayerMask() end
+
 -- ===== AUDIO =====
 
 ---@class AudioSource : Component
@@ -2486,6 +2582,55 @@ function GameObjectEvent:Unsubscribe(id) end
 ---@field timeScale number Time scale multiplier (1.0 = normal, 0.5 = slow motion, 0.0 = paused)
 Time = {}
 
+-- ===== NETWORK =====
+
+---One control of the networked input layout (netcode stage B4)
+---@class InputControlDeclaration
+---@field name string 1 to 32 characters of A-Z, a-z, 0-9 and _, not starting with a digit, unique in the layout
+---@field kind "button"|"axis"|"vector2"|"vector3"
+---@field bits? integer Bits per component, 1 to 16 (2 to 16 when signed); default 8; a button ignores it
+---@field range? number The largest magnitude of a component, above 0 and at most 1000000; default 1
+---@field signed? boolean true (default): [-range, range] with an exact zero; false: [0, range]
+
+---@class Network
+Network = {}
+
+---Declare the networked input layout: which controls a player input holds and how each is quantised on the wire. Call it
+---once, at the top level of a script that loads with the scene; the server and every client must declare the same layout or a
+---client is refused at join. A malformed declaration is an error and changes nothing; the last valid one wins.
+---@param controls InputControlDeclaration[]
+function Network.DeclareInputLayout(controls) end
+
+---On a server: the input of the client that OWNS this object (the owner the server gave it at spawn) for the current fixed tick.
+---Returns a table of the layout controls (a button is a boolean, an axis a number, a vector2/vector3 a Vector2/Vector3) and where
+---it came from: "frame" (a frame arrived for the tick), "repeated" (the last input again) or "neutral" (no input). Returns nothing
+---when there is no server in this process, the object has no NetworkObject, the server owns it, or its owner has no input.
+---@param gameObject GameObject
+---@return table<string, boolean|number|Vector2|Vector3>? input
+---@return ("frame"|"repeated"|"neutral")? source
+function Network.GetInput(gameObject) end
+
+---The server's time in seconds (its fixed tick divided by its tick rate). On a client it is the estimate from the clock sync
+---(netcode stage B3): it never decreases, and it is nil until the first answer from the server has arrived. On a server it is
+---the server's own tick count. nil when this process runs neither.
+---@return number? seconds
+function Network.GetServerTime() end
+
+---The server's fixed tick: fractional on a client (an estimate, never decreasing), whole on a server. nil under the same
+---conditions as Network.GetServerTime.
+---@return number? tick
+function Network.GetServerTick() end
+
+---The round trip from this client to the server in seconds (the median of its recent clock pings). nil on a process that
+---runs no client and before the clock has synced.
+---@return number? seconds
+function Network.GetRtt() end
+
+---The jitter of the round trip in seconds (the mean absolute deviation of the recent clock pings from their median). nil under
+---the same conditions as Network.GetRtt.
+---@return number? seconds
+function Network.GetJitter() end
+
 -- ===== APPLICATION =====
 
 ---@class Application
@@ -2722,3 +2867,50 @@ function Debug.Warn(message) end
 ---Log an error
 ---@param message string
 function Debug.Error(message) end
+
+
+---@class LagCompensatedHit
+---@field netId integer
+---@field hitbox integer
+---@field point Vector3
+---@field normal Vector3
+---@field distance number
+---@field timeMicros integer
+
+---Server only. renderTimeMicros is on NetworkServer.Update's monotonic clock. Rewind is capped by measured RTT.
+---@param clientId integer authenticated requesting client
+---@param renderTimeMicros integer
+---@param origin Vector3
+---@param direction Vector3
+---@param maxDistance number
+---@param layerMask integer|nil
+---@param ignoreNetId integer|nil
+---@return LagCompensatedHit|nil
+function Physics.RaycastLagCompensated(clientId, renderTimeMicros, origin, direction, maxDistance, layerMask, ignoreNetId) end
+
+---@param clientId integer
+---@param renderTimeMicros integer
+---@param origin Vector3
+---@param radius number
+---@param direction Vector3
+---@param maxDistance number
+---@param layerMask integer|nil
+---@param ignoreNetId integer|nil
+---@return LagCompensatedHit|nil
+function Physics.SphereCastLagCompensated(clientId, renderTimeMicros, origin, radius, direction, maxDistance, layerMask, ignoreNetId) end
+
+---@class Network
+Network = {}
+---@param object GameObject
+---@param mode string always, owner or radius
+---@param radius number
+---@param priority number positive, 0.001 to 1000
+---@return boolean
+function Network.SetInterestPolicy(object, mode, radius, priority) end
+---@param clientId integer
+---@param object GameObject must belong to the requesting client in the server world
+---@return boolean
+function Network.SetObserver(clientId, object) end
+---@param clientId integer
+---@return boolean
+function Network.ClearObserver(clientId) end

@@ -138,6 +138,8 @@ namespace N2Engine::N2Net
 
         void Push(HashTree tree);
         [[nodiscard]] const HashTree *Find(std::uint32_t tick) const noexcept;
+        /// The same, mutable (the IHashTreePeer questions are non-const); a responder answers from it
+        [[nodiscard]] HashTree *Find(std::uint32_t tick) noexcept;
         [[nodiscard]] const std::vector<HashTree> &Trees() const noexcept { return trees_; }
         [[nodiscard]] std::size_t Capacity() const noexcept { return capacity_; }
 

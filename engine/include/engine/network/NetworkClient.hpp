@@ -1,7 +1,9 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -10,8 +12,12 @@
 #include <string_view>
 #include <utility>
 
+#include "engine/network/InputLayout.hpp"
+#include "engine/network/NetworkClock.hpp"
 #include "engine/network/NetworkFingerprint.hpp"
 #include "engine/network/NetworkId.hpp"
+#include "engine/network/NetworkInput.hpp"
+#include "engine/network/NetworkInterpolation.hpp"
 #include "engine/network/NetworkProtocol.hpp"
 #include "engine/network/NetworkReplication.hpp"
 #include "engine/network/NetworkWorld.hpp"
@@ -56,6 +62,34 @@ namespace N2Engine::Network
         /// After refusing, the client keeps its connection up this long at most, to get its reject out (it leaves as soon
         /// as the reject was acknowledged)
         std::uint64_t refuseLingerMicros = 1'000'000;
+        /// The networked input layout (netcode stage B4), part of the fingerprint: the same as the server's, or the
+        /// client refuses to join. Empty: this client sends no input.
+        InputLayout inputLayout;
+        /// Frames in every input message: the newest this many unacknowledged ones (the network setting
+        /// authoritative.inputRedundancy, 1 to 8; a host copies it here). Clamped to 1 to kMaxInputFramesPerMessage.
+        std::uint32_t inputRedundancy = 4;
+        /// Remote objects are shown interpolated (netcode stage B3). false: they show the newest state received, as
+        /// before. The delay is the network setting authoritative.interpolationDelayMs (a host copies it into
+        /// interpolation.delayMicros).
+        bool interpolate = true;
+        InterpolationOptions interpolation;
+        /// The clock estimate's filter (see ClockSyncOptions)
+        ClockSyncOptions clock;
+        /// How often the client pings the server for its clock: this often until the estimate has eight samples, then the
+        /// second interval. At most one ping per Update. Each at least 20 ms (clamped), so a ping storm cannot come from here.
+        std::uint64_t clockBurstIntervalMicros = 100'000;
+        std::uint64_t clockIntervalMicros = 500'000;
+    };
+
+    /// What the clock sync did on the client (the estimator's own counters are ClockSync::Stats)
+    struct ClientClockStats
+    {
+        std::uint64_t pingsSent = 0;
+        std::uint64_t pongsReceived = 0;
+        /// A pong for a ping this client has no record of (answered twice, too late, or never sent)
+        std::uint64_t pongsUnmatched = 0;
+        /// A pong the estimator refused (a round trip over its limit, a tick rate that changed)
+        std::uint64_t pongsRejected = 0;
     };
 
     struct NetworkClientStats
@@ -110,6 +144,17 @@ namespace N2Engine::Network
      * channel) to the replicated fields of the objects it has, through Component::ApplyReplicated, and acknowledges what
      * it applied. It writes nothing but replicated fields and takes values from nothing but the server's connection.
      *
+     * Player input (netcode stage B4): once Joined, the game queues the local input once per fixed tick (QueueInput); each
+     * Update sends the newest few unacknowledged frames in one unreliable message, so a lost or reordered datagram loses
+     * no input as long as one of the next few arrives; the server's acknowledgements trim the ring of unacknowledged frames,
+     * which never holds more than kMaxUnackedInputFrames. No prediction or reconciliation yet.
+     *
+     * Clock and interpolation (netcode stage B3): once Joined, the client pings the server a few times a second and
+     * estimates the server's tick from the answers (ClockSync: server time, round trip, jitter), and every Update shows
+     * the objects it has no authority over at (estimated server time - interpolation delay), interpolated between the
+     * states the server sent (SnapshotInterpolator). An object this client owns is NOT interpolated (the client controls
+     * it; prediction is a later stage), and neither is one the interpolation filter (SetInterpolationFilter) refuses.
+     *
      * Single-threaded; call Update every frame with a monotonic microsecond clock. It must not outlive the transport
      * or the world.
      */
@@ -119,6 +164,13 @@ namespace N2Engine::Network
         /// `world` must be bound to the client's scene already (NetworkWorld::BindScene): the fingerprint it sends and
         /// compares includes the number of scene objects
         NetworkClient(N2Net::ITransport &transport, NetworkWorld &world, NetworkClientOptions options);
+        ~NetworkClient();
+        NetworkClient(const NetworkClient &) = delete;
+        NetworkClient &operator=(const NetworkClient &) = delete;
+
+        /// The client most recently constructed that is still alive, or nullptr: how the Lua binding finds the client
+        /// (Network.GetServerTime and the rest). A process runs one.
+        [[nodiscard]] static NetworkClient *Active() noexcept;
 
         /// Called when something happens (see NetworkSessionEvent). Runs inside Update; it may not call Update.
         void SetEventObserver(std::function<void(const NetworkSessionEvent &)> observer)
@@ -150,6 +202,47 @@ namespace N2Engine::Network
         [[nodiscard]] const ClientReplicationStats &ReplicationStats() const noexcept { return _replicator.Stats(); }
         [[nodiscard]] NetworkWorld &World() noexcept { return _world; }
 
+        /// Packs one tick of local input (`values`: InputLayout::ValueCount() of them, in the layout's order) into an
+        /// InputFrame and queues it for the next Update to send. `tick` is the tick the server should apply it on (the
+        /// server's own count: matching it to the client's is clock sync, a later stage) and must rise from one call to
+        /// the next. Returns the frame's sequence. Fails when the client has not joined, has no layout, the count is
+        /// wrong or the tick does not rise.
+        [[nodiscard]] std::expected<std::uint32_t, std::string> QueueInput(std::uint32_t tick, std::span<const float> values);
+        [[nodiscard]] const InputLayout &GetInputLayout() const noexcept { return _options.inputLayout; }
+        /// What the input sender did; Unacked is the frames still held for the server to acknowledge
+        [[nodiscard]] const ClientInputStats &InputStats() const noexcept { return _input.Stats(); }
+        [[nodiscard]] std::size_t UnackedInputFrames() const noexcept { return _input.Unacked(); }
+
+        // ---- Clock and interpolation (netcode stage B3) ----------------------------------------------------------------
+
+        /// True once a pong was accepted: the server's time is known (as of the last Update's clock)
+        [[nodiscard]] bool ClockSynced() const noexcept { return _clock.Synced(); }
+        /// The server's tick, fractional, at the clock of the last Update; 0 until ClockSynced. Never decreases. The tick
+        /// is the 64-bit count the 32 bits on the wire were unwrapped to.
+        [[nodiscard]] double ServerTick() { return _clock.ServerTick(_now); }
+        /// The same in microseconds of server time
+        [[nodiscard]] std::uint64_t ServerTimeMicros() { return _clock.ServerTimeMicros(_now); }
+        /// The server's tick rate as its pongs say (0 until ClockSynced)
+        [[nodiscard]] std::uint32_t ServerTickRate() const noexcept { return _clock.TickRate(); }
+        /// The round trip to the server (median of the recent pings) and its jitter, in microseconds; 0 until ClockSynced
+        [[nodiscard]] std::uint64_t RttMicros() const noexcept { return _clock.RttMicros(); }
+        [[nodiscard]] std::uint64_t JitterMicros() const noexcept { return _clock.JitterMicros(); }
+        [[nodiscard]] const ClockSync &Clock() const noexcept { return _clock; }
+        [[nodiscard]] const ClientClockStats &ClockStats() const noexcept { return _clockStats; }
+
+        /// The tick remote objects were shown at in the last Update (the server tick less the interpolation delay); 0
+        /// until the first one
+        [[nodiscard]] double RenderTick() const noexcept { return _renderTick; }
+        [[nodiscard]] const SnapshotInterpolator &Interpolator() const noexcept { return _interpolator; }
+
+        /// The hook for an object the game moves itself (a predicted, locally controlled one: netcode stage B6): the
+        /// filter is asked for each object before it is interpolated and returns false to leave the object alone. An
+        /// object this client owns is never interpolated, filter or not. Runs inside Update.
+        void SetInterpolationFilter(std::function<bool(const NetworkObject &)> filter)
+        {
+            _interpolationFilter = std::move(filter);
+        }
+
     private:
         void HandleEvent(const N2Net::TransportEvent &event);
         void OnDatagram(std::span<const std::uint8_t> data);
@@ -158,6 +251,14 @@ namespace N2Engine::Network
         void OnSpawn(const SpawnMessage &spawn);
         void OnDespawn(const DespawnMessage &despawn);
         void OnWorldReady(const WorldReadyMessage &ready);
+        void OnInputAck(std::span<const std::uint8_t> message);
+        void OnClockPong(std::span<const std::uint8_t> message);
+        void OnStreamTick(std::span<const std::uint8_t> message);
+        void SendClockPing();
+        void OnStateMessage(std::uint32_t tick);
+        void OnEntryApplied(NetworkObject &object, std::uint32_t tick);
+        void ApplyInterpolation();
+        [[nodiscard]] bool IsLocallyOwned(const NetworkObject &object) const noexcept;
         void RefuseJoin(JoinRefusal reason, std::string text);
         void Fail(std::string text);
         void Notify(const NetworkSessionEvent &event);
@@ -170,6 +271,21 @@ namespace N2Engine::Network
         std::optional<Fingerprint> _serverFingerprint;
         NetworkClientStats _stats;
         ClientReplicator _replicator;
+        ClientInputSender _input;
+        ClockSync _clock;
+        SnapshotInterpolator _interpolator;
+        ClientClockStats _clockStats;
+        struct PendingPing
+        {
+            std::uint32_t sequence = 0;
+            std::uint64_t sentAt = 0;
+        };
+        static constexpr std::size_t kPendingPings = 8;
+        std::array<PendingPing, kPendingPings> _pendingPings{};
+        std::uint32_t _nextPingSequence = 1;
+        std::uint64_t _nextPingAt = 0;
+        double _renderTick = 0.0;
+        std::function<bool(const NetworkObject &)> _interpolationFilter;
         NetworkClientState _state = NetworkClientState::Connecting;
         std::string _error;
         JoinRefusal _refusal = JoinRefusal::None;

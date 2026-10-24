@@ -6,6 +6,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <span>
 #include <string>
@@ -13,8 +14,12 @@
 #include <utility>
 #include <vector>
 
+#include "engine/network/InputLayout.hpp"
 #include "engine/network/NetworkFingerprint.hpp"
+#include "engine/network/LagCompensation.hpp"
 #include "engine/network/NetworkId.hpp"
+#include "engine/network/NetworkClock.hpp"
+#include "engine/network/NetworkInput.hpp"
 #include "engine/network/NetworkReplication.hpp"
 #include "engine/network/NetworkWorld.hpp"
 #include "engine/network/PrefabTable.hpp"
@@ -61,6 +66,20 @@ namespace N2Engine::Network
         std::uint32_t maxClientAcksPerSecond = 1024;
         /// The bounds of the state messages (see ServerReplicationOptions)
         ServerReplicationOptions replication;
+        std::uint64_t lagCompMaxMicros = 200'000;
+        bool autoCaptureHitboxes = true;
+        /// The networked input layout (netcode stage B4), part of the fingerprint: every client must declare the same.
+        /// Empty (the default): the server takes no input, and a client that sends any is dropped.
+        InputLayout inputLayout;
+        /// The jitter buffer, the missing-input policy and the rate limit of the clients' input (ServerInputOptions)
+        ServerInputOptions input;
+        /// The fixed tick rate of the simulation (the network setting tickRate), 1 to kMaxClockTickRate (clamped): the
+        /// clock pongs (netcode stage B3) tell the clients, who turn ticks into time with it. The tick itself is the host's
+        /// to give (SetCurrentTick).
+        std::uint32_t tickRate = 60;
+        /// More clock pings than this from one client in one second is a violation and the client is dropped. A client
+        /// sends a few a second at most (NetworkClientOptions), so this is a ceiling.
+        std::uint32_t maxClockPingsPerSecond = 32;
     };
 
     /// Counters since the server was made. All are data: nothing here throws.
@@ -89,6 +108,20 @@ namespace N2Engine::Network
         std::uint64_t droppedOverCapacity = 0;
         std::uint64_t spawnsSent = 0;
         std::uint64_t despawnsSent = 0;
+        /// Clock pings answered (netcode stage B3)
+        std::uint64_t clockPongsSent = 0;
+    };
+
+    /// The input of one client for one tick, as the server's game reads it (NetworkServer::InputFor)
+    struct ControlledInput
+    {
+        /// The client the input belongs to: the owner of the object that was asked about
+        ClientId client = kServerClientId;
+        std::uint32_t tick = 0;
+        /// Whether a frame arrived for the tick, the last one was repeated, or the input is neutral
+        InputSource source = InputSource::Neutral;
+        /// The decoded values, in the layout's order (InputLayout::ValueOffset says where a control's start)
+        std::vector<float> values;
     };
 
     /// What NetworkServer tells its observer about a client
@@ -122,6 +155,11 @@ namespace N2Engine::Network
      * message (a Spawn and a Despawn included), a malformed one, an unexpected channel, or more than
      * maxClientMessagesPerSecond (acknowledgements: maxClientAcksPerSecond), is dropped and nothing it sent has any
      * effect. Spawn and Despawn are methods of this class for the game's server code, not messages anyone can send to it.
+     * Player input (netcode stage B4) is the other thing a client sends on the unreliable channel: InputFrames, at most
+     * options.input.maxMessagesPerSecond messages a second (more drops the client), each decoded against the layout
+     * both ends agreed on, buffered per client in a bounded jitter buffer (ServerInputBuffer) and read by the game through
+     * InputFor, which hands an object's input only to the client that OWNS it: an input message names no object, and the
+     * owner was fixed by the server when it spawned the object.
      * The same holds for field values (netcode stage B2): the server reads the replicated fields of its own objects and
      * sends them (stateSendRateHz times a second, on the unreliable channel, as the difference to what each client
      * acknowledged: see ServerReplicator); nothing a client sends is ever read as a value, so a client cannot write the
@@ -168,6 +206,35 @@ namespace N2Engine::Network
         /// Destroys the object and tells every client that has joined; false if there is no object with this id
         bool Despawn(NetworkId id);
 
+        /// Tells the server which fixed tick the simulation is on (the most recent one begun): the reference the input
+        /// buffers bound a frame's tick against (a frame too far ahead is refused) and fall back on when the game stops
+        /// reading. Call it once per Update with Time::GetTick() (truncated to 32 bits; the buffers compare modulo 2^32). A
+        /// client that joins starts its buffer at the tick given last. The same tick is what the server stamps on its
+        /// state updates and clock pongs (netcode stage B3): a host that never calls this sends tick 0, and its clients
+        /// have no time to interpolate by.
+        void SetCurrentTick(std::uint32_t tick);
+        [[nodiscard]] std::uint32_t CurrentTick() const noexcept { return _inputTick; }
+        /// The fixed tick rate the pongs announce (options.tickRate, clamped)
+        [[nodiscard]] std::uint32_t TickRate() const noexcept { return _options.tickRate; }
+
+        /// The input the owner of object `id` has for `tick`, for the game's server code to apply to that object. nullopt
+        /// when there is no such object, the server owns it (a scene object, or a Spawn with the default owner), its owner
+        /// has not joined or left, the server takes no input (empty layout), or `tick` is too old (kInputHistoryTicks behind
+        /// the newest tick asked for). Asking for a tick resolves every earlier tick in order (see ServerInputBuffer), so
+        /// the answer is the same however often it is asked and the same for the same frames on every run.
+        [[nodiscard]] std::optional<ControlledInput> InputFor(NetworkId id, std::uint32_t tick);
+        /// The same for a client by id; nullopt when it has not joined
+        [[nodiscard]] std::optional<ControlledInput> InputForClient(ClientId client, std::uint32_t tick);
+        [[nodiscard]] const InputLayout &GetInputLayout() const noexcept { return _options.inputLayout; }
+        /// What the input buffers did, every client's added up (clients that left included)
+        [[nodiscard]] ServerInputStats InputStats() const;
+        /// One client's buffer; nullopt when it has none (not joined, or no input layout)
+        [[nodiscard]] std::optional<ServerInputStats> InputStatsFor(ClientId client) const;
+
+        /// The server most recently constructed that is still alive, or nullptr: how the Lua binding finds the server
+        /// (Network.GetInput). A process runs one.
+        [[nodiscard]] static NetworkServer *Active() noexcept;
+
         /// Drops the client on `peer` now, or forgets the peer if it is not a client: the host's way to refuse a peer it
         /// found wanting. Not for use inside the transport's poll (Update's observers).
         void DropPeer(N2Net::PeerId peer, std::string_view reason);
@@ -182,6 +249,7 @@ namespace N2Engine::Network
         /// What the state replication has sent and what the clients acknowledged
         [[nodiscard]] const ServerReplicationStats &ReplicationStats() const noexcept { return _replicator.Stats(); }
         [[nodiscard]] const ServerReplicator &Replicator() const noexcept { return _replicator; }
+        bool SetObserver(ClientId client, NetworkId observer);
 
         /// True once the world's scene went away; the server then takes no more clients
         [[nodiscard]] bool WorldLost() const noexcept { return _worldLost; }
@@ -190,6 +258,16 @@ namespace N2Engine::Network
         [[nodiscard]] const PrefabTable &Prefabs() const noexcept { return _options.prefabs; }
         [[nodiscard]] const NetworkServerStats &Stats() const noexcept { return _stats; }
         [[nodiscard]] NetworkWorld &World() noexcept { return _world; }
+
+        /// Game code captures world-space hitboxes after a simulation tick, using the same monotonic clock as Update.
+        /// Only registered objects may be recorded. Despawn removes their history immediately.
+        bool CaptureHitboxes(std::uint64_t nowMicros, std::span<const HistoricalHitbox> hitboxes);
+        [[nodiscard]] std::optional<LagCompensatedHit> CastLagCompensated(ClientId requester,
+            std::uint64_t renderTimeMicros, const Math::Vector3 &origin, const Math::Vector3 &direction,
+            float maxDistance, float radius = 0, std::uint32_t layers = ~0u, NetworkId ignore = {}) const;
+        /// Explicit host binding for the Physics Lua query functions. Cleared on destruction.
+        void BindPhysicsQueries();
+        [[nodiscard]] static NetworkServer *PhysicsQueryServer() noexcept;
 
     private:
         enum class ClientState : std::uint8_t
@@ -211,6 +289,15 @@ namespace N2Engine::Network
             std::uint32_t rateWindowCount = 0;
             std::uint64_t ackWindowStart = 0;
             std::uint32_t ackWindowCount = 0;
+            std::set<std::uint32_t> hidden;
+            std::uint64_t inputWindowStart = 0;
+            std::uint32_t inputWindowCount = 0;
+            std::uint64_t clockWindowStart = 0;
+            std::uint32_t clockWindowCount = 0;
+            /// Clock pongs built when the pings arrived, sent by the next SendClockPongs (at most kMaxPendingPongs)
+            std::vector<ClockPongMessage> pendingPongs;
+            /// Made when the client joins, if the server takes input
+            std::unique_ptr<ServerInputBuffer> input;
             bool dropping = false;
             std::string dropReason;
         };
@@ -221,18 +308,25 @@ namespace N2Engine::Network
         void OnDatagram(N2Net::PeerId peer, std::span<const std::uint8_t> data);
         void OnMessage(Client &client, N2Net::MessageChannel channel, std::span<const std::uint8_t> message);
         void OnUnreliable(Client &client, std::span<const std::uint8_t> message);
+        void OnInputFrames(Client &client, std::span<const std::uint8_t> message);
+        void OnClockPing(Client &client, std::span<const std::uint8_t> message);
+        void SendClockPongs();
+        bool AllowClockPing(Client &client);
         void OnAccept(Client &client, const Fingerprint &fingerprint);
         void SendJoinState(Client &client);
         bool Send(Client &client, const std::vector<std::uint8_t> &message);
         void Broadcast(const std::vector<std::uint8_t> &message);
         void FlushPendingDespawns();
         void SendState();
+        void SendInputAcks();
+        void RetireInput(Client &client);
         void RunTimers();
         void SendPackets();
         void ApplyDrops();
         void MarkDrop(Client &client, std::string reason, std::uint64_t NetworkServerStats::*counter);
         bool AllowMessage(Client &client);
         bool AllowAck(Client &client);
+        bool AllowInput(Client &client);
         void NotifyLeft(const Client &client, std::string_view reason);
 
         N2Net::ITransport &_transport;
@@ -241,7 +335,17 @@ namespace N2Engine::Network
         Fingerprint _fingerprint;
         NetworkServerStats _stats;
         ServerReplicator _replicator;
+        LagCompensation _lagCompensation;
+        std::uint64_t _lastHitboxTick = ~std::uint64_t{0};
         std::uint64_t _nextStateAt = 0;
+        std::uint32_t _inputTick = 0;
+        /// The tick the host gave last, and the server's clock when Update first saw it (the part of a tick that has passed
+        /// is the difference to now)
+        std::uint32_t _seenTick = 0;
+        std::uint64_t _seenTickAt = 0;
+        bool _haveSeenTick = false;
+        /// The input counters of clients that left
+        ServerInputStats _departedInput;
         std::uint64_t _now = 0;
         bool _worldLost = false;
         ClientId _nextClientId = 1;

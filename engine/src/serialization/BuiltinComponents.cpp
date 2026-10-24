@@ -9,9 +9,11 @@
 #include "engine/example/renderers/QuadRenderer.hpp"
 #include "engine/example/renderers/SphereRenderer.hpp"
 #include "engine/network/NetworkObject.hpp"
+#include "engine/network/LagCompensatedHitbox.hpp"
 #include "engine/network/NetworkTransform.hpp"
 #include "engine/physics/BoxCollider.hpp"
 #include "engine/physics/CapsuleCollider.hpp"
+#include "engine/physics/CharacterController.hpp"
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/SoftBody.hpp"
 #include "engine/physics/SphereCollider.hpp"
@@ -51,6 +53,7 @@ namespace N2Engine
         Add<Physics::BoxCollider>(registry, "BoxCollider");
         Add<Physics::SphereCollider>(registry, "SphereCollider");
         Add<Physics::CapsuleCollider>(registry, "CapsuleCollider");
+        Add<Physics::CharacterController>(registry, "CharacterController");
         Add<Rendering::Light>(registry, "Light");
         Add<Audio::AudioSource>(registry, "AudioSource");
         Add<Audio::AudioListener>(registry, "AudioListener");
@@ -68,6 +71,7 @@ namespace N2Engine
         Add<UI::UIText>(registry, "UIText");
         Add<UI::Button>(registry, "Button");
         Add<Network::NetworkObject>(registry, "NetworkObject");
+        Add<Network::LagCompensatedHitbox>(registry, "LagCompensatedHitbox");
         Add<Network::NetworkTransform>(registry, "NetworkTransform");
     }
 }

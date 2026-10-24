@@ -7,6 +7,7 @@
 #include "engine/physics/BoxCollider.hpp"
 #include "engine/physics/SphereCollider.hpp"
 #include "engine/physics/CapsuleCollider.hpp"
+#include "engine/physics/CharacterController.hpp"
 #include "engine/physics/PhysicsMaterial.hpp"
 #include "engine/physics/PhysicsTypes.hpp"
 #include "engine/physics/ICollider.hpp"
@@ -14,10 +15,12 @@
 #include "engine/Layers.hpp"
 #include "engine/Application.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
+#include "engine/physics/LagCompensation.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <format>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -232,6 +235,51 @@ namespace N2Engine::Scripting::Bindings
         }
     }
 
+    namespace
+    {
+        // A finite number argument of a CharacterController call; anything else is a Lua error
+        float RequireNumber(const sol::object &argument, const char *method, const char *name)
+        {
+            if (argument.get_type() != sol::type::number)
+            {
+                throw std::runtime_error(std::string(method) + ": " + name + " must be a number");
+            }
+            const float value = static_cast<float>(argument.as<double>());
+            if (!std::isfinite(value))
+            {
+                throw std::runtime_error(std::string(method) + ": " + name + " must be finite");
+            }
+            return value;
+        }
+
+        // A Vector3 argument with finite components
+        Math::Vector3 RequireVector(const sol::object &argument, const char *method, const char *name)
+        {
+            if (!argument.is<Math::Vector3>())
+            {
+                throw std::runtime_error(std::string(method) + ": " + name + " must be a Vector3");
+            }
+            const Math::Vector3 value = argument.as<Math::Vector3>();
+            if (!std::isfinite(value.x) || !std::isfinite(value.y) || !std::isfinite(value.z))
+            {
+                throw std::runtime_error(std::string(method) + ": " + name + " must be finite");
+            }
+            return value;
+        }
+
+        // The state of a character as a plain table (CharacterController:GetState)
+        sol::table CharacterStateToLua(const Physics::CharacterState &character, lua_State *state)
+        {
+            sol::state_view lua(state);
+            sol::table result = lua.create_table();
+            result["position"] = character.position;
+            result["velocity"] = character.velocity;
+            result["grounded"] = character.grounded;
+            result["groundNormal"] = character.groundNormal;
+            return result;
+        }
+    }
+
     sol::object CollisionToLua(const Physics::Collision &collision, lua_State *state)
     {
         return sol::make_object(state, LuaCollision{
@@ -302,6 +350,34 @@ namespace N2Engine::Scripting::Bindings
 
         // ===== Raycasts (global) =====
         lua["Physics"] = lua.create_table_with(
+            "RaycastLagCompensated", [](Network::ClientId client, std::uint64_t time,
+                const Math::Vector3 &origin, const Math::Vector3 &direction, float distance,
+                sol::optional<std::int64_t> mask, sol::optional<std::uint32_t> ignore,
+                sol::this_state state) -> sol::object
+            {
+                auto *server = Network::NetworkServer::PhysicsQueryServer();
+                if (!server) return sol::make_object(state,sol::lua_nil);
+                const auto hit = Physics::RaycastLagCompensated(*server,client,time,origin,direction,distance,
+                    ReadLayerMask(mask),Network::NetworkId{ignore.value_or(0)});
+                if (!hit) return sol::make_object(state,sol::lua_nil);
+                sol::state_view lua(state);
+                return lua.create_table_with("netId",hit->object.value,"hitbox",hit->hitbox,"point",hit->point,
+                    "normal",hit->normal,"distance",hit->distance,"timeMicros",hit->timeMicros);
+            },
+            "SphereCastLagCompensated", [](Network::ClientId client, std::uint64_t time,
+                const Math::Vector3 &origin, float radius, const Math::Vector3 &direction, float distance,
+                sol::optional<std::int64_t> mask, sol::optional<std::uint32_t> ignore,
+                sol::this_state state) -> sol::object
+            {
+                auto *server = Network::NetworkServer::PhysicsQueryServer();
+                if (!server) return sol::make_object(state,sol::lua_nil);
+                const auto hit = Physics::SphereCastLagCompensated(*server,client,time,origin,direction,distance,radius,
+                    ReadLayerMask(mask),Network::NetworkId{ignore.value_or(0)});
+                if (!hit) return sol::make_object(state,sol::lua_nil);
+                sol::state_view lua(state);
+                return lua.create_table_with("netId",hit->object.value,"hitbox",hit->hitbox,"point",hit->point,
+                    "normal",hit->normal,"distance",hit->distance,"timeMicros",hit->timeMicros);
+            },
             // Physics.IsGpuAvailable() -> true when the physics scene runs on the GPU (physics.gpu auto/on and the
             // probe succeeded); false otherwise, including without a physics backend
             "IsGpuAvailable", []() -> bool
@@ -505,6 +581,150 @@ namespace N2Engine::Scripting::Bindings
             "GetMaterial", Forward<CapsuleColliderRef, &Physics::CapsuleCollider::GetMaterial>(),
             "SetOffset", Forward<CapsuleColliderRef, &Physics::CapsuleCollider::SetOffset>(),
             "GetOffset", Forward<CapsuleColliderRef, &Physics::CapsuleCollider::GetOffset>()
+        );
+
+        // ===== CharacterController =====
+        // The engine-owned capsule controller (docs/physics.html, "Character controller"). Settings apply at the next
+        // step; a value that is not a finite number in the setting's range is a Lua error.
+        using CharacterControllerRef = ComponentRef<Physics::CharacterController>;
+        const auto settingSetter = [](float Physics::CharacterController::*member, const char *method,
+                                      const float lowest, const float highest)
+        {
+            return [member, method, lowest, highest](const CharacterControllerRef &c, const sol::object value)
+            {
+                const float number = RequireNumber(value, method, "value");
+                if (number < lowest || number > highest)
+                {
+                    throw std::runtime_error(std::format("{}: value must be between {} and {}", method, lowest, highest));
+                }
+                const auto controller = c.Pin();
+                (*controller).*member = number;
+            };
+        };
+        const auto settingGetter = [](float Physics::CharacterController::*member)
+        {
+            return [member](const CharacterControllerRef &c) -> float
+            {
+                const auto controller = c.Pin();
+                return (*controller).*member;
+            };
+        };
+        BindComponentType<Physics::CharacterController>(lua, "CharacterController",
+            // SetInput(move, jump?): the wanted horizontal velocity (a Vector3, y ignored, world units per second) and
+            // whether to jump on the next tick. The move is held until the next SetInput; the jump is one press.
+            "SetInput", [](const CharacterControllerRef &c, const sol::object move, const sol::object jump)
+            {
+                Physics::CharacterInput input;
+                input.move = RequireVector(move, "CharacterController:SetInput", "move");
+                if (!IsAbsent(jump))
+                {
+                    if (jump.get_type() != sol::type::boolean)
+                    {
+                        throw std::runtime_error("CharacterController:SetInput: jump must be a boolean or nil");
+                    }
+                    input.jump = jump.as<bool>();
+                }
+                c.Pin()->SetInput(input);
+            },
+            // GetInput() -> {move = Vector3, jump = boolean}
+            "GetInput", [](const CharacterControllerRef &c, const sol::this_state state) -> sol::table
+            {
+                sol::state_view lua(state);
+                sol::table result = lua.create_table();
+                const auto controller = c.Pin();
+                result["move"] = controller->GetInput().move;
+                result["jump"] = controller->GetInput().jump;
+                return result;
+            },
+            // GetState() -> {position, velocity, grounded, groundNormal}: a copy, a script may keep it
+            "GetState", [](const CharacterControllerRef &c, const sol::this_state state) -> sol::table
+            {
+                return CharacterStateToLua(c.Pin()->GetState(), state);
+            },
+            // SetState({position, velocity?, grounded?, groundNormal?}): restores a state (a server correction) and
+            // moves the object to its position. position is required; the others default to rest, not grounded, up.
+            "SetState", [](const CharacterControllerRef &c, const sol::object stateArgument)
+            {
+                if (stateArgument.get_type() != sol::type::table)
+                {
+                    throw std::runtime_error("CharacterController:SetState: state must be a table");
+                }
+                const sol::table given = stateArgument.as<sol::table>();
+                Physics::CharacterState restored;
+                const sol::object position = given["position"];
+                restored.position = RequireVector(position, "CharacterController:SetState", "position");
+                const sol::object velocity = given["velocity"];
+                if (!IsAbsent(velocity))
+                {
+                    restored.velocity = RequireVector(velocity, "CharacterController:SetState", "velocity");
+                }
+                const sol::object grounded = given["grounded"];
+                if (!IsAbsent(grounded))
+                {
+                    if (grounded.get_type() != sol::type::boolean)
+                    {
+                        throw std::runtime_error("CharacterController:SetState: grounded must be a boolean or nil");
+                    }
+                    restored.grounded = grounded.as<bool>();
+                }
+                const sol::object groundNormal = given["groundNormal"];
+                if (!IsAbsent(groundNormal))
+                {
+                    restored.groundNormal =
+                        RequireVector(groundNormal, "CharacterController:SetState", "groundNormal");
+                }
+                c.Pin()->SetState(restored);
+            },
+            // Teleport(position): the state at that position, at rest and not grounded
+            "Teleport", [](const CharacterControllerRef &c, const sol::object position)
+            {
+                c.Pin()->Teleport(RequireVector(position, "CharacterController:Teleport", "position"));
+            },
+            // Step(dt) -> boolean: one step now with the held input; false when it did not run (no physics backend or
+            // invalid settings). dt must be a finite number above 0.
+            "Step", [](const CharacterControllerRef &c, const sol::object dt) -> bool
+            {
+                const float seconds = RequireNumber(dt, "CharacterController:Step", "dt");
+                if (!(seconds > 0.0f))
+                {
+                    throw std::runtime_error("CharacterController:Step: dt must be above 0");
+                }
+                return c.Pin()->Step(seconds);
+            },
+            "IsGrounded", [](const CharacterControllerRef &c) { return c.Pin()->GetState().grounded; },
+            "GetPosition", [](const CharacterControllerRef &c) { return c.Pin()->GetState().position; },
+            "GetVelocity", [](const CharacterControllerRef &c) { return c.Pin()->GetState().velocity; },
+
+            "SetRadius", settingSetter(&Physics::CharacterController::radius, "CharacterController:SetRadius", 0.01f, 100.0f),
+            "GetRadius", settingGetter(&Physics::CharacterController::radius),
+            "SetHeight", settingSetter(&Physics::CharacterController::height, "CharacterController:SetHeight", 0.02f, 1000.0f),
+            "GetHeight", settingGetter(&Physics::CharacterController::height),
+            "SetStepOffset", settingSetter(&Physics::CharacterController::stepOffset, "CharacterController:SetStepOffset", 0.0f, 100.0f),
+            "GetStepOffset", settingGetter(&Physics::CharacterController::stepOffset),
+            "SetSlopeLimit", settingSetter(&Physics::CharacterController::slopeLimit, "CharacterController:SetSlopeLimit", 0.0f, 89.0f),
+            "GetSlopeLimit", settingGetter(&Physics::CharacterController::slopeLimit),
+            "SetSkinWidth", settingSetter(&Physics::CharacterController::skinWidth, "CharacterController:SetSkinWidth", 0.0001f, 1.0f),
+            "GetSkinWidth", settingGetter(&Physics::CharacterController::skinWidth),
+            "SetJumpSpeed", settingSetter(&Physics::CharacterController::jumpSpeed, "CharacterController:SetJumpSpeed", 0.0f, 1000.0f),
+            "GetJumpSpeed", settingGetter(&Physics::CharacterController::jumpSpeed),
+            "SetGravityScale", settingSetter(&Physics::CharacterController::gravityScale, "CharacterController:SetGravityScale", -100.0f, 100.0f),
+            "GetGravityScale", settingGetter(&Physics::CharacterController::gravityScale),
+            "SetMaxFallSpeed", settingSetter(&Physics::CharacterController::maxFallSpeed, "CharacterController:SetMaxFallSpeed", 0.01f, 100000.0f),
+            "GetMaxFallSpeed", settingGetter(&Physics::CharacterController::maxFallSpeed),
+            // SetLayerMask(mask): the layers it collides with, cut to 32 bits so -1 means every layer
+            "SetLayerMask", [](const CharacterControllerRef &c, const sol::object mask)
+            {
+                const sol::optional<int64_t> given = OptionalMaskArgument(mask, "CharacterController:SetLayerMask");
+                if (!given)
+                {
+                    throw std::runtime_error("CharacterController:SetLayerMask: layerMask must be a number");
+                }
+                c.Pin()->layerMask = static_cast<int>(ReadLayerMask(given));
+            },
+            "GetLayerMask", [](const CharacterControllerRef &c)
+            {
+                return static_cast<int64_t>(static_cast<uint32_t>(c.Pin()->layerMask));
+            }
         );
     }
 }

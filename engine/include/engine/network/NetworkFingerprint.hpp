@@ -7,6 +7,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "engine/network/InputLayout.hpp"
 #include "engine/network/PrefabTable.hpp"
 
 namespace N2Engine::Network
@@ -44,7 +45,9 @@ namespace N2Engine::Network
      *
      * The fingerprint covers: the engine version text; the content of the scene (SceneHash: HashSceneJson of the scene
      * file's parsed JSON, so line endings and key order do not matter); the registered component type names, the
-     * replicated fields of each and how they are encoded, and the prefab table (RegistryHash); the number of
+     * replicated fields of each and how they are encoded, the prefab table and the networked input layout (RegistryHash;
+     * the input layout enters as InputLayout::Hash(), so a client whose controls or their quantisation differ refuses to
+     * join); the number of
      * NetworkObjects in the scene. It does not cover Lua script sources,
      * assets or the values of component fields: two peers whose scripts differ will agree here and still disagree
      * later. The wire version is a separate field of the hello message (see NetworkProtocol.hpp).
@@ -67,9 +70,9 @@ namespace N2Engine::Network
 
     /// FNV-1a over the sorted names of every registered component type (ComponentRegistry), for each the replicated fields
     /// its schema lists with everything that decides their bytes on the wire (HashFieldFormat: name, kind, step, range,
-    /// enum options), and `prefabs.Hash()`. A server and a client that replicate other fields, or the same fields another
+    /// enum options), `prefabs.Hash()` and `inputLayout.Hash()` (an empty layout hashes too). A server and a client that replicate other fields, or the same fields another
     /// way, refuse each other (Registry).
-    [[nodiscard]] std::uint64_t HashRegistry(const PrefabTable &prefabs);
+    [[nodiscard]] std::uint64_t HashRegistry(const PrefabTable &prefabs, const InputLayout &inputLayout = InputLayout());
 
     /// `text` cut to `maxLength` bytes with every byte outside printable ASCII (0x20 to 0x7E) replaced by '?': what
     /// goes on the wire and into log lines
@@ -78,7 +81,8 @@ namespace N2Engine::Network
     /// The fingerprint of this process for `scenePath` (an informational text) whose parsed content hashes to
     /// `sceneHash` and which holds `sceneObjectCount` NetworkObjects, with the prefab table `prefabs`
     [[nodiscard]] Fingerprint MakeFingerprint(std::string_view scenePath, std::uint64_t sceneHash,
-                                              std::uint32_t sceneObjectCount, const PrefabTable &prefabs);
+                                              std::uint32_t sceneObjectCount, const PrefabTable &prefabs,
+                                              const InputLayout &inputLayout = InputLayout());
 
     /// What differs between the server's fingerprint and the client's, the first of: the engine version, the scene
     /// content, the registry, the object count. None when they agree.
