@@ -80,8 +80,18 @@ async function screenshot(name, visible = false) {
     const browserArgs = browserLaunchArgs(options);
     report.arguments = browserArgs;
     report.playwright = playwrightRequire('playwright/package.json').version;
+    // The GPU process loads the system Vulkan loader, which finds no driver on a runner without a Vulkan ICD (the loader log
+    // says "Found no files"): ANGLE then fails VK_KHR_surface, the compositor falls back, and the WebGPU swap chain texture
+    // cannot be created, which destroys the device. Point the loader at the SwiftShader ICD that ships with the browser.
+    const launchEnv = { ...process.env };
+    if (options.swiftshader && !launchEnv.VK_ICD_FILENAMES) {
+      const executable = process.env.N2_BROWSER_EXECUTABLE || chromium.executablePath();
+      const icd = path.join(path.dirname(executable), 'vk_swiftshader_icd.json');
+      if (fs.existsSync(icd)) launchEnv.VK_ICD_FILENAMES = icd;
+    }
+    report.vulkanIcd = launchEnv.VK_ICD_FILENAMES || null;
     browser = await chromium.launch({ channel: 'chromium', executablePath: process.env.N2_BROWSER_EXECUTABLE || undefined,
-      headless: !options.headed, args: browserArgs });
+      headless: !options.headed, args: browserArgs, env: launchEnv });
     report.browser = browser.version();
     messages.push('Browser: ' + report.browser + '; Playwright: ' + report.playwright + '; platform: ' + process.platform);
     page = await browser.newPage({ viewport: { width: 800, height: 450 }, deviceScaleFactor: 2 });
