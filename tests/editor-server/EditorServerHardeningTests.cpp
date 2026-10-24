@@ -218,6 +218,25 @@ TEST_F(EditorServerNoSceneTest, HierarchyAndEntityCommandsAreErrors)
         paste.WriteBool(false);
         expectNoScene(Execute(server, CommandType::InstantiateEntities, paste.Release()), "InstantiateEntities");
     }
+    {
+        BufferWriter createPrefab;
+        createPrefab.WriteString(id);
+        createPrefab.WriteString("res://prefabs/Thing.prefab");
+        createPrefab.WriteBool(false);
+        expectNoScene(Execute(server, CommandType::CreatePrefab, createPrefab.Release()), "CreatePrefab");
+
+        BufferWriter instantiatePrefab;
+        instantiatePrefab.WriteString("res://prefabs/Thing.prefab");
+        instantiatePrefab.WriteString("");
+        instantiatePrefab.WriteI32(-1);
+        instantiatePrefab.WriteBool(false);
+        instantiatePrefab.WriteF32(0.0f);
+        instantiatePrefab.WriteF32(0.0f);
+        instantiatePrefab.WriteF32(0.0f);
+        expectNoScene(Execute(server, CommandType::InstantiatePrefab, instantiatePrefab.Release()), "InstantiatePrefab");
+    }
+    expectNoScene(Execute(server, CommandType::ApplyPrefab, StringPayload(id)), "ApplyPrefab");
+    expectNoScene(Execute(server, CommandType::UnpackPrefab, StringPayload(id)), "UnpackPrefab");
 
     BufferWriter create;
     create.WriteString("Thing");

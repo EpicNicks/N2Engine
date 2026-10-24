@@ -299,6 +299,7 @@ namespace
         }
 
         [[nodiscard]] const fs::path &Root() const { return _root; }
+        [[nodiscard]] const IO::ProjectFile &Project() const { return _project; }
         [[nodiscard]] fs::path SceneFile() const { return _root / "assets" / "scenes" / "Play.scene"; }
         [[nodiscard]] const std::string &SavedText() const { return _savedText; }
 
@@ -645,7 +646,8 @@ TEST_F(EditorPlayTest, APlayHostRefusesTheCommandsThatWriteTheProjectOrSwapTheSc
                                    CommandType::SetStartupScene, CommandType::RestoreAutosave,
                                    CommandType::DiscardAutosave, CommandType::LoadScene,
                                    CommandType::SetImportSettings, CommandType::WriteTextAsset,
-                                   CommandType::CreateScriptAsset, CommandType::CreateFolder})
+                                   CommandType::CreateScriptAsset, CommandType::CreateFolder,
+                                   CommandType::CreatePrefab, CommandType::ApplyPrefab})
     {
         EXPECT_TRUE(EditorServer::IsEditOnlyCommand(static_cast<uint8_t>(type))) << static_cast<int>(type);
         const Frame response = Execute(*play, type);
@@ -656,10 +658,40 @@ TEST_F(EditorPlayTest, APlayHostRefusesTheCommandsThatWriteTheProjectOrSwapTheSc
     EXPECT_TRUE(SceneHasObjectNamed("Unsaved"));
     EXPECT_EQ(ReadFile(SceneFile()), before);
     for (const CommandType type : {CommandType::GetHierarchy, CommandType::ListAssets, CommandType::GetAssetInfo,
-                                   CommandType::ReadTextAsset, CommandType::RescanAssets})
+                                   CommandType::ReadTextAsset, CommandType::RescanAssets,
+                                   CommandType::InstantiatePrefab, CommandType::UnpackPrefab})
     {
         EXPECT_FALSE(EditorServer::IsEditOnlyCommand(static_cast<uint8_t>(type))) << static_cast<int>(type);
     }
+}
+
+TEST_F(EditorPlayTest, APlayHostInstantiatesAPrefabIntoTheRunningGameWithoutAUndoStep)
+{
+    const fs::path prefab = Root() / "assets" / "Thing.prefab";
+    {
+        std::ofstream file(prefab, std::ios::binary);
+        file << R"({"name":"Thing","rootObject":{"name":"Thing","uuid":"6f1b1a52-7f0e-4c5e-9d0e-3c2f6a1b9d11"}})";
+    }
+    StartPlaying();
+    play->SetProject(Root(), Project()); // as a host started with --project --play has it
+    EXPECT_FALSE(SceneHasObjectNamed("Thing"));
+
+    const Frame created = Execute(*play, CommandType::InstantiatePrefab, [&]
+    {
+        BufferWriter w;
+        w.WriteString("res://Thing.prefab");
+        w.WriteString("");
+        w.WriteI32(-1);
+        w.WriteBool(false);
+        w.WriteF32(0.0f);
+        w.WriteF32(0.0f);
+        w.WriteF32(0.0f);
+        return w.Release();
+    }());
+    EXPECT_EQ(created.type, EntityCreatedType) << created.Text();
+    EXPECT_TRUE(SceneHasObjectNamed("Thing"));
+    EXPECT_FALSE(SceneManager::GetCurSceneRef().IsEditMode()) << "still the game";
+    EXPECT_EQ(Execute(*play, CommandType::Undo).type, ErrorType) << "a running game has no undo";
 }
 
 TEST_F(EditorPlayTest, APlayHostWritesNoAutosave)

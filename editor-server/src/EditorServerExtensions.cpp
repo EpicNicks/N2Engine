@@ -121,6 +121,12 @@ namespace N2Engine::Editor
             {CommandType::SetEditorViewOptions, false},
             {CommandType::SerializeEntities, false},
             {CommandType::InstantiateEntities, false},
+            // Prefab assets (EN3): the commands write .prefab files or link scene objects to them, which Editor.Scene and
+            // Editor.Assets have no use for (WriteText does not write the extension either)
+            {CommandType::CreatePrefab, false},
+            {CommandType::InstantiatePrefab, false},
+            {CommandType::ApplyPrefab, false},
+            {CommandType::UnpackPrefab, false},
             {CommandType::PickEntity, false},
             {CommandType::GetEntityBounds, false},
             // Entities and components beyond what Editor.Scene has: the older commands and the readers it does not use

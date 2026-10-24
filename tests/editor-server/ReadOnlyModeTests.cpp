@@ -56,7 +56,11 @@ namespace
             {"SaveSceneToFile", Class::Write}, {"NewScene", Class::Write}, {"CreateEntity", Class::Write},
             {"DestroyEntity", Class::Write}, {"SetEntityTransform", Class::Write}, {"CreateEntityEx", Class::Write},
             {"SetEntityParent", Class::Write}, {"SetEntityProperties", Class::Write},
-            {"DuplicateEntity", Class::Write}, {"InstantiateEntities", Class::Write}, {"SetLocalTransform", Class::Write}, {"CreateScript", Class::Write},
+            {"DuplicateEntity", Class::Write}, {"InstantiateEntities", Class::Write},
+            // Prefab assets (since 1.19.0): all four change the scene or a project file
+            {"CreatePrefab", Class::Write}, {"InstantiatePrefab", Class::Write}, {"ApplyPrefab", Class::Write},
+            {"UnpackPrefab", Class::Write},
+{"SetLocalTransform", Class::Write}, {"CreateScript", Class::Write},
             {"RescanAssets", Class::Write}, {"SetImportSettings", Class::Write}, {"WriteTextAsset", Class::Write},
             {"CreateScriptAsset", Class::Write}, {"CreateFolder", Class::Write}, {"AddComponent", Class::Write},
             {"RemoveComponent", Class::Write}, {"SetComponentFields", Class::Write},

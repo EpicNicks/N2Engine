@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.18.0";
+inline constexpr const char *ProtocolVersion = "1.19.0";
 
 enum class CommandType : uint8_t
 {
@@ -91,6 +91,10 @@ enum class CommandType : uint8_t
     SetEditorViewOptions = 0x17,
     CheckLuaSyntax = 0xA7,
     GetAssetPreview = 0xA8,
+    CreatePrefab = 0xA9,
+    InstantiatePrefab = 0xAA,
+    ApplyPrefab = 0xAB,
+    UnpackPrefab = 0xAC,
 };
 
 enum class ResponseType : uint8_t
@@ -474,6 +478,32 @@ struct GetAssetPreviewCmd
 {
     std::string uuidOrPath;
     uint32_t maxSize;
+};
+
+struct CreatePrefabCmd
+{
+    std::string entityId;
+    std::string path;
+    bool overwrite;
+};
+
+struct InstantiatePrefabCmd
+{
+    std::string uuidOrPath;
+    std::string parentId;
+    int32_t siblingIndex;
+    bool hasPosition;
+    Vec3 position;
+};
+
+struct ApplyPrefabCmd
+{
+    std::string entityId;
+};
+
+struct UnpackPrefabCmd
+{
+    std::string entityId;
 };
 
 // Response structures
