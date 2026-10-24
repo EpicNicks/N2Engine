@@ -8,6 +8,7 @@
 #include "engine/GameObjectScene.hpp"
 #include "engine/Time.hpp"
 #include "engine/network/LagCompensatedHitbox.hpp"
+#include "engine/network/NetworkObject.hpp"
 #include "engine/network/NetworkProtocol.hpp"
 
 namespace N2Engine::Network
@@ -61,6 +62,8 @@ namespace N2Engine::Network
         _fingerprint = MakeFingerprint(_options.scenePath, _options.sceneHash, _world.SceneObjectCount(), _options.prefabs,
                                        _options.inputLayout);
         _options.input = _options.input.Clamped();
+        _options.rpc = _options.rpc.Clamped();
+        _options.tickRate = std::clamp<std::uint32_t>(_options.tickRate, 1u, kMaxClockTickRate);
         g_activeServer = this;
         _world.SetDestroyedHandler([this](const NetworkId id, const bool wasSpawned)
                                    { _pendingDespawns.emplace_back(id.value, wasSpawned); });
@@ -110,6 +113,13 @@ namespace N2Engine::Network
     void NetworkServer::Update(const std::uint64_t nowMicros)
     {
         _now = nowMicros;
+        if (!_haveSeenTick || _seenTick != _inputTick)
+        {
+            // The host moved to another tick since the last update: the part of a tick that has passed counts from here
+            _haveSeenTick = true;
+            _seenTick = _inputTick;
+            _seenTickAt = _now;
+        }
 
         if (_options.autoCaptureHitboxes && _world.HasScene() && _lastHitboxTick != Time::GetTick())
         {
@@ -141,9 +151,11 @@ namespace N2Engine::Network
         }
         else
         {
+            DispatchRpcs();
             FlushPendingDespawns();
             SendState();
             SendInputAcks();
+            SendClockPongs();
         }
         RunTimers();
         SendPackets();
@@ -248,6 +260,12 @@ namespace N2Engine::Network
             OnUnreliable(client, message);
             return;
         }
+        if (!message.empty() && message[0] == kRpcClientReliableType)
+        {
+            // RPCs have budgets of their own (RpcLimits); the world-message ceiling below is for the accept and the reject
+            OnRpc(client, message);
+            return;
+        }
         if (!AllowMessage(client))
         {
             MarkDrop(client, "it sent more messages per second than allowed", &NetworkServerStats::droppedRateLimited);
@@ -290,6 +308,16 @@ namespace N2Engine::Network
             OnInputFrames(client, message);
             return;
         }
+        if (!message.empty() && message[0] == kClockPingType)
+        {
+            OnClockPing(client, message);
+            return;
+        }
+        if (!message.empty() && message[0] == kRpcClientUnreliableType)
+        {
+            OnRpc(client, message);
+            return;
+        }
         if (!AllowAck(client))
         {
             MarkDrop(client, "it sent more state acknowledgements per second than allowed",
@@ -320,6 +348,226 @@ namespace N2Engine::Network
         {
             MarkDrop(client, "it acknowledged a state update the server never sent", &NetworkServerStats::droppedProtocol);
         }
+    }
+
+    void NetworkServer::OnRpc(Client &client, const std::span<const std::uint8_t> message)
+    {
+        if (client.state != ClientState::Joined)
+        {
+            MarkDrop(client, "it sent an RPC before it joined", &NetworkServerStats::droppedProtocol);
+            return;
+        }
+        RpcHeader header;
+        if (!DecodeRpcHeader(message, header))
+        {
+            MarkDrop(client, "it sent a malformed RPC message", &NetworkServerStats::droppedMalformed);
+            return;
+        }
+        ++_rpcStats.received;
+        const auto refuse = [this, &client](std::uint64_t RpcStats::*counter, const char *why)
+        {
+            ++(_rpcStats.*counter);
+            if (_rpcLog.Allow())
+            {
+                Logger::Warn(std::format("NetworkServer: RPC from client {} refused: {}", client.id, why));
+            }
+        };
+
+        const RpcBudget::Verdict verdict = client.rpcBudget.Admit(
+            _now, RpcBudgetKey(header.componentIndex, header.rpcIndex), message.size(), _options.rpc);
+        if (verdict != RpcBudget::Verdict::Allowed)
+        {
+            refuse(&RpcStats::droppedRate,
+                   verdict == RpcBudget::Verdict::OverRate ? "over its RPC rate budget" : "over its RPC byte budget");
+            return;
+        }
+        if (client.pendingRpcs.size() >= _options.rpc.maxQueued)
+        {
+            refuse(&RpcStats::droppedQueueFull, "its RPC queue is full");
+            return;
+        }
+
+        NetworkObject *const networked = _world.Find(header.object);
+        if (networked == nullptr)
+        {
+            refuse(&RpcStats::rejectedUnknown, "no such object");
+            return;
+        }
+        // Authority: a client calls RPCs only on the objects it owns (the objects of the server have owner 0, never a client)
+        if (networked->GetOwner() != client.id || client.id == kServerClientId)
+        {
+            refuse(&RpcStats::rejectedAuthority, "the client does not own the object");
+            return;
+        }
+        const auto &components = networked->GetGameObject().GetAllComponents();
+        if (header.componentIndex >= components.size() || components[header.componentIndex] == nullptr)
+        {
+            refuse(&RpcStats::rejectedUnknown, "no such component");
+            return;
+        }
+        const std::vector<RpcDescriptor> *const table = RpcTableOf(*components[header.componentIndex]);
+        if (table == nullptr || header.rpcIndex >= table->size() || HashRpcTable(*table) != header.tableHash)
+        {
+            refuse(&RpcStats::rejectedUnknown, "no such RPC (or the RPC tables differ)");
+            return;
+        }
+        const RpcDescriptor &descriptor = (*table)[header.rpcIndex];
+        if (descriptor.direction != RpcDirection::ClientToServer)
+        {
+            refuse(&RpcStats::rejectedDirection, "the RPC is not a client-to-server RPC");
+            return;
+        }
+        if (descriptor.reliable != (header.type == kRpcClientReliableType))
+        {
+            refuse(&RpcStats::rejectedUnknown, "the RPC arrived on the other channel than it is declared for");
+            return;
+        }
+        if (_options.cosmeticRpcsOnly && !descriptor.cosmetic)
+        {
+            refuse(&RpcStats::rejectedSimulation, "the RPC changes the simulation, which this preset does not allow");
+            return;
+        }
+        PendingRpc call;
+        call.sender = client.id;
+        call.object = header.object;
+        call.componentIndex = header.componentIndex;
+        call.rpcIndex = header.rpcIndex;
+        call.tableHash = header.tableHash;
+        if (!DecodeRpcArgs(descriptor, header.args, call.args))
+        {
+            refuse(&RpcStats::rejectedArguments, "the arguments do not decode or are not valid");
+            return;
+        }
+        client.pendingRpcs.push_back(std::move(call));
+    }
+
+    void NetworkServer::DispatchRpcs()
+    {
+        std::vector<std::pair<ClientId, std::vector<PendingRpc>>> batches;
+        for (auto &entry : _clients)
+        {
+            if (!entry.second.pendingRpcs.empty())
+            {
+                batches.emplace_back(entry.second.id, std::move(entry.second.pendingRpcs));
+                entry.second.pendingRpcs.clear();
+            }
+        }
+        // Clients in id order, each client's calls in the order they arrived: the same on every run
+        std::sort(batches.begin(), batches.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+        for (const auto &batch : batches)
+        {
+            for (const PendingRpc &call : batch.second)
+            {
+                RunPendingRpc(_world, call, true, _rpcStats);
+            }
+        }
+    }
+
+    RpcSendResult NetworkServer::CallRpc(Component &component, const std::string_view name,
+                                         const std::vector<nlohmann::json> &args, const RpcTarget target,
+                                         const ClientId clientId)
+    {
+        NetworkObject *const networked = component.GetGameObject().GetComponent<NetworkObject>();
+        if (networked == nullptr || !networked->HasNetworkId() || !networked->IsRegistered() ||
+            _world.Find(networked->GetNetworkId()) != networked)
+        {
+            return RpcSendResult::UnknownObject;
+        }
+        ResolvedRpc rpc;
+        if (!FindRpc(component.GetGameObject(), component, name, rpc))
+        {
+            return RpcSendResult::UnknownRpc;
+        }
+        const RpcDescriptor &descriptor = *rpc.descriptor;
+        if (descriptor.direction == RpcDirection::ClientToServer)
+        {
+            return RpcSendResult::WrongDirection;
+        }
+        if (_options.cosmeticRpcsOnly && !descriptor.cosmetic)
+        {
+            ++_rpcStats.rejectedSimulation;
+            return RpcSendResult::NotSimulationSafe;
+        }
+        if (descriptor.direction == RpcDirection::ServerToOwner && target != RpcTarget::Owner)
+        {
+            return RpcSendResult::WrongDirection;
+        }
+
+        std::vector<Client *> targets;
+        const NetworkId id = networked->GetNetworkId();
+        if (target == RpcTarget::All)
+        {
+            for (auto &entry : _clients)
+            {
+                Client &candidate = entry.second;
+                if (candidate.state == ClientState::Joined && !candidate.dropping && !candidate.hidden.contains(id.value))
+                {
+                    targets.push_back(&candidate);
+                }
+            }
+        }
+        else
+        {
+            const ClientId wanted = target == RpcTarget::Owner ? networked->GetOwner() : clientId;
+            if (wanted != kServerClientId)
+            {
+                for (auto &entry : _clients)
+                {
+                    if (entry.second.id == wanted && entry.second.state == ClientState::Joined && !entry.second.dropping)
+                    {
+                        targets.push_back(&entry.second);
+                    }
+                }
+            }
+        }
+        if (targets.empty())
+        {
+            return RpcSendResult::NoTarget;
+        }
+
+        const std::vector<RpcDescriptor> *const table = RpcTableOf(component);
+        std::string error;
+        const std::optional<std::vector<std::uint8_t>> message =
+            EncodeRpcMessage(descriptor.reliable ? kRpcServerReliableType : kRpcServerUnreliableType, id, rpc,
+                             HashRpcTable(*table), args, error);
+        if (!message.has_value())
+        {
+            if (_rpcLog.Allow())
+            {
+                Logger::Warn(std::format("NetworkServer::CallRpc: {}", error));
+            }
+            return RpcSendResult::BadArguments;
+        }
+
+        std::size_t sent = 0;
+        for (Client *const receiver : targets)
+        {
+            if (!receiver->rpcBudget.AdmitSend(_now, _options.rpc))
+            {
+                ++_rpcStats.droppedSendBudget;
+                continue;
+            }
+            bool ok = false;
+            if (descriptor.reliable)
+            {
+                ok = Send(*receiver, *message);
+            }
+            else
+            {
+                ok = message->size() <= receiver->connection->MaxUnreliableMessageSize() &&
+                     receiver->connection->SendUnreliable(*message) == N2Net::SendResult::Ok;
+            }
+            if (ok)
+            {
+                ++sent;
+                ++_rpcStats.sent;
+            }
+            else
+            {
+                ++_rpcStats.sendFailed;
+            }
+        }
+        return sent > 0 ? RpcSendResult::Sent : RpcSendResult::OverBudget;
     }
 
     void NetworkServer::OnAccept(Client &client, const Fingerprint &fingerprint)
@@ -605,6 +853,77 @@ namespace N2Engine::Network
         }
     }
 
+    void NetworkServer::OnClockPing(Client &client, const std::span<const std::uint8_t> message)
+    {
+        if (!AllowClockPing(client))
+        {
+            MarkDrop(client, "it sent more clock pings per second than allowed", &NetworkServerStats::droppedRateLimited);
+            return;
+        }
+        if (client.state != ClientState::Joined)
+        {
+            MarkDrop(client, "it sent a clock ping before it joined", &NetworkServerStats::droppedProtocol);
+            return;
+        }
+        const std::expected<ClockPingMessage, DecodeError> ping = DecodeClockPing(message);
+        if (!ping)
+        {
+            MarkDrop(client, std::format("it sent a malformed clock ping ({})", ToString(ping.error())),
+                     &NetworkServerStats::droppedMalformed);
+            return;
+        }
+        // The answer is stamped now and sent by the next SendClockPongs (never from inside the connection's receive).
+        // The pings of one update beyond the cap get no answer: the client asks again.
+        constexpr std::size_t kMaxPendingPongs = 8;
+        if (client.pendingPongs.size() >= kMaxPendingPongs)
+        {
+            return;
+        }
+        const std::uint32_t microsPerTick = 1'000'000u / _options.tickRate;
+        const std::uint64_t sinceTick = _now > _seenTickAt ? _now - _seenTickAt : 0;
+        ClockPongMessage pong;
+        pong.sequence = ping->sequence;
+        pong.tick = _inputTick;
+        pong.tickMicros = static_cast<std::uint32_t>(std::min<std::uint64_t>(sinceTick, microsPerTick));
+        pong.tickRate = static_cast<std::uint16_t>(_options.tickRate);
+        client.pendingPongs.push_back(pong);
+    }
+
+    void NetworkServer::SendClockPongs()
+    {
+        for (auto &entry : _clients)
+        {
+            Client &client = entry.second;
+            if (client.pendingPongs.empty())
+            {
+                continue;
+            }
+            if (client.state == ClientState::Joined && !client.dropping && !client.connection->IsFailed())
+            {
+                for (const ClockPongMessage &pong : client.pendingPongs)
+                {
+                    // A lost pong is as good as none: the client pings again
+                    if (client.connection->SendUnreliable(Encode(pong)) == N2Net::SendResult::Ok)
+                    {
+                        ++_stats.clockPongsSent;
+                    }
+                }
+            }
+            client.pendingPongs.clear();
+        }
+    }
+
+    bool NetworkServer::AllowClockPing(Client &client)
+    {
+        if (_now - client.clockWindowStart >= kMicrosPerSecond)
+        {
+            client.clockWindowStart = _now;
+            client.clockWindowCount = 0;
+        }
+        ++client.clockWindowCount;
+        return client.clockWindowCount <= _options.maxClockPingsPerSecond;
+    }
+
     void NetworkServer::RetireInput(Client &client)
     {
         if (client.input != nullptr)
@@ -740,11 +1059,17 @@ namespace N2Engine::Network
                 if (shown) client.hidden.erase(id); else client.hidden.insert(id);
             }
             const std::vector<std::vector<std::uint8_t>> messages =
-                _replicator.BuildForClient(client.id, _now, client.connection->MaxUnreliableMessageSize());
+                _replicator.BuildForClient(client.id, _now, client.connection->MaxUnreliableMessageSize(), _inputTick);
             for (const std::vector<std::uint8_t> &message : messages)
             {
                 // A message that does not get out is as good as a lost one: the next tick sends what is still needed
                 (void)client.connection->SendUnreliable(message);
+            }
+            if (messages.empty())
+            {
+                // Nothing changed for this client: say how far the stream has got, so it can tell objects that stopped
+                // from snapshots that are late (netcode stage B3)
+                (void)client.connection->SendUnreliable(Encode(StreamTickMessage{_inputTick}));
             }
         }
     }

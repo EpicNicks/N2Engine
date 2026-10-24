@@ -1,10 +1,14 @@
 #pragma once
 
+#include "engine/network/NetworkId.hpp"
+#include "engine/network/NetworkRpc.hpp"
 #include "engine/serialization/ComponentSerializer.hpp"
 #include "engine/io/ResourcePath.hpp"
 #include "nlohmann/json.hpp"
 #include <functional>
 #include <memory>
+#include <optional>
+#include <vector>
 #include <string_view>
 #include <sol/sol.hpp>
 
@@ -52,6 +56,15 @@ namespace N2Engine::Scripting
         // DescribeFields said once that a declaration's `replicated` was refused (not a boolean, or a kind that cannot be
         // replicated), so describing the fields again does not repeat it
         mutable bool _replicatedWarned = false;
+        // The RPCs the script declares in its `Rpcs` table (netcode stage B7), read from the instance on first use and
+        // dropped whenever the instance is replaced
+        std::vector<Network::RpcDescriptor> _rpcs;
+        bool _rpcsBuilt = false;
+        void BuildRpcTable();
+        /// self:Rpc(name, ...) and self:RpcTo(client, name, ...): validates the arguments against the declaration and
+        /// calls the active server or client. Throws (a Lua error) for an unknown RPC or an argument of the wrong type.
+        bool SendRpcFromScript(const std::string &name, const sol::variadic_args &arguments,
+                               std::optional<Network::ClientId> client);
         // Set when a call into the script ran out of instructions or memory (LuaLimits): its lifecycle calls are skipped
         // until the script is set again or reloaded, so a looping OnUpdate doesn't burn the whole budget every frame
         bool _faulted = false;
@@ -214,6 +227,14 @@ namespace N2Engine::Scripting
         // (the instance's field, not the saved default), and a client sets only that field on its instance.
         /// Serialize() with the live values of the replicated script fields in "scriptData"
         [[nodiscard]] nlohmann::json SerializeReplicated(std::span<const FieldInfo> replicated) override;
+
+        // Network RPCs (netcode stage B7). A script declares `Rpcs = { Fire = { target = "server", reliable = true,
+        // args = { "Vector3", "float" } } }` (target "server", "client" or "owner"; reliable defaults to true; cosmetic to
+        // false; an argument is a type name from bool, int, float, string, Vector3 or { type = "float", min = 0, max = 1 }),
+        // calls it with self:Rpc("Fire", dir, power) and handles it in function Script:OnRpc_Fire(sender, dir, power).
+        [[nodiscard]] const std::vector<Network::RpcDescriptor> *GetRpcTable() override;
+        bool InvokeRpc(const Network::RpcDescriptor &rpc, const Network::RpcContext &context,
+                       const std::vector<nlohmann::json> &args) override;
         /// Sets the replicated script fields `values` names in "scriptData", on the instance and in the saved data; the
         /// script's other fields are not touched (SetEditorFields would write every saved field back to the instance)
         void ApplyReplicated(const nlohmann::json &values, ReferenceResolver *resolver) override;

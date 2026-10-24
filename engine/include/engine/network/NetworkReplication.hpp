@@ -3,8 +3,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
+#include <set>
 #include <span>
+#include <utility>
 #include <vector>
 
 #include "engine/network/NetworkId.hpp"
@@ -15,6 +18,7 @@
 namespace N2Engine::Network
 {
     class NetworkWorld;
+    class NetworkObject;
 
     /// Counters of the server's state replication since it was made. All data: nothing here throws.
     struct ServerReplicationStats
@@ -101,9 +105,12 @@ namespace N2Engine::Network
         /// The StateUpdates for `client` this tick (each a complete message for the unreliable channel), at most
         /// maxMessagesPerTick of them, none when nothing changed since what the client acknowledged. `nowMicros`
         /// stamps the messages (their ack deadline). `maxMessageBytes` caps this client's message size (the connection's
-        /// largest unreliable message), at most the options' value.
+        /// largest unreliable message), at most the options' value. `serverTick` is the server's fixed tick (32 bits)
+        /// the states are read on: it goes into every message's header (netcode stage B3), where the client's
+        /// interpolation reads it.
         [[nodiscard]] std::vector<std::vector<std::uint8_t>> BuildForClient(ClientId client, std::uint64_t nowMicros,
-                                                                            std::size_t maxMessageBytes);
+                                                                            std::size_t maxMessageBytes,
+                                                                            std::uint32_t serverTick = 0);
 
         /// Applies a client's ack. False when it names a sequence that was never sent (nothing is applied).
         bool OnAck(ClientId client, const StateAckMessage &ack);
@@ -172,7 +179,7 @@ namespace N2Engine::Network
         void ExpireRecords(ClientState &state, std::uint64_t nowMicros);
         void ExpireFront(ClientState &state);
         void ApplyRecord(ClientState &state, const SentRecord &record);
-        void Flush(ClientState &state, PendingMessage &pending, std::uint64_t nowMicros,
+        void Flush(ClientState &state, PendingMessage &pending, std::uint64_t nowMicros, std::uint32_t serverTick,
                    std::vector<std::vector<std::uint8_t>> &messages);
         /// The entry for one object (its bytes and what it records), or false when nothing changed
         bool BuildEntry(ClientState &state, std::uint32_t id, const ObjectState &object,
@@ -235,6 +242,16 @@ namespace N2Engine::Network
         /// Applies one StateUpdate (the bytes of an unreliable message) to `world`
         Result OnStateUpdate(const NetworkWorld &world, std::span<const std::uint8_t> message);
 
+        /// Called for each StateUpdate that is newer than any seen, before its entries are applied, with the server tick
+        /// in its header (netcode stage B3: the snapshot interpolation hangs on it)
+        void SetMessageObserver(std::function<void(std::uint32_t)> observer) { _messageObserver = std::move(observer); }
+        /// Called for each entry applied whole, with the object and the tick of the message; the object's fields hold the
+        /// server's values when it runs. It may not call OnStateUpdate.
+        void SetEntryObserver(std::function<void(NetworkObject &, std::uint32_t)> observer)
+        {
+            _entryObserver = std::move(observer);
+        }
+
         /// The object is gone: its layout goes
         void ForgetObject(NetworkId id) { _layouts.Forget(id); }
 
@@ -258,5 +275,7 @@ namespace N2Engine::Network
         std::uint32_t _latest = 0;
         std::uint32_t _bits = 0;
         bool _ackPending = false;
+        std::function<void(std::uint32_t)> _messageObserver;
+        std::function<void(NetworkObject &, std::uint32_t)> _entryObserver;
     };
 }
