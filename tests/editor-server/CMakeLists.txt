@@ -45,6 +45,7 @@ endif()
 target_compile_definitions(editor_server_tests PRIVATE
         N2_PROTOCOL_JSON="${CMAKE_CURRENT_SOURCE_DIR}/../../editor-server/protocol/protocol.json"
         N2_PROTOCOL_TEST_VECTORS="${CMAKE_CURRENT_SOURCE_DIR}/../../editor-server/protocol/test-vectors.json"
+        N2_EDITOR_TOOLING_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tooling"
 )
 
 # ExtensionApiAnnotationTests checks the LuaLS annotations of the Editor API of editor extensions against what the host

@@ -24,7 +24,7 @@ namespace N2Engine::Physics
         _gameObject.CreatePositionable();
 
         RegisterMember(NAMEOF(backend), backend)
-            .Tooltip("Auto: PhysX on the GPU when the project enables it and it works (not available yet), else CPU. PhysX: falls back to CPU, with a warning. CPU: the same on every machine. Read when the body starts.");
+            .Tooltip("Auto: PhysX (deformable volumes) on the GPU when the project enables physics.gpu and it works, else CPU. PhysX: falls back to CPU, with a warning. CPU: the same on every machine. Read when the body starts.");
         RegisterMember(NAMEOF(resolution), resolution).Range(kMinTetResolution, kMaxTetResolution)
             .Tooltip("Voxels along the longest axis of the mesh the body is built from: more is finer and slower. Read when the body starts.");
         RegisterMember(NAMEOF(density), density).Range(0.001, 1.0e7).Tooltip("Mass per unit volume in kg/m^3 (water is 1000)");
@@ -38,12 +38,12 @@ namespace N2Engine::Physics
         RegisterMember(NAMEOF(solverIterations), solverIterations).Range(1.0, CpuSoftBodyBackend::kMaxIterations)
             .Tooltip("Solver iterations in each of the CPU backend's 4 sub-steps: more is stiffer and slower");
         RegisterMember(NAMEOF(collideWithGround), collideWithGround)
-            .Tooltip("Rest on the plane y = groundHeight; the only collision the CPU backend does");
+            .Tooltip("Rest on the plane y = groundHeight; the only collision the CPU backend does (the PhysX backend collides with the scene's colliders instead)");
         RegisterMember(NAMEOF(groundHeight), groundHeight);
         RegisterMember(NAMEOF(materialModel), materialModel)
-            .Tooltip("Used only by the PhysX backend, which arrives in a later stage; the CPU backend ignores it");
+            .Tooltip("Used only by the PhysX backend: CoRotational is fast and needs well-shaped tetrahedra, NeoHookean is robust and slower. The CPU backend ignores it");
         RegisterMember(NAMEOF(selfCollision), selfCollision)
-            .Tooltip("Used only by the PhysX backend, which arrives in a later stage; the CPU backend ignores it");
+            .Tooltip("Used only by the PhysX backend: the body collides with itself. The CPU backend ignores it");
     }
 
     SoftBody::~SoftBody()
@@ -97,6 +97,8 @@ namespace N2Engine::Physics
         }
         params.groundEnabled = collideWithGround;
         params.groundHeight = groundHeight;
+        params.materialModel = materialModel;
+        params.selfCollision = selfCollision;
         return params;
     }
 

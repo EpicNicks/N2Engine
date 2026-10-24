@@ -158,6 +158,8 @@ namespace Renderer::Software
          */
         void ReadFramebuffer(uint8_t *buffer, int width, int height) const override;
 
+        /// Draws submitted while enabled shade a one-pixel inward band along triangle boundaries.
+        /// Snapshotted per draw, like material and view state; clipping creates polygon edges, never fan diagonals.
         void SetWireframe(bool enabled) override;
         const char* GetRendererName() const override { return "Software Rasterizer"; }
 
@@ -167,6 +169,7 @@ namespace Renderer::Software
             float modelMatrix[16];
             SWMaterialSnapshot material; // copied at DrawMesh: the render thread never reads the SWMaterial
             Common::RenderState state;
+            bool wireframe = false;
             // The view and projection set when the draw was submitted, so a SetViewProjection later in the
             // frame (the UI pass) only affects the draws after it, as in OpenGL
             float view[16];
@@ -229,7 +232,7 @@ namespace Renderer::Software
         };
 
         void RasterizeMesh(SWMesh* mesh, const float* modelMatrix, const float* view, const float* proj,
-                           const SWMaterialSnapshot& material, const Common::RenderState& state,
+                           const SWMaterialSnapshot& material, const Common::RenderState& state, bool wireframe,
                            uint32_t firstIndex, uint32_t indexCount,
                            const Common::SceneLightingData& lighting, const N2Engine::Math::Vector3& cameraPos);
         /// Records a draw of `indexCount` indices from `firstIndex` (both DrawMesh overloads)

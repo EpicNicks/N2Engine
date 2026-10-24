@@ -524,6 +524,11 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <li><strong>The engine side</strong> is <code>Renderer::WebGpu::CreateWebGpuRenderer()</code>, declared in <code>renderer/webgpu/WebGpuFactory.hpp</code> without a WebGPU type, which <code>Window</code> calls only in the web build; only the renderer is compiled with the port's include path.</li>
 </ul>
 
+<h3 id="sw-wireframe">Software wireframe</h3>
+<p><code>SoftwareRenderer::SetWireframe(true)</code> draws a one-pixel inward band along each triangle's boundary; its interior writes neither colour nor depth. The option is copied when <code>DrawMesh</code> records a draw, including indexed subranges, so solid and wireframe draws may share a frame and a later toggle cannot change submitted work. The boundary pixels use the normal material, textures, lighting, alpha tests, face culling and depth state. Turning the option off restores filled triangles.</p>
+<p>Homogeneous clipping produces a convex polygon. Wireframe shows that polygon's boundary, including the new clipping edges, without the internal diagonals introduced by fan triangulation. Every fan triangle checks the complete polygon boundary, preserving the band even beside a very narrow fan wedge. Collapsed projected edges are ignored. The software result uses the existing top-left coverage rule, has no antialiasing or configurable line width, and does not promise the exact pixels of GPU line rasterization. Degenerate triangles draw nothing. It still scans the triangle's bounded pixel area, so wireframe reduces shading work rather than guaranteeing faster rasterization.</p>
+<p class="src">Source: <code>renderer/src/software/SoftwareRenderer.cpp</code> — <code>RecordDraw</code>, <code>RasterTri</code>, <code>WireBoundary</code>; tests: <code>tests/renderer/software/SoftwareWireframeTests.cpp</code>.</p>
+
 <h3 id="sw-headless">The software renderer's headless mode <span class="badge">PR #51</span></h3>
 <p><code>SoftwareRenderer::Initialize(nullptr, width, height)</code> starts the software renderer without a window. It makes no GL or GLFW call at all: no context, no glad, no blit texture or shader. Everything else is as with a window:</p>
 <ul>

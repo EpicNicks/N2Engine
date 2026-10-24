@@ -706,14 +706,40 @@ namespace
         bool     depthTest;
         bool     depthWrite;   // already false when depthTest is off, as in OpenGL
         CullMode cull;
+        bool     wireframe;
+    };
+
+    struct WireEdge
+    {
+        double dx, dy, originX, originY, band;
+        bool Covers(double x, double y) const
+        {
+            return std::abs(dx * (y - originY) - dy * (x - originX)) <= band;
+        }
+    };
+
+    // A clipped convex polygon, before fan triangulation. A thin fan wedge may be narrower than the
+    // one-pixel boundary band, so every fan tests ALL polygon edges, including ones on another wedge.
+    struct WireBoundary
+    {
+        std::array<WireEdge, 12> edges;
+        int count = 0;
+        bool Covers(int px, int py) const
+        {
+            const double x = double(px) * kSubStep + kSubHalf;
+            const double y = double(py) * kSubStep + kSubHalf;
+            for (int i = 0; i < count; ++i)
+                if (edges[i].Covers(x, y)) return true;
+            return false;
+        }
     };
 
     // The text shader writes depth whenever the draw depth-tests, even in the Transparent queue (whose
     // state says no depth write): with no blending, an alpha-tested glyph is an opaque surface, and
     // writing its depth keeps anything drawn later behind it from covering it. See SWShaderType::Text.
-    inline RasterState ToRasterState(const RenderState& s, const bool alphaTestedText)
+    inline RasterState ToRasterState(const RenderState& s, const bool alphaTestedText, const bool wireframe)
     {
-        return RasterState{ s.depthTest, s.depthTest && (s.depthWrite || alphaTestedText), s.cull };
+        return RasterState{ s.depthTest, s.depthTest && (s.depthWrite || alphaTestedText), s.cull, wireframe };
     }
 
     // The text shader's alpha test: the SDF edge (0.5, 128 in the atlas bytes) and, as OpenGL discards a
@@ -733,7 +759,7 @@ namespace
     template <ShadeKind KIND>
     void RasterTri(const ScreenVert& sv0, const ScreenVert& sv1, const ScreenVert& sv2,
                    const RasterTarget& t, const RasterState& rs, const ResolvedMat& mat,
-                   [[maybe_unused]] const LitState& lit)
+                   [[maybe_unused]] const LitState& lit, const WireBoundary* boundary)
     {
         const ScreenVert* A = &sv0;
         const ScreenVert* B = &sv1;
@@ -790,6 +816,17 @@ namespace
         edgeSetup(*C, *A, s1x, s1y, b1);   // weight of B
         edgeSetup(*A, *B, s2x, s2y, b2);   // weight of C
 
+        // An unbiased edge function is distance from its line times its length. A one-pixel inward band
+        // reuses the triangle's clipping, top-left rule, interpolation and shading, and never writes its interior.
+        // A clipped polygon uses its complete boundary below; a triangle needs only these three edge functions.
+        const auto edgeBand = [](const ScreenVert& a, const ScreenVert& b)
+        {
+            return std::hypot(double(b.fx) - a.fx, double(b.fy) - a.fy) * kSubStep;
+        };
+        const double band0 = rs.wireframe && !boundary ? edgeBand(*B, *C) : 0.0;
+        const double band1 = rs.wireframe && !boundary ? edgeBand(*C, *A) : 0.0;
+        const double band2 = rs.wireframe && !boundary ? edgeBand(*A, *B) : 0.0;
+
         const int64_t cx0 = (int64_t)px0 * kSubStep + kSubHalf;
         const int64_t cy0 = (int64_t)py0 * kSubStep + kSubHalf;
 
@@ -812,7 +849,9 @@ namespace
 
             for (int px = px0; px <= px1; ++px)
             {
-                if ((e0 | e1 | e2) >= 0)   // sign-bit trick: inside iff none negative
+                if ((e0 | e1 | e2) >= 0 && // sign-bit trick: inside iff none negative
+                    (!rs.wireframe || (boundary ? boundary->Covers(px, py) :
+                        e0 + b0 <= band0 || e1 + b1 <= band1 || e2 + b2 <= band2)))
                 {
                     const float l0 = (float)(e0 + b0) * invArea;
                     const float l1 = (float)(e1 + b1) * invArea;
@@ -1080,7 +1119,7 @@ void SoftwareRenderer::EndFrame()
             for (const size_t index : OrderDraws(keys))
             {
                 const DrawCommand& cmd = queue[index];
-                RasterizeMesh(cmd.mesh, cmd.modelMatrix, cmd.view, cmd.proj, cmd.material, cmd.state,
+                RasterizeMesh(cmd.mesh, cmd.modelMatrix, cmd.view, cmd.proj, cmd.material, cmd.state, cmd.wireframe,
                               cmd.firstIndex, cmd.indexCount, lighting, camPos);
             }
 
@@ -1297,6 +1336,7 @@ void SoftwareRenderer::RecordDraw(IMesh* mesh, const float* modelMatrix, IMateri
     // as OpenGL applies uniforms when the draw is submitted
     cmd.material = SnapshotMaterial(*swMat);
     cmd.state = state;
+    cmd.wireframe = m_wireframe;
     memcpy(cmd.modelMatrix, modelMatrix, 64);
     memcpy(cmd.view, m_view, 64);
     memcpy(cmd.proj, m_proj, 64);
@@ -1367,7 +1407,7 @@ void SoftwareRenderer::SetPixel(int x, int y, float depth, uint32_t color)
 }
 
 void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, const float* view, const float* proj,
-                                     const SWMaterialSnapshot& material, const RenderState& state,
+                                     const SWMaterialSnapshot& material, const RenderState& state, const bool wireframe,
                                      const uint32_t firstIndex, const uint32_t indexCount,
                                      const SceneLightingData& lighting, const N2Engine::Math::Vector3& cameraPos)
 {
@@ -1407,7 +1447,7 @@ void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, con
 
     const RasterTarget target{ m_colorBuffer.data(), m_depthBuffer.data(),
                                (int)m_width, (int)m_height };
-    const RasterState rs = ToRasterState(state, kind == ShadeKind::Text);
+    const RasterState rs = ToRasterState(state, kind == ShadeKind::Text, wireframe);
     const float halfW = 0.5f * (float)m_width;
     const float halfH = 0.5f * (float)m_height;
 
@@ -1472,14 +1512,14 @@ void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, con
             x.sv = Project(x.cv, halfW, halfH);   // project once; reused by every triangle sharing it
     }
 
-    auto raster = [&](const ScreenVert& a, const ScreenVert& b, const ScreenVert& c)
+    auto raster = [&](const ScreenVert& a, const ScreenVert& b, const ScreenVert& c, const WireBoundary* boundary = nullptr)
     {
         switch (kind)
         {
-        case ShadeKind::Lit:   RasterTri<ShadeKind::Lit  >(a, b, c, target, rs, rm, lit); break;
-        case ShadeKind::Text:  RasterTri<ShadeKind::Text >(a, b, c, target, rs, rm, lit); break;
-        case ShadeKind::Unlit: RasterTri<ShadeKind::Unlit>(a, b, c, target, rs, rm, lit); break;
-        case ShadeKind::Flat:  RasterTri<ShadeKind::Flat >(a, b, c, target, rs, rm, lit); break;
+        case ShadeKind::Lit:   RasterTri<ShadeKind::Lit  >(a, b, c, target, rs, rm, lit, boundary); break;
+        case ShadeKind::Text:  RasterTri<ShadeKind::Text >(a, b, c, target, rs, rm, lit, boundary); break;
+        case ShadeKind::Unlit: RasterTri<ShadeKind::Unlit>(a, b, c, target, rs, rm, lit, boundary); break;
+        case ShadeKind::Flat:  RasterTri<ShadeKind::Flat >(a, b, c, target, rs, rm, lit, boundary); break;
         }
     };
 
@@ -1504,8 +1544,20 @@ void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, con
 
         ScreenVert sv[12];
         for (int k = 0; k < n; ++k) sv[k] = Project(poly[k], halfW, halfH);
+        WireBoundary boundary;
+        if (wireframe)
+        {
+            for (int k = 0; k < n; ++k)
+            {
+                const auto& a = sv[k]; const auto& b = sv[(k + 1) % n];
+                const double dx = double(b.fx) - a.fx, dy = double(b.fy) - a.fy;
+                // Quantization may collapse an edge. It has no line and must not cover the entire polygon.
+                if (dx != 0.0 || dy != 0.0)
+                    boundary.edges[boundary.count++] = WireEdge{dx, dy, double(a.fx), double(a.fy), std::hypot(dx, dy) * kSubStep};
+            }
+        }
         for (int k = 1; k + 1 < n; ++k)                 // fan-triangulate
-            raster(sv[0], sv[k], sv[k + 1]);
+            raster(sv[0], sv[k], sv[k + 1], wireframe ? &boundary : nullptr);
     }
 }
 

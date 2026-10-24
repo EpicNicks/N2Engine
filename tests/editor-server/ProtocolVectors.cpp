@@ -106,6 +106,9 @@ namespace ProtocolVectors
     const std::map<std::string, RequestDecoder> &RequestDecoders()
     {
         static const std::map<std::string, RequestDecoder> decoders = {
+            {"SetEditorViewOptions",[](BufferReader &r){return json{{"wireframe",SetEditorViewOptionsCmd::Deserialize(r).wireframe}};}},
+            {"CheckLuaSyntax",[](BufferReader &r){const auto cmd=CheckLuaSyntaxCmd::Deserialize(r);return json{{"text",cmd.text},{"chunkName",cmd.chunkName}};}},
+            {"GetAssetPreview",[](BufferReader &r){const auto cmd=GetAssetPreviewCmd::Deserialize(r);return json{{"uuidOrPath",cmd.uuidOrPath},{"maxSize",cmd.maxSize}};}},
             {"SetViewportSize", [](BufferReader &r)
             {
                 const auto cmd = SetViewportSizeCmd::Deserialize(r);
@@ -342,6 +345,8 @@ namespace ProtocolVectors
                 WritePlayState(w, StringField(f, "state"), Uint32Field(f, "frame"), f.at("time").get<float>());
             }},
             {"AssetList", [](BufferWriter &w, const json &f) { WriteAssetList(w, f.at("folders"), f.at("assets")); }},
+            {"LuaSyntax",[](BufferWriter &w,const json &f){WriteLuaSyntax(w,f.at("result"));}},
+            {"AssetPreview",[](BufferWriter &w,const json &f){const auto pixels=FromHex(StringField(f,"pixels"));WriteAssetPreview(w,f.at("info"),pixels);}},
             {"AssetDetail", [](BufferWriter &w, const json &f) { WriteAssetDetail(w, f.at("info")); }},
             {"TextData", [](BufferWriter &w, const json &f) { WriteTextData(w, StringField(f, "text")); }},
             {"AssetCreated", [](BufferWriter &w, const json &f)

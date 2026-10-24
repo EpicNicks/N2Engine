@@ -2,6 +2,13 @@
 
 Tags: [V] verified by reading N2Engine-Electron-Frontend `master` at `c3768c0` (protocol 1.13.0, `engine-ref.txt` = `2c15f3f`) and N2Engine `master` at `942cc21`; [M] from memory, general knowledge or another proposal, not checked in this code; [E] estimate. `[FE]` marks a frontend path (relative to N2Engine-Electron-Frontend/), other paths are relative to N2Engine/. Design only: nothing was built, run or changed, and no repo was touched.
 
+Implementation update (2026-10-23; the design observations below describe the original baseline):
+
+- FE13a/b, FE14 and FE15 are implemented together in [frontend PR #57](https://github.com/EpicNicks/N2Engine-Electron-Frontend/pull/57). This includes overlays and orthographic/axis/2D/bookmark views, CodeMirror with pinned Lua API completion data, and bounded client statistics. The combined frontend suites pass, and Chrome smoke covers the viewport controls, narrow statistics layout, and CodeMirror editing/completion/search/read-only behavior. Live Electron/host feel remains a user check.
+- EN1 implements protocol 1.17.0: Read-class editor wireframe options, compile-only Lua syntax checking, and CPU texture/audio previews. The optional import-settings schema command is deferred. Backend wireframe support still applies (WebGPU ignores it; software does not rasterize it; Vulkan requires the device feature).
+- FE-S1 is next after EN1 merges: update the engine pin/generated protocol and Lua API indexes, capability-gate the lint adapter, and wire the host wireframe and preview controls. The frontend PR deliberately retains its current engine pin; the editor API completion index records that the legacy pin lacks `editor-api.lua`.
+- Orthographic picking has explicit host regression coverage, including parallel rays with different origins. CodeMirror's measured bundle increase is 253,893 gzip bytes; MIT dependency notices are included in the frontend.
+
 Inputs it must stay consistent with:
 - `proposals/lua-editor-extensions.md` (E-X1..E-X7; E-X2 is in flight and takes protocol **1.14.0** [M: progress log 2026-10-20]; E-X4 is the frontend PR: Tools menu, `FormDialog`, trust prompt, admin Extensions dialog).
 - `proposals/netcode-runtime-design.md` sections 5.1-5.3 (A1: the `network` settings block and preset table; B11: the editor Network panel, a protocol minor).
