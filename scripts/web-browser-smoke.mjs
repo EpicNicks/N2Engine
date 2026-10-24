@@ -179,7 +179,8 @@ async function screenshot(name, visible = false) {
     assert.match(page.url(), /renderer=software/);
     assert.equal(await page.evaluate(() => !!window.__gpuSession), false);
     await page.click('#start');
-    await page.waitForFunction(() => document.querySelector('#canvas').width === 640);
+    // Software renders at device resolution (640 CSS pixels x2), capped at 1280; 640 is only the first frame before it follows.
+    await page.waitForFunction(() => document.querySelector('#canvas').width === 1280);
     await screenshot('software.png', true);
     // If loss exhausts recovery before Start, replace the canvas and start
     // software in this page, without asking the user to reload.
@@ -190,7 +191,7 @@ async function screenshot(name, visible = false) {
     await page.evaluate(() => window.__gpuSession.device.destroy());
     await page.waitForFunction(() => document.querySelector('#canvas').getContext('2d') !== null);
     await page.click('#start');
-    await page.waitForFunction(() => document.querySelector('#canvas').width === 640);
+    await page.waitForFunction(() => document.querySelector('#canvas').width === 1280);
     assert.equal(await page.evaluate(() => window.__gpuFrames), 0);
     assert.equal(await page.locator('#error').isVisible(), false);
     await page.goto(base + '/?renderer=webgpu');
@@ -223,7 +224,7 @@ async function screenshot(name, visible = false) {
     assert.equal(await page.evaluate(() => isSecureContext), false);
     assert.equal(await page.evaluate(() => !!window.__gpuSession), false);
     await page.click('#start');
-    await page.waitForFunction(() => document.querySelector('#canvas').width === 640);
+    await page.waitForFunction(() => document.querySelector('#canvas').width === 1280);
     assert.equal(await page.locator('#error').isVisible(), false);
     assert.equal(await page.evaluate(() => window.__gpuFrames), 0);
     await page.screenshot({ path: path.join(evidenceDir, 'insecure-software.png') });
