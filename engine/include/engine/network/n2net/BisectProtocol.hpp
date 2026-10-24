@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
 #include <vector>
@@ -196,6 +197,11 @@ namespace N2Engine::N2Net
     public:
         BisectClient(Connection &connection, const BisectClientConfig &config) noexcept;
 
+        /// Sends each request through `sender` instead of a Connection (a relay's forward envelope wraps it): true when
+        /// the message was accepted. A false return ends the session with ConnectionFailed, as a refusing Connection does.
+        using Sender = std::function<bool(std::span<const std::uint8_t>)>;
+        BisectClient(Sender sender, const BisectClientConfig &config) noexcept;
+
         /// Sends a request. nullopt (and failure set, unless it is only that the table is full: then None) when the
         /// budget or the outstanding limit is hit or the connection refuses.
         [[nodiscard]] std::optional<std::uint32_t> Submit(std::uint64_t nowMicros, BisectOp op, std::uint32_t tick,
@@ -239,7 +245,8 @@ namespace N2Engine::N2Net
             }
         }
 
-        Connection &connection_;
+        Connection *connection_ = nullptr;
+        Sender sender_;
         BisectClientConfig config_;
         BisectFailure failure_ = BisectFailure::None;
         std::uint32_t nextId_ = 1;

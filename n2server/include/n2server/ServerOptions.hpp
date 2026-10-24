@@ -45,9 +45,20 @@ namespace N2Engine::Server
         /// such a bind. Every session is encrypted whatever this says; what the flag permits is a server that admits no
         /// one (or, once a tokens file is added later, listens on a world-facing address from the first moment).
         bool insecureBind = false;
-        /// --relay: RESERVED for the deterministic relay mode (stage C3). It parses, and RunServer refuses it as not
-        /// implemented.
+        /// --relay: the deterministic relay mode (stage C3, LockstepRelay): the server runs no world, it seats
+        /// --relay-players clients and forwards and confirms their inputs. The project must use the Deterministic preset;
+        /// otherwise RunServer refuses to start.
         bool relay = false;
+        /// --relay-players: players the session waits for, 1 to 4 (the replay format's cap)
+        int relayPlayers = 2;
+        /// --relay-stall: what the relay does when a slot stalls or its client leaves: "drop" (DropSlot, the session goes
+        /// on) or "stop" (end it for everyone)
+        bool relayStallStops = false;
+        /// --relay-stall-ms: how long the others may wait for a slot before it counts as stalled
+        int relayStallMs = 5000;
+        /// --relay-layout: a JSON list of input controls (ParseInputLayoutJson); empty: the layout the project's Lua
+        /// declared with Network.DeclareInputLayout
+        std::string relayLayoutFile;
         /// --websocket-port: -1 disabled, 0 chooses a free loopback TCP port. Put a TLS proxy in front for wss.
         int webSocketPort = -1;
         /// --websocket-origin: exact allowed browser Origin; empty accepts requests with no Origin only.

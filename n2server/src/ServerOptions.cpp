@@ -31,7 +31,12 @@ namespace N2Engine::Server
             "  --max-clients <n>       the most sessions at once, 1 to 1024 (default 16)\n"
             "  --protocol-id <n>       identifies the game and its build, decimal or 0x hex (default 0x4E324E54)\n"
             "  --insecure-bind         accept a non-loopback --bind without a tokens file\n"
-            "  --relay                 reserved for the deterministic relay mode; refused as not implemented\n"
+            "  --relay                 the deterministic relay mode: seat --relay-players clients, forward and confirm their\n"
+            "                          inputs, stop on a desync (the project must use network.preset deterministic)\n"
+            "  --relay-players <n>     players the relay waits for, 1 to 4 (default 2)\n"
+            "  --relay-stall <p>       drop (default: DropSlot, the session goes on) or stop, for a stalled or lost client\n"
+            "  --relay-stall-ms <n>    how long the others wait for a slot before it is stalled, 100 to 600000 (default 5000)\n"
+            "  --relay-layout <path>   a JSON list of input controls; default: the layout the project's Lua declared\n"
             "  --exit-on-stdin-eof     stop when stdin closes (a launcher that has gone away)\n"
             "  --log-level <level>     info (default), warn or error\n"
             "  --log-file <path>       also append the log lines to this file (created 0600 on POSIX)\n"
@@ -146,7 +151,8 @@ namespace N2Engine::Server
             }
             const bool takesValue = arg == "-p" || arg == "--port" || arg == "--bind" || arg == "--project" ||
                                     arg == "--scene" || arg == "--tokens-file" || arg == "--max-clients" ||
-                                    arg == "--websocket-port" || arg == "--websocket-origin" || arg == "--protocol-id" || arg == "--log-level" || arg == "--log-file";
+                                    arg == "--websocket-port" || arg == "--websocket-origin" || arg == "--protocol-id" || arg == "--log-level" || arg == "--log-file" ||
+                                    arg == "--relay-players" || arg == "--relay-stall" || arg == "--relay-stall-ms" || arg == "--relay-layout";
             if (!takesValue)
             {
                 return std::unexpected(std::format("Unknown option: {} (see --help)", Shown(arg)));
@@ -158,6 +164,44 @@ namespace N2Engine::Server
             }
             const std::string &value = args[++i];
 
+            if (arg == "--relay-players")
+            {
+                const std::optional<int> players = Editor::ParseWholeNumber(value, 1, 4);
+                if (!players)
+                {
+                    return std::unexpected("Invalid --relay-players: " + Shown(value) + " (expected a whole number from 1 to 4)");
+                }
+                options.relayPlayers = *players;
+                continue;
+            }
+            if (arg == "--relay-stall")
+            {
+                if (value != "drop" && value != "stop")
+                {
+                    return std::unexpected("Invalid --relay-stall: " + Shown(value) + " (expected drop or stop)");
+                }
+                options.relayStallStops = value == "stop";
+                continue;
+            }
+            if (arg == "--relay-stall-ms")
+            {
+                const std::optional<int> ms = Editor::ParseWholeNumber(value, 100, 600000);
+                if (!ms)
+                {
+                    return std::unexpected("Invalid --relay-stall-ms: " + Shown(value) + " (expected a whole number from 100 to 600000)");
+                }
+                options.relayStallMs = *ms;
+                continue;
+            }
+            if (arg == "--relay-layout")
+            {
+                if (value.empty())
+                {
+                    return std::unexpected("--relay-layout is missing a value");
+                }
+                options.relayLayoutFile = value;
+                continue;
+            }
             if (arg == "--websocket-origin")
             {
                 if (value.size() > 2048 || value.find_first_of("\r\n") != std::string::npos)
@@ -267,6 +311,11 @@ namespace N2Engine::Server
         if (options.projectPath.empty())
         {
             return std::unexpected("--project is required (see --help)");
+        }
+        if (!options.relay && (options.relayPlayers != 2 || options.relayStallStops || options.relayStallMs != 5000 ||
+                               !options.relayLayoutFile.empty()))
+        {
+            return std::unexpected("--relay-players, --relay-stall, --relay-stall-ms and --relay-layout only apply with --relay");
         }
         // Fail closed: a server on a non-loopback address must have a tokens file (every session is encrypted, but a
         // server with no tokens admits nobody), or be told explicitly that it may

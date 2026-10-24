@@ -1,5 +1,6 @@
 #include "engine/network/n2net/BisectProtocol.hpp"
 
+#include <algorithm>
 #include <utility>
 
 #include "engine/network/n2net/ByteIO.hpp"
@@ -353,7 +354,7 @@ namespace N2Engine::N2Net
     // ---- client ----
 
     BisectClient::BisectClient(Connection &connection, const BisectClientConfig &config) noexcept
-        : connection_(connection), config_(config)
+        : connection_(&connection), config_(config)
     {
         if (config_.maxOutstanding < 1)
         {
@@ -363,6 +364,12 @@ namespace N2Engine::N2Net
         {
             config_.maxOutstanding = kMaxBisectOutstanding;
         }
+    }
+
+    BisectClient::BisectClient(Sender sender, const BisectClientConfig &config) noexcept
+        : sender_(std::move(sender)), config_(config)
+    {
+        config_.maxOutstanding = std::clamp<std::uint32_t>(config_.maxOutstanding, 1u, kMaxBisectOutstanding);
     }
 
     std::uint32_t BisectClient::Outstanding() const noexcept
@@ -413,7 +420,10 @@ namespace N2Engine::N2Net
         request.hi = op == BisectOp::Fields ? 0 : hi;
         std::array<std::uint8_t, kBisectRequestSize> buffer{};
         const std::size_t size = EncodeBisectRequest(request, buffer);
-        if (size == 0 || connection_.SendReliable(std::span<const std::uint8_t>(buffer.data(), size)) != SendResult::Ok)
+        const std::span<const std::uint8_t> message(buffer.data(), size);
+        const bool sent = size != 0 && (connection_ != nullptr ? connection_->SendReliable(message) == SendResult::Ok
+                                                               : (sender_ && sender_(message)));
+        if (!sent)
         {
             Fail(BisectFailure::ConnectionFailed);
             return std::nullopt;

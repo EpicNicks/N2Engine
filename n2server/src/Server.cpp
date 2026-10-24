@@ -33,6 +33,8 @@
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourceUUID.hpp"
 #include "engine/network/InputLayout.hpp"
+#include "engine/network/LockstepRelay.hpp"
+#include "engine/network/LockstepRuntime.hpp"
 #include "engine/network/NetworkFingerprint.hpp"
 #include "engine/network/NetworkServer.hpp"
 #include "engine/network/NetworkWorld.hpp"
@@ -275,13 +277,6 @@ namespace N2Engine::Server
         {
             return RunNewToken(options);
         }
-        if (options.relay)
-        {
-            std::println(stderr, "N2Server --relay: not implemented (it is reserved for the deterministic relay mode, a later "
-                                 "stage); start without it");
-            return 1;
-        }
-
         // The log sink: every Logger line at or above --log-level, one timestamped line each, on stderr (the journal,
         // `docker logs`) and in --log-file, in every build type. Before anything below logs. A --log-file that can't be
         // opened ends the server here, so an audit trail that was asked for is never silently missing.
@@ -344,6 +339,35 @@ namespace N2Engine::Server
             std::println(stderr, "{} was made with engine {}; this is engine {}, a different major version",
                          IO::ProjectFile::FileName, project->engineVersion, EngineVersion());
             return 1;
+        }
+        // The relay serves the Deterministic preset only: a project on another preset has no lockstep to relay
+        const Network::NetworkSettings networkSettings = ReadNetworkSettings(project->settings);
+        if (options.relay && networkSettings.preset != Network::NetworkPreset::Deterministic)
+        {
+            std::println(stderr, "N2Server --relay: the project's network.preset is {}, not deterministic; the relay serves "
+                                 "only the Deterministic preset (set network.preset, physics.backend jolt and the rest of "
+                                 "its requirements)",
+                         Network::ToString(networkSettings.preset));
+            return 1;
+        }
+        std::optional<Network::InputLayout> relayLayoutFromFile;
+        if (options.relay && !options.relayLayoutFile.empty())
+        {
+            std::ifstream file(options.relayLayoutFile, std::ios::binary);
+            std::stringstream text;
+            text << file.rdbuf();
+            if (!file)
+            {
+                std::println(stderr, "N2Server --relay-layout: can't read {}", options.relayLayoutFile);
+                return 1;
+            }
+            auto parsed = Network::ParseInputLayoutJson(text.str());
+            if (!parsed)
+            {
+                std::println(stderr, "N2Server --relay-layout: {}", parsed.error());
+                return 1;
+            }
+            relayLayoutFromFile = std::move(*parsed);
         }
         const std::string scenePath = options.scene.empty() ? project->startupScene : options.scene;
         if (scenePath.empty())
@@ -658,24 +682,90 @@ namespace N2Engine::Server
             netOptions.tickRate = static_cast<std::uint32_t>(
                 std::clamp(std::lround(1.0 / std::max(static_cast<double>(Time::GetFixedDeltaTime()), 1e-6)), 1l, 1000l));
             netOptions.lagCompMaxMicros =static_cast<std::uint64_t>(ReadNetworkSettings(project->settings).authoritative.lagCompMaxMs) * 1000;
-            Network::NetworkServer netServer(transport, world, std::move(netOptions));
-            netServer.BindPhysicsQueries();
-            netServer.SetTransportObserver(onEvent);
-            netServer.SetClientObserver(
-                [&forgetClient](const Network::NetworkClientEvent &event)
+            netOptions.cosmeticRpcsOnly = networkSettings.preset == Network::NetworkPreset::Deterministic;
+            std::unique_ptr<Network::NetworkServer> netServerPtr;
+            std::unique_ptr<Network::LockstepRelay> relay;
+            if (!options.relay)
+            {
+                netServerPtr = std::make_unique<Network::NetworkServer>(transport, world, std::move(netOptions));
+                netServerPtr->BindPhysicsQueries();
+                netServerPtr->SetTransportObserver(onEvent);
+                netServerPtr->SetClientObserver(
+                    [&forgetClient](const Network::NetworkClientEvent &event)
+                    {
+                        if (event.type == Network::NetworkClientEvent::Type::Joined)
+                        {
+                            LogAdmin(std::format("Network client joined the world: client={} peer={}", event.client,
+                                                 event.peer));
+                        }
+                        else
+                        {
+                            LogAdmin(std::format("Network client left the world: client={} peer={} joined={} ({})",
+                                                 event.client, event.peer, event.wasJoined ? "yes" : "no", event.reason));
+                            forgetClient(event.peer);
+                        }
+                    });
+            }
+            else
+            {
+                Network::LockstepRelayOptions relayOptions;
+                relayOptions.protocolId = options.protocolId;
+                relayOptions.slotCount = static_cast<std::uint32_t>(options.relayPlayers);
+                relayOptions.layout = relayLayoutFromFile ? *relayLayoutFromFile : Network::DeclaredInputLayout();
+                relayOptions.inputDelay = static_cast<std::uint32_t>(std::max(1, networkSettings.deterministic.inputDelay));
+                relayOptions.hashInterval = static_cast<std::uint32_t>(std::max(1, networkSettings.deterministic.hashInterval));
+                // The tick rate the engine's fixed ticks really run at (the clients pace their SimulationClock by it)
+                relayOptions.tickRate = netOptions.tickRate;
+                relayOptions.stallPolicy = options.relayStallStops ? Network::StallPolicy::Stop : Network::StallPolicy::Drop;
+                relayOptions.stallTimeoutMicros = static_cast<std::uint64_t>(options.relayStallMs) * 1000;
+                relayOptions.maxConnections = static_cast<std::uint32_t>(std::min(options.maxClients, 64));
+                relay = std::make_unique<Network::LockstepRelay>(transport, std::move(relayOptions));
+                if (!relay->Valid())
                 {
-                    if (event.type == Network::NetworkClientEvent::Type::Joined)
+                    std::println(stderr, "N2Server --relay: no input layout: give --relay-layout <file>, or declare one in "
+                                         "the project's Lua with Network.DeclareInputLayout, and use 1 to 4 players");
+                    Logger::Error("The relay could not start: no input layout");
+                    opened.transport.reset();
+                    opened.udp = nullptr;
+                    stopEngine();
+                    return 1;
+                }
+                relay->SetObserver(
+                    [](const Network::RelayEvent &event)
                     {
-                        LogAdmin(std::format("Network client joined the world: client={} peer={}", event.client,
-                                             event.peer));
-                    }
-                    else
-                    {
-                        LogAdmin(std::format("Network client left the world: client={} peer={} joined={} ({})",
-                                             event.client, event.peer, event.wasJoined ? "yes" : "no", event.reason));
-                        forgetClient(event.peer);
-                    }
-                });
+                        using Type = Network::RelayEvent::Type;
+                        switch (event.type)
+                        {
+                        case Type::Joined:
+                            LogAdmin(std::format("Relay: a client took slot {}", event.slot));
+                            break;
+                        case Type::Refused:
+                            LogAdmin(std::format("Relay: a join was refused ({})", event.text));
+                            break;
+                        case Type::Started:
+                            Logger::Info("Relay: every slot joined, the session started");
+                            break;
+                        case Type::SlotDropped:
+                            Logger::Warn(std::format("Relay: slot {} dropped from tick {} ({})", event.slot, event.tick, event.text));
+                            break;
+                        case Type::Stopped:
+                            Logger::Warn(std::format("Relay: the session was stopped at tick {} ({}, slot {})", event.tick,
+                                                     event.text, event.slot));
+                            break;
+                        case Type::ClientDropped:
+                            LogAdmin(std::format("Relay: a client left (slot {}): {}", event.slot, event.text));
+                            break;
+                        case Type::Reset:
+                            Logger::Info("Relay: the session is over; waiting for the next one");
+                            break;
+                        }
+                    });
+                Logger::Info(std::format("Relay: waiting for {} player(s); stall policy {}, stall timeout {} ms, input delay {}, "
+                                         "hash interval {}, tick rate {}",
+                                         options.relayPlayers, Network::ToString(relay->Options().stallPolicy),
+                                         options.relayStallMs, relay->Options().inputDelay, relay->Options().hashInterval,
+                                         relay->Options().tickRate));
+            }
             const auto loopStart = std::chrono::steady_clock::now();
             const auto elapsedMicros = [&loopStart]
             {
@@ -716,15 +806,27 @@ namespace N2Engine::Server
                 }
 
                 // The tick input frames are bounded against (the most recent one begun)
-                netServer.SetCurrentTick(static_cast<std::uint32_t>(Time::GetTick()));
-                netServer.Update(elapsedMicros());
-                for (const N2Net::PeerId peer : dropAfterPoll)
+                if (netServerPtr)
                 {
-                    netServer.DropPeer(peer, "it came up without an identity");
+                    netServerPtr->SetCurrentTick(static_cast<std::uint32_t>(Time::GetTick()));
+                    netServerPtr->Update(elapsedMicros());
+                    for (const N2Net::PeerId peer : dropAfterPoll)
+                    {
+                        netServerPtr->DropPeer(peer, "it came up without an identity");
+                    }
+                    dropAfterPoll.clear();
                 }
-                dropAfterPoll.clear();
+                else
+                {
+                    relay->Update(elapsedMicros());
+                    for (const N2Net::PeerId peer : dropAfterPoll)
+                    {
+                        transport.Disconnect(peer);
+                    }
+                    dropAfterPoll.clear();
+                }
                 app.Tick(tick);
-                if (hooks.onTick && !hooks.onTick(netServer, elapsedMicros()))
+                if (netServerPtr && hooks.onTick && !hooks.onTick(*netServerPtr, elapsedMicros()))
                 {
                     hookStop = true;
                     Logger::Info("The server's host asked it to stop");
@@ -753,6 +855,16 @@ namespace N2Engine::Server
                 Logger::Info("Stdin closed");
             }
 
+            if (relay)
+            {
+                // A running session is told it is over (a few passes to get the Stop out), then the sockets close
+                relay->Shutdown();
+                for (int pass = 0; pass < 20; ++pass)
+                {
+                    relay->Update(elapsedMicros());
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                }
+            }
             // Tell the clients (a sealed Disconnect each), then close the socket
             for (const auto &client : clients)
             {
@@ -764,7 +876,7 @@ namespace N2Engine::Server
                 const std::string drops = DropText(stats);
                 Logger::Info(std::format("Stopping: {} session(s) established, {} client(s) connected over the run, {} "
                                          "client(s) joined the world; handshakes dropped: {}",
-                                         stats.sessionsEstablished, clientsEverConnected, netServer.Stats().clientsJoined,
+                                         stats.sessionsEstablished, clientsEverConnected, netServerPtr ? netServerPtr->Stats().clientsJoined : relay->Stats().joined,
                                          drops.empty() ? std::string("none") : drops));
             }
             opened.transport.reset();
