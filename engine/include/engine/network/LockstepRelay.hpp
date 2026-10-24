@@ -60,7 +60,7 @@ namespace N2Engine::Network
         /// sendInterval at most, so this is a ceiling, not a rate anyone needs.
         std::uint32_t maxBundlesPerSecond = 1024;
         /// More reliable messages than this from one client in one second is a violation (roots, pauses and forwards)
-        std::uint32_t maxMessagesPerSecond = 256;
+        std::uint32_t maxMessagesPerSecond = 2048;
         /// Bisect messages forwarded in one session, in total
         std::uint32_t maxForwardMessages = 1024;
         /// Connections at once (joined or not); a connection beyond it is dropped at once

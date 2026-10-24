@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <condition_variable>
 #include <format>
+#include <mutex>
+#include <thread>
 #include <utility>
 
 #include <nlohmann/json.hpp>
@@ -108,27 +111,101 @@ namespace N2Engine::Network
         return InputLayout::Create(std::move(specs));
     }
 
-    /// The driver the networked hash-tree peer blocks on: it lets the host's world move and pumps the runtime's network
+#if !defined(__EMSCRIPTEN__)
+    /// A body that runs on its own thread but only while the caller is inside Resume(): strict hand-off, so exactly one
+    /// of the two runs at a time and the body may use the runtime freely. Yield() gives control back.
+    struct LockstepRuntime::Coroutine
+    {
+        explicit Coroutine(std::function<void(Coroutine &)> bodyFunction) : body(std::move(bodyFunction)) {}
+
+        ~Coroutine()
+        {
+            abort = true;
+            while (!done && thread.joinable())
+            {
+                Resume();
+            }
+            if (thread.joinable())
+            {
+                thread.join();
+            }
+        }
+
+        void Resume()
+        {
+            std::unique_lock lock(mutex);
+            if (done)
+            {
+                return;
+            }
+            turn = Turn::Body;
+            if (!thread.joinable())
+            {
+                thread = std::thread(
+                    [this]
+                    {
+                        std::unique_lock inner(mutex);
+                        cv.wait(inner, [this] { return turn == Turn::Body; });
+                        inner.unlock();
+                        body(*this);
+                        inner.lock();
+                        done = true;
+                        turn = Turn::Caller;
+                        cv.notify_all();
+                    });
+            }
+            cv.notify_all();
+            cv.wait(lock, [this] { return turn == Turn::Caller; });
+        }
+
+        /// Called by the body
+        void Yield()
+        {
+            std::unique_lock lock(mutex);
+            turn = Turn::Caller;
+            cv.notify_all();
+            cv.wait(lock, [this] { return turn == Turn::Body; });
+        }
+
+        enum class Turn : std::uint8_t
+        {
+            Caller,
+            Body,
+        };
+
+        std::function<void(Coroutine &)> body;
+        std::thread thread;
+        std::mutex mutex;
+        std::condition_variable cv;
+        Turn turn = Turn::Caller;
+        bool done = false;
+        bool abort = false;
+    };
+#else
+    struct LockstepRuntime::Coroutine
+    {
+    };
+#endif
+
+    /// The driver the networked hash-tree peer waits on: a step yields to the caller, who pumps the network
     struct LockstepRuntime::DriverImpl final : N2Net::IBisectDriver
     {
-        explicit DriverImpl(LockstepRuntime &owner) : runtime(owner) {}
+        DriverImpl(LockstepRuntime &owner, Coroutine &coroutine) : runtime(owner), co(coroutine) {}
 
-        [[nodiscard]] std::uint64_t NowMicros() const override
-        {
-            return runtime.options_.nowMicros ? runtime.options_.nowMicros() : runtime.now_;
-        }
+        [[nodiscard]] std::uint64_t NowMicros() const override { return runtime.now_; }
 
         bool Step() override
         {
-            if (runtime.options_.idle)
-            {
-                runtime.options_.idle();
-            }
-            runtime.Pump(NowMicros());
-            return runtime.connection_ != nullptr && !runtime.Finished();
+#if !defined(__EMSCRIPTEN__)
+            co.Yield();
+            return !co.abort && runtime.connection_ != nullptr && !runtime.Finished();
+#else
+            return false;
+#endif
         }
 
         LockstepRuntime &runtime;
+        Coroutine &co;
     };
 
     LockstepRuntime::LockstepRuntime(N2Net::ITransport &transport, LockstepRuntimeOptions options)
@@ -140,7 +217,11 @@ namespace N2Engine::Network
         clock_.SetBehindHandler([this](const SimulationBehind &) { ++stats_.framesBehind; });
     }
 
-    LockstepRuntime::~LockstepRuntime() = default;
+    LockstepRuntime::~LockstepRuntime()
+    {
+        // A bisection still waiting is aborted before the members it uses go
+        bisection_.reset();
+    }
 
     std::uint32_t LockstepRuntime::TicksRun() const noexcept
     {
@@ -579,7 +660,7 @@ namespace N2Engine::Network
         }
     }
 
-    void LockstepRuntime::HandleStop(const StopMessage &stopMessage)
+    void LockstepRuntime::BeginStop(const StopMessage &stopMessage)
     {
         LockstepStopInfo info;
         info.reason = stopMessage.reason;
@@ -591,41 +672,71 @@ namespace N2Engine::Network
         stop_ = info;
         Notify(LockstepEvent::Type::Stopped, info.slotA, info.tick, std::string(ToString(info.reason)));
 
-        if (info.reason == StopReason::Desync)
+        if (info.reason != StopReason::Desync)
         {
-            N2Net::HashTree *const local = history_.Find(info.tick);
-            const bool participant = slot_ == info.slotA || slot_ == info.slotB;
-            if (participant && local != nullptr && options_.nowMicros && options_.idle && connection_)
-            {
-                const std::uint32_t other = slot_ == info.slotA ? info.slotB : info.slotA;
-                bisectClient_ = std::make_unique<N2Net::BisectClient>(
-                    [this, other](const std::span<const std::uint8_t> message)
-                    {
-                        const std::vector<std::uint8_t> envelope =
-                            EncodeForward(RelayMessage::To, static_cast<std::uint8_t>(other), message);
-                        return !envelope.empty() && connection_ &&
-                               connection_->SendReliable(envelope) == N2Net::SendResult::Ok;
-                    },
-                    options_.bisect);
-                DriverImpl driver(*this);
-                N2Net::NetworkedHashTreePeer peer(*bisectClient_, driver, info.tick);
-                info.divergence = N2Net::Bisect(*local, peer);
-            }
-            stop_ = info;
-            WriteReport(info, local);
-            stop_ = info;
-
-            // Keep answering the other peer's questions until it is done (it does not tell us), then leave
-            if (participant && options_.nowMicros && options_.idle)
-            {
-                DriverImpl driver(*this);
-                const std::uint64_t until = driver.NowMicros() + options_.desyncLingerMicros;
-                while (driver.NowMicros() < until && driver.Step())
-                {
-                }
-            }
-            bisectClient_.reset();
+            FinishStop();
+            return;
         }
+        N2Net::HashTree *const local = history_.Find(info.tick);
+        const bool participant = slot_ == info.slotA || slot_ == info.slotB;
+#if !defined(__EMSCRIPTEN__)
+        if (participant && local != nullptr && connection_)
+        {
+            const std::uint32_t other = slot_ == info.slotA ? info.slotB : info.slotA;
+            bisectClient_ = std::make_unique<N2Net::BisectClient>(
+                [this, other](const std::span<const std::uint8_t> message)
+                {
+                    const std::vector<std::uint8_t> envelope =
+                        EncodeForward(RelayMessage::To, static_cast<std::uint8_t>(other), message);
+                    return !envelope.empty() && connection_ && connection_->SendReliable(envelope) == N2Net::SendResult::Ok;
+                },
+                options_.bisect);
+            bisection_ = std::make_unique<Coroutine>(
+                [this, local](Coroutine &co)
+                {
+                    DriverImpl driver(*this, co);
+                    N2Net::NetworkedHashTreePeer peer(*bisectClient_, driver, stop_->tick);
+                    stop_->divergence = N2Net::Bisect(*local, peer);
+                    stop_->bisectFailure = peer.Failure();
+                });
+            stopPhase_ = StopPhase::Bisecting;
+            return;
+        }
+#endif
+        (void)participant;
+        WriteReport(*stop_, local);
+        // A participant that could not bisect has nothing more to serve
+        FinishStop();
+    }
+
+    void LockstepRuntime::StepStop(const std::uint64_t now)
+    {
+#if !defined(__EMSCRIPTEN__)
+        if (stopPhase_ == StopPhase::Bisecting)
+        {
+            bisection_->Resume();
+            if (bisection_->done)
+            {
+                bisection_.reset();
+                bisectClient_.reset();
+                WriteReport(*stop_, history_.Find(stop_->tick));
+                // Keep answering the other peer's questions until it is done (it does not tell us), then leave
+                stopPhase_ = StopPhase::Lingering;
+                lingerUntil_ = now + options_.desyncLingerMicros;
+            }
+        }
+        else if (stopPhase_ == StopPhase::Lingering && now >= lingerUntil_)
+        {
+            FinishStop();
+        }
+#else
+        (void)now;
+#endif
+    }
+
+    void LockstepRuntime::FinishStop()
+    {
+        stopPhase_ = StopPhase::None;
         if (server_ != N2Net::kInvalidPeer)
         {
             // Let the last packets out, then leave
@@ -636,7 +747,6 @@ namespace N2Engine::Network
             }
             transport_.Disconnect(server_);
         }
-        stop_ = info;
         if (!Finished())
         {
             state_ = LockstepState::Stopped;
@@ -650,31 +760,29 @@ namespace N2Engine::Network
             haveStartedAt_ = true;
             startedAt_ = nowMicros;
         }
-        if (busy_)
-        {
-            // Called from inside a bisection (the host's idle stepped us): only the network moves
-            Pump(nowMicros);
-            return;
-        }
-        busy_ = true;
         Pump(nowMicros);
         if (pendingStop_ && !Finished())
         {
             const StopMessage stop = *pendingStop_;
             pendingStop_.reset();
-            HandleStop(stop);
+            BeginStop(stop);
+        }
+        if (stopPhase_ != StopPhase::None && !Finished())
+        {
+            StepStop(nowMicros);
+            Pump(nowMicros);
+            return;
         }
         if ((state_ == LockstepState::Connecting || state_ == LockstepState::Joining) &&
             nowMicros - startedAt_ >= options_.joinTimeoutMicros)
         {
             Fail("the relay did not answer the join in time");
         }
-        if (state_ == LockstepState::Running && scheduler_)
+        if (state_ == LockstepState::Running && scheduler_ && !stop_)
         {
             RunTicks(unscaledDeltaSeconds);
             SendBundle(nowMicros);
             Pump(nowMicros);
         }
-        busy_ = false;
     }
 }

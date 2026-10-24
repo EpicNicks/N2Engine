@@ -111,11 +111,6 @@ namespace N2Engine::Network
         std::function<std::optional<N2Net::HashTree>(std::uint32_t tick)> buildTree;
         /// A readable name for a leaf the bisection reported (DescribeHashedField); optional
         std::function<std::string(std::uint32_t objectId, std::uint16_t fieldId)> describeField;
-        /// The host's monotonic clock in microseconds, and a function that lets the world move while the runtime waits
-        /// inside a bisection (sleep a moment, or pump the other end in a test). Both required for the desync flow; a
-        /// runtime without them skips the bisection and still writes the report.
-        std::function<std::uint64_t()> nowMicros;
-        std::function<void()> idle;
         std::function<void(const LockstepEvent &)> observer;
     };
 
@@ -143,6 +138,8 @@ namespace N2Engine::Network
         std::uint64_t rootB = 0;
         /// Desync only: what the bisection found (Kind::None when this peer was not in the pair or had no tree)
         N2Net::Divergence divergence;
+        /// Desync only: why the bisection ended in Malformed (None when it did not)
+        N2Net::BisectFailure bisectFailure = N2Net::BisectFailure::None;
         bool reportWritten = false;
         std::string reportError;
     };
@@ -162,12 +159,14 @@ namespace N2Engine::Network
      *   - records every confirmed tick as an n2replay version 2 row (LockstepRecorder), so the session can be replayed by
      *     the C2 golden runner.
      *
-     * The desync flow (N14: stop, never try to continue): when the relay's Stop names a mismatch, the two peers it names
-     * bisect against each other through the relay (NetworkedHashTreePeer over a BisectClient whose messages ride To/From
-     * envelopes, and a BisectResponder answers the other's questions), each writes the n2desync report with the input
-     * log, keeps answering for desyncLingerMicros, and leaves. Any other peer writes the report without a bisection. The
-     * bisection blocks inside Update, calling options.idle between steps (see LockstepRuntimeOptions); Update called
-     * again from inside idle only pumps the network.
+     * The desync flow (N14: stop, never try to continue): when the relay's Stop names a mismatch, the simulation stops at
+     * once (no further tick runs), the two peers it names bisect against each other through the relay
+     * (NetworkedHashTreePeer over a BisectClient whose messages ride To/From envelopes, and a BisectResponder answers the
+     * other's questions), each writes the n2desync report with the input log, keeps answering for desyncLingerMicros, and
+     * leaves. Any other peer writes the report without a bisection. Bisect is a synchronous loop (the IHashTreePeer
+     * seam), so it runs on a helper thread that is handed control one slice per Update and never runs at the same time as
+     * the caller: Update never blocks. The web build has no threads, so there the bisection is skipped and the report is
+     * written with divergence none.
      *
      * Single-threaded. The SimulationClock's tick counter is Time::GetTick(), process-wide; the runtime touches it only
      * with ownsTickCounter.
@@ -212,6 +211,7 @@ namespace N2Engine::Network
 
     private:
         struct DriverImpl;
+        struct Coroutine;
 
         void Pump(std::uint64_t now);
         void HandleEvent(const N2Net::TransportEvent &event, std::uint64_t now);
@@ -222,7 +222,9 @@ namespace N2Engine::Network
         void RunTicks(double unscaledDelta);
         bool RunOneTick(const N2Net::TickInputs &inputs);
         void SendBundle(std::uint64_t now);
-        void HandleStop(const StopMessage &stop);
+        void BeginStop(const StopMessage &stop);
+        void StepStop(std::uint64_t now);
+        void FinishStop();
         void WriteReport(LockstepStopInfo &info, const N2Net::HashTree *local);
         void Fail(std::string text);
         void Notify(LockstepEvent::Type type, std::uint32_t slot, std::uint32_t tick, std::string text);
@@ -249,7 +251,15 @@ namespace N2Engine::Network
         bool haveStartedAt_ = false;
         std::uint64_t lastSendAt_ = 0;
         std::uint64_t lastAckAt_ = 0;
-        bool busy_ = false;
+        enum class StopPhase : std::uint8_t
+        {
+            None,
+            Bisecting,
+            Lingering,
+        };
+        StopPhase stopPhase_ = StopPhase::None;
+        std::uint64_t lingerUntil_ = 0;
+        std::unique_ptr<Coroutine> bisection_;
         bool recorderFull_ = false;
         std::uint64_t now_ = 0;
         std::optional<StopMessage> pendingStop_;
