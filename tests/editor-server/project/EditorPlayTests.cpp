@@ -648,7 +648,7 @@ TEST_F(EditorPlayTest, APlayHostRefusesTheCommandsThatWriteTheProjectOrSwapTheSc
                                    CommandType::SetImportSettings, CommandType::WriteTextAsset,
                                    CommandType::CreateScriptAsset, CommandType::CreateFolder,
                                    CommandType::CreatePrefab, CommandType::ApplyPrefab,
-                                   CommandType::SetPhysicsBackend})
+                                   CommandType::SetPhysicsBackend, CommandType::SetNetworkSettings})
     {
         EXPECT_TRUE(EditorServer::IsEditOnlyCommand(static_cast<uint8_t>(type))) << static_cast<int>(type);
         const Frame response = Execute(*play, type);
@@ -661,7 +661,8 @@ TEST_F(EditorPlayTest, APlayHostRefusesTheCommandsThatWriteTheProjectOrSwapTheSc
     for (const CommandType type : {CommandType::GetHierarchy, CommandType::ListAssets, CommandType::GetAssetInfo,
                                    CommandType::ReadTextAsset, CommandType::RescanAssets,
                                    CommandType::InstantiatePrefab, CommandType::UnpackPrefab,
-                                   CommandType::GetPhysicsBackends})
+                                   CommandType::GetPhysicsBackends, CommandType::GetNetworkSettings,
+                                   CommandType::GetNetworkValidation})
     {
         EXPECT_FALSE(EditorServer::IsEditOnlyCommand(static_cast<uint8_t>(type))) << static_cast<int>(type);
     }

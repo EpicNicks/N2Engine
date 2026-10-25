@@ -36,6 +36,7 @@
 #include "engine/example/renderers/SphereRenderer.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourceUUID.hpp"
+#include "engine/network/NetworkObject.hpp"
 #include "engine/network/NetworkSettings.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
 #include "engine/physics/PhysicsBackendInfo.hpp"
@@ -62,6 +63,7 @@
 #include "editor-server/EditorServer.hpp"
 #include "editor-server/EditorTls.hpp"
 #include "editor-server/ExtensionHost.hpp"
+#include "editor-server/NetworkPanel.hpp"
 #include "editor-server/Protocol.hpp"
 #include "editor-server/Commands.hpp"
 #include "editor-server/Serialization.hpp"
@@ -2818,7 +2820,7 @@ namespace N2Engine::Editor
 
     std::vector<std::string> EditorServer::Capabilities()
     {
-        return {"editorExtensions","editorTooling","luaSyntax","assetPreviews","entityClipboard","prefabAssets","physicsBackends"};
+        return {"editorExtensions","editorTooling","luaSyntax","assetPreviews","entityClipboard","prefabAssets","physicsBackends","networkPanel"};
     }
 
     bool EditorServer::EnableEditorExtensions(std::filesystem::path projectRoot)
@@ -4225,6 +4227,8 @@ namespace N2Engine::Editor
         {CommandType::GetProjectInfo, "GetProjectInfo", EditorServer::CommandClass::Read},
         {CommandType::GetHistory, "GetHistory", EditorServer::CommandClass::Read},
         {CommandType::GetPhysicsBackends, "GetPhysicsBackends", EditorServer::CommandClass::Read},
+        {CommandType::GetNetworkSettings, "GetNetworkSettings", EditorServer::CommandClass::Read},
+        {CommandType::GetNetworkValidation, "GetNetworkValidation", EditorServer::CommandClass::Read},
         // The extension lists answer from what was captured at load: they run no Lua. InvokeMenuItem (0x82) and
         // InvokeInspectorAction (0x83) run extension code, so they are Writes below.
         {CommandType::ListEditorExtensions, "ListEditorExtensions", EditorServer::CommandClass::Read},
@@ -4254,6 +4258,7 @@ namespace N2Engine::Editor
         {CommandType::ApplyPrefab, "ApplyPrefab", EditorServer::CommandClass::Write},
         {CommandType::UnpackPrefab, "UnpackPrefab", EditorServer::CommandClass::Write},
         {CommandType::SetPhysicsBackend, "SetPhysicsBackend", EditorServer::CommandClass::Write},
+        {CommandType::SetNetworkSettings, "SetNetworkSettings", EditorServer::CommandClass::Write},
         {CommandType::SetLocalTransform, "SetLocalTransform", EditorServer::CommandClass::Write},
         {CommandType::CreateScript, "CreateScript", EditorServer::CommandClass::Write},
         {CommandType::RescanAssets, "RescanAssets", EditorServer::CommandClass::Write},
@@ -4597,6 +4602,15 @@ namespace N2Engine::Editor
             break;
         case CommandType::SetPhysicsBackend:
             HandleSetPhysicsBackend(clientSocket, payload);
+            break;
+        case CommandType::GetNetworkSettings:
+            HandleGetNetworkSettings(clientSocket);
+            break;
+        case CommandType::SetNetworkSettings:
+            HandleSetNetworkSettings(clientSocket, payload);
+            break;
+        case CommandType::GetNetworkValidation:
+            HandleGetNetworkValidation(clientSocket, payload);
             break;
         case CommandType::GetEntity:
             HandleGetEntity(clientSocket, payload);
@@ -5951,6 +5965,8 @@ namespace N2Engine::Editor
         case CommandType::ApplyPrefab:
         // J9's: it saves project.n2proj, as SetProjectSettings does (GetPhysicsBackends only reads)
         case CommandType::SetPhysicsBackend:
+        // B11's: it saves project.n2proj too (GetNetworkSettings and GetNetworkValidation only read)
+        case CommandType::SetNetworkSettings:
         // Reloading runs the project's extension files again, and invoking runs one's code, which a play host (it plays a
         // snapshot, and runs no extension) never does
         case CommandType::ReloadEditorExtensions:
@@ -9706,6 +9722,93 @@ namespace N2Engine::Editor
                                           Phys::ToString(*kind)));
         BufferWriter response;
         WritePhysicsBackends(response, BuildPhysicsBackendsInfo());
+        SendResponse(clientSocket, response.Release());
+    }
+
+    nlohmann::json EditorServer::BuildNetworkSettingsInfo() const
+    {
+        const nlohmann::json settings = _project ? _project->file.settings : nlohmann::json::object();
+        NetworkPanel::NudgeInput nudge;
+        if (const Scene *scene = SceneManager::GetCurScene())
+        {
+            for (const auto &go : scene->GetAllGameObjects())
+            {
+                if (go && !go->IsDestroyed() && go->HasComponent<Network::NetworkObject>())
+                {
+                    ++nudge.networkObjects;
+                }
+            }
+        }
+        return NetworkPanel::BuildSettingsInfo(settings, NetworkPanel::CurrentHostBuild(), nudge);
+    }
+
+    void EditorServer::HandleGetNetworkSettings(int clientSocket)
+    {
+        BufferWriter response;
+        WriteNetworkSettings(response, BuildNetworkSettingsInfo());
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleSetNetworkSettings(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const SetNetworkSettingsCmd cmd = SetNetworkSettingsCmd::Deserialize(reader);
+        if (!_project)
+        {
+            SendNoProject(clientSocket);
+            return;
+        }
+
+        const auto patch = NetworkPanel::BuildChangePatch(_project->file.settings, cmd.preset, cmd.settings,
+                                                          NetworkPanel::CurrentHostBuild());
+        if (!patch)
+        {
+            BufferWriter response;
+            WriteError(response, patch.error());
+            SendResponse(clientSocket, response.Release());
+            return;
+        }
+        // Nothing to change: no save, no projectChanged
+        if (!patch->at("network").empty())
+        {
+            if (auto applied = ApplySettingsPatch(*patch); !applied)
+            {
+                BufferWriter response;
+                WriteError(response, applied.error());
+                SendResponse(clientSocket, response.Release());
+                return;
+            }
+            ServerLog::PublicInfo("Network settings changed and saved; they take effect at the next play session or "
+                                  "host start");
+        }
+        BufferWriter response;
+        WriteNetworkSettings(response, BuildNetworkSettingsInfo());
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleGetNetworkValidation(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const GetNetworkValidationCmd cmd = GetNetworkValidationCmd::Deserialize(reader);
+        const nlohmann::json settings = _project ? _project->file.settings : nlohmann::json::object();
+        Network::NetworkPreset preset = ReadNetworkSettings(settings).preset;
+        if (!cmd.preset.empty())
+        {
+            const std::optional<Network::NetworkPreset> parsed = Network::ParseNetworkPreset(cmd.preset);
+            if (!parsed)
+            {
+                BufferWriter response;
+                WriteError(response, std::format("Unknown network preset {}: expected \"none\", \"authoritative\" or "
+                                                 "\"deterministic\"",
+                                                 SanitizeForLog(cmd.preset)));
+                SendResponse(clientSocket, response.Release());
+                return;
+            }
+            preset = *parsed;
+        }
+        BufferWriter response;
+        WriteNetworkValidation(response, NetworkPanel::BuildValidationReport(settings, preset,
+                                                                             NetworkPanel::CurrentHostBuild()));
         SendResponse(clientSocket, response.Release());
     }
 

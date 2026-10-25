@@ -986,6 +986,9 @@ namespace N2Engine::Editor
         void HandleUnpackPrefab(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetPhysicsBackends(int clientSocket);
         void HandleSetPhysicsBackend(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleGetNetworkSettings(int clientSocket);
+        void HandleSetNetworkSettings(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleGetNetworkValidation(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetEntity(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleSetLocalTransform(int clientSocket, const std::vector<uint8_t> &payload);
 
@@ -1100,6 +1103,9 @@ namespace N2Engine::Editor
         /// The PhysicsBackendsInfo of GetPhysicsBackends: the backends this build contains with what they declare, the
         /// project's physics.backend and network.preset, and the backend this host is running
         [[nodiscard]] nlohmann::json BuildPhysicsBackendsInfo() const;
+        /// The NetworkSettingsInfo of GetNetworkSettings (B11): the project's network settings, the three preset
+        /// bundles and the nudge for the open scene
+        [[nodiscard]] nlohmann::json BuildNetworkSettingsInfo() const;
         /// Merges `patch` into the project's settings as SetProjectSettings does (applied live, then saved; a refusal puts
         /// the live state back and saves nothing). Needs a project. The Error is the message a client is shown.
         [[nodiscard]] std::expected<void, std::string> ApplySettingsPatch(const nlohmann::json &patch);

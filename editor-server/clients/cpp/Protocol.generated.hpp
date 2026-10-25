@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.20.0";
+inline constexpr const char *ProtocolVersion = "1.21.0";
 
 enum class CommandType : uint8_t
 {
@@ -97,6 +97,9 @@ enum class CommandType : uint8_t
     UnpackPrefab = 0xAC,
     GetPhysicsBackends = 0xAD,
     SetPhysicsBackend = 0xAE,
+    GetNetworkSettings = 0x51,
+    SetNetworkSettings = 0x52,
+    GetNetworkValidation = 0x53,
 };
 
 enum class ResponseType : uint8_t
@@ -144,6 +147,8 @@ enum class ResponseType : uint8_t
     SerializedEntities = 0x21,
     EntitiesCreated = 0x22,
     PhysicsBackends = 0x23,
+    NetworkSettings = 0x24,
+    NetworkValidation = 0x25,
 };
 
 // Custom types
@@ -514,6 +519,17 @@ struct SetPhysicsBackendCmd
     std::string backend;
 };
 
+struct SetNetworkSettingsCmd
+{
+    std::string preset;
+    std::string settings; // JSON: any
+};
+
+struct GetNetworkValidationCmd
+{
+    std::string preset;
+};
+
 // Response structures
 struct FrameDataData
 {
@@ -774,6 +790,16 @@ struct AssetPreviewData
 struct PhysicsBackendsData
 {
     std::string info; // JSON: PhysicsBackendsInfo
+};
+
+struct NetworkSettingsData
+{
+    std::string info; // JSON: NetworkSettingsInfo
+};
+
+struct NetworkValidationData
+{
+    std::string report; // JSON: NetworkValidationReport
 };
 
 struct ErrorCodedData

@@ -89,6 +89,9 @@ namespace
             {"UnpackPrefab", CommandType::UnpackPrefab},
             {"GetPhysicsBackends", CommandType::GetPhysicsBackends},
             {"SetPhysicsBackend", CommandType::SetPhysicsBackend},
+            {"GetNetworkSettings", CommandType::GetNetworkSettings},
+            {"SetNetworkSettings", CommandType::SetNetworkSettings},
+            {"GetNetworkValidation", CommandType::GetNetworkValidation},
             {"GetEntity", CommandType::GetEntity},
             {"SetLocalTransform", CommandType::SetLocalTransform},
             {"CreateScript", CommandType::CreateScript},
@@ -162,6 +165,8 @@ namespace
             {"SerializedEntities", ResponseType::SerializedEntities},
             {"EntitiesCreated", ResponseType::EntitiesCreated},
             {"PhysicsBackends", ResponseType::PhysicsBackends},
+            {"NetworkSettings", ResponseType::NetworkSettings},
+            {"NetworkValidation", ResponseType::NetworkValidation},
             {"AssetPreview",ResponseType::AssetPreview},
             {"PickResult", ResponseType::PickResult},
             {"Bounds", ResponseType::Bounds},
@@ -225,6 +230,8 @@ namespace
             {"ApplyPrefab", [](BufferReader &r) { (void)ApplyPrefabCmd::Deserialize(r); }},
             {"UnpackPrefab", [](BufferReader &r) { (void)UnpackPrefabCmd::Deserialize(r); }},
             {"SetPhysicsBackend", [](BufferReader &r) { (void)SetPhysicsBackendCmd::Deserialize(r); }},
+            {"SetNetworkSettings", [](BufferReader &r) { (void)SetNetworkSettingsCmd::Deserialize(r); }},
+            {"GetNetworkValidation", [](BufferReader &r) { (void)GetNetworkValidationCmd::Deserialize(r); }},
             {"GetEntity", [](BufferReader &r) { (void)GetEntityCmd::Deserialize(r); }},
             {"SetLocalTransform", [](BufferReader &r) { (void)SetLocalTransformCmd::Deserialize(r); }},
             {"AddComponent", [](BufferReader &r) { (void)AddComponentCmd::Deserialize(r); }},
@@ -649,6 +656,8 @@ TEST(ProtocolSpecTest, EveryCommandIsClassifiedForAPlayHost)
         {"CreatePrefab", true}, {"ApplyPrefab", true},
         // J9: SetPhysicsBackend saves project.n2proj (GetPhysicsBackends only reads, below)
         {"SetPhysicsBackend", true},
+        // B11: SetNetworkSettings saves project.n2proj (the two Get commands only read, below)
+        {"SetNetworkSettings", true},
         // Allowed: they read, or change only the running game, the in-memory scene store or the connection
         {"RenderFrame", false}, {"SetViewportSize", false}, {"GetAudio", false}, {"Hello", false},
         {"PollEvents", false}, {"RenderFrameIfChanged", false}, {"SetCameraPosition", false},
@@ -666,7 +675,7 @@ TEST(ProtocolSpecTest, EveryCommandIsClassifiedForAPlayHost)
         {"ListAssets", false}, {"GetAssetInfo", false}, {"ReadTextAsset", false},
         {"SetEditorViewOptions", false}, {"SerializeEntities", false}, {"InstantiateEntities", false},
         {"InstantiatePrefab", false}, {"UnpackPrefab", false},{"CheckLuaSyntax", false}, {"GetAssetPreview", false},
-        {"GetPhysicsBackends", false},
+        {"GetPhysicsBackends", false}, {"GetNetworkSettings", false}, {"GetNetworkValidation", false},
         {"WritePlaySnapshot", false}, {"SetPaused", false}, {"Step", false}, {"GetPlayState", false},
         {"SendInput", false}, {"Shutdown", false},
         // A play host runs no editor extension: the lists answer (nothing is loaded there), the reload and the invocation
