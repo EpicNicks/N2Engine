@@ -1,5 +1,5 @@
 {
-  "version": "1.19.0",
+  "version": "1.20.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -1019,6 +1019,30 @@
         "entityId": "string"
       },
       "response": { "type": "Ok" }
+    },
+    "GetPhysicsBackends": {
+      "id": "0xAD",
+      "description": "Since 1.20.0. Read command (a viewer may call it; it changes nothing). Lists the 3D physics backends the engine knows, with what this host's build declares for each, the project's physics.backend setting and the backend this host is running, for the editor's backend picker. Hello advertises it with the capability physicsBackends. Answers PhysicsBackendsInfo: current is the backend the project's physics.backend names (\"physx\" or \"jolt\"; \"physx\" when the project does not set it, or has no project), configured is whether the project sets it, active is the BackendId of the backend this host is running (empty when it runs none), restartRequired is true when active is not current (a change takes effect at the next play session or host start: the running host keeps the backend it created at startup), networkPreset is the project's network.preset (\"none\", \"authoritative\" or \"deterministic\"). backends has one entry per known backend, \"physx\" first, then \"jolt\": id (the physics.backend value), displayName, compiledIn (whether this host's build contains it: PhysX with N2ENGINE_USE_PHYSX, Jolt with N2ENGINE_USE_JOLT), determinism (the DeterminismLevel it declares with physics.deterministic on, the best it can declare in this build: \"None\", \"SameBinary\" or \"CrossPlatform\"), determinismDefault (the level with physics.deterministic off), features (the feature groups it implements: \"layers\", \"triggers\", \"events\", \"queries\"), missingFeatures (the groups it does not), supportsSnapshot, supportsSetState, deterministicSelectable and, when there is something to say, note. deterministicSelectable is true when the backend is compiled in, declares CrossPlatform and implements every feature group: the editor offers the Deterministic network preset only for a backend where it is true (the other startup requirements of the preset, such as the strict floating-point build and the Lua seed, are checked when the project starts and are not part of it). A backend that is not compiled in has no class to ask, so its determinism, features, supportsSnapshot and supportsSetState are the empty ones (\"None\", no groups, false) and mean unknown, not none; its note says so. Works without a project (current \"physx\", configured false, networkPreset \"none\"). A play host answers it too.",
+      "request": {},
+      "response": {
+        "type": "PhysicsBackends",
+        "fields": {
+          "info": "json:PhysicsBackendsInfo"
+        }
+      }
+    },
+    "SetPhysicsBackend": {
+      "id": "0xAE",
+      "description": "Since 1.20.0. Write command (a viewer is refused with forbidden, a --read-only host with readOnly; a play host refuses it, as it refuses every command that writes the project file). Sets the project's physics.backend setting and saves project.n2proj, by the same path as SetProjectSettings (applied, validated, saved, projectChanged follows). backend is \"physx\" or \"jolt\" (any case; the host saves it in lower case). The running host keeps the backend it created at startup: the change takes effect at the next play session or host start (the answer's restartRequired says whether this host still runs another one). Error without a project; for any other name (an unknown backend); for a backend this host's build does not contain (compiledIn false: nothing is saved, so a project is never pointed at a backend its editor host cannot show); and when the project's network.preset is deterministic and the backend is not deterministicSelectable (the project would refuse to start). Answers PhysicsBackendsInfo as GetPhysicsBackends does, after the change.",
+      "request": {
+        "backend": "string"
+      },
+      "response": {
+        "type": "PhysicsBackends",
+        "fields": {
+          "info": "json:PhysicsBackendsInfo"
+        }
+      }
     }
   },
   "types": {
@@ -1245,6 +1269,27 @@
       "select?": "string[]",
       "warnings?": "string[]"
     },
+    "PhysicsBackendInfo": {
+      "id": "string",
+      "displayName": "string",
+      "compiledIn": "bool",
+      "determinism": "string",
+      "determinismDefault": "string",
+      "features": "string[]",
+      "missingFeatures": "string[]",
+      "supportsSnapshot": "bool",
+      "supportsSetState": "bool",
+      "deterministicSelectable": "bool",
+      "note?": "string"
+    },
+    "PhysicsBackendsInfo": {
+      "current": "string",
+      "configured": "bool",
+      "active": "string",
+      "restartRequired": "bool",
+      "networkPreset": "string",
+      "backends": "PhysicsBackendInfo[]"
+    },
     "ClipboardPayload": {
       "format": "string",
       "version": "number",
@@ -1318,7 +1363,8 @@
     "LuaSyntax": "0x20",
     "AssetPreview": "0xA4",
     "SerializedEntities": "0x21",
-    "EntitiesCreated": "0x22"
+    "EntitiesCreated": "0x22",
+    "PhysicsBackends": "0x23"
   },
   "extraResponses": {
     "ErrorCoded": {

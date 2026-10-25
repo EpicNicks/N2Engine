@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.19.0";
+inline constexpr const char *ProtocolVersion = "1.20.0";
 
 enum class CommandType : uint8_t
 {
@@ -95,6 +95,8 @@ enum class CommandType : uint8_t
     InstantiatePrefab = 0xAA,
     ApplyPrefab = 0xAB,
     UnpackPrefab = 0xAC,
+    GetPhysicsBackends = 0xAD,
+    SetPhysicsBackend = 0xAE,
 };
 
 enum class ResponseType : uint8_t
@@ -141,6 +143,7 @@ enum class ResponseType : uint8_t
     AssetPreview = 0xA4,
     SerializedEntities = 0x21,
     EntitiesCreated = 0x22,
+    PhysicsBackends = 0x23,
 };
 
 // Custom types
@@ -506,6 +509,11 @@ struct UnpackPrefabCmd
     std::string entityId;
 };
 
+struct SetPhysicsBackendCmd
+{
+    std::string backend;
+};
+
 // Response structures
 struct FrameDataData
 {
@@ -761,6 +769,11 @@ struct AssetPreviewData
 {
     std::string info; // JSON: AssetPreviewInfo
     std::vector<uint8_t> pixels;
+};
+
+struct PhysicsBackendsData
+{
+    std::string info; // JSON: PhysicsBackendsInfo
 };
 
 struct ErrorCodedData

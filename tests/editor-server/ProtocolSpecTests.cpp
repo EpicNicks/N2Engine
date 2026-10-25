@@ -87,6 +87,8 @@ namespace
             {"InstantiatePrefab", CommandType::InstantiatePrefab},
             {"ApplyPrefab", CommandType::ApplyPrefab},
             {"UnpackPrefab", CommandType::UnpackPrefab},
+            {"GetPhysicsBackends", CommandType::GetPhysicsBackends},
+            {"SetPhysicsBackend", CommandType::SetPhysicsBackend},
             {"GetEntity", CommandType::GetEntity},
             {"SetLocalTransform", CommandType::SetLocalTransform},
             {"CreateScript", CommandType::CreateScript},
@@ -159,6 +161,7 @@ namespace
             {"LuaSyntax",ResponseType::LuaSyntax},
             {"SerializedEntities", ResponseType::SerializedEntities},
             {"EntitiesCreated", ResponseType::EntitiesCreated},
+            {"PhysicsBackends", ResponseType::PhysicsBackends},
             {"AssetPreview",ResponseType::AssetPreview},
             {"PickResult", ResponseType::PickResult},
             {"Bounds", ResponseType::Bounds},
@@ -221,6 +224,7 @@ namespace
             {"InstantiatePrefab", [](BufferReader &r) { (void)InstantiatePrefabCmd::Deserialize(r); }},
             {"ApplyPrefab", [](BufferReader &r) { (void)ApplyPrefabCmd::Deserialize(r); }},
             {"UnpackPrefab", [](BufferReader &r) { (void)UnpackPrefabCmd::Deserialize(r); }},
+            {"SetPhysicsBackend", [](BufferReader &r) { (void)SetPhysicsBackendCmd::Deserialize(r); }},
             {"GetEntity", [](BufferReader &r) { (void)GetEntityCmd::Deserialize(r); }},
             {"SetLocalTransform", [](BufferReader &r) { (void)SetLocalTransformCmd::Deserialize(r); }},
             {"AddComponent", [](BufferReader &r) { (void)AddComponentCmd::Deserialize(r); }},
@@ -643,6 +647,8 @@ TEST(ProtocolSpecTest, EveryCommandIsClassifiedForAPlayHost)
         {"SetImportSettings", true}, {"WriteTextAsset", true}, {"CreateScriptAsset", true}, {"CreateFolder", true},
         // The prefab commands that write a .prefab file (InstantiatePrefab only reads one, UnpackPrefab changes the scene)
         {"CreatePrefab", true}, {"ApplyPrefab", true},
+        // J9: SetPhysicsBackend saves project.n2proj (GetPhysicsBackends only reads, below)
+        {"SetPhysicsBackend", true},
         // Allowed: they read, or change only the running game, the in-memory scene store or the connection
         {"RenderFrame", false}, {"SetViewportSize", false}, {"GetAudio", false}, {"Hello", false},
         {"PollEvents", false}, {"RenderFrameIfChanged", false}, {"SetCameraPosition", false},
@@ -660,6 +666,7 @@ TEST(ProtocolSpecTest, EveryCommandIsClassifiedForAPlayHost)
         {"ListAssets", false}, {"GetAssetInfo", false}, {"ReadTextAsset", false},
         {"SetEditorViewOptions", false}, {"SerializeEntities", false}, {"InstantiateEntities", false},
         {"InstantiatePrefab", false}, {"UnpackPrefab", false},{"CheckLuaSyntax", false}, {"GetAssetPreview", false},
+        {"GetPhysicsBackends", false},
         {"WritePlaySnapshot", false}, {"SetPaused", false}, {"Step", false}, {"GetPlayState", false},
         {"SendInput", false}, {"Shutdown", false},
         // A play host runs no editor extension: the lists answer (nothing is loaded there), the reload and the invocation

@@ -647,7 +647,8 @@ TEST_F(EditorPlayTest, APlayHostRefusesTheCommandsThatWriteTheProjectOrSwapTheSc
                                    CommandType::DiscardAutosave, CommandType::LoadScene,
                                    CommandType::SetImportSettings, CommandType::WriteTextAsset,
                                    CommandType::CreateScriptAsset, CommandType::CreateFolder,
-                                   CommandType::CreatePrefab, CommandType::ApplyPrefab})
+                                   CommandType::CreatePrefab, CommandType::ApplyPrefab,
+                                   CommandType::SetPhysicsBackend})
     {
         EXPECT_TRUE(EditorServer::IsEditOnlyCommand(static_cast<uint8_t>(type))) << static_cast<int>(type);
         const Frame response = Execute(*play, type);
@@ -659,10 +660,13 @@ TEST_F(EditorPlayTest, APlayHostRefusesTheCommandsThatWriteTheProjectOrSwapTheSc
     EXPECT_EQ(ReadFile(SceneFile()), before);
     for (const CommandType type : {CommandType::GetHierarchy, CommandType::ListAssets, CommandType::GetAssetInfo,
                                    CommandType::ReadTextAsset, CommandType::RescanAssets,
-                                   CommandType::InstantiatePrefab, CommandType::UnpackPrefab})
+                                   CommandType::InstantiatePrefab, CommandType::UnpackPrefab,
+                                   CommandType::GetPhysicsBackends})
     {
         EXPECT_FALSE(EditorServer::IsEditOnlyCommand(static_cast<uint8_t>(type))) << static_cast<int>(type);
     }
+    // The list reads (a play host has a backend of its own to report); the change would write project.n2proj
+    EXPECT_EQ(Execute(*play, CommandType::GetPhysicsBackends).type, static_cast<uint8_t>(ResponseType::PhysicsBackends));
 }
 
 TEST_F(EditorPlayTest, APlayHostInstantiatesAPrefabIntoTheRunningGameWithoutAUndoStep)

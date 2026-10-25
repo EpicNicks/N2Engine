@@ -712,6 +712,17 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    struct SetPhysicsBackendCmd
+    {
+        /// "physx" or "jolt" (any case; the host saves it in lower case)
+        std::string backend;
+
+        static SetPhysicsBackendCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
     struct SerializeEntitiesCmd
     {
         /// A JSON array of the objects' UUID strings (checked by the handler)
@@ -1153,6 +1164,16 @@ namespace N2Engine::Editor::Protocol
         BufferWriter payload;
         WriteJson(payload, ids);
         w.WriteU8(static_cast<uint8_t>(ResponseType::EntitiesCreated));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// GetPhysicsBackends' and SetPhysicsBackend's response: the PhysicsBackendsInfo as one JSON value
+    inline void WritePhysicsBackends(BufferWriter &w, const nlohmann::json &info)
+    {
+        BufferWriter payload;
+        WriteJson(payload, info);
+        w.WriteU8(static_cast<uint8_t>(ResponseType::PhysicsBackends));
         w.WriteU32(static_cast<uint32_t>(payload.Size()));
         w.WriteBytes(payload.Data());
     }

@@ -127,6 +127,9 @@ namespace N2Engine::Editor
             {CommandType::InstantiatePrefab, false},
             {CommandType::ApplyPrefab, false},
             {CommandType::UnpackPrefab, false},
+            // The physics backend picker (J9): a project setting, which Editor.Scene and Editor.Assets do not reach
+            {CommandType::GetPhysicsBackends, false},
+            {CommandType::SetPhysicsBackend, false},
             {CommandType::PickEntity, false},
             {CommandType::GetEntityBounds, false},
             // Entities and components beyond what Editor.Scene has: the older commands and the readers it does not use
