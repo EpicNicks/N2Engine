@@ -36,6 +36,9 @@
 #include "engine/example/renderers/SphereRenderer.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourceUUID.hpp"
+#include "engine/network/NetworkSettings.hpp"
+#include "engine/physics/IPhysicsBackend.hpp"
+#include "engine/physics/PhysicsBackendInfo.hpp"
 #include "engine/picking/ScenePicking.hpp"
 #include "engine/prefabs/Prefab.hpp"
 #include "engine/prefabs/PrefabFile.hpp"
@@ -2815,7 +2818,7 @@ namespace N2Engine::Editor
 
     std::vector<std::string> EditorServer::Capabilities()
     {
-        return {"editorExtensions","editorTooling","luaSyntax","assetPreviews","entityClipboard","prefabAssets"};
+        return {"editorExtensions","editorTooling","luaSyntax","assetPreviews","entityClipboard","prefabAssets","physicsBackends"};
     }
 
     bool EditorServer::EnableEditorExtensions(std::filesystem::path projectRoot)
@@ -4221,6 +4224,7 @@ namespace N2Engine::Editor
         {CommandType::GetLuaFields, "GetLuaFields", EditorServer::CommandClass::Read},
         {CommandType::GetProjectInfo, "GetProjectInfo", EditorServer::CommandClass::Read},
         {CommandType::GetHistory, "GetHistory", EditorServer::CommandClass::Read},
+        {CommandType::GetPhysicsBackends, "GetPhysicsBackends", EditorServer::CommandClass::Read},
         // The extension lists answer from what was captured at load: they run no Lua. InvokeMenuItem (0x82) and
         // InvokeInspectorAction (0x83) run extension code, so they are Writes below.
         {CommandType::ListEditorExtensions, "ListEditorExtensions", EditorServer::CommandClass::Read},
@@ -4249,6 +4253,7 @@ namespace N2Engine::Editor
         {CommandType::InstantiatePrefab, "InstantiatePrefab", EditorServer::CommandClass::Write},
         {CommandType::ApplyPrefab, "ApplyPrefab", EditorServer::CommandClass::Write},
         {CommandType::UnpackPrefab, "UnpackPrefab", EditorServer::CommandClass::Write},
+        {CommandType::SetPhysicsBackend, "SetPhysicsBackend", EditorServer::CommandClass::Write},
         {CommandType::SetLocalTransform, "SetLocalTransform", EditorServer::CommandClass::Write},
         {CommandType::CreateScript, "CreateScript", EditorServer::CommandClass::Write},
         {CommandType::RescanAssets, "RescanAssets", EditorServer::CommandClass::Write},
@@ -4586,6 +4591,12 @@ namespace N2Engine::Editor
             break;
         case CommandType::UnpackPrefab:
             HandleUnpackPrefab(clientSocket, payload);
+            break;
+        case CommandType::GetPhysicsBackends:
+            HandleGetPhysicsBackends(clientSocket);
+            break;
+        case CommandType::SetPhysicsBackend:
+            HandleSetPhysicsBackend(clientSocket, payload);
             break;
         case CommandType::GetEntity:
             HandleGetEntity(clientSocket, payload);
@@ -5938,6 +5949,8 @@ namespace N2Engine::Editor
         // EN3's: they write a .prefab file (InstantiatePrefab only reads one, and UnpackPrefab touches the scene alone)
         case CommandType::CreatePrefab:
         case CommandType::ApplyPrefab:
+        // J9's: it saves project.n2proj, as SetProjectSettings does (GetPhysicsBackends only reads)
+        case CommandType::SetPhysicsBackend:
         // Reloading runs the project's extension files again, and invoking runs one's code, which a play host (it plays a
         // snapshot, and runs no extension) never does
         case CommandType::ReloadEditorExtensions:
@@ -9502,23 +9515,33 @@ namespace N2Engine::Editor
             return;
         }
 
-        BufferWriter response;
-        if (!cmd.settings.is_object())
+        if (auto applied = ApplySettingsPatch(cmd.settings); !applied)
         {
-            WriteError(response, "settings must be a JSON object: a merge patch (RFC 7386) for the project's settings");
+            BufferWriter response;
+            WriteError(response, applied.error());
             SendResponse(clientSocket, response.Release());
             return;
+        }
+        ServerLog::PublicInfo("Project settings changed and saved");
+        SendProjectInfo(clientSocket);
+    }
+
+    std::expected<void, std::string> EditorServer::ApplySettingsPatch(const nlohmann::json &patch)
+    {
+        if (!patch.is_object())
+        {
+            return std::unexpected("settings must be a JSON object: a merge patch (RFC 7386) for the project's settings");
         }
 
         // A merge patch: keys set to null are removed, objects merge recursively, anything else replaces
         nlohmann::json merged = _project->file.settings;
-        merged.merge_patch(cmd.settings);
+        merged.merge_patch(patch);
 
         // Only the blocks the patch touches are applied, live, before saving; the state they change is captured first,
         // so a refusal (or a failed save) puts back exactly what was running, including a block the previous settings
         // never had
         std::set<std::string> touched;
-        for (const auto &[key, value] : cmd.settings.items())
+        for (const auto &[key, value] : patch.items())
         {
             touched.insert(key);
         }
@@ -9534,9 +9557,7 @@ namespace N2Engine::Editor
                 message += " " + problem + ";";
             }
             message.pop_back();
-            WriteError(response, message);
-            SendResponse(clientSocket, response.Release());
-            return;
+            return std::unexpected(std::move(message));
         }
 
         IO::ProjectFile changed = _project->file;
@@ -9544,12 +9565,148 @@ namespace N2Engine::Editor
         if (auto saved = SaveProject(std::move(changed)); !saved)
         {
             before.Restore();
-            WriteError(response, saved.error());
-            SendResponse(clientSocket, response.Release());
+            return std::unexpected(saved.error());
+        }
+        return {};
+    }
+
+    nlohmann::json EditorServer::BuildPhysicsBackendsInfo() const
+    {
+        namespace Phys = N2Engine::Physics;
+        const nlohmann::json settings = _project ? _project->file.settings : nlohmann::json::object();
+        const std::optional<Phys::PhysicsBackendKind> configured = ReadPhysicsBackend(settings);
+        // The default when the project does not say is physx (the setting's documented default)
+        const Phys::PhysicsBackendKind current = configured.value_or(Phys::PhysicsBackendKind::PhysX);
+        const Network::NetworkPreset preset = ReadNetworkSettings(settings).preset;
+
+        std::string active;
+        if (const Phys::IPhysicsBackend *backend = Application::GetInstance().Get3DPhysicsBackend())
+        {
+            active = std::string(backend->BackendId());
+        }
+
+        nlohmann::json backends = nlohmann::json::array();
+        for (const Phys::PhysicsBackendDescription &description : Phys::DescribePhysicsBackends())
+        {
+            nlohmann::json features = nlohmann::json::array();
+            nlohmann::json missing = nlohmann::json::array();
+            for (const Phys::PhysicsFeature feature : Phys::kAllPhysicsFeatures)
+            {
+                (description.features.Has(feature) ? features : missing).push_back(std::string(Phys::FeatureId(feature)));
+            }
+            nlohmann::json entry = {
+                {"id", std::string(Phys::ToString(description.kind))},
+                {"displayName", std::string(Phys::DisplayName(description.kind))},
+                {"compiledIn", description.compiledIn},
+                {"determinism", std::string(Phys::ToString(description.determinism))},
+                {"determinismDefault", std::string(Phys::ToString(description.determinismDefault))},
+                {"features", std::move(features)},
+                {"missingFeatures", std::move(missing)},
+                {"supportsSnapshot", description.supportsSnapshot},
+                {"supportsSetState", description.supportsSetState},
+                {"deterministicSelectable", description.DeterministicSelectable()}};
+            if (!description.compiledIn)
+            {
+                entry["note"] = "Not in this host's build: its declarations are unknown here and it cannot be chosen";
+            }
+            else if (!description.DeterministicSelectable())
+            {
+                std::string why = "The Deterministic preset needs ";
+                if (description.determinism != Phys::DeterminismLevel::CrossPlatform)
+                {
+                    why += std::format("a backend that declares CrossPlatform determinism (this one declares {} at best)",
+                                       Phys::ToString(description.determinism));
+                    if (!description.features.IsComplete())
+                    {
+                        why += " and ";
+                    }
+                }
+                if (!description.features.IsComplete())
+                {
+                    why += "every feature group (missing: ";
+                    bool first = true;
+                    for (const Phys::PhysicsFeature feature : description.features.Missing())
+                    {
+                        why += (first ? "" : ", ") + std::string(Phys::FeatureId(feature));
+                        first = false;
+                    }
+                    why += ")";
+                }
+                entry["note"] = std::move(why);
+            }
+            backends.push_back(std::move(entry));
+        }
+
+        return nlohmann::json{{"current", std::string(Phys::ToString(current))},
+                              {"configured", configured.has_value()},
+                              {"active", active},
+                              {"restartRequired", !active.empty() && active != Phys::ToString(current)},
+                              {"networkPreset", std::string(Network::ToString(preset))},
+                              {"backends", std::move(backends)}};
+    }
+
+    void EditorServer::HandleGetPhysicsBackends(int clientSocket)
+    {
+        BufferWriter response;
+        WritePhysicsBackends(response, BuildPhysicsBackendsInfo());
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleSetPhysicsBackend(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const SetPhysicsBackendCmd cmd = SetPhysicsBackendCmd::Deserialize(reader);
+        namespace Phys = N2Engine::Physics;
+        if (!_project)
+        {
+            SendNoProject(clientSocket);
             return;
         }
-        ServerLog::PublicInfo("Project settings changed and saved");
-        SendProjectInfo(clientSocket);
+
+        const auto fail = [&](const std::string &message)
+        {
+            BufferWriter response;
+            WriteError(response, message);
+            SendResponse(clientSocket, response.Release());
+        };
+
+        const std::optional<Phys::PhysicsBackendKind> kind = Phys::ParsePhysicsBackendKind(cmd.backend);
+        if (!kind)
+        {
+            fail(std::format("Unknown physics backend {}: expected \"physx\" or \"jolt\"", SanitizeForLog(cmd.backend)));
+            return;
+        }
+        const Phys::PhysicsBackendDescription description = Phys::DescribePhysicsBackend(*kind);
+        if (!description.compiledIn)
+        {
+            fail(std::format("This host's build has no {} backend (N2ENGINE_USE_{} is off), so physics.backend can't be "
+                             "set to {}",
+                             Phys::DisplayName(*kind), *kind == Phys::PhysicsBackendKind::PhysX ? "PHYSX" : "JOLT",
+                             Phys::ToString(*kind)));
+            return;
+        }
+        // The project would refuse to start (Application::Init) on a backend that can't be deterministic
+        if (ReadNetworkSettings(_project->file.settings).preset == Network::NetworkPreset::Deterministic &&
+            !description.DeterministicSelectable())
+        {
+            fail(std::format("network.preset is deterministic and {} does not declare what that preset needs (CrossPlatform "
+                             "determinism and every feature group): choose another network preset first, or another backend",
+                             Phys::DisplayName(*kind)));
+            return;
+        }
+
+        if (auto applied = ApplySettingsPatch(nlohmann::json{{"physics", {{"backend", std::string(Phys::ToString(*kind))}}}});
+            !applied)
+        {
+            fail(applied.error());
+            return;
+        }
+        ServerLog::PublicInfo(std::format("physics.backend set to {} and saved; it takes effect at the next play session "
+                                          "or host start",
+                                          Phys::ToString(*kind)));
+        BufferWriter response;
+        WritePhysicsBackends(response, BuildPhysicsBackendsInfo());
+        SendResponse(clientSocket, response.Release());
     }
 
     void EditorServer::HandleSetStartupScene(int clientSocket, const std::vector<uint8_t> &payload)

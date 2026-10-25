@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.19.0";
+        public const string ProtocolVersion = "1.20.0";
     }
 
     public enum CommandType : byte
@@ -94,6 +94,8 @@ namespace N2Engine.Editor.Protocol
         InstantiatePrefab = 0xAA,
         ApplyPrefab = 0xAB,
         UnpackPrefab = 0xAC,
+        GetPhysicsBackends = 0xAD,
+        SetPhysicsBackend = 0xAE,
     }
 
     public enum ResponseType : byte
@@ -140,6 +142,7 @@ namespace N2Engine.Editor.Protocol
         AssetPreview = 0xA4,
         SerializedEntities = 0x21,
         EntitiesCreated = 0x22,
+        PhysicsBackends = 0x23,
     }
 
     public struct Vec3
@@ -572,6 +575,48 @@ namespace N2Engine.Editor.Protocol
         public string[]? Warnings { get; set; }
     }
 
+    public class PhysicsBackendInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("id")]
+        public string Id { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("displayName")]
+        public string DisplayName { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("compiledIn")]
+        public bool CompiledIn { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("determinism")]
+        public string Determinism { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("determinismDefault")]
+        public string DeterminismDefault { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("features")]
+        public string[] Features { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("missingFeatures")]
+        public string[] MissingFeatures { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("supportsSnapshot")]
+        public bool SupportsSnapshot { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("supportsSetState")]
+        public bool SupportsSetState { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("deterministicSelectable")]
+        public bool DeterministicSelectable { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("note")]
+        public string? Note { get; set; }
+    }
+
+    public class PhysicsBackendsInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("current")]
+        public string Current { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("configured")]
+        public bool Configured { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("active")]
+        public string Active { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("restartRequired")]
+        public bool RestartRequired { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("networkPreset")]
+        public string NetworkPreset { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("backends")]
+        public PhysicsBackendInfo[] Backends { get; set; }
+    }
+
     public class ClipboardPayload
     {
         [System.Text.Json.Serialization.JsonPropertyName("format")]
@@ -977,6 +1022,11 @@ namespace N2Engine.Editor.Protocol
         public string EntityId;
     }
 
+    public struct SetPhysicsBackendRequest
+    {
+        public string Backend;
+    }
+
     public struct FrameDataResponse
     {
         public uint Width;
@@ -1256,6 +1306,12 @@ namespace N2Engine.Editor.Protocol
         /// <summary>JSON text: AssetPreviewInfo</summary>
         public string Info;
         public byte[] Pixels;
+    }
+
+    public struct PhysicsBackendsResponse
+    {
+        /// <summary>JSON text: PhysicsBackendsInfo</summary>
+        public string Info;
     }
 
     public struct ErrorCodedResponse

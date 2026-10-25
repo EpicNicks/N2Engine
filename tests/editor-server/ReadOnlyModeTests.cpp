@@ -60,6 +60,8 @@ namespace
             // Prefab assets (since 1.19.0): all four change the scene or a project file
             {"CreatePrefab", Class::Write}, {"InstantiatePrefab", Class::Write}, {"ApplyPrefab", Class::Write},
             {"UnpackPrefab", Class::Write},
+            // The physics backend picker (since 1.20.0): the list reads, choosing one saves the project file
+            {"GetPhysicsBackends", Class::Read}, {"SetPhysicsBackend", Class::Write},
 {"SetLocalTransform", Class::Write}, {"CreateScript", Class::Write},
             {"RescanAssets", Class::Write}, {"SetImportSettings", Class::Write}, {"WriteTextAsset", Class::Write},
             {"CreateScriptAsset", Class::Write}, {"CreateFolder", Class::Write}, {"AddComponent", Class::Write},
