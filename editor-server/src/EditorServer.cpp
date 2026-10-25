@@ -37,6 +37,8 @@
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourceUUID.hpp"
 #include "engine/picking/ScenePicking.hpp"
+#include "engine/prefabs/Prefab.hpp"
+#include "engine/prefabs/PrefabFile.hpp"
 #include "engine/prefabs/PrefabManager.hpp"
 #include "engine/rendering/Light.hpp"
 #include "engine/rendering/Mesh.hpp"
@@ -358,7 +360,7 @@ namespace N2Engine::Editor
         /// The fields GetHierarchy and GetEntity share (the EntityHeader of protocol.json, plus what a node adds)
         nlohmann::json HeaderJson(const GameObject &gameObject, const std::string &parentId, const size_t index)
         {
-            return nlohmann::json{
+            nlohmann::json header{
                 {"id", gameObject.GetUUID().ToString()},
                 {"parentId", parentId},
                 {"index", index},
@@ -368,6 +370,12 @@ namespace N2Engine::Editor
                 {"layer", gameObject.GetLayer()},
                 {"tag", gameObject.GetTag()},
             };
+            // The prefab asset the object is linked to (since 1.19.0), only when it is
+            if (const auto &prefab = gameObject.GetPrefabReference(); prefab.has_value())
+            {
+                header["prefab"] = prefab->ToString();
+            }
+            return header;
         }
 
         /// Appends the object and, depth first, everything under it: a HierarchyNode each
@@ -611,11 +619,14 @@ namespace N2Engine::Editor
             return true;
         }
 
-        ClipboardScan ScanClipboard(const nlohmann::json &entities, const std::function<bool(std::string_view)> &validName)
+        /// Counts what `whole` holds: every JSON value (and whether a res:// string leaves the assets folder), and the
+        /// object trees that start at `roots` (objects inside `whole`). Used for a paste's entities and for a prefab file.
+        ClipboardScan ScanTree(const nlohmann::json &whole, const std::vector<const nlohmann::json *> &roots,
+                               const std::function<bool(std::string_view)> &validName)
         {
             ClipboardScan scan;
             // Every value of the payload, whatever it is for
-            std::vector<const nlohmann::json *> values{&entities};
+            std::vector<const nlohmann::json *> values{&whole};
             while (!values.empty())
             {
                 const nlohmann::json *value = values.back();
@@ -642,9 +653,9 @@ namespace N2Engine::Editor
             }
             // The object tree: every entry of "children" is an object one level down
             std::vector<std::pair<const nlohmann::json *, std::size_t>> pending;
-            for (const nlohmann::json &root : entities)
+            for (const nlohmann::json *root : roots)
             {
-                pending.emplace_back(&root, 1);
+                pending.emplace_back(root, 1);
             }
             while (!pending.empty())
             {
@@ -668,6 +679,17 @@ namespace N2Engine::Editor
                 }
             }
             return scan;
+        }
+
+        /// ScanTree for a paste: `entities` is the payload's array, each entry a root
+        ClipboardScan ScanClipboard(const nlohmann::json &entities, const std::function<bool(std::string_view)> &validName)
+        {
+            std::vector<const nlohmann::json *> roots;
+            for (const nlohmann::json &root : entities)
+            {
+                roots.push_back(&root);
+            }
+            return ScanTree(entities, roots, validName);
         }
 
         // ==================== Components (#6, E5) ====================
@@ -1557,6 +1579,27 @@ namespace N2Engine::Editor
                 return RestoreSubtree(*saved, parentId, index);
             };
             op.redoBytes = subtree->size();
+            return op;
+        }
+
+        /// CreatePrefab and UnpackPrefab: the object's prefab link (prefabReference) goes from `before` to `after`, and
+        /// back. The link is the only thing the step touches.
+        EditOp PrefabLinkOp(const std::string &entityId, const std::optional<Math::UUID> &before,
+                            const std::optional<Math::UUID> &after)
+        {
+            const auto apply = [entityId](const std::optional<Math::UUID> &link) -> EditOutcome
+            {
+                const auto entity = LoadedEntity(entityId);
+                if (!entity)
+                {
+                    return std::unexpected(entity.error());
+                }
+                (*entity)->SetPrefabReference(link);
+                return EffectFor({entityId});
+            };
+            EditOp op;
+            op.undo = [apply, before]() -> EditOutcome { return apply(before); };
+            op.redo = [apply, after]() -> EditOutcome { return apply(after); };
             return op;
         }
 
@@ -2772,7 +2815,7 @@ namespace N2Engine::Editor
 
     std::vector<std::string> EditorServer::Capabilities()
     {
-        return {"editorExtensions","editorTooling","luaSyntax","assetPreviews","entityClipboard"};
+        return {"editorExtensions","editorTooling","luaSyntax","assetPreviews","entityClipboard","prefabAssets"};
     }
 
     bool EditorServer::EnableEditorExtensions(std::filesystem::path projectRoot)
@@ -4202,6 +4245,10 @@ namespace N2Engine::Editor
         {CommandType::SetEntityProperties, "SetEntityProperties", EditorServer::CommandClass::Write},
         {CommandType::DuplicateEntity, "DuplicateEntity", EditorServer::CommandClass::Write},
         {CommandType::InstantiateEntities, "InstantiateEntities", EditorServer::CommandClass::Write},
+        {CommandType::CreatePrefab, "CreatePrefab", EditorServer::CommandClass::Write},
+        {CommandType::InstantiatePrefab, "InstantiatePrefab", EditorServer::CommandClass::Write},
+        {CommandType::ApplyPrefab, "ApplyPrefab", EditorServer::CommandClass::Write},
+        {CommandType::UnpackPrefab, "UnpackPrefab", EditorServer::CommandClass::Write},
         {CommandType::SetLocalTransform, "SetLocalTransform", EditorServer::CommandClass::Write},
         {CommandType::CreateScript, "CreateScript", EditorServer::CommandClass::Write},
         {CommandType::RescanAssets, "RescanAssets", EditorServer::CommandClass::Write},
@@ -4527,6 +4574,18 @@ namespace N2Engine::Editor
             break;
         case CommandType::InstantiateEntities:
             HandleInstantiateEntities(clientSocket, payload);
+            break;
+        case CommandType::CreatePrefab:
+            HandleCreatePrefab(clientSocket, payload);
+            break;
+        case CommandType::InstantiatePrefab:
+            HandleInstantiatePrefab(clientSocket, payload);
+            break;
+        case CommandType::ApplyPrefab:
+            HandleApplyPrefab(clientSocket, payload);
+            break;
+        case CommandType::UnpackPrefab:
+            HandleUnpackPrefab(clientSocket, payload);
             break;
         case CommandType::GetEntity:
             HandleGetEntity(clientSocket, payload);
@@ -5876,6 +5935,9 @@ namespace N2Engine::Editor
         case CommandType::WriteTextAsset:
         case CommandType::CreateScriptAsset:
         case CommandType::CreateFolder:
+        // EN3's: they write a .prefab file (InstantiatePrefab only reads one, and UnpackPrefab touches the scene alone)
+        case CommandType::CreatePrefab:
+        case CommandType::ApplyPrefab:
         // Reloading runs the project's extension files again, and invoking runs one's code, which a play host (it plays a
         // snapshot, and runs no extension) never does
         case CommandType::ReloadEditorExtensions:
@@ -6696,6 +6758,51 @@ namespace N2Engine::Editor
         SendResponse(clientSocket, response.Release());
     }
 
+    namespace
+    {
+        /// Puts the objects InstantiatePrefabs built in the scene: under `parent` (null: at the scene's root), the first
+        /// at `siblingIndex` among the siblings (negative, or past the last: after the last) and the rest after it, each
+        /// named uniquely among the siblings it lands next to. The caller checked the depth, which this checks again
+        /// (nothing may be recorded for an object that isn't in the scene); then the objects are dropped, none left
+        /// half added, and the text that says why is returned.
+        std::optional<std::string> AttachRoots(Scene &scene, const std::shared_ptr<GameObject> &parent,
+                                               const std::vector<std::shared_ptr<GameObject>> &roots,
+                                               const int32_t siblingIndex)
+        {
+            const auto siblingsOf = [&]() -> const std::vector<std::shared_ptr<GameObject>> &
+            {
+                return parent != nullptr ? parent->GetChildren() : scene.GetRootGameObjects();
+            };
+            const std::size_t siblingCount = siblingsOf().size();
+            const std::size_t first =
+                siblingIndex < 0 ? siblingCount : std::min(static_cast<std::size_t>(siblingIndex), siblingCount);
+            for (std::size_t i = 0; i < roots.size(); ++i)
+            {
+                const std::shared_ptr<GameObject> &root = roots[i];
+                root->SetName(PasteName(root->GetName(), siblingsOf()));
+                if (parent != nullptr)
+                {
+                    if (!parent->CanAddChild(root))
+                    {
+                        for (std::size_t added = 0; added < i; ++added)
+                        {
+                            scene.DestroyGameObject(roots[added]);
+                        }
+                        scene.ProcessDestroyed();
+                        return TooDeepMessage(root->GetName(), parent->GetName());
+                    }
+                    parent->AddChild(root, false);
+                }
+                else
+                {
+                    scene.AddRootGameObject(root);
+                }
+                root->SetSiblingIndex(first + i);
+            }
+            return std::nullopt;
+        }
+    }
+
     void EditorServer::HandleInstantiateEntities(int clientSocket, const std::vector<uint8_t> &payload)
     {
         BufferReader reader(payload);
@@ -6821,38 +6928,10 @@ namespace N2Engine::Editor
             return;
         }
 
-        const auto siblingsOf = [&]() -> const std::vector<std::shared_ptr<GameObject>> &
+        if (const std::optional<std::string> refused = AttachRoots(*scene, parent, roots, cmd.siblingIndex))
         {
-            return parent != nullptr ? parent->GetChildren() : scene->GetRootGameObjects();
-        };
-        const std::size_t siblingCount = siblingsOf().size();
-        const std::size_t first =
-            cmd.siblingIndex < 0 ? siblingCount : std::min(static_cast<std::size_t>(cmd.siblingIndex), siblingCount);
-        for (std::size_t i = 0; i < roots.size(); ++i)
-        {
-            const std::shared_ptr<GameObject> &root = roots[i];
-            root->SetName(PasteName(root->GetName(), siblingsOf()));
-            if (parent != nullptr)
-            {
-                // Checked above, so this holds; checked all the same, as nothing may be recorded for an object that
-                // isn't in the scene
-                if (!parent->CanAddChild(root))
-                {
-                    for (std::size_t added = 0; added < i; ++added)
-                    {
-                        scene->DestroyGameObject(roots[added]);
-                    }
-                    scene->ProcessDestroyed();
-                    SendError(clientSocket, TooDeepMessage(root->GetName(), parent->GetName()));
-                    return;
-                }
-                parent->AddChild(root, false);
-            }
-            else
-            {
-                scene->AddRootGameObject(root);
-            }
-            root->SetSiblingIndex(first + i);
+            SendError(clientSocket, *refused);
+            return;
         }
 
         std::vector<EditOp> ops;
@@ -8029,6 +8108,427 @@ namespace N2Engine::Editor
             }
             ServerLog::Info("Created folder " + shown);
         }
+
+        BufferWriter response;
+        WriteOk(response);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    // ==================== Prefab assets (EN3, protocol 1.19.0) ====================
+
+    namespace
+    {
+        /// Whether a res:// path (already resolved) names a .prefab file: the extension in any case, and a name before it
+        bool IsPrefabPath(const IO::ResourcePath &path)
+        {
+            return LowerAscii(path.GetExtension()) == PrefabFile::Extension && !path.GetStem().empty();
+        }
+
+        /// The prefab file a UUID or a res:// path names, resolved inside the assets folder. A UUID must belong to an
+        /// indexed asset of the type Prefab; a path need not be indexed yet.
+        std::expected<ResolvedScenePath, std::string> ResolvePrefabAsset(const std::filesystem::path &assetsRoot,
+                                                                         const std::string &uuidOrPath)
+        {
+            std::string path = uuidOrPath;
+            if (!uuidOrPath.starts_with("res://"))
+            {
+                const auto uuid = Math::UUID::FromString(uuidOrPath);
+                if (!uuid.has_value())
+                {
+                    return std::unexpected("Expected a res:// path or a prefab asset UUID: " +
+                                           EditorServer::SanitizeForLog(uuidOrPath));
+                }
+                const IO::AssetMetadata *meta = IO::ResourceLoader::Instance().GetMetadata(uuid.value());
+                if (meta == nullptr || meta->resourcePath.GetType() != IO::PathType::Resource)
+                {
+                    return std::unexpected("No asset has the UUID " + uuid.value().ToString());
+                }
+                if (meta->resourceType != PrefabFile::ResourceTypeName)
+                {
+                    return std::unexpected(uuid.value().ToString() + " is not a prefab asset");
+                }
+                path = meta->resourcePath.ToString();
+            }
+            auto resolved = EditorServer::ResolveAssetPath(assetsRoot, path);
+            if (resolved && !IsPrefabPath(resolved->resourcePath))
+            {
+                return std::unexpected("Not a prefab asset: " + EditorServer::SanitizeForLog(resolved->resourcePath.ToString()) +
+                                       " (a prefab's path ends in .prefab)");
+            }
+            return resolved;
+        }
+
+        /// A prefab file's JSON, read from disk (not from the loader's cache, so what was written last is what is used)
+        /// and checked as PrefabFile::Load checks it. The messages name the asset as the client knows it.
+        std::expected<nlohmann::json, std::string> ReadPrefabFile(const ResolvedScenePath &resolved)
+        {
+            const std::string shown = EditorServer::SanitizeForLog(resolved.resourcePath.ToString());
+            std::error_code error;
+            if (!std::filesystem::is_regular_file(resolved.file, error))
+            {
+                return std::unexpected("Prefab not found: " + shown);
+            }
+            const std::uintmax_t fileSize = std::filesystem::file_size(resolved.file, error);
+            if (error || fileSize > MaxClipboardBytes)
+            {
+                return std::unexpected(std::format("{} is larger than {} MiB", shown, MaxClipboardBytes / (1024 * 1024)));
+            }
+            auto text = ReadTextFile(resolved.file);
+            if (!text)
+            {
+                return std::unexpected("Couldn't read " + shown + ": " + text.error());
+            }
+            auto parsed = PrefabFile::Parse(*text);
+            if (!parsed)
+            {
+                return std::unexpected(shown + " is not a usable prefab: " + parsed.error());
+            }
+            return std::move(*parsed);
+        }
+
+        /// The JSON of a prefab file made from an object: Prefab::Serialize's form. The root's own prefabReference is
+        /// left out (a file is not linked to itself); `prefabName` and `rootName`, when given, replace the names.
+        nlohmann::json PrefabJsonOf(const std::shared_ptr<GameObject> &object, const std::optional<std::string> &prefabName,
+                                    const std::optional<std::string> &rootName)
+        {
+            nlohmann::json prefab = Prefab(object->GetName(), object).Serialize();
+            nlohmann::json &root = prefab["rootObject"];
+            root.erase("prefabReference");
+            if (prefabName)
+            {
+                prefab["name"] = *prefabName;
+            }
+            if (rootName)
+            {
+                root["name"] = *rootName;
+            }
+            return prefab;
+        }
+
+        /// The prefab file's asset UUID: the .meta's, else (not indexed yet) what the file gets when it is first scanned
+        Math::UUID PrefabAssetUuid(const IO::ResourcePath &path)
+        {
+            const Math::UUID uuid = IO::ResourceLoader::Instance().GetUUID(path);
+            return uuid == Math::UUID::ZERO ? IO::ResourceUUID::FromPath(path) : uuid;
+        }
+    }
+
+    void EditorServer::HandleCreatePrefab(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const CreatePrefabCmd cmd = CreatePrefabCmd::Deserialize(reader);
+        if (reader.HasData())
+        {
+            SendError(clientSocket, "Malformed payload: trailing bytes");
+            return;
+        }
+
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            SendError(clientSocket, "No scene loaded");
+            return;
+        }
+        if (!_project)
+        {
+            SendNoProject(clientSocket);
+            return;
+        }
+        const std::shared_ptr<GameObject> entity = FindEntity(*scene, cmd.entityId);
+        if (entity == nullptr)
+        {
+            SendError(clientSocket, NotFoundMessage("Entity", cmd.entityId));
+            return;
+        }
+        const auto resolved = ResolveAssetPath(_project->root / "assets", cmd.path);
+        if (!resolved)
+        {
+            SendError(clientSocket, resolved.error());
+            return;
+        }
+        const std::string shown = SanitizeForLog(resolved->resourcePath.ToString());
+        if (!IsPrefabPath(resolved->resourcePath))
+        {
+            SendError(clientSocket, "A prefab's path must end in .prefab: " + shown);
+            return;
+        }
+        std::error_code error;
+        if (std::filesystem::exists(resolved->file, error))
+        {
+            if (!std::filesystem::is_regular_file(resolved->file, error))
+            {
+                SendError(clientSocket, shown + " isn't a file");
+                return;
+            }
+            if (!cmd.overwrite)
+            {
+                SendError(clientSocket, shown + " already exists");
+                return;
+            }
+        }
+
+        const std::string text = SceneFileText(PrefabJsonOf(entity, std::nullopt, std::nullopt));
+        if (text.size() > MaxClipboardBytes)
+        {
+            SendError(clientSocket, std::format("The prefab would be larger than {} MiB as text and can't be saved",
+                                                MaxClipboardBytes / (1024 * 1024)));
+            return;
+        }
+        std::filesystem::create_directories(resolved->file.parent_path(), error);
+        if (error)
+        {
+            SendError(clientSocket, ClientText::Failure("Couldn't create the folder of " + shown, ClientText::Reason(error), error.message()));
+            return;
+        }
+        if (auto written = IO::WriteTextFileAtomically(resolved->file, text); !written)
+        {
+            SendError(clientSocket, ClientText::Failure("Couldn't write " + shown, "the file could not be written", written.error()));
+            return;
+        }
+        NoteAssetWritten(resolved->resourcePath, true);
+        ServerLog::Info("Created prefab " + shown);
+
+        // The link is the scene edit: one undo step. Undoing it leaves the file, as undoing a save leaves the scene file.
+        const Math::UUID uuid = PrefabAssetUuid(resolved->resourcePath);
+        const std::optional<Math::UUID> before = entity->GetPrefabReference();
+        if (!before.has_value() || before.value() != uuid)
+        {
+            entity->SetPrefabReference(uuid);
+            MarkSceneChanged({entity->GetUUID().ToString()});
+            RecordEdit(Labelled("Create Prefab", entity->GetName()),
+                       PrefabLinkOp(entity->GetUUID().ToString(), before, uuid));
+        }
+
+        BufferWriter response;
+        WriteAssetCreated(response, resolved->resourcePath.ToString(), uuid.ToString());
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleInstantiatePrefab(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const InstantiatePrefabCmd cmd = InstantiatePrefabCmd::Deserialize(reader);
+        if (reader.HasData())
+        {
+            SendError(clientSocket, "Malformed payload: trailing bytes");
+            return;
+        }
+
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            SendError(clientSocket, "No scene loaded");
+            return;
+        }
+        if (!_project)
+        {
+            SendNoProject(clientSocket);
+            return;
+        }
+        if (cmd.hasPosition && !(std::isfinite(cmd.position.x) && std::isfinite(cmd.position.y) &&
+                                 std::isfinite(cmd.position.z)))
+        {
+            SendError(clientSocket, "The position has a value that isn't a finite number");
+            return;
+        }
+
+        // Everything about the file is checked before anything is built, so a refused one changes nothing
+        const auto resolved = ResolvePrefabAsset(_project->root / "assets", cmd.uuidOrPath);
+        if (!resolved)
+        {
+            SendError(clientSocket, resolved.error());
+            return;
+        }
+        const auto prefab = ReadPrefabFile(*resolved);
+        if (!prefab)
+        {
+            SendError(clientSocket, prefab.error());
+            return;
+        }
+        const nlohmann::json &rootJson = prefab->at("rootObject");
+        const ClipboardScan scan =
+            ScanTree(*prefab, {&rootJson}, [](std::string_view name) { return IsValidAssetName(name); });
+        if (scan.values > MaxClipboardValues)
+        {
+            SendError(clientSocket, std::format("The prefab has more than {} values", MaxClipboardValues));
+            return;
+        }
+        if (scan.objects > MaxClipboardObjects)
+        {
+            SendError(clientSocket, std::format("The prefab has more than {} objects", MaxClipboardObjects));
+            return;
+        }
+        if (scan.badAssetPath)
+        {
+            SendError(clientSocket, "The prefab names an asset path outside the project's assets folder");
+            return;
+        }
+
+        std::shared_ptr<GameObject> parent;
+        if (!cmd.parentId.empty())
+        {
+            parent = FindEntity(*scene, cmd.parentId);
+            if (parent == nullptr)
+            {
+                SendError(clientSocket, NotFoundMessage("Parent", cmd.parentId));
+                return;
+            }
+        }
+        const std::size_t levelsAbove = parent != nullptr ? parent->GetHierarchyDepth() + 1 : 0;
+        if (levelsAbove + scan.levels > JsonLimits::MaxHierarchyDepth)
+        {
+            SendError(clientSocket,
+                      std::format("The prefab would nest deeper than the {} levels a scene may have",
+                                  JsonLimits::MaxHierarchyDepth));
+            return;
+        }
+
+        // The shared primitive of InstantiateEntities: fresh UUIDs, references inside the prefab point at the copies, a
+        // reference to anything else is left empty (nothing is looked up in the scene)
+        std::vector<std::shared_ptr<GameObject>> roots = PrefabManager::InstantiatePrefabs({&rootJson}, nullptr);
+        if (roots.empty())
+        {
+            SendError(clientSocket, "The prefab couldn't be instantiated (see the log)");
+            return;
+        }
+        const std::shared_ptr<GameObject> root = roots.front();
+        root->SetPrefabReference(PrefabAssetUuid(resolved->resourcePath));
+
+        if (const std::optional<std::string> refused = AttachRoots(*scene, parent, roots, cmd.siblingIndex))
+        {
+            SendError(clientSocket, *refused);
+            return;
+        }
+        if (cmd.hasPosition)
+        {
+            // In the world, after the parent is known; an object without a transform gets one to be placed with
+            if (root->GetPositionable() == nullptr)
+            {
+                root->CreatePositionable();
+            }
+            root->GetPositionable()->SetPosition(cmd.position);
+        }
+
+        MarkSceneChanged(SubtreeIds(*root));
+        RecordEdit(Labelled("Instantiate", root->GetName()), CreatedOp(*root));
+
+        BufferWriter response;
+        WriteEntityCreated(response, root->GetUUID().ToString());
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleApplyPrefab(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const ApplyPrefabCmd cmd = ApplyPrefabCmd::Deserialize(reader);
+        if (reader.HasData())
+        {
+            SendError(clientSocket, "Malformed payload: trailing bytes");
+            return;
+        }
+
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            SendError(clientSocket, "No scene loaded");
+            return;
+        }
+        if (!_project)
+        {
+            SendNoProject(clientSocket);
+            return;
+        }
+        const std::shared_ptr<GameObject> entity = FindEntity(*scene, cmd.entityId);
+        if (entity == nullptr)
+        {
+            SendError(clientSocket, NotFoundMessage("Entity", cmd.entityId));
+            return;
+        }
+        const std::optional<Math::UUID> link = entity->GetPrefabReference();
+        if (!link.has_value())
+        {
+            SendError(clientSocket, std::format("'{}' isn't linked to a prefab", SanitizeForLog(entity->GetName())));
+            return;
+        }
+        const auto resolved = ResolvePrefabAsset(_project->root / "assets", link->ToString());
+        if (!resolved)
+        {
+            SendError(clientSocket, std::format("The prefab '{}' is linked to is gone: {}", SanitizeForLog(entity->GetName()),
+                                                resolved.error()));
+            return;
+        }
+        const std::string shown = SanitizeForLog(resolved->resourcePath.ToString());
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(resolved->file, error))
+        {
+            SendError(clientSocket, "The prefab file no longer exists: " + shown);
+            return;
+        }
+
+        // The prefab keeps its own name and its root object's: an instance is named for its place among its siblings
+        std::optional<std::string> prefabName;
+        std::optional<std::string> rootName;
+        if (const auto current = ReadPrefabFile(*resolved); current)
+        {
+            prefabName = current->at("name").get<std::string>();
+            const auto name = current->at("rootObject").find("name");
+            if (name != current->at("rootObject").end() && name->is_string())
+            {
+                rootName = name->get<std::string>();
+            }
+        }
+        const std::string text = SceneFileText(PrefabJsonOf(entity, prefabName, rootName));
+        if (text.size() > MaxClipboardBytes)
+        {
+            SendError(clientSocket, std::format("The prefab would be larger than {} MiB as text and can't be saved",
+                                                MaxClipboardBytes / (1024 * 1024)));
+            return;
+        }
+        if (auto written = IO::WriteTextFileAtomically(resolved->file, text); !written)
+        {
+            SendError(clientSocket, ClientText::Failure("Couldn't write " + shown, "the file could not be written", written.error()));
+            return;
+        }
+        NoteAssetWritten(resolved->resourcePath, true);
+        ServerLog::Info("Applied to prefab " + shown);
+
+        BufferWriter response;
+        WriteOk(response);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleUnpackPrefab(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const UnpackPrefabCmd cmd = UnpackPrefabCmd::Deserialize(reader);
+        if (reader.HasData())
+        {
+            SendError(clientSocket, "Malformed payload: trailing bytes");
+            return;
+        }
+
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            SendError(clientSocket, "No scene loaded");
+            return;
+        }
+        const std::shared_ptr<GameObject> entity = FindEntity(*scene, cmd.entityId);
+        if (entity == nullptr)
+        {
+            SendError(clientSocket, NotFoundMessage("Entity", cmd.entityId));
+            return;
+        }
+        const std::optional<Math::UUID> before = entity->GetPrefabReference();
+        if (!before.has_value())
+        {
+            SendError(clientSocket, std::format("'{}' isn't linked to a prefab", SanitizeForLog(entity->GetName())));
+            return;
+        }
+
+        entity->SetPrefabReference(std::nullopt);
+        MarkSceneChanged({entity->GetUUID().ToString()});
+        RecordEdit(Labelled("Unpack Prefab", entity->GetName()), PrefabLinkOp(entity->GetUUID().ToString(), before, std::nullopt));
 
         BufferWriter response;
         WriteOk(response);

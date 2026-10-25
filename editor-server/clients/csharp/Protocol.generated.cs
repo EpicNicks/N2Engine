@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.18.0";
+        public const string ProtocolVersion = "1.19.0";
     }
 
     public enum CommandType : byte
@@ -90,6 +90,10 @@ namespace N2Engine.Editor.Protocol
         SetEditorViewOptions = 0x17,
         CheckLuaSyntax = 0xA7,
         GetAssetPreview = 0xA8,
+        CreatePrefab = 0xA9,
+        InstantiatePrefab = 0xAA,
+        ApplyPrefab = 0xAB,
+        UnpackPrefab = 0xAC,
     }
 
     public enum ResponseType : byte
@@ -336,6 +340,8 @@ namespace N2Engine.Editor.Protocol
         public string Tag { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("components")]
         public string[] Components { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("prefab")]
+        public string? Prefab { get; set; }
     }
 
     public class EntityHeader
@@ -356,6 +362,8 @@ namespace N2Engine.Editor.Protocol
         public double Layer { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("tag")]
         public string Tag { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("prefab")]
+        public string? Prefab { get; set; }
     }
 
     public class JsonVec3
@@ -941,6 +949,32 @@ namespace N2Engine.Editor.Protocol
     {
         public string UuidOrPath;
         public uint MaxSize;
+    }
+
+    public struct CreatePrefabRequest
+    {
+        public string EntityId;
+        public string Path;
+        public bool Overwrite;
+    }
+
+    public struct InstantiatePrefabRequest
+    {
+        public string UuidOrPath;
+        public string ParentId;
+        public int SiblingIndex;
+        public bool HasPosition;
+        public Vec3 Position;
+    }
+
+    public struct ApplyPrefabRequest
+    {
+        public string EntityId;
+    }
+
+    public struct UnpackPrefabRequest
+    {
+        public string EntityId;
     }
 
     public struct FrameDataResponse

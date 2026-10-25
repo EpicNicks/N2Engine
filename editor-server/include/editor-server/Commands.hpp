@@ -645,6 +645,73 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    struct CreatePrefabCmd
+    {
+        /// The GameObject's UUID string
+        std::string entityId;
+        /// A res:// path ending in .prefab
+        std::string path;
+        /// Replace the file when it exists
+        bool overwrite = false;
+
+        static CreatePrefabCmd Deserialize(BufferReader &r)
+        {
+            CreatePrefabCmd cmd;
+            cmd.entityId = r.ReadString();
+            cmd.path = r.ReadString();
+            cmd.overwrite = r.ReadBool();
+            return cmd;
+        }
+    };
+
+    struct InstantiatePrefabCmd
+    {
+        /// A prefab asset's UUID string or its res:// path
+        std::string uuidOrPath;
+        /// The parent's UUID string, or empty for a root of the scene
+        std::string parentId;
+        /// The place among the siblings; negative (-1) or past the last: the last place
+        int32_t siblingIndex = -1;
+        /// Whether `position` is used
+        bool hasPosition = false;
+        /// Where the instance's root goes in the world, when hasPosition
+        Math::Vector3 position;
+
+        static InstantiatePrefabCmd Deserialize(BufferReader &r)
+        {
+            // Read in order, one statement each (the arguments of a call have no defined order)
+            InstantiatePrefabCmd cmd;
+            cmd.uuidOrPath = r.ReadString();
+            cmd.parentId = r.ReadString();
+            cmd.siblingIndex = r.ReadI32();
+            cmd.hasPosition = r.ReadBool();
+            cmd.position = ReadVec3(r);
+            return cmd;
+        }
+    };
+
+    struct ApplyPrefabCmd
+    {
+        /// The GameObject's UUID string
+        std::string entityId;
+
+        static ApplyPrefabCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
+    struct UnpackPrefabCmd
+    {
+        /// The GameObject's UUID string
+        std::string entityId;
+
+        static UnpackPrefabCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
     struct SerializeEntitiesCmd
     {
         /// A JSON array of the objects' UUID strings (checked by the handler)

@@ -235,6 +235,22 @@ namespace ProtocolVectors
             {"DuplicateEntity", [](BufferReader &r) { return json{{"entityId", DuplicateEntityCmd::Deserialize(r).entityId}}; }},
             {"GetEntity", [](BufferReader &r) { return json{{"entityId", GetEntityCmd::Deserialize(r).entityId}}; }},
             {"SerializeEntities", [](BufferReader &r) { return json{{"ids", SerializeEntitiesCmd::Deserialize(r).ids}}; }},
+            {"CreatePrefab", [](BufferReader &r)
+            {
+                const auto cmd = CreatePrefabCmd::Deserialize(r);
+                return json{{"entityId", cmd.entityId}, {"path", cmd.path}, {"overwrite", cmd.overwrite}};
+            }},
+            {"InstantiatePrefab", [](BufferReader &r)
+            {
+                const auto cmd = InstantiatePrefabCmd::Deserialize(r);
+                return json{{"uuidOrPath", cmd.uuidOrPath},
+                            {"parentId", cmd.parentId},
+                            {"siblingIndex", cmd.siblingIndex},
+                            {"hasPosition", cmd.hasPosition},
+                            {"position", Vec3Json(cmd.position)}};
+            }},
+            {"ApplyPrefab", [](BufferReader &r) { return json{{"entityId", ApplyPrefabCmd::Deserialize(r).entityId}}; }},
+            {"UnpackPrefab", [](BufferReader &r) { return json{{"entityId", UnpackPrefabCmd::Deserialize(r).entityId}}; }},
             {"InstantiateEntities", [](BufferReader &r)
             {
                 const auto cmd = InstantiateEntitiesCmd::Deserialize(r);

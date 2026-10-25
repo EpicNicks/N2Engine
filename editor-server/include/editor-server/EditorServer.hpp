@@ -980,6 +980,10 @@ namespace N2Engine::Editor
         void HandleDuplicateEntity(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleSerializeEntities(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleInstantiateEntities(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleCreatePrefab(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleInstantiatePrefab(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleApplyPrefab(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleUnpackPrefab(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetEntity(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleSetLocalTransform(int clientSocket, const std::vector<uint8_t> &payload);
 
