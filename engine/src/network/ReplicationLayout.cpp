@@ -318,4 +318,96 @@ namespace N2Engine::Network
         resolver.ResolveAll();
         return EntryResult::Applied;
     }
+
+    ObjectValues CaptureObjectValues(const ObjectLayout &layout, GameObject &object)
+    {
+        ObjectValues result;
+        result.layoutHash = layout.hash;
+        result.fields.resize(layout.fields.size());
+        const auto &components = object.GetAllComponents();
+        for (const ReplicatedComponent &entry : layout.components)
+        {
+            if (entry.index >= components.size() || components[entry.index] == nullptr)
+            {
+                continue;
+            }
+            nlohmann::json values;
+            try
+            {
+                values = components[entry.index]->SerializeReplicated(
+                    std::span<const FieldInfo>(layout.fields.data() + entry.firstField, entry.fieldCount));
+            }
+            catch (const std::exception &)
+            {
+                continue;
+            }
+            for (std::size_t i = entry.firstField; i < entry.firstField + entry.fieldCount; ++i)
+            {
+                if (const nlohmann::json *const value = FindValue(values, layout.fields[i]); value != nullptr)
+                {
+                    result.fields[i] = *value;
+                }
+            }
+        }
+        return result;
+    }
+
+    bool ApplyObjectValues(const ObjectLayout &layout, GameObject &object, const ObjectValues &values,
+                           ReferenceResolver &resolver, std::size_t &refused)
+    {
+        if (values.layoutHash != layout.hash || values.fields.size() != layout.fields.size())
+        {
+            return false;
+        }
+        const auto &components = object.GetAllComponents();
+        bool ok = true;
+        for (std::size_t c = 0; c < layout.components.size(); ++c)
+        {
+            const ReplicatedComponent &entry = layout.components[c];
+            nlohmann::json target = nlohmann::json::object();
+            bool touched = false;
+            for (std::size_t i = entry.firstField; i < entry.firstField + entry.fieldCount; ++i)
+            {
+                if (!values.fields[i].has_value())
+                {
+                    continue;
+                }
+                const FieldInfo &field = layout.fields[i];
+                if (field.container.empty())
+                {
+                    target[field.name] = *values.fields[i];
+                }
+                else
+                {
+                    if (!target.contains(field.container))
+                    {
+                        target[field.container] = nlohmann::json::object();
+                    }
+                    target[field.container][field.name] = *values.fields[i];
+                }
+                touched = true;
+            }
+            if (!touched)
+            {
+                continue;
+            }
+            if (entry.index >= components.size() || components[entry.index] == nullptr)
+            {
+                ++refused;
+                ok = false;
+                continue;
+            }
+            try
+            {
+                components[entry.index]->ApplyReplicated(target, &resolver);
+            }
+            catch (const std::exception &)
+            {
+                ++refused;
+                ok = false;
+            }
+        }
+        resolver.ResolveAll();
+        return ok;
+    }
 }
