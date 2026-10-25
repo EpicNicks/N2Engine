@@ -8,6 +8,8 @@
 #include <utility>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "engine/network/NetworkId.hpp"
 #include "engine/network/ReplicationCodec.hpp"
 #include "engine/serialization/FieldInfo.hpp"
@@ -118,4 +120,22 @@ namespace N2Engine::Network
     /// refuses a value is counted in `refused` and the rest still applies.
     [[nodiscard]] EntryResult ApplyEntry(const ObjectLayout &layout, GameObject &object, N2Net::ByteReader &payload,
                                          const WorldReferences &references, std::size_t &refused);
+
+    /// The replicated fields of one object as JSON, NOT quantised: the exact values the components wrote. What a rollback
+    /// snapshot keeps (the wire codecs round, so a snapshot made of EncodeObjectState bytes could not put a value back
+    /// exactly). `fields` has one entry per entry of ObjectLayout::fields; nullopt: the component did not write the field.
+    struct ObjectValues
+    {
+        std::uint16_t layoutHash = 0;
+        std::vector<std::optional<nlohmann::json>> fields;
+    };
+
+    /// Reads the replicated fields of `object` (Component::SerializeReplicated), unquantised. Never throws.
+    [[nodiscard]] ObjectValues CaptureObjectValues(const ObjectLayout &layout, GameObject &object);
+
+    /// Writes captured values back through Component::ApplyReplicated, one call per component. False when the layout is
+    /// not the one the values were captured under (the hashes differ), or a component refused a value (counted in
+    /// `refused`; the other components are still applied). GameObject references resolve through `resolver`.
+    [[nodiscard]] bool ApplyObjectValues(const ObjectLayout &layout, GameObject &object, const ObjectValues &values,
+                                         ReferenceResolver &resolver, std::size_t &refused);
 }

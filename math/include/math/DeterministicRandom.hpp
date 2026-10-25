@@ -28,6 +28,10 @@ namespace N2Engine::Math
 
         void Seed(const std::uint32_t seed) { _state = seed; }
 
+        /// The whole stream state: a counter. Seed(State()) puts a stream back where it was (what a rollback snapshot
+        /// keeps of the session RNG).
+        [[nodiscard]] std::uint32_t State() const noexcept { return _state; }
+
         [[nodiscard]] std::uint32_t NextU32()
         {
             _state += 0x9E3779B9u;
