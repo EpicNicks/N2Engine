@@ -43,7 +43,7 @@ namespace
             {"GetCameraPosition", Class::Read}, {"SetEditorCamera", Class::Read}, {"GetEditorCamera", Class::Read},
             {"PickEntity", Class::Read}, {"GetEntityBounds", Class::Read}, {"GetCurrentScene", Class::Read},
             {"GetHierarchy", Class::Read}, {"GetOpenScene", Class::Read}, {"GetEntityTransform", Class::Read},
-            {"GetAllEntities", Class::Read}, {"GetEntity", Class::Read}, {"GetEngineHealth", Class::Read},
+            {"GetAllEntities", Class::Read}, {"GetEntity", Class::Read}, {"SerializeEntities", Class::Read}, {"GetEngineHealth", Class::Read},
             {"GetComponentTypes", Class::Read}, {"GetComponent", Class::Read}, {"GetLuaFields", Class::Read},
             {"GetProjectInfo", Class::Read}, {"GetHistory", Class::Read}, {"GetAutosave", Class::Read},
             {"ListAssets", Class::Read}, {"GetAssetInfo", Class::Read}, {"SetEditorViewOptions",Class::Read}, {"CheckLuaSyntax",Class::Read}, {"GetAssetPreview",Class::Read}, {"ReadTextAsset", Class::Read},
@@ -56,7 +56,16 @@ namespace
             {"SaveSceneToFile", Class::Write}, {"NewScene", Class::Write}, {"CreateEntity", Class::Write},
             {"DestroyEntity", Class::Write}, {"SetEntityTransform", Class::Write}, {"CreateEntityEx", Class::Write},
             {"SetEntityParent", Class::Write}, {"SetEntityProperties", Class::Write},
-            {"DuplicateEntity", Class::Write}, {"SetLocalTransform", Class::Write}, {"CreateScript", Class::Write},
+            {"DuplicateEntity", Class::Write}, {"InstantiateEntities", Class::Write},
+            // Prefab assets (since 1.19.0): all four change the scene or a project file
+            {"CreatePrefab", Class::Write}, {"InstantiatePrefab", Class::Write}, {"ApplyPrefab", Class::Write},
+            {"UnpackPrefab", Class::Write},
+            // The physics backend picker (since 1.20.0): the list reads, choosing one saves the project file
+            {"GetPhysicsBackends", Class::Read}, {"SetPhysicsBackend", Class::Write},
+            // The Network panel (since 1.21.0): the two reads, and the change that saves the project file
+            {"GetNetworkSettings", Class::Read}, {"GetNetworkValidation", Class::Read},
+            {"SetNetworkSettings", Class::Write},
+{"SetLocalTransform", Class::Write}, {"CreateScript", Class::Write},
             {"RescanAssets", Class::Write}, {"SetImportSettings", Class::Write}, {"WriteTextAsset", Class::Write},
             {"CreateScriptAsset", Class::Write}, {"CreateFolder", Class::Write}, {"AddComponent", Class::Write},
             {"RemoveComponent", Class::Write}, {"SetComponentFields", Class::Write},

@@ -488,7 +488,7 @@ jobs:
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
-        run: cmake --build build --parallel --target N2EditorHost N2Server math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client n2server_net_host n2server_net_client websocket_echo jolt_smoke_tests -- -k 0
+        run: cmake --build build --parallel --target N2EditorHost N2Server math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client n2server_net_host n2server_net_client n2server_lockstep_client n2_replay websocket_echo jolt_smoke_tests -- -k 0
 
       # The vendored Jolt Physics tree is exactly upstream's v5.6.0 (the SHA-256 of every file, no extra file under Jolt/)
       - name: Check the vendored Jolt Physics tree
@@ -679,7 +679,7 @@ jobs:
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/aarch64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
-        run: cmake --build build --parallel --target N2EditorHost N2Server math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client n2server_net_host n2server_net_client websocket_echo jolt_smoke_tests -- -k 0
+        run: cmake --build build --parallel --target N2EditorHost N2Server math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client n2server_net_host n2server_net_client n2server_lockstep_client n2_replay websocket_echo jolt_smoke_tests -- -k 0
 
       # The vendored Jolt Physics (N2ENGINE_USE_JOLT): its smoke test (the library alone) run directly, because ctest
       # hides a passing test's output, so this leg's [JOLT-DETERMINISM] line (the state hash every leg must produce, the
@@ -844,7 +844,7 @@ jobs:
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DN2ENGINE_RENDERER_VULKAN=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
-        run: cmake --build build --parallel --target N2EditorHost N2Server math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client n2server_net_host n2server_net_client websocket_echo jolt_smoke_tests -- -k 0
+        run: cmake --build build --parallel --target N2EditorHost N2Server math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client n2server_net_host n2server_net_client n2server_lockstep_client n2_replay websocket_echo jolt_smoke_tests -- -k 0
 
       # The vendored Jolt Physics (N2ENGINE_USE_JOLT): its smoke test (the library alone) run directly, because ctest
       # hides a passing test's output, so this leg's [JOLT-DETERMINISM] line (the state hash every leg must produce, the
@@ -1230,6 +1230,7 @@ jobs:
           . "$HOME/emsdk/emsdk_env.sh"
           node scripts/web-loader-test.mjs
           node scripts/web-gpu-test.mjs
+          node --test scripts/web-browser-support.test.mjs
 
       # Stage 4: the audio unlock of the loader (web/n2-loader.js, createAudioUnlock) under node with a mock AudioContext
       # and a mock document: resume once on the first gesture, listeners removed, failures tolerated, the hidden tab
@@ -1304,6 +1305,68 @@ jobs:
             fi
             echo "$dir: the WebGPU backend is linked into the player"
           done
+
+      # G6 reuses these exact build outputs in a separate browser job; no second engine build or mutable artifact ref.
+      # The size-profile player keeps the transfer small. The dev readback executable links only the renderer.
+      - name: Upload the browser gate inputs
+        uses: actions/upload-artifact@v7
+        with:
+          name: webgpu-browser-inputs
+          path: |
+            build-web-size/web-package/index.html
+            build-web-size/web-package/index.js
+            build-web-size/web-package/index.wasm
+            build-web-size/web-package/index.data
+            build-web-size/web-package/n2-loader.js
+            build-web-size/web-package/manifest.json
+            build-web/browser-tests/n2-webgpu-readback.js
+            build-web/browser-tests/n2-webgpu-readback.wasm
+          if-no-files-found: error
+          retention-days: 7
+
+  # Optional G6 check (not a branch-protection requirement). Failures stay visible: no continue-on-error.
+  # The full browser smoke runs against the package built above on Chromium's SwiftShader WebGPU adapter.
+  # Fixed-colour C++ readback goldens are required; counters/screenshots alone cannot prove GPU output.
+  webgpu-browser:
+    name: webgpu (Chromium, SwiftShader browser)
+    needs: [changes, web]
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.browser-cache
+      N2_READBACK_DIR: ${{ github.workspace }}/browser-inputs/build-web/browser-tests
+      N2_BROWSER_EVIDENCE_DIR: ${{ github.workspace }}/browser-evidence
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: scripts/browser-tools/package-lock.json
+      - uses: actions/download-artifact@v8
+        with:
+          name: webgpu-browser-inputs
+          path: browser-inputs
+      - name: Install the pinned browser and tools
+        run: |
+          npm ci --prefix scripts/browser-tools --ignore-scripts
+          node scripts/browser-tools/node_modules/playwright/cli.js install --with-deps --no-shell chromium
+          sudo apt-get install -y --no-install-recommends xvfb xauth
+      - name: Run the SwiftShader browser gate
+        run: |
+          set -euo pipefail
+          mkdir -p browser-evidence
+          node --test scripts/web-browser-support.test.mjs
+          xvfb-run -a node scripts/web-browser-smoke.mjs browser-inputs/build-web-size/web-package scripts/browser-tools --swiftshader --headed 2>&1 | tee browser-evidence/runner.log
+      - name: Retain browser diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: webgpu-browser-evidence
+          path: browser-evidence
+          if-no-files-found: warn
+          retention-days: 14
 
   # The cross-leg determinism comparison of the Jolt backend (stage J7, docs/physics.html "Determinism proof in CI"). Every leg
   # (windows Release, linux x86_64 Clang, linux arm64 Clang, linux x86_64 GCC 14, web under node) ran the physics scene corpus

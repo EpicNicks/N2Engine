@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.17.0";
+inline constexpr const char *ProtocolVersion = "1.21.0";
 
 enum class CommandType : uint8_t
 {
@@ -46,6 +46,8 @@ enum class CommandType : uint8_t
     SetEntityParent = 0x36,
     SetEntityProperties = 0x37,
     DuplicateEntity = 0x38,
+    SerializeEntities = 0x3B,
+    InstantiateEntities = 0x3C,
     GetEntity = 0x39,
     SetLocalTransform = 0x3A,
     CreateScript = 0x40,
@@ -89,6 +91,15 @@ enum class CommandType : uint8_t
     SetEditorViewOptions = 0x17,
     CheckLuaSyntax = 0xA7,
     GetAssetPreview = 0xA8,
+    CreatePrefab = 0xA9,
+    InstantiatePrefab = 0xAA,
+    ApplyPrefab = 0xAB,
+    UnpackPrefab = 0xAC,
+    GetPhysicsBackends = 0xAD,
+    SetPhysicsBackend = 0xAE,
+    GetNetworkSettings = 0x51,
+    SetNetworkSettings = 0x52,
+    GetNetworkValidation = 0x53,
 };
 
 enum class ResponseType : uint8_t
@@ -133,6 +144,11 @@ enum class ResponseType : uint8_t
     ExtensionResult = 0x1F,
     LuaSyntax = 0x20,
     AssetPreview = 0xA4,
+    SerializedEntities = 0x21,
+    EntitiesCreated = 0x22,
+    PhysicsBackends = 0x23,
+    NetworkSettings = 0x24,
+    NetworkValidation = 0x25,
 };
 
 // Custom types
@@ -303,6 +319,19 @@ struct DuplicateEntityCmd
     std::string entityId;
 };
 
+struct SerializeEntitiesCmd
+{
+    std::string ids; // JSON: any
+};
+
+struct InstantiateEntitiesCmd
+{
+    std::string clipboard;
+    std::string parentId;
+    int32_t siblingIndex;
+    bool keepExternalRefs;
+};
+
 struct GetEntityCmd
 {
     std::string entityId;
@@ -459,6 +488,48 @@ struct GetAssetPreviewCmd
     uint32_t maxSize;
 };
 
+struct CreatePrefabCmd
+{
+    std::string entityId;
+    std::string path;
+    bool overwrite;
+};
+
+struct InstantiatePrefabCmd
+{
+    std::string uuidOrPath;
+    std::string parentId;
+    int32_t siblingIndex;
+    bool hasPosition;
+    Vec3 position;
+};
+
+struct ApplyPrefabCmd
+{
+    std::string entityId;
+};
+
+struct UnpackPrefabCmd
+{
+    std::string entityId;
+};
+
+struct SetPhysicsBackendCmd
+{
+    std::string backend;
+};
+
+struct SetNetworkSettingsCmd
+{
+    std::string preset;
+    std::string settings; // JSON: any
+};
+
+struct GetNetworkValidationCmd
+{
+    std::string preset;
+};
+
 // Response structures
 struct FrameDataData
 {
@@ -573,6 +644,16 @@ struct EntityListData
 {
     uint32_t count;
     std::vector<EntityInfo> entities;
+};
+
+struct SerializedEntitiesData
+{
+    std::string clipboard; // JSON: ClipboardPayload
+};
+
+struct EntitiesCreatedData
+{
+    std::string ids; // JSON: string[]
 };
 
 struct EntityDataData
@@ -704,6 +785,21 @@ struct AssetPreviewData
 {
     std::string info; // JSON: AssetPreviewInfo
     std::vector<uint8_t> pixels;
+};
+
+struct PhysicsBackendsData
+{
+    std::string info; // JSON: PhysicsBackendsInfo
+};
+
+struct NetworkSettingsData
+{
+    std::string info; // JSON: NetworkSettingsInfo
+};
+
+struct NetworkValidationData
+{
+    std::string report; // JSON: NetworkValidationReport
 };
 
 struct ErrorCodedData

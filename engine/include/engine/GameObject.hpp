@@ -121,6 +121,12 @@ namespace N2Engine
         void SetTag(const std::string &tag) { _tag = tag; }
         bool CompareTag(const std::string &tag) const { return _tag == tag; }
 
+        // Prefab link: the UUID of the .prefab asset this object was made from or saved as (the editor's
+        // CreatePrefab/InstantiatePrefab set it, UnpackPrefab clears it). Serialized as "prefabReference"; the
+        // engine itself does nothing with it (instances are copies, v1 has no overrides).
+        const std::optional<Math::UUID>& GetPrefabReference() const { return _prefabReference; }
+        void SetPrefabReference(std::optional<Math::UUID> prefab) { _prefabReference = prefab; }
+
         // Layer: an index 0..31 (see Layers), 0 (Default) unless set. Serialized. Its colliders' shapes move
         // to the new layer straight away; children keep their own layer (as in Unity).
         int GetLayer() const { return _layer; }

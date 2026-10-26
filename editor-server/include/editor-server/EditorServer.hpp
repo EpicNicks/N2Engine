@@ -978,6 +978,17 @@ namespace N2Engine::Editor
         void HandleSetEntityParent(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleSetEntityProperties(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleDuplicateEntity(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleSerializeEntities(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleInstantiateEntities(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleCreatePrefab(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleInstantiatePrefab(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleApplyPrefab(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleUnpackPrefab(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleGetPhysicsBackends(int clientSocket);
+        void HandleSetPhysicsBackend(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleGetNetworkSettings(int clientSocket);
+        void HandleSetNetworkSettings(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleGetNetworkValidation(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetEntity(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleSetLocalTransform(int clientSocket, const std::vector<uint8_t> &payload);
 
@@ -1089,6 +1100,15 @@ namespace N2Engine::Editor
         void SendSceneInfo(int clientSocket, const std::expected<OpenSceneInfo, std::string> &info);
         /// ProjectInfo for the project (there must be one)
         void SendProjectInfo(int clientSocket);
+        /// The PhysicsBackendsInfo of GetPhysicsBackends: the backends this build contains with what they declare, the
+        /// project's physics.backend and network.preset, and the backend this host is running
+        [[nodiscard]] nlohmann::json BuildPhysicsBackendsInfo() const;
+        /// The NetworkSettingsInfo of GetNetworkSettings (B11): the project's network settings, the three preset
+        /// bundles and the nudge for the open scene
+        [[nodiscard]] nlohmann::json BuildNetworkSettingsInfo() const;
+        /// Merges `patch` into the project's settings as SetProjectSettings does (applied live, then saved; a refusal puts
+        /// the live state back and saves nothing). Needs a project. The Error is the message a client is shown.
+        [[nodiscard]] std::expected<void, std::string> ApplySettingsPatch(const nlohmann::json &patch);
         /// The Error a project command answers without a project
         void SendNoProject(int clientSocket);
         /// Saves the project file with this change, then keeps it; an Error message when it can't be saved

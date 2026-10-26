@@ -645,6 +645,144 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    struct CreatePrefabCmd
+    {
+        /// The GameObject's UUID string
+        std::string entityId;
+        /// A res:// path ending in .prefab
+        std::string path;
+        /// Replace the file when it exists
+        bool overwrite = false;
+
+        static CreatePrefabCmd Deserialize(BufferReader &r)
+        {
+            CreatePrefabCmd cmd;
+            cmd.entityId = r.ReadString();
+            cmd.path = r.ReadString();
+            cmd.overwrite = r.ReadBool();
+            return cmd;
+        }
+    };
+
+    struct InstantiatePrefabCmd
+    {
+        /// A prefab asset's UUID string or its res:// path
+        std::string uuidOrPath;
+        /// The parent's UUID string, or empty for a root of the scene
+        std::string parentId;
+        /// The place among the siblings; negative (-1) or past the last: the last place
+        int32_t siblingIndex = -1;
+        /// Whether `position` is used
+        bool hasPosition = false;
+        /// Where the instance's root goes in the world, when hasPosition
+        Math::Vector3 position;
+
+        static InstantiatePrefabCmd Deserialize(BufferReader &r)
+        {
+            // Read in order, one statement each (the arguments of a call have no defined order)
+            InstantiatePrefabCmd cmd;
+            cmd.uuidOrPath = r.ReadString();
+            cmd.parentId = r.ReadString();
+            cmd.siblingIndex = r.ReadI32();
+            cmd.hasPosition = r.ReadBool();
+            cmd.position = ReadVec3(r);
+            return cmd;
+        }
+    };
+
+    struct ApplyPrefabCmd
+    {
+        /// The GameObject's UUID string
+        std::string entityId;
+
+        static ApplyPrefabCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
+    struct UnpackPrefabCmd
+    {
+        /// The GameObject's UUID string
+        std::string entityId;
+
+        static UnpackPrefabCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
+    struct SetPhysicsBackendCmd
+    {
+        /// "physx" or "jolt" (any case; the host saves it in lower case)
+        std::string backend;
+
+        static SetPhysicsBackendCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
+    struct SetNetworkSettingsCmd
+    {
+        /// "none", "authoritative" or "deterministic" (any case), or empty to keep the preset
+        std::string preset;
+        /// A JSON merge patch for the tunable settings of the network block (an object; {} for none)
+        nlohmann::json settings;
+
+        static SetNetworkSettingsCmd Deserialize(BufferReader &r)
+        {
+            SetNetworkSettingsCmd cmd;
+            cmd.preset = r.ReadString();
+            cmd.settings = ReadBoundedJson(r);
+            return cmd;
+        }
+    };
+
+    struct GetNetworkValidationCmd
+    {
+        /// The preset to check, or empty for the project's own
+        std::string preset;
+
+        static GetNetworkValidationCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
+    struct SerializeEntitiesCmd
+    {
+        /// A JSON array of the objects' UUID strings (checked by the handler)
+        nlohmann::json ids;
+
+        static SerializeEntitiesCmd Deserialize(BufferReader &r)
+        {
+            return {ReadBoundedJson(r)};
+        }
+    };
+
+    struct InstantiateEntitiesCmd
+    {
+        /// The ClipboardPayload as JSON text, parsed by the handler after its size and nesting are checked
+        std::string clipboard;
+        /// The parent's UUID string, or empty for a root of the scene
+        std::string parentId;
+        /// The place among the siblings; negative (-1) or past the last: the last place
+        int32_t siblingIndex = -1;
+        /// Keep a reference to an object or component outside the payload when the open scene has it
+        bool keepExternalRefs = false;
+
+        static InstantiateEntitiesCmd Deserialize(BufferReader &r)
+        {
+            InstantiateEntitiesCmd cmd;
+            cmd.clipboard = r.ReadString();
+            cmd.parentId = r.ReadString();
+            cmd.siblingIndex = r.ReadI32();
+            cmd.keepExternalRefs = r.ReadBool();
+            return cmd;
+        }
+    };
+
     struct GetEntityCmd
     {
         /// The GameObject's UUID string
@@ -1035,6 +1173,56 @@ namespace N2Engine::Editor::Protocol
         w.WriteU8(static_cast<uint8_t>(ResponseType::EntityCreated));
         w.WriteU32(static_cast<uint32_t>(4 + entityId.size()));
         w.WriteString(entityId);
+    }
+
+    /// SerializeEntities' response: the ClipboardPayload as one JSON value
+    inline void WriteSerializedEntities(BufferWriter &w, const nlohmann::json &clipboard)
+    {
+        BufferWriter payload;
+        WriteJson(payload, clipboard);
+        w.WriteU8(static_cast<uint8_t>(ResponseType::SerializedEntities));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// InstantiateEntities' response: a JSON array of the new topmost objects' UUID strings
+    inline void WriteEntitiesCreated(BufferWriter &w, const nlohmann::json &ids)
+    {
+        BufferWriter payload;
+        WriteJson(payload, ids);
+        w.WriteU8(static_cast<uint8_t>(ResponseType::EntitiesCreated));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// GetPhysicsBackends' and SetPhysicsBackend's response: the PhysicsBackendsInfo as one JSON value
+    inline void WritePhysicsBackends(BufferWriter &w, const nlohmann::json &info)
+    {
+        BufferWriter payload;
+        WriteJson(payload, info);
+        w.WriteU8(static_cast<uint8_t>(ResponseType::PhysicsBackends));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// GetNetworkSettings' and SetNetworkSettings' response: the NetworkSettingsInfo as one JSON value
+    inline void WriteNetworkSettings(BufferWriter &w, const nlohmann::json &info)
+    {
+        BufferWriter payload;
+        WriteJson(payload, info);
+        w.WriteU8(static_cast<uint8_t>(ResponseType::NetworkSettings));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// GetNetworkValidation's response: the NetworkValidationReport as one JSON value
+    inline void WriteNetworkValidation(BufferWriter &w, const nlohmann::json &report)
+    {
+        BufferWriter payload;
+        WriteJson(payload, report);
+        w.WriteU8(static_cast<uint8_t>(ResponseType::NetworkValidation));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
     }
 
     inline void WriteFrameData(BufferWriter &w, uint32_t width, uint32_t height, std::span<const uint8_t> pixels)

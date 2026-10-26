@@ -42,6 +42,22 @@ namespace N2Engine::Math
 
         [[nodiscard]] inline bool IsSeeded() { return Detail::SeededStream().has_value(); }
 
+        /// The state of the seeded stream (nullopt while unseeded), and putting it back: what a rollback snapshot keeps of
+        /// the global RNG. RestoreSeededState does nothing for nullopt, so an unseeded session snapshots no RNG.
+        [[nodiscard]] inline std::optional<std::uint32_t> SeededState()
+        {
+            const auto &stream = Detail::SeededStream();
+            return stream.has_value() ? std::optional<std::uint32_t>(stream->State()) : std::nullopt;
+        }
+
+        inline void RestoreSeededState(const std::optional<std::uint32_t> state)
+        {
+            if (state.has_value() && Detail::SeededStream().has_value())
+            {
+                Detail::SeededStream()->Seed(*state);
+            }
+        }
+
         // Random float [0, 1] (seeded: [0, 1))
         inline float RandomFloat()
         {

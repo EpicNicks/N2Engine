@@ -1,0 +1,10 @@
+{
+  "name": "n2engine-browser-ci-tools",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Pinned development-only browser tools for WebGPU G6",
+  "dependencies": {
+    "playwright": "1.64.1",
+    "pngjs": "7.0.0"
+  }
+}

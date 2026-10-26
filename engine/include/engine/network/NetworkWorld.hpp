@@ -96,6 +96,49 @@ namespace N2Engine::Network
         /// Replaces the handler (an empty function removes it)
         void SetDestroyedHandler(DestroyedHandler handler) { _destroyedHandler = std::move(handler); }
 
+        // Parking (netcode C5, rollback). A parked object is out of the world but not gone: it is unregistered (Find,
+        // Objects and Count no longer see it, so nothing replicates or hashes it), its GameObject is deactivated (no
+        // updates, a Rigidbody's body is disabled, which is what the physics parked-body contract asks for) and nothing is
+        // destroyed, so no OnDestroy runs and no body or audio source is released. It keeps its net id, owner and prefab,
+        // and Unpark puts it back exactly as it was registered. A rollback parks the objects that did not exist at the
+        // restore point (undoing a spawn) and the ones despawned after it (undoing a despawn) instead of destroying them.
+
+        /// Why an object is parked
+        enum class ParkReason : std::uint8_t
+        {
+            /// The simulation despawned it (it must come back if the despawn is rolled back)
+            Despawned,
+            /// A rollback undid its spawn (it comes back if the resimulation spawns it again)
+            SpawnUndone,
+        };
+
+        struct ParkedObject
+        {
+            NetworkObject *object = nullptr;
+            ParkReason reason = ParkReason::Despawned;
+            /// The simulation tick it was parked at (the caller's number)
+            std::uint32_t tick = 0;
+            /// The GameObject's own active flag when it was parked, put back by Unpark
+            bool wasActive = true;
+        };
+
+        /// Parks a registered object. False when `id` is not registered.
+        bool Park(NetworkId id, ParkReason reason, std::uint32_t tick);
+        /// Registers a parked object again and, with `reactivate`, restores its active flag (without it the GameObject stays
+        /// inactive for the caller to activate); nullptr when `id` is not parked
+        NetworkObject *Unpark(NetworkId id, bool reactivate = true);
+        [[nodiscard]] const ParkedObject *FindParked(NetworkId id) const;
+        /// Parked objects by net id, ascending
+        [[nodiscard]] const std::map<std::uint32_t, ParkedObject> &Parked() const noexcept { return _parked; }
+        /// Destroys the parked object for good (its GameObject is destroyed, OnDestroy runs, the destroyed handler is
+        /// not called). False when `id` is not parked.
+        bool ReleaseParked(NetworkId id);
+
+        /// The next id AllocateId would give out (0 once the counter is spent); a rollback restores it so a resimulation
+        /// hands out the ids the first run did. Not a way to reuse ids in a normal session.
+        [[nodiscard]] std::uint32_t NextId() const noexcept { return _nextId; }
+        void SetNextId(const std::uint32_t next) noexcept { _nextId = next; }
+
     private:
         friend class NetworkObject;
 
@@ -107,6 +150,7 @@ namespace N2Engine::Network
         std::uint32_t _sceneObjectCount = 0;
         std::uint32_t _nextId = 1;
         std::map<std::uint32_t, NetworkObject *> _objects;
+        std::map<std::uint32_t, ParkedObject> _parked;
         DestroyedHandler _destroyedHandler;
     };
 }

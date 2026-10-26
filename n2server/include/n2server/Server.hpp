@@ -26,8 +26,9 @@ namespace N2Engine::Server
 
     /**
      * Runs a dedicated server, as N2Server does. With options.showHelp it prints ServerUsage() and returns 0; with
-     * options.newTokenUser it is RunNewToken (TokenCli.hpp). With options.relay it prints one line to stderr
-     * ("N2Server --relay: not implemented ...") and returns 1, before anything else starts. Otherwise:
+     * options.newTokenUser it is RunNewToken (TokenCli.hpp). With options.relay the project must use the Deterministic
+     * preset (else one line on stderr and 1, before the engine starts) and step 3 serves a Network::LockstepRelay instead of a
+     * NetworkServer (no world is replicated). Otherwise:
      *  1. the log sink starts (stderr, and --log-file), then the tokens file loads (--tokens-file; a file the server
      *     would not accept, such as one other users can read on POSIX, ends the server here), then the project's
      *     project.n2proj is read, all before the engine starts;

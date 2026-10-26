@@ -118,6 +118,17 @@ namespace N2Engine::Network
 
     void NetworkWorld::Reset()
     {
+        for (auto &entry : _parked)
+        {
+            NetworkObject &object = *entry.second.object;
+            object._world = nullptr;
+            object._id = NetworkId{};
+            object._owner = kServerClientId;
+            object._spawned = false;
+            object._prefabName.clear();
+            object.GetGameObject().SetActive(entry.second.wasActive);
+        }
+        _parked.clear();
         for (auto &entry : _objects)
         {
             NetworkObject &object = *entry.second;
@@ -174,7 +185,7 @@ namespace N2Engine::Network
         {
             return std::unexpected(std::string("net id 0 is not a valid id"));
         }
-        if (_objects.contains(id.value))
+        if (_objects.contains(id.value) || _parked.contains(id.value))
         {
             return std::unexpected(std::format("net id {} is already in use", id.value));
         }
@@ -229,6 +240,67 @@ namespace N2Engine::Network
         return result;
     }
 
+    bool NetworkWorld::Park(const NetworkId id, const ParkReason reason, const std::uint32_t tick)
+    {
+        const auto found = _objects.find(id.value);
+        if (found == _objects.end())
+        {
+            return false;
+        }
+        NetworkObject *const object = found->second;
+        _objects.erase(found);
+        ParkedObject parked;
+        parked.object = object;
+        parked.reason = reason;
+        parked.tick = tick;
+        parked.wasActive = object->GetGameObject().IsActive();
+        _parked.emplace(id.value, parked);
+        object->GetGameObject().SetActive(false);
+        return true;
+    }
+
+    NetworkObject *NetworkWorld::Unpark(const NetworkId id, const bool reactivate)
+    {
+        const auto found = _parked.find(id.value);
+        if (found == _parked.end())
+        {
+            return nullptr;
+        }
+        const ParkedObject parked = found->second;
+        _parked.erase(found);
+        _objects.emplace(id.value, parked.object);
+        if (reactivate)
+        {
+            parked.object->GetGameObject().SetActive(parked.wasActive);
+        }
+        return parked.object;
+    }
+
+    const NetworkWorld::ParkedObject *NetworkWorld::FindParked(const NetworkId id) const
+    {
+        const auto found = _parked.find(id.value);
+        return found == _parked.end() ? nullptr : &found->second;
+    }
+
+    bool NetworkWorld::ReleaseParked(const NetworkId id)
+    {
+        const auto found = _parked.find(id.value);
+        if (found == _parked.end())
+        {
+            return false;
+        }
+        NetworkObject *const object = found->second.object;
+        _parked.erase(found);
+        object->_world = nullptr;
+        object->_id = NetworkId{};
+        object->_owner = kServerClientId;
+        object->_spawned = false;
+        object->_prefabName.clear();
+        // Inactive already, so its body (if any) is disabled before the destroy pass removes it
+        object->GetGameObject().Destroy();
+        return true;
+    }
+
     void NetworkWorld::ObjectGone(NetworkObject &object)
     {
         const NetworkId id = object._id;
@@ -239,6 +311,11 @@ namespace N2Engine::Network
             if (found != _objects.end() && found->second == &object)
             {
                 _objects.erase(found);
+            }
+            const auto parked = _parked.find(id.value);
+            if (parked != _parked.end() && parked->second.object == &object)
+            {
+                _parked.erase(parked);
             }
         }
         object._id = NetworkId{};

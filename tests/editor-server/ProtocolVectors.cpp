@@ -234,6 +234,38 @@ namespace ProtocolVectors
             }},
             {"DuplicateEntity", [](BufferReader &r) { return json{{"entityId", DuplicateEntityCmd::Deserialize(r).entityId}}; }},
             {"GetEntity", [](BufferReader &r) { return json{{"entityId", GetEntityCmd::Deserialize(r).entityId}}; }},
+            {"SerializeEntities", [](BufferReader &r) { return json{{"ids", SerializeEntitiesCmd::Deserialize(r).ids}}; }},
+            {"CreatePrefab", [](BufferReader &r)
+            {
+                const auto cmd = CreatePrefabCmd::Deserialize(r);
+                return json{{"entityId", cmd.entityId}, {"path", cmd.path}, {"overwrite", cmd.overwrite}};
+            }},
+            {"InstantiatePrefab", [](BufferReader &r)
+            {
+                const auto cmd = InstantiatePrefabCmd::Deserialize(r);
+                return json{{"uuidOrPath", cmd.uuidOrPath},
+                            {"parentId", cmd.parentId},
+                            {"siblingIndex", cmd.siblingIndex},
+                            {"hasPosition", cmd.hasPosition},
+                            {"position", Vec3Json(cmd.position)}};
+            }},
+            {"ApplyPrefab", [](BufferReader &r) { return json{{"entityId", ApplyPrefabCmd::Deserialize(r).entityId}}; }},
+            {"UnpackPrefab", [](BufferReader &r) { return json{{"entityId", UnpackPrefabCmd::Deserialize(r).entityId}}; }},
+            {"SetPhysicsBackend", [](BufferReader &r) { return json{{"backend", SetPhysicsBackendCmd::Deserialize(r).backend}}; }},
+            {"SetNetworkSettings", [](BufferReader &r)
+            {
+                const auto cmd = SetNetworkSettingsCmd::Deserialize(r);
+                return json{{"preset", cmd.preset}, {"settings", cmd.settings}};
+            }},
+            {"GetNetworkValidation", [](BufferReader &r) { return json{{"preset", GetNetworkValidationCmd::Deserialize(r).preset}}; }},
+            {"InstantiateEntities", [](BufferReader &r)
+            {
+                const auto cmd = InstantiateEntitiesCmd::Deserialize(r);
+                return json{{"clipboard", cmd.clipboard},
+                            {"parentId", cmd.parentId},
+                            {"siblingIndex", cmd.siblingIndex},
+                            {"keepExternalRefs", cmd.keepExternalRefs}};
+            }},
             {"SetLocalTransform", [](BufferReader &r)
             {
                 const auto cmd = SetLocalTransformCmd::Deserialize(r);
@@ -346,6 +378,11 @@ namespace ProtocolVectors
             }},
             {"AssetList", [](BufferWriter &w, const json &f) { WriteAssetList(w, f.at("folders"), f.at("assets")); }},
             {"LuaSyntax",[](BufferWriter &w,const json &f){WriteLuaSyntax(w,f.at("result"));}},
+            {"SerializedEntities", [](BufferWriter &w, const json &f) { WriteSerializedEntities(w, f.at("clipboard")); }},
+            {"EntitiesCreated", [](BufferWriter &w, const json &f) { WriteEntitiesCreated(w, f.at("ids")); }},
+            {"PhysicsBackends", [](BufferWriter &w, const json &f) { WritePhysicsBackends(w, f.at("info")); }},
+            {"NetworkSettings", [](BufferWriter &w, const json &f) { WriteNetworkSettings(w, f.at("info")); }},
+            {"NetworkValidation", [](BufferWriter &w, const json &f) { WriteNetworkValidation(w, f.at("report")); }},
             {"AssetPreview",[](BufferWriter &w,const json &f){const auto pixels=FromHex(StringField(f,"pixels"));WriteAssetPreview(w,f.at("info"),pixels);}},
             {"AssetDetail", [](BufferWriter &w, const json &f) { WriteAssetDetail(w, f.at("info")); }},
             {"TextData", [](BufferWriter &w, const json &f) { WriteTextData(w, StringField(f, "text")); }},

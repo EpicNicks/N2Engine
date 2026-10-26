@@ -1,5 +1,5 @@
 {
-  "version": "1.17.0",
+  "version": "1.21.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -83,7 +83,7 @@
     },
     "PollEvents": {
       "id": "0x05",
-      "description": "Returns the server's events after afterSeq, oldest first: log lines (every line the host logs, from startup on) and, in later versions, other kinds. Seqs are numbered from 1 within an epoch, a random non-zero number the server picks when it starts (and again if seqs would pass 4294967295, when it starts over at 1). One rule: afterSeq means the last seq the client has seen in the epoch it passes; when that epoch is not 0 and is not the server's, or afterSeq is newer than any seq of the server's epoch, the server reads afterSeq as 0. So a client passes epoch 0 and afterSeq 0 first, then each response's epoch and nextSeq: reconnecting to the same host it misses nothing and gets nothing twice, and after the host restarted (or started over) it gets the new epoch's events from the start. Returns at most maxEvents (and at most 1024) events; nextSeq is the last one's seq, or, when none is returned, the newest seq, so maxEvents 0 skips everything retained. The server keeps the newest 4096 events (and about 2 MiB of them); dropped counts the events after afterSeq that fell off before this poll. A client polls it (about every 100 ms); it never logs, so an idle server returns no events. A log event is {seq, kind: \"log\", level: \"info\" | \"warn\" | \"error\", message, time: Unix milliseconds}. Since 1.3.0: sceneChanged {revision, savedRevision, path} whenever the scene revision moves, a scene is saved, or another is loaded (path is the loaded scene's file, empty for none). Since 1.4.0 it also says what changed: entityIds, the UUIDs of the objects whose GetEntity data the change touched (those it created, destroyed with everything under them, renamed, re-tagged or moved to another layer; and, with everything under them, those it reparented, transformed, activated or deactivated, whose world matrices or activeInHierarchy changed with them, and the copy and its subtree for a duplicate), when there are at most 256 of them. It doesn't list the siblings whose index shifted: header.index is only guaranteed fresh in a GetHierarchy read, so a client that shows the tree refetches it when the revision moves; full: true when another scene was loaded (OpenScene, NewScene, LoadScene), so every id a client holds is invalid and it refetches everything. A save changes no object and carries neither. Any other event with neither (a change that touched more than 256 objects) means anything may have changed, so a client refetches what it shows; one with entityIds lets it refetch only those, and GetHierarchy when the revision moved. assetsChanged {added, removed, modified} (res:// paths, each sorted) after a RescanAssets that found changes, and, since 1.9.0, after the host's file watcher found changes (it looks about once a second while a client is connected, so a file added, edited or deleted outside the editor is reported without a RescanAssets) and after WriteTextAsset, CreateScriptAsset and SetImportSettings (modified, though its file is the same, for the last); an asset of a kind the engine can reload that is held in memory is reloaded before the event is sent (see WriteTextAsset); projectChanged {} after project.n2proj was saved. historyChanged {canUndo, canRedo, label, redoLabel, undoCount, redoCount} since 1.6.0, after a step is recorded, undone or redone, or the history is cleared (label is the step Undo would undo, redoLabel the one Redo would redo, empty for none; the counts are the steps done and undone); an edit merged into the step before it (typing in a number box) sends none. Since 1.6.0 sceneChanged also follows Undo, Redo and RestoreAutosave, with full: true when the step was undone or redone by restoring a snapshot of the scene. Since 1.7.0: frameChanged {revision} when what the viewport would show has changed (the scene, the editor camera, the viewport size, the assets or the project's settings) since the last frame RenderFrameIfChanged rendered: one event per change that follows a rendered frame, not one per change, so dragging the camera sends one. revision is the revision the next frame will have (a later change before that frame moves it on); a client that is showing the viewport answers it with RenderFrameIfChanged. Since 1.10.0: playState {state, frame} from a play host when the game is paused or resumed (state \"Paused\" or \"Playing\", frame the frame count then), and once with \"Playing\" when the game starts; an ordinary host sends none. Since 1.15.0: extensionOutput {extension, level, message, time} for each line a Lua editor extension wrote with Editor.Log (or print) while a menu item (or, since 1.16.0, an inspector button) ran: extension is the extension's name, level \"info\", \"warn\" or \"error\", message the text (cut to 1024 bytes), time Unix milliseconds. The event is Admin-tagged like the host's own log lines (only an admin, or any client of a host with no authentication, receives it), and the same line is also logged by the host as an Admin log line. The host also sends extensionOutput, with no change of version, for each warning that an extension's OnBeforePlay hook returns while WritePlaySnapshot runs: level \"warn\" and message the warning (the keys are the same as for a line of Editor.Log). Those events are not Admin-tagged: every role receives them, because the client that asked to play has to be able to show them (the same warning is also an Admin log line). A client that shows extensionOutput shows these too. A client ignores kinds and keys it doesn't know.",
+      "description": "Returns the server's events after afterSeq, oldest first: log lines (every line the host logs, from startup on) and, in later versions, other kinds. Seqs are numbered from 1 within an epoch, a random non-zero number the server picks when it starts (and again if seqs would pass 4294967295, when it starts over at 1). One rule: afterSeq means the last seq the client has seen in the epoch it passes; when that epoch is not 0 and is not the server's, or afterSeq is newer than any seq of the server's epoch, the server reads afterSeq as 0. So a client passes epoch 0 and afterSeq 0 first, then each response's epoch and nextSeq: reconnecting to the same host it misses nothing and gets nothing twice, and after the host restarted (or started over) it gets the new epoch's events from the start. Returns at most maxEvents (and at most 1024) events; nextSeq is the last one's seq, or, when none is returned, the newest seq, so maxEvents 0 skips everything retained. The server keeps the newest 4096 events (and about 2 MiB of them); dropped counts the events after afterSeq that fell off before this poll. A client polls it (about every 100 ms); it never logs, so an idle server returns no events. A log event is {seq, kind: \"log\", level: \"info\" | \"warn\" | \"error\", message, time: Unix milliseconds}. Since 1.3.0: sceneChanged {revision, savedRevision, path} whenever the scene revision moves, a scene is saved, or another is loaded (path is the loaded scene's file, empty for none). Since 1.4.0 it also says what changed: entityIds, the UUIDs of the objects whose GetEntity data the change touched (those it created, destroyed with everything under them, renamed, re-tagged or moved to another layer; and, with everything under them, those it reparented, transformed, activated or deactivated, whose world matrices or activeInHierarchy changed with them, and the copy and its subtree for a duplicate), when there are at most 256 of them. It doesn't list the siblings whose index shifted: header.index is only guaranteed fresh in a GetHierarchy read, so a client that shows the tree refetches it when the revision moves; full: true when another scene was loaded (OpenScene, NewScene, LoadScene), so every id a client holds is invalid and it refetches everything. A save changes no object and carries neither. Any other event with neither (a change that touched more than 256 objects) means anything may have changed, so a client refetches what it shows; one with entityIds lets it refetch only those, and GetHierarchy when the revision moved. assetsChanged {added, removed, modified} (res:// paths, each sorted) after a RescanAssets that found changes, and, since 1.9.0, after the host's file watcher found changes (it looks about once a second while a client is connected, so a file added, edited or deleted outside the editor is reported without a RescanAssets) and after WriteTextAsset, CreateScriptAsset, SetImportSettings (modified, though its file is the same, for the last) and, since 1.19.0, CreatePrefab and ApplyPrefab; an asset of a kind the engine can reload that is held in memory is reloaded before the event is sent (see WriteTextAsset); projectChanged {} after project.n2proj was saved. historyChanged {canUndo, canRedo, label, redoLabel, undoCount, redoCount} since 1.6.0, after a step is recorded, undone or redone, or the history is cleared (label is the step Undo would undo, redoLabel the one Redo would redo, empty for none; the counts are the steps done and undone); an edit merged into the step before it (typing in a number box) sends none. Since 1.6.0 sceneChanged also follows Undo, Redo and RestoreAutosave, with full: true when the step was undone or redone by restoring a snapshot of the scene. Since 1.7.0: frameChanged {revision} when what the viewport would show has changed (the scene, the editor camera, the viewport size, the assets or the project's settings) since the last frame RenderFrameIfChanged rendered: one event per change that follows a rendered frame, not one per change, so dragging the camera sends one. revision is the revision the next frame will have (a later change before that frame moves it on); a client that is showing the viewport answers it with RenderFrameIfChanged. Since 1.10.0: playState {state, frame} from a play host when the game is paused or resumed (state \"Paused\" or \"Playing\", frame the frame count then), and once with \"Playing\" when the game starts; an ordinary host sends none. Since 1.15.0: extensionOutput {extension, level, message, time} for each line a Lua editor extension wrote with Editor.Log (or print) while a menu item (or, since 1.16.0, an inspector button) ran: extension is the extension's name, level \"info\", \"warn\" or \"error\", message the text (cut to 1024 bytes), time Unix milliseconds. The event is Admin-tagged like the host's own log lines (only an admin, or any client of a host with no authentication, receives it), and the same line is also logged by the host as an Admin log line. The host also sends extensionOutput, with no change of version, for each warning that an extension's OnBeforePlay hook returns while WritePlaySnapshot runs: level \"warn\" and message the warning (the keys are the same as for a line of Editor.Log). Those events are not Admin-tagged: every role receives them, because the client that asked to play has to be able to show them (the same warning is also an Admin log line). A client that shows extensionOutput shows these too. A client ignores kinds and keys it doesn't know.",
       "request": {
         "epoch": "uint32",
         "afterSeq": "uint32",
@@ -429,6 +429,35 @@
         }
       }
     },
+    "SerializeEntities": {
+      "id": "0x3B",
+      "description": "Since 1.18.0. Read command (a viewer may copy; it changes nothing and records no history). ids is a JSON array of 1..4096 object UUID strings. The host keeps the topmost objects among them (an object whose ancestor is also listed is covered by that ancestor's subtree; an id listed twice counts once), in hierarchy order (the order a scene saves them), and answers ClipboardPayload: {format: \"n2engine.entities\", version: 1, objectCount, entities}. entities is an array with one entry per topmost object: that object's saved form with its whole subtree (what Scene saves: components with their values, children, transforms local to the parent), UUIDs as they are in the open scene. The payload is self-contained: a reference between objects or components inside the copied set is kept as it is (InstantiateEntities remaps it to the copies), a reference to anything outside the set is kept as the UUID text it is saved with (InstantiateEntities keeps it when asked to and the target exists, else leaves it empty), and asset references are the asset UUIDs or res:// paths the components save, so a payload carries no file contents and no host path. Limits: at most 4096 ids, 10000 objects in the copied subtrees and 16 MiB of payload text, else Error (nothing partial is answered). Error without a scene, for an id that is not a UUID or names no object, and for an empty list. The client may keep the payload in memory or as text on the system clipboard; the host validates everything again when it is pasted, so the text is never trusted.",
+      "request": {
+        "ids": "json"
+      },
+      "response": {
+        "type": "SerializedEntities",
+        "fields": {
+          "clipboard": "json:ClipboardPayload"
+        }
+      }
+    },
+    "InstantiateEntities": {
+      "id": "0x3C",
+      "description": "Since 1.18.0. Write command (a viewer is refused with forbidden, a --read-only host with readOnly). Builds the objects of a ClipboardPayload (SerializeEntities' answer, from this scene, another scene or another project) as new objects in the open scene, as ONE undo step labelled \"Paste N objects\" (\"Paste <name>\" for one). clipboard is the payload as JSON text (at most 16 MiB; it is checked for nesting depth before it is parsed, and its shape, format, version, object count and depth are validated before anything is built, so a refused payload changes nothing). parentId is the UUID of the object to paste under (empty: the scene's root); siblingIndex is the place among the siblings of the first pasted object (-1: after the last sibling; larger than the count is clamped; the rest follow in order). Every object and component gets a fresh UUID. References between the pasted objects and components point at the copies. keepExternalRefs: when true, a reference to an object or component that is not in the payload is looked up in the open scene by its UUID and kept when found (pasting into the scene the payload came from), else left empty; when false every such reference is left empty. Names are made unique among the siblings the objects are pasted next to, as DuplicateEntity does (Cube gives Cube (1)); a name that no sibling has is kept. A payload from the same scene pasted twice therefore does not collide. Limits: 1..1024 roots, at most 10000 objects in all, at most 512 levels (MaxHierarchyDepth) counting the levels above parentId, 16 MiB of text; a payload with an unknown format, a version other than 1, entries that are not objects, or data a component refuses is an Error with a sanitised message and no change (no host path, no payload text). A res:// string anywhere in the payload that leaves the project's assets folder (a .. part, a drive, a backslash, a name a file cannot have) is refused with the whole payload; the paste reads no file. Answers EntitiesCreated: ids, the UUIDs of the new topmost objects in the order pasted. sceneChanged follows for every new object. Error without a scene, for a parentId that names no object, and in a scene that is not open for editing the objects are built but no undo step is made, as for DuplicateEntity.",
+      "request": {
+        "clipboard": "string",
+        "parentId": "string",
+        "siblingIndex": "int32",
+        "keepExternalRefs": "bool"
+      },
+      "response": {
+        "type": "EntitiesCreated",
+        "fields": {
+          "ids": "json:string[]"
+        }
+      }
+    },
     "GetEntity": {
       "id": "0x39",
       "description": "One object in full. entity is {header (id, parentId, index, name, active, activeInHierarchy, layer and tag, as a hierarchy node has them), transform (the local position, rotation and scale, rotation a quaternion; absent for an object that has no transform), components (each {type, uuid, values}: values is the component's saved form, what Scene saves for it, in component order)}. worldMatrix is the object's local-to-world matrix (the identity for an object with no transform), so a client draws a gizmo without walking the parent chain. Error when there is no scene or no such object.",
@@ -474,7 +503,7 @@
     },
     "ListAssets": {
       "id": "0xA0",
-      "description": "The assets in a folder of the project (since 1.9.0): the files the engine indexes (those whose extension has a loader: scripts, textures, fonts, audio, materials, models, scenes), each with its UUID, which is its .meta's. folder is a res:// path (\"res://\" or empty for the whole assets folder, \"res://scenes\"); it must be an existing folder, else an Error. A path is \"res://\" then a path inside the project's assets folder (\"res://scripts/Player.lua\"); a path with \"..\", a drive or root, a name Windows can't hold (a character of <>:\"|?*, a control character, a name ending in a dot or space, a device name such as CON) or one that leaves the folder through a symbolic link is an Error. recursive false lists the folder's own files and subfolders, true everything below it. folders is a JSON array of the subfolders' res:// paths (without a trailing slash), found by walking the file system, because the metadata doesn't know empty folders (symbolic links to folders are left out); assets is a JSON array of AssetInfo: {path, uuid, type, size, modified, subAssets?}. type is the resource type (\"LuaScript\", \"Texture\", \"Font\", \"AudioClip\", \"Material\", \"Model\", \"Scene\"), size the file's bytes, modified its modification time in Unix milliseconds, both as the last scan saw them (the watcher scans about once a second while a client is connected, and an assetsChanged event follows a change). subAssets, only on a file that has them (a model's meshes, materials and textures), lists {key, uuid, type} for each, as the .meta's index recorded them when the model last loaded; a model never loaded has none yet. Both arrays are sorted by path; the answer isn't paged. Pure: it changes nothing and never logs. Error without a project.",
+      "description": "The assets in a folder of the project (since 1.9.0): the files the engine indexes (those whose extension has a loader: scripts, textures, fonts, audio, materials, models, scenes), each with its UUID, which is its .meta's. folder is a res:// path (\"res://\" or empty for the whole assets folder, \"res://scenes\"); it must be an existing folder, else an Error. A path is \"res://\" then a path inside the project's assets folder (\"res://scripts/Player.lua\"); a path with \"..\", a drive or root, a name Windows can't hold (a character of <>:\"|?*, a control character, a name ending in a dot or space, a device name such as CON) or one that leaves the folder through a symbolic link is an Error. recursive false lists the folder's own files and subfolders, true everything below it. folders is a JSON array of the subfolders' res:// paths (without a trailing slash), found by walking the file system, because the metadata doesn't know empty folders (symbolic links to folders are left out); assets is a JSON array of AssetInfo: {path, uuid, type, size, modified, subAssets?}. type is the resource type (\"LuaScript\", \"Texture\", \"Font\", \"AudioClip\", \"Material\", \"Model\", \"Scene\", and, since 1.19.0, \"Prefab\"), size the file's bytes, modified its modification time in Unix milliseconds, both as the last scan saw them (the watcher scans about once a second while a client is connected, and an assetsChanged event follows a change). subAssets, only on a file that has them (a model's meshes, materials and textures), lists {key, uuid, type} for each, as the .meta's index recorded them when the model last loaded; a model never loaded has none yet. Both arrays are sorted by path; the answer isn't paged. Pure: it changes nothing and never logs. Error without a project.",
       "request": {
         "folder": "string",
         "recursive": "bool"
@@ -941,6 +970,117 @@
           "pixels": "bytes"
         }
       }
+    },
+    "CreatePrefab": {
+      "id": "0xA9",
+      "description": "Since 1.19.0. Write command (a viewer is refused with forbidden, a --read-only host with readOnly; a play host refuses it, as it refuses every command that writes a project file). Saves an object and everything under it as a prefab asset and links the object to it. entityId is the object's UUID; path is a res:// path inside the project's assets folder that ends in .prefab (any case) with a non-empty name, resolved with the same boundary checks as WriteTextAsset (no .. part, drive, backslash or device name, no symbolic link leading out). The folders above it that are missing are created. An existing file is an Error unless overwrite is true; a folder or other non-file in the way is always an Error. The file is JSON in the form Prefab::Serialize writes, {name, rootObject}, indented by two spaces and ending in a newline: name is the object's name and rootObject its saved form with its whole subtree (components with their values, children, local transforms, the UUIDs it has in the open scene). The root's own prefabReference is left out of the file (the file is not linked to itself); a descendant's is kept. The file is at most 16 MiB of text (else Error) and is written atomically, then indexed like any asset (an assetsChanged event lists it as added, or as modified when it replaced one). Writing the file is not an undo step, as SaveSceneToFile is not. The object's link (prefabReference, shown as prefab on its HierarchyNode and EntityHeader) is set to the file's asset UUID as one undo step labelled \"Create Prefab <name>\" (undo clears it again, or restores the one it had); nothing is recorded when the object already had that link. sceneChanged lists the object. Answers AssetCreated: path as the file system spells it, and uuid the prefab asset's UUID. Error without a project, without a scene, for an object that is not in the scene and for a path that is not a valid .prefab path.",
+      "request": {
+        "entityId": "string",
+        "path": "string",
+        "overwrite": "bool"
+      },
+      "response": {
+        "type": "AssetCreated",
+        "fields": {
+          "path": "string",
+          "uuid": "string"
+        }
+      }
+    },
+    "InstantiatePrefab": {
+      "id": "0xAA",
+      "description": "Since 1.19.0. Write command (a viewer is refused with forbidden, a --read-only host with readOnly). Builds a prefab asset as a new object in the open scene, as ONE undo step labelled \"Instantiate <name>\" (undo removes the whole instance; inside an open edit group it joins the group's step; a play host builds it without an undo step, as for DuplicateEntity). uuidOrPath is the prefab's asset UUID or its res:// path (a .prefab file inside the assets folder, resolved as for CreatePrefab); the file is read from disk, so what CreatePrefab or ApplyPrefab wrote is used at once. It is built by the same primitive as InstantiateEntities (PrefabManager::InstantiatePrefabs): every object and component gets a fresh UUID, a reference between objects or components of the prefab points at the copies, and a reference to anything that is not in the prefab is left empty (nothing is looked up in the open scene). The instance's root gets prefabReference = the prefab's asset UUID (the file is linked, its other objects are not). parentId is the UUID of the object to build it under (empty: the scene's root); siblingIndex is the place among the siblings (-1: after the last; larger than the count is clamped). The root's name is made unique among the siblings it lands next to, as DuplicateEntity does (Cube gives Cube (1)). When hasPosition is true, position is the root's position in the WORLD (an object with no transform gets one for it); when false the root keeps the local transform the prefab file has, and position is ignored (send zeros). Checked before anything is built, so a refused instantiation changes nothing and records nothing: the file at most 16 MiB; its JSON nesting at most the scene cap, checked on the text before it is parsed; an object with a string name and an object rootObject; at most 10000 objects and 4 million JSON values; at most 512 hierarchy levels counting the levels above parentId; any res:// string in the file must stay inside the assets folder by name (as for InstantiateEntities); object data a component refuses. Answers EntityCreated: entityId, the new root's UUID. sceneChanged follows for every new object. Error without a project, without a scene, for a parentId that names no object, for a UUID that is not a prefab asset, and for a prefab file that is missing or refused by the checks above (the message says what is wrong, never the file's text or a host path).",
+      "request": {
+        "uuidOrPath": "string",
+        "parentId": "string",
+        "siblingIndex": "int32",
+        "hasPosition": "bool",
+        "position": "vec3"
+      },
+      "response": {
+        "type": "EntityCreated",
+        "fields": {
+          "entityId": "string"
+        }
+      }
+    },
+    "ApplyPrefab": {
+      "id": "0xAB",
+      "description": "Since 1.19.0. Write command (a viewer is refused with forbidden, a --read-only host with readOnly; a play host refuses it, as it refuses every command that writes a project file). Overwrites the prefab file an object is linked to with the object as it is now: entityId names an object whose prefabReference is set (the root of an instance, or the object CreatePrefab was given). The file is written as CreatePrefab writes it (the object and its whole subtree; the root's prefabReference left out), except that the prefab's name and its root object's name are kept as the file has them, so applying an instance called Cube (1) does not rename the prefab; a file that cannot be read keeps nothing and takes the object's names. The file is written atomically and an assetsChanged event lists it as modified. It changes nothing in the scene (no revision, no undo step), and instances already in the scene are not updated, since a prefab is copied when it is instantiated. A client asks the user before sending it. Error without a project, without a scene, for an object that is not in the scene or is linked to no prefab, when the prefab asset no longer exists or is not a prefab, and when the file would be over 16 MiB.",
+      "request": {
+        "entityId": "string"
+      },
+      "response": { "type": "Ok" }
+    },
+    "UnpackPrefab": {
+      "id": "0xAC",
+      "description": "Since 1.19.0. Write command (a viewer is refused with forbidden, a --read-only host with readOnly). Removes an object's prefab link (prefabReference), as one undo step labelled \"Unpack Prefab <name>\" (undo restores the link). Only that object's own link is cleared: the object, its children and the prefab file are not touched. sceneChanged lists the object. Error without a scene, for an object that is not in the scene and for one that is linked to no prefab.",
+      "request": {
+        "entityId": "string"
+      },
+      "response": { "type": "Ok" }
+    },
+    "GetPhysicsBackends": {
+      "id": "0xAD",
+      "description": "Since 1.20.0. Read command (a viewer may call it; it changes nothing). Lists the 3D physics backends the engine knows, with what this host's build declares for each, the project's physics.backend setting and the backend this host is running, for the editor's backend picker. Hello advertises it with the capability physicsBackends. Answers PhysicsBackendsInfo: current is the backend the project's physics.backend names (\"physx\" or \"jolt\"; \"physx\" when the project does not set it, or has no project), configured is whether the project sets it, active is the BackendId of the backend this host is running (empty when it runs none), restartRequired is true when active is not current (a change takes effect at the next play session or host start: the running host keeps the backend it created at startup), networkPreset is the project's network.preset (\"none\", \"authoritative\" or \"deterministic\"). backends has one entry per known backend, \"physx\" first, then \"jolt\": id (the physics.backend value), displayName, compiledIn (whether this host's build contains it: PhysX with N2ENGINE_USE_PHYSX, Jolt with N2ENGINE_USE_JOLT), determinism (the DeterminismLevel it declares with physics.deterministic on, the best it can declare in this build: \"None\", \"SameBinary\" or \"CrossPlatform\"), determinismDefault (the level with physics.deterministic off), features (the feature groups it implements: \"layers\", \"triggers\", \"events\", \"queries\"), missingFeatures (the groups it does not), supportsSnapshot, supportsSetState, deterministicSelectable and, when there is something to say, note. deterministicSelectable is true when the backend is compiled in, declares CrossPlatform and implements every feature group: the editor offers the Deterministic network preset only for a backend where it is true (the other startup requirements of the preset, such as the strict floating-point build and the Lua seed, are checked when the project starts and are not part of it). A backend that is not compiled in has no class to ask, so its determinism, features, supportsSnapshot and supportsSetState are the empty ones (\"None\", no groups, false) and mean unknown, not none; its note says so. Works without a project (current \"physx\", configured false, networkPreset \"none\"). A play host answers it too.",
+      "request": {},
+      "response": {
+        "type": "PhysicsBackends",
+        "fields": {
+          "info": "json:PhysicsBackendsInfo"
+        }
+      }
+    },
+    "SetPhysicsBackend": {
+      "id": "0xAE",
+      "description": "Since 1.20.0. Write command (a viewer is refused with forbidden, a --read-only host with readOnly; a play host refuses it, as it refuses every command that writes the project file). Sets the project's physics.backend setting and saves project.n2proj, by the same path as SetProjectSettings (applied, validated, saved, projectChanged follows). backend is \"physx\" or \"jolt\" (any case; the host saves it in lower case). The running host keeps the backend it created at startup: the change takes effect at the next play session or host start (the answer's restartRequired says whether this host still runs another one). Error without a project; for any other name (an unknown backend); for a backend this host's build does not contain (compiledIn false: nothing is saved, so a project is never pointed at a backend its editor host cannot show); and when the project's network.preset is deterministic and the backend is not deterministicSelectable (the project would refuse to start). Answers PhysicsBackendsInfo as GetPhysicsBackends does, after the change.",
+      "request": {
+        "backend": "string"
+      },
+      "response": {
+        "type": "PhysicsBackends",
+        "fields": {
+          "info": "json:PhysicsBackendsInfo"
+        }
+      }
+    },
+    "GetNetworkSettings": {
+      "id": "0x51",
+      "description": "Since 1.21.0. Read command (a viewer may call it; it changes nothing). The data of the editor's Network panel: the project's network settings, the three preset bundles with every setting's value, whether the preset locks it or leaves it tunable, and where the project's value comes from, and the nudge. Hello advertises it with the capability networkPanel. Answers NetworkSettingsInfo. preset is the project's network.preset (\"none\", \"authoritative\" or \"deterministic\"; none without a project or a network block). values is the network block as the engine reads it (tickRate, transport, authoritative, deterministic; defaults filled in) and ranges the allowed range of each numeric setting (key as in a row's settingKey, e.g. network.tickRate). overrides is the stored network.overrides object. customised is true when lostGuarantees is not empty: for the project's preset, one entry per Locked setting whose value the project sets explicitly (or stores in network.overrides) to something other than the preset's value, with the guarantee that loses (the engine's preset table, LostGuarantees); storedCustomised is the stored network.customised flag as written. presets has the three presets in the order none, authoritative, deterministic: id, label, summary, selected (it is the project's preset), selectable and, when that is false, unavailableReason (Deterministic only: the physics backend the project would run on does not declare CrossPlatform determinism and every feature group; the text names what is missing and which backends in this build qualify, or says that none does), and rows. rows is the same list of settings for every preset, in the design's order, each row: key (stable id, e.g. physics.gpu), label, governed (the preset has a rule for it; false: any value), locked (the preset fixes it; changing it loses lostGuarantee), tunable (the project may change it within its range), startupChecked (Application::Init checks it: for Deterministic an unmet one refuses to start, for Server authoritative it only warns), settingKey (the project setting that carries the value, e.g. physics.gpu or network.authoritative.snapshotRate; absent for a requirement on the build or backend), value (the preset's value for it, a fixed timestep in seconds; null when there is none), description (the design's wording), lostGuarantee (for a locked row), current (the value the project has now, the explicit one or the default; absent without a settingKey; null when the setting has no default, such as physics.backend) , atPresetValue (current equals value within 0.1 percent; absent without a settingKey) and source: \"project\" (project.n2proj sets it), \"override\" (network.overrides stores it), \"default\" (not set: the engine's default applies) or \"build\" (a requirement on the build or backend, with no setting). backend has selected (the backend the project would run on, empty when none) and deterministicSelectable (the ids of the backends this host's build contains that can carry the Deterministic preset; GetPhysicsBackends has the detail). nudge has show (true when network.preset is none and reasons is not empty), reasons (\"scene\": the open scene has NetworkObject components; \"settings\": the network block holds settings other than the preset), networkObjects (their number in the open scene) and hint (one sentence for a non-blocking panel; empty when show is false). The nudge looks only at the open scene, not at every scene file. problems lists the messages for values in the project file the engine could not use (a bad value is replaced by its default). Works without a project and in a play host.",
+      "request": {},
+      "response": {
+        "type": "NetworkSettings",
+        "fields": {
+          "info": "json:NetworkSettingsInfo"
+        }
+      }
+    },
+    "SetNetworkSettings": {
+      "id": "0x52",
+      "description": "Since 1.21.0. Write command (a viewer is refused with forbidden, a --read-only host with readOnly; a play host refuses it, as it refuses every command that writes the project file). Sets the project's network preset and tunable network settings and saves project.n2proj by the same path as SetProjectSettings (applied, validated, saved, projectChanged follows). preset is \"none\", \"authoritative\" or \"deterministic\" (any case; the host saves it in lower case) or empty to keep the preset. settings is a JSON merge patch (RFC 7386) for the tunable settings of the project's network block, an object ({} for none): tickRate, transport (udp, webSocket, port), authoritative (snapshotRate, interpolationDelayMs, inputRedundancy, predictionMaxMs, smoothingMs, snapThreshold, lagCompMaxMs) and deterministic (mode, inputDelay, rollbackWindow, hashInterval); a key set to null returns to its default. The preset, network.overrides and network.customised are not accepted in settings (the preset is the preset field; this command does not write the stored overrides or the flag), and the locked settings of a preset (physics.gpu, math.simdTier and the rest) are changed with SetProjectSettings or SetPhysicsBackend, not here. The change takes effect at the next play session or host start (a host reads the preset once, in Application::Init). Error without a project; for an unknown preset; for a settings value that is not an object, a key that is not tunable, or a value the engine refuses (the wrong type, a fraction where a whole number is needed, an unknown mode, or a number outside its range, which the engine would clamp and report as a problem); and when preset is deterministic and the physics backend the project would run on does not declare what the preset needs (the unavailableReason of GetNetworkSettings), because the project would refuse to start: choose the backend first with SetPhysicsBackend. The other requirements of the preset (the Lua seed, scalar SIMD and so on) are not checked here; GetNetworkValidation reports them. Nothing is saved on an Error. A request that changes nothing (empty preset and {}) saves nothing and sends no projectChanged. Answers NetworkSettingsInfo as GetNetworkSettings does, after the change.",
+      "request": {
+        "preset": "string",
+        "settings": "json"
+      },
+      "response": {
+        "type": "NetworkSettings",
+        "fields": {
+          "info": "json:NetworkSettingsInfo"
+        }
+      }
+    },
+    "GetNetworkValidation": {
+      "id": "0x53",
+      "description": "Since 1.21.0. Read command (a viewer may call it; it changes nothing). The validation report for a network preset against the project's settings and this host's build: the startup checks of Application::Init (ValidateNetwork) run without starting anything. preset is \"none\", \"authoritative\" or \"deterministic\" (any case) to check that preset as if the project had chosen it, or empty for the project's own; any other text is an Error. Answers NetworkValidationReport: preset (the one checked), projectPreset, refused (Deterministic with an unmet requirement: the engine would refuse to start the project), unmet (their number), summary (one sentence), requirements (Deterministic only, in the engine's order, each: id, text, met, detail (why it is unmet; empty when met) and, for an unmet requirement a setting can fix, fix: {label, settings} where settings is a merge patch for SetProjectSettings; the ids are physics-backend, physics-features, strict-fp, simd-scalar, lua-seed, engine-trig, physics-threads, gpu-physics-off, fixed-timestep, tick-loop and, in rollback mode, snapshot), warnings (Server authoritative only: conditions that weaken it but do not stop the engine, such as GPU physics on or a backend without set-state) and environment (what was checked: backend, backendDeterminism, strictFp, engineOwnedTrig, simdTier, luaSeedSet, physicsGpu, fixedTimestepSeconds, tickRate, deterministicMode). There is no fix for lua-seed (a constant Lua hash seed is an administrator's choice: the determinism settings block is restricted), strict-fp, engine-trig, tick-loop or snapshot (they are properties of the build or of the preset's mode). The build facts (strict floating point, engine-owned trig, the backends compiled in and what they declare) are those of this editor host's build: a game built differently may differ. Works without a project (the defaults) and in a play host.",
+      "request": {
+        "preset": "string"
+      },
+      "response": {
+        "type": "NetworkValidation",
+        "fields": {
+          "report": "json:NetworkValidationReport"
+        }
+      }
     }
   },
   "types": {
@@ -1050,7 +1190,8 @@
       "activeInHierarchy": "bool",
       "layer": "number",
       "tag": "string",
-      "components": "string[]"
+      "components": "string[]",
+      "prefab?": "string"
     },
     "EntityHeader": {
       "id": "string",
@@ -1060,7 +1201,8 @@
       "active": "bool",
       "activeInHierarchy": "bool",
       "layer": "number",
-      "tag": "string"
+      "tag": "string",
+      "prefab?": "string"
     },
     "JsonVec3": {
       "x": "number",
@@ -1165,6 +1307,114 @@
       "select?": "string[]",
       "warnings?": "string[]"
     },
+    "PhysicsBackendInfo": {
+      "id": "string",
+      "displayName": "string",
+      "compiledIn": "bool",
+      "determinism": "string",
+      "determinismDefault": "string",
+      "features": "string[]",
+      "missingFeatures": "string[]",
+      "supportsSnapshot": "bool",
+      "supportsSetState": "bool",
+      "deterministicSelectable": "bool",
+      "note?": "string"
+    },
+    "PhysicsBackendsInfo": {
+      "current": "string",
+      "configured": "bool",
+      "active": "string",
+      "restartRequired": "bool",
+      "networkPreset": "string",
+      "backends": "PhysicsBackendInfo[]"
+    },
+    "NetworkSettingRow": {
+      "key": "string",
+      "label": "string",
+      "governed": "bool",
+      "locked": "bool",
+      "tunable": "bool",
+      "startupChecked": "bool",
+      "settingKey?": "string",
+      "value": "json",
+      "description": "string",
+      "lostGuarantee?": "string",
+      "current?": "json",
+      "atPresetValue?": "bool",
+      "source": "string"
+    },
+    "NetworkPresetInfo": {
+      "id": "string",
+      "label": "string",
+      "summary": "string",
+      "selected": "bool",
+      "selectable": "bool",
+      "unavailableReason?": "string",
+      "rows": "NetworkSettingRow[]"
+    },
+    "NetworkNudge": {
+      "show": "bool",
+      "reasons": "string[]",
+      "networkObjects": "number",
+      "hint": "string"
+    },
+    "NetworkSettingRange": {
+      "key": "string",
+      "min": "number",
+      "max": "number",
+      "default": "number",
+      "integer": "bool"
+    },
+    "NetworkLostGuarantee": {
+      "settingKey": "string",
+      "rowKey": "string",
+      "text": "string"
+    },
+    "NetworkBackendInfo": {
+      "selected": "string",
+      "deterministicSelectable": "string[]"
+    },
+    "NetworkSettingsInfo": {
+      "preset": "string",
+      "customised": "bool",
+      "storedCustomised": "bool",
+      "tickRate": "number",
+      "values": "json",
+      "overrides": "json",
+      "ranges": "NetworkSettingRange[]",
+      "lostGuarantees": "NetworkLostGuarantee[]",
+      "presets": "NetworkPresetInfo[]",
+      "backend": "NetworkBackendInfo",
+      "nudge": "NetworkNudge",
+      "problems": "string[]"
+    },
+    "NetworkRequirementFix": {
+      "label": "string",
+      "settings": "json"
+    },
+    "NetworkRequirementInfo": {
+      "id": "string",
+      "text": "string",
+      "met": "bool",
+      "detail": "string",
+      "fix?": "NetworkRequirementFix"
+    },
+    "NetworkValidationReport": {
+      "preset": "string",
+      "projectPreset": "string",
+      "refused": "bool",
+      "unmet": "number",
+      "summary": "string",
+      "requirements": "NetworkRequirementInfo[]",
+      "warnings": "string[]",
+      "environment": "json"
+    },
+    "ClipboardPayload": {
+      "format": "string",
+      "version": "number",
+      "objectCount": "number",
+      "entities": "json[]"
+    },
     "LuaSyntaxResult": {
       "ok": "bool",
       "line": "number",
@@ -1230,7 +1480,12 @@
     "EditorUi": "0x1E",
     "ExtensionResult": "0x1F",
     "LuaSyntax": "0x20",
-    "AssetPreview": "0xA4"
+    "AssetPreview": "0xA4",
+    "SerializedEntities": "0x21",
+    "EntitiesCreated": "0x22",
+    "PhysicsBackends": "0x23",
+    "NetworkSettings": "0x24",
+    "NetworkValidation": "0x25"
   },
   "extraResponses": {
     "ErrorCoded": {

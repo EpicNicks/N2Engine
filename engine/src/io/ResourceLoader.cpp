@@ -7,6 +7,7 @@
 #include "engine/rendering/Material.hpp"
 #include "engine/rendering/Model.hpp"
 #include "engine/rendering/Texture.hpp"
+#include "engine/prefabs/PrefabFile.hpp"
 #include "engine/sceneManagement/SceneFile.hpp"
 #include "engine/text/Font.hpp"
 #include <assetimport/ModelImporters.hpp>
@@ -81,22 +82,25 @@ namespace N2Engine::IO
                 return std::string(Rendering::Model::ResourceTypeName);
             if (ext == SceneFile::Extension)
                 return std::string(SceneFile::ResourceTypeName);
+            if (ext == PrefabFile::Extension)
+                return std::string(PrefabFile::ResourceTypeName);
             return "Unknown";
         }
     }
 
     void ResourceLoader::Initialize(const std::filesystem::path& projectRoot, const std::filesystem::path& userDataRoot)
     {
-        // Font.cpp's, Texture.cpp's, Material.cpp's, Model.cpp's and SceneFile.cpp's own registration only runs if
+        // Font.cpp's, Texture.cpp's, Material.cpp's, Model.cpp's, SceneFile.cpp's and PrefabFile.cpp's own registration only runs if
         // something calls it (or, for the static registrars, the linker keeps those files, which a program that
         // names none of the types wouldn't); registering here (idempotent) makes .ttf/.otf, the image extensions,
-        // .mat, the model extensions (.gltf/.glb, and .fbx/.obj with ufbx built) and .scene scan and load anyway. Done before the roots change, so a first registration
+        // .mat, the model extensions (.gltf/.glb, and .fbx/.obj with ufbx built), .scene and .prefab scan and load anyway. Done before the roots change, so a first registration
         // doesn't rescan anything.
         Text::Font::RegisterLoader();
         Rendering::Texture::RegisterLoader();
         Rendering::Material::RegisterLoader();
         Rendering::Model::RegisterLoader();
         SceneFile::RegisterLoader();
+        PrefabFile::RegisterLoader();
 
         _projectRoot = projectRoot;
         _assetsRoot = projectRoot / "assets";

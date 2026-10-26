@@ -119,6 +119,21 @@ namespace N2Engine::Editor
             {CommandType::SetEditorCamera, false},
             {CommandType::GetEditorCamera, false},
             {CommandType::SetEditorViewOptions, false},
+            {CommandType::SerializeEntities, false},
+            {CommandType::InstantiateEntities, false},
+            // Prefab assets (EN3): the commands write .prefab files or link scene objects to them, which Editor.Scene and
+            // Editor.Assets have no use for (WriteText does not write the extension either)
+            {CommandType::CreatePrefab, false},
+            {CommandType::InstantiatePrefab, false},
+            {CommandType::ApplyPrefab, false},
+            {CommandType::UnpackPrefab, false},
+            // The physics backend picker (J9): a project setting, which Editor.Scene and Editor.Assets do not reach
+            {CommandType::GetPhysicsBackends, false},
+            {CommandType::SetPhysicsBackend, false},
+            // The Network panel (B11): project settings again
+            {CommandType::GetNetworkSettings, false},
+            {CommandType::SetNetworkSettings, false},
+            {CommandType::GetNetworkValidation, false},
             {CommandType::PickEntity, false},
             {CommandType::GetEntityBounds, false},
             // Entities and components beyond what Editor.Scene has: the older commands and the readers it does not use

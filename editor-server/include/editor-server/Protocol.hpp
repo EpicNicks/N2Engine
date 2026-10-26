@@ -11,7 +11,7 @@ namespace N2Engine::Editor
 {
     /// The version of protocol.json this server implements (ProtocolSpecTest pins the two equal). Hello compares the
     /// client's with it: the same major version is compatible, whatever the minor and patch versions.
-    inline constexpr std::string_view ProtocolVersion = "1.17.0";
+    inline constexpr std::string_view ProtocolVersion = "1.21.0";
 
     struct ProtocolVersionNumber
     {
@@ -88,6 +88,8 @@ namespace N2Engine::Editor
         DuplicateEntity = 0x38,
         GetEntity = 0x39,
         SetLocalTransform = 0x3A,
+        SerializeEntities = 0x3B,
+        InstantiateEntities = 0x3C,
         CreateScript = 0x40,
         RescanAssets = 0x41,
         ListAssets = 0xA0,
@@ -99,6 +101,15 @@ namespace N2Engine::Editor
         CreateFolder = 0xA6,
         CheckLuaSyntax = 0xA7,
         GetAssetPreview = 0xA8,
+        CreatePrefab = 0xA9,
+        InstantiatePrefab = 0xAA,
+        ApplyPrefab = 0xAB,
+        UnpackPrefab = 0xAC,
+        GetPhysicsBackends = 0xAD,
+        SetPhysicsBackend = 0xAE,
+        GetNetworkSettings = 0x51,
+        SetNetworkSettings = 0x52,
+        GetNetworkValidation = 0x53,
         GetEngineHealth = 0x50,
         GetComponentTypes = 0x60,
         AddComponent = 0x61,
@@ -166,6 +177,11 @@ namespace N2Engine::Editor
         EditorUi = 0x1E,
         ExtensionResult = 0x1F,
         LuaSyntax = 0x20,
+        SerializedEntities = 0x21,
+        EntitiesCreated = 0x22,
+        PhysicsBackends = 0x23,
+        NetworkSettings = 0x24,
+        NetworkValidation = 0x25,
         AssetList = 0xA0,
         AssetDetail = 0xA1,
         TextData = 0xA2,

@@ -209,6 +209,34 @@ TEST_F(EditorServerNoSceneTest, HierarchyAndEntityCommandsAreErrors)
     expectNoScene(Execute(server, CommandType::GetHierarchy), "GetHierarchy");
     expectNoScene(Execute(server, CommandType::GetEntity, StringPayload(id)), "GetEntity");
     expectNoScene(Execute(server, CommandType::DuplicateEntity, StringPayload(id)), "DuplicateEntity");
+    expectNoScene(Execute(server, CommandType::SerializeEntities, StringPayload("[\"" + id + "\"]")), "SerializeEntities");
+    {
+        BufferWriter paste;
+        paste.WriteString(R"({"format":"n2engine.entities","version":1,"entities":[{"name":"x"}]})");
+        paste.WriteString("");
+        paste.WriteI32(-1);
+        paste.WriteBool(false);
+        expectNoScene(Execute(server, CommandType::InstantiateEntities, paste.Release()), "InstantiateEntities");
+    }
+    {
+        BufferWriter createPrefab;
+        createPrefab.WriteString(id);
+        createPrefab.WriteString("res://prefabs/Thing.prefab");
+        createPrefab.WriteBool(false);
+        expectNoScene(Execute(server, CommandType::CreatePrefab, createPrefab.Release()), "CreatePrefab");
+
+        BufferWriter instantiatePrefab;
+        instantiatePrefab.WriteString("res://prefabs/Thing.prefab");
+        instantiatePrefab.WriteString("");
+        instantiatePrefab.WriteI32(-1);
+        instantiatePrefab.WriteBool(false);
+        instantiatePrefab.WriteF32(0.0f);
+        instantiatePrefab.WriteF32(0.0f);
+        instantiatePrefab.WriteF32(0.0f);
+        expectNoScene(Execute(server, CommandType::InstantiatePrefab, instantiatePrefab.Release()), "InstantiatePrefab");
+    }
+    expectNoScene(Execute(server, CommandType::ApplyPrefab, StringPayload(id)), "ApplyPrefab");
+    expectNoScene(Execute(server, CommandType::UnpackPrefab, StringPayload(id)), "UnpackPrefab");
 
     BufferWriter create;
     create.WriteString("Thing");

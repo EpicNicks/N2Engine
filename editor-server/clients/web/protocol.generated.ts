@@ -1,7 +1,7 @@
 // Auto-generated from protocol.json by generate_typescript.py - do not edit
 
 /** protocol.json's version (major.minor.patch); Hello sends it, and the server answers with its own */
-export const PROTOCOL_VERSION = "1.17.0";
+export const PROTOCOL_VERSION = "1.21.0";
 
 // ==================== Types ====================
 
@@ -127,6 +127,7 @@ export interface HierarchyNode {
   layer: number;
   tag: string;
   components: string[];
+  prefab?: string;
 }
 
 export interface EntityHeader {
@@ -138,6 +139,7 @@ export interface EntityHeader {
   activeInHierarchy: boolean;
   layer: number;
   tag: string;
+  prefab?: string;
 }
 
 export interface JsonVec3 {
@@ -259,6 +261,127 @@ export interface ExtensionResultInfo {
   warnings?: string[];
 }
 
+export interface PhysicsBackendInfo {
+  id: string;
+  displayName: string;
+  compiledIn: boolean;
+  determinism: string;
+  determinismDefault: string;
+  features: string[];
+  missingFeatures: string[];
+  supportsSnapshot: boolean;
+  supportsSetState: boolean;
+  deterministicSelectable: boolean;
+  note?: string;
+}
+
+export interface PhysicsBackendsInfo {
+  current: string;
+  configured: boolean;
+  active: string;
+  restartRequired: boolean;
+  networkPreset: string;
+  backends: PhysicsBackendInfo[];
+}
+
+export interface NetworkSettingRow {
+  key: string;
+  label: string;
+  governed: boolean;
+  locked: boolean;
+  tunable: boolean;
+  startupChecked: boolean;
+  settingKey?: string;
+  value: unknown;
+  description: string;
+  lostGuarantee?: string;
+  current?: unknown;
+  atPresetValue?: boolean;
+  source: string;
+}
+
+export interface NetworkPresetInfo {
+  id: string;
+  label: string;
+  summary: string;
+  selected: boolean;
+  selectable: boolean;
+  unavailableReason?: string;
+  rows: NetworkSettingRow[];
+}
+
+export interface NetworkNudge {
+  show: boolean;
+  reasons: string[];
+  networkObjects: number;
+  hint: string;
+}
+
+export interface NetworkSettingRange {
+  key: string;
+  min: number;
+  max: number;
+  default: number;
+  integer: boolean;
+}
+
+export interface NetworkLostGuarantee {
+  settingKey: string;
+  rowKey: string;
+  text: string;
+}
+
+export interface NetworkBackendInfo {
+  selected: string;
+  deterministicSelectable: string[];
+}
+
+export interface NetworkSettingsInfo {
+  preset: string;
+  customised: boolean;
+  storedCustomised: boolean;
+  tickRate: number;
+  values: unknown;
+  overrides: unknown;
+  ranges: NetworkSettingRange[];
+  lostGuarantees: NetworkLostGuarantee[];
+  presets: NetworkPresetInfo[];
+  backend: NetworkBackendInfo;
+  nudge: NetworkNudge;
+  problems: string[];
+}
+
+export interface NetworkRequirementFix {
+  label: string;
+  settings: unknown;
+}
+
+export interface NetworkRequirementInfo {
+  id: string;
+  text: string;
+  met: boolean;
+  detail: string;
+  fix?: NetworkRequirementFix;
+}
+
+export interface NetworkValidationReport {
+  preset: string;
+  projectPreset: string;
+  refused: boolean;
+  unmet: number;
+  summary: string;
+  requirements: NetworkRequirementInfo[];
+  warnings: string[];
+  environment: unknown;
+}
+
+export interface ClipboardPayload {
+  format: string;
+  version: number;
+  objectCount: number;
+  entities: unknown[];
+}
+
 export interface LuaSyntaxResult {
   ok: boolean;
   line: number;
@@ -320,6 +443,8 @@ export const CommandType = {
   SetEntityParent: 0x36,
   SetEntityProperties: 0x37,
   DuplicateEntity: 0x38,
+  SerializeEntities: 0x3B,
+  InstantiateEntities: 0x3C,
   GetEntity: 0x39,
   SetLocalTransform: 0x3A,
   CreateScript: 0x40,
@@ -363,6 +488,15 @@ export const CommandType = {
   SetEditorViewOptions: 0x17,
   CheckLuaSyntax: 0xA7,
   GetAssetPreview: 0xA8,
+  CreatePrefab: 0xA9,
+  InstantiatePrefab: 0xAA,
+  ApplyPrefab: 0xAB,
+  UnpackPrefab: 0xAC,
+  GetPhysicsBackends: 0xAD,
+  SetPhysicsBackend: 0xAE,
+  GetNetworkSettings: 0x51,
+  SetNetworkSettings: 0x52,
+  GetNetworkValidation: 0x53,
 } as const;
 
 export type CommandType = typeof CommandType[keyof typeof CommandType];
@@ -408,6 +542,11 @@ export const ResponseType = {
   ExtensionResult: 0x1F,
   LuaSyntax: 0x20,
   AssetPreview: 0xA4,
+  SerializedEntities: 0x21,
+  EntitiesCreated: 0x22,
+  PhysicsBackends: 0x23,
+  NetworkSettings: 0x24,
+  NetworkValidation: 0x25,
 } as const;
 
 export type ResponseType = typeof ResponseType[keyof typeof ResponseType];
@@ -445,6 +584,8 @@ export const CommandResponse = {
   SetEntityParent: "Ok",
   SetEntityProperties: "Ok",
   DuplicateEntity: "EntityCreated",
+  SerializeEntities: "SerializedEntities",
+  InstantiateEntities: "EntitiesCreated",
   GetEntity: "EntityData",
   SetLocalTransform: "Ok",
   CreateScript: "ScriptData",
@@ -488,6 +629,15 @@ export const CommandResponse = {
   SetEditorViewOptions: "Ok",
   CheckLuaSyntax: "LuaSyntax",
   GetAssetPreview: "AssetPreview",
+  CreatePrefab: "AssetCreated",
+  InstantiatePrefab: "EntityCreated",
+  ApplyPrefab: "Ok",
+  UnpackPrefab: "Ok",
+  GetPhysicsBackends: "PhysicsBackends",
+  SetPhysicsBackend: "PhysicsBackends",
+  GetNetworkSettings: "NetworkSettings",
+  SetNetworkSettings: "NetworkSettings",
+  GetNetworkValidation: "NetworkValidation",
 } as const;
 
 // ==================== Messages ====================
@@ -606,6 +756,17 @@ export interface SetEntityPropertiesRequest {
 
 export interface DuplicateEntityRequest {
   entityId: string;
+}
+
+export interface SerializeEntitiesRequest {
+  ids: unknown;
+}
+
+export interface InstantiateEntitiesRequest {
+  clipboard: string;
+  parentId: string;
+  siblingIndex: number;
+  keepExternalRefs: boolean;
 }
 
 export interface GetEntityRequest {
@@ -737,6 +898,41 @@ export interface GetAssetPreviewRequest {
   maxSize: number;
 }
 
+export interface CreatePrefabRequest {
+  entityId: string;
+  path: string;
+  overwrite: boolean;
+}
+
+export interface InstantiatePrefabRequest {
+  uuidOrPath: string;
+  parentId: string;
+  siblingIndex: number;
+  hasPosition: boolean;
+  position: Vec3;
+}
+
+export interface ApplyPrefabRequest {
+  entityId: string;
+}
+
+export interface UnpackPrefabRequest {
+  entityId: string;
+}
+
+export interface SetPhysicsBackendRequest {
+  backend: string;
+}
+
+export interface SetNetworkSettingsRequest {
+  preset: string;
+  settings: unknown;
+}
+
+export interface GetNetworkValidationRequest {
+  preset: string;
+}
+
 /** Ok has no payload */
 export type OkResponse = Record<string, never>;
 
@@ -843,6 +1039,14 @@ export interface EntityTransformResponse {
 export interface EntityListResponse {
   count: number;
   entities: EntityInfo[];
+}
+
+export interface SerializedEntitiesResponse {
+  clipboard: ClipboardPayload;
+}
+
+export interface EntitiesCreatedResponse {
+  ids: string[];
 }
 
 export interface EntityDataResponse {
@@ -952,6 +1156,18 @@ export interface LuaSyntaxResponse {
 export interface AssetPreviewResponse {
   info: AssetPreviewInfo;
   pixels: Uint8Array;
+}
+
+export interface PhysicsBackendsResponse {
+  info: PhysicsBackendsInfo;
+}
+
+export interface NetworkSettingsResponse {
+  info: NetworkSettingsInfo;
+}
+
+export interface NetworkValidationResponse {
+  report: NetworkValidationReport;
 }
 
 export interface ErrorCodedResponse {
@@ -1609,6 +1825,40 @@ export function decodeDuplicateEntityRequest(payload: Uint8Array): DuplicateEnti
   return { entityId };
 }
 
+/** SerializeEntities's request payload (without the frame header) */
+export function encodeSerializeEntitiesRequest(value: SerializeEntitiesRequest): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.json(value.ids);
+  return writer.finish();
+}
+
+/** Reads SerializeEntities's request payload; bytes after the last field are ignored */
+export function decodeSerializeEntitiesRequest(payload: Uint8Array): SerializeEntitiesRequest {
+  const reader = new ProtocolReader(payload);
+  const ids = reader.json() as unknown;
+  return { ids };
+}
+
+/** InstantiateEntities's request payload (without the frame header) */
+export function encodeInstantiateEntitiesRequest(value: InstantiateEntitiesRequest): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.string(value.clipboard);
+  writer.string(value.parentId);
+  writer.i32(value.siblingIndex);
+  writer.bool(value.keepExternalRefs);
+  return writer.finish();
+}
+
+/** Reads InstantiateEntities's request payload; bytes after the last field are ignored */
+export function decodeInstantiateEntitiesRequest(payload: Uint8Array): InstantiateEntitiesRequest {
+  const reader = new ProtocolReader(payload);
+  const clipboard = reader.string();
+  const parentId = reader.string();
+  const siblingIndex = reader.i32();
+  const keepExternalRefs = reader.bool();
+  return { clipboard, parentId, siblingIndex, keepExternalRefs };
+}
+
 /** GetEntity's request payload (without the frame header) */
 export function encodeGetEntityRequest(value: GetEntityRequest): Uint8Array {
   const writer = new ProtocolWriter();
@@ -2029,6 +2279,118 @@ export function decodeGetAssetPreviewRequest(payload: Uint8Array): GetAssetPrevi
   return { uuidOrPath, maxSize };
 }
 
+/** CreatePrefab's request payload (without the frame header) */
+export function encodeCreatePrefabRequest(value: CreatePrefabRequest): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.string(value.entityId);
+  writer.string(value.path);
+  writer.bool(value.overwrite);
+  return writer.finish();
+}
+
+/** Reads CreatePrefab's request payload; bytes after the last field are ignored */
+export function decodeCreatePrefabRequest(payload: Uint8Array): CreatePrefabRequest {
+  const reader = new ProtocolReader(payload);
+  const entityId = reader.string();
+  const path = reader.string();
+  const overwrite = reader.bool();
+  return { entityId, path, overwrite };
+}
+
+/** InstantiatePrefab's request payload (without the frame header) */
+export function encodeInstantiatePrefabRequest(value: InstantiatePrefabRequest): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.string(value.uuidOrPath);
+  writer.string(value.parentId);
+  writer.i32(value.siblingIndex);
+  writer.bool(value.hasPosition);
+  writeVec3(writer, value.position);
+  return writer.finish();
+}
+
+/** Reads InstantiatePrefab's request payload; bytes after the last field are ignored */
+export function decodeInstantiatePrefabRequest(payload: Uint8Array): InstantiatePrefabRequest {
+  const reader = new ProtocolReader(payload);
+  const uuidOrPath = reader.string();
+  const parentId = reader.string();
+  const siblingIndex = reader.i32();
+  const hasPosition = reader.bool();
+  const position = readVec3(reader);
+  return { uuidOrPath, parentId, siblingIndex, hasPosition, position };
+}
+
+/** ApplyPrefab's request payload (without the frame header) */
+export function encodeApplyPrefabRequest(value: ApplyPrefabRequest): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.string(value.entityId);
+  return writer.finish();
+}
+
+/** Reads ApplyPrefab's request payload; bytes after the last field are ignored */
+export function decodeApplyPrefabRequest(payload: Uint8Array): ApplyPrefabRequest {
+  const reader = new ProtocolReader(payload);
+  const entityId = reader.string();
+  return { entityId };
+}
+
+/** UnpackPrefab's request payload (without the frame header) */
+export function encodeUnpackPrefabRequest(value: UnpackPrefabRequest): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.string(value.entityId);
+  return writer.finish();
+}
+
+/** Reads UnpackPrefab's request payload; bytes after the last field are ignored */
+export function decodeUnpackPrefabRequest(payload: Uint8Array): UnpackPrefabRequest {
+  const reader = new ProtocolReader(payload);
+  const entityId = reader.string();
+  return { entityId };
+}
+
+/** SetPhysicsBackend's request payload (without the frame header) */
+export function encodeSetPhysicsBackendRequest(value: SetPhysicsBackendRequest): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.string(value.backend);
+  return writer.finish();
+}
+
+/** Reads SetPhysicsBackend's request payload; bytes after the last field are ignored */
+export function decodeSetPhysicsBackendRequest(payload: Uint8Array): SetPhysicsBackendRequest {
+  const reader = new ProtocolReader(payload);
+  const backend = reader.string();
+  return { backend };
+}
+
+/** SetNetworkSettings's request payload (without the frame header) */
+export function encodeSetNetworkSettingsRequest(value: SetNetworkSettingsRequest): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.string(value.preset);
+  writer.json(value.settings);
+  return writer.finish();
+}
+
+/** Reads SetNetworkSettings's request payload; bytes after the last field are ignored */
+export function decodeSetNetworkSettingsRequest(payload: Uint8Array): SetNetworkSettingsRequest {
+  const reader = new ProtocolReader(payload);
+  const preset = reader.string();
+  const settings = reader.json() as unknown;
+  return { preset, settings };
+}
+
+/** GetNetworkValidation's request payload (without the frame header) */
+export function encodeGetNetworkValidationRequest(value: GetNetworkValidationRequest): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.string(value.preset);
+  return writer.finish();
+}
+
+/** Reads GetNetworkValidation's request payload; bytes after the last field are ignored */
+export function decodeGetNetworkValidationRequest(payload: Uint8Array): GetNetworkValidationRequest {
+  const reader = new ProtocolReader(payload);
+  const preset = reader.string();
+  return { preset };
+}
+
 /** Ok's (empty) payload */
 export function encodeOkResponse(_value: OkResponse): Uint8Array {
   const writer = new ProtocolWriter();
@@ -2338,6 +2700,34 @@ export function decodeEntityListResponse(payload: Uint8Array): EntityListRespons
   const count = reader.u32();
   const entities = readArray(reader, count, readEntityInfo);
   return { count, entities };
+}
+
+/** SerializedEntities's payload (without the frame header) */
+export function encodeSerializedEntitiesResponse(value: SerializedEntitiesResponse): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.json(value.clipboard);
+  return writer.finish();
+}
+
+/** Reads SerializedEntities's payload; bytes after the last field are ignored */
+export function decodeSerializedEntitiesResponse(payload: Uint8Array): SerializedEntitiesResponse {
+  const reader = new ProtocolReader(payload);
+  const clipboard = reader.json() as ClipboardPayload;
+  return { clipboard };
+}
+
+/** EntitiesCreated's payload (without the frame header) */
+export function encodeEntitiesCreatedResponse(value: EntitiesCreatedResponse): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.json(value.ids);
+  return writer.finish();
+}
+
+/** Reads EntitiesCreated's payload; bytes after the last field are ignored */
+export function decodeEntitiesCreatedResponse(payload: Uint8Array): EntitiesCreatedResponse {
+  const reader = new ProtocolReader(payload);
+  const ids = reader.json() as string[];
+  return { ids };
 }
 
 /** EntityData's payload (without the frame header) */
@@ -2690,6 +3080,48 @@ export function decodeAssetPreviewResponse(payload: Uint8Array): AssetPreviewRes
   return { info, pixels };
 }
 
+/** PhysicsBackends's payload (without the frame header) */
+export function encodePhysicsBackendsResponse(value: PhysicsBackendsResponse): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.json(value.info);
+  return writer.finish();
+}
+
+/** Reads PhysicsBackends's payload; bytes after the last field are ignored */
+export function decodePhysicsBackendsResponse(payload: Uint8Array): PhysicsBackendsResponse {
+  const reader = new ProtocolReader(payload);
+  const info = reader.json() as PhysicsBackendsInfo;
+  return { info };
+}
+
+/** NetworkSettings's payload (without the frame header) */
+export function encodeNetworkSettingsResponse(value: NetworkSettingsResponse): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.json(value.info);
+  return writer.finish();
+}
+
+/** Reads NetworkSettings's payload; bytes after the last field are ignored */
+export function decodeNetworkSettingsResponse(payload: Uint8Array): NetworkSettingsResponse {
+  const reader = new ProtocolReader(payload);
+  const info = reader.json() as NetworkSettingsInfo;
+  return { info };
+}
+
+/** NetworkValidation's payload (without the frame header) */
+export function encodeNetworkValidationResponse(value: NetworkValidationResponse): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.json(value.report);
+  return writer.finish();
+}
+
+/** Reads NetworkValidation's payload; bytes after the last field are ignored */
+export function decodeNetworkValidationResponse(payload: Uint8Array): NetworkValidationResponse {
+  const reader = new ProtocolReader(payload);
+  const report = reader.json() as NetworkValidationReport;
+  return { report };
+}
+
 /** ErrorCoded's payload (without the frame header) */
 export function encodeErrorCodedResponse(value: ErrorCodedResponse): Uint8Array {
   const writer = new ProtocolWriter();
@@ -2730,6 +3162,8 @@ export const RequestCodecs = {
   SetEntityParent: { encode: encodeSetEntityParentRequest, decode: decodeSetEntityParentRequest },
   SetEntityProperties: { encode: encodeSetEntityPropertiesRequest, decode: decodeSetEntityPropertiesRequest },
   DuplicateEntity: { encode: encodeDuplicateEntityRequest, decode: decodeDuplicateEntityRequest },
+  SerializeEntities: { encode: encodeSerializeEntitiesRequest, decode: decodeSerializeEntitiesRequest },
+  InstantiateEntities: { encode: encodeInstantiateEntitiesRequest, decode: decodeInstantiateEntitiesRequest },
   GetEntity: { encode: encodeGetEntityRequest, decode: decodeGetEntityRequest },
   SetLocalTransform: { encode: encodeSetLocalTransformRequest, decode: decodeSetLocalTransformRequest },
   CreateScript: { encode: encodeCreateScriptRequest, decode: decodeCreateScriptRequest },
@@ -2757,6 +3191,13 @@ export const RequestCodecs = {
   SetEditorViewOptions: { encode: encodeSetEditorViewOptionsRequest, decode: decodeSetEditorViewOptionsRequest },
   CheckLuaSyntax: { encode: encodeCheckLuaSyntaxRequest, decode: decodeCheckLuaSyntaxRequest },
   GetAssetPreview: { encode: encodeGetAssetPreviewRequest, decode: decodeGetAssetPreviewRequest },
+  CreatePrefab: { encode: encodeCreatePrefabRequest, decode: decodeCreatePrefabRequest },
+  InstantiatePrefab: { encode: encodeInstantiatePrefabRequest, decode: decodeInstantiatePrefabRequest },
+  ApplyPrefab: { encode: encodeApplyPrefabRequest, decode: decodeApplyPrefabRequest },
+  UnpackPrefab: { encode: encodeUnpackPrefabRequest, decode: decodeUnpackPrefabRequest },
+  SetPhysicsBackend: { encode: encodeSetPhysicsBackendRequest, decode: decodeSetPhysicsBackendRequest },
+  SetNetworkSettings: { encode: encodeSetNetworkSettingsRequest, decode: decodeSetNetworkSettingsRequest },
+  GetNetworkValidation: { encode: encodeGetNetworkValidationRequest, decode: decodeGetNetworkValidationRequest },
 } as const;
 
 /** Each response's codecs */
@@ -2778,6 +3219,8 @@ export const ResponseCodecs = {
   EntityCreated: { encode: encodeEntityCreatedResponse, decode: decodeEntityCreatedResponse },
   EntityTransform: { encode: encodeEntityTransformResponse, decode: decodeEntityTransformResponse },
   EntityList: { encode: encodeEntityListResponse, decode: decodeEntityListResponse },
+  SerializedEntities: { encode: encodeSerializedEntitiesResponse, decode: decodeSerializedEntitiesResponse },
+  EntitiesCreated: { encode: encodeEntitiesCreatedResponse, decode: decodeEntitiesCreatedResponse },
   EntityData: { encode: encodeEntityDataResponse, decode: decodeEntityDataResponse },
   ScriptData: { encode: encodeScriptDataResponse, decode: decodeScriptDataResponse },
   AssetList: { encode: encodeAssetListResponse, decode: decodeAssetListResponse },
@@ -2800,5 +3243,8 @@ export const ResponseCodecs = {
   PlayState: { encode: encodePlayStateResponse, decode: decodePlayStateResponse },
   LuaSyntax: { encode: encodeLuaSyntaxResponse, decode: decodeLuaSyntaxResponse },
   AssetPreview: { encode: encodeAssetPreviewResponse, decode: decodeAssetPreviewResponse },
+  PhysicsBackends: { encode: encodePhysicsBackendsResponse, decode: decodePhysicsBackendsResponse },
+  NetworkSettings: { encode: encodeNetworkSettingsResponse, decode: decodeNetworkSettingsResponse },
+  NetworkValidation: { encode: encodeNetworkValidationResponse, decode: decodeNetworkValidationResponse },
   ErrorCoded: { encode: encodeErrorCodedResponse, decode: decodeErrorCodedResponse },
 } as const;
