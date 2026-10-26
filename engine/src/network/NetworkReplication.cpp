@@ -213,7 +213,8 @@ namespace N2Engine::Network
     }
 
     void ServerReplicator::Flush(ClientState &state, PendingMessage &pending, const std::uint64_t nowMicros,
-                                 const std::uint32_t serverTick, std::vector<std::vector<std::uint8_t>> &messages)
+                                 const std::uint32_t serverTick, const std::optional<std::uint32_t> inputTick,
+                                 std::vector<std::vector<std::uint8_t>> &messages)
     {
         if (pending.sent.empty())
         {
@@ -244,6 +245,8 @@ namespace N2Engine::Network
         header.sequence = record.sequence;
         header.entryCount = static_cast<std::uint16_t>(record.entries.size());
         header.tick = serverTick;
+        header.hasInputTick = inputTick.has_value();
+        header.inputTick = inputTick.value_or(0u);
         std::vector<std::uint8_t> message = EncodeStateUpdateHeader(header);
         message.insert(message.end(), pending.entries.begin(), pending.entries.end());
 
@@ -278,7 +281,8 @@ namespace N2Engine::Network
     std::vector<std::vector<std::uint8_t>> ServerReplicator::BuildForClient(const ClientId client,
                                                                             const std::uint64_t nowMicros,
                                                                             const std::size_t maxMessageBytes,
-                                                                            const std::uint32_t serverTick)
+                                                                            const std::uint32_t serverTick,
+                                                                            const std::optional<std::uint32_t> inputTick)
     {
         std::vector<std::vector<std::uint8_t>> messages;
         const auto found = _clients.find(client);
@@ -330,7 +334,7 @@ namespace N2Engine::Network
         PendingMessage pending;
         auto flush = [&] {
             const auto size = pending.entries.empty() ? 0 : kStateUpdateHeaderBytes + pending.entries.size();
-            Flush(state,pending,nowMicros,serverTick,messages);
+            Flush(state,pending,nowMicros,serverTick,inputTick,messages);
             budget -= size;
         };
         for (auto id : order)
@@ -424,6 +428,7 @@ namespace N2Engine::Network
             return Result::Stale;
         }
         _highestSeen = view.header.sequence;
+        _currentInputTick = view.header.hasInputTick ? std::optional<std::uint32_t>(view.header.inputTick) : std::nullopt;
         if (_messageObserver)
         {
             _messageObserver(view.header.tick);

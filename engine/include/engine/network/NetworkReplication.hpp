@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <optional>
 #include <map>
 #include <set>
 #include <span>
@@ -107,10 +108,11 @@ namespace N2Engine::Network
         /// stamps the messages (their ack deadline). `maxMessageBytes` caps this client's message size (the connection's
         /// largest unreliable message), at most the options' value. `serverTick` is the server's fixed tick (32 bits)
         /// the states are read on: it goes into every message's header (netcode stage B3), where the client's
-        /// interpolation reads it.
-        [[nodiscard]] std::vector<std::vector<std::uint8_t>> BuildForClient(ClientId client, std::uint64_t nowMicros,
-                                                                            std::size_t maxMessageBytes,
-                                                                            std::uint32_t serverTick = 0);
+        /// interpolation reads it. `inputTick` (netcode stage B6) is the stamp of the newest input frame applied to this
+        /// client's objects, or nullopt: it goes into every message's header, where the client's prediction reads it.
+        [[nodiscard]] std::vector<std::vector<std::uint8_t>> BuildForClient(
+            ClientId client, std::uint64_t nowMicros, std::size_t maxMessageBytes, std::uint32_t serverTick = 0,
+            std::optional<std::uint32_t> inputTick = std::nullopt);
 
         /// Applies a client's ack. False when it names a sequence that was never sent (nothing is applied).
         bool OnAck(ClientId client, const StateAckMessage &ack);
@@ -180,7 +182,7 @@ namespace N2Engine::Network
         void ExpireFront(ClientState &state);
         void ApplyRecord(ClientState &state, const SentRecord &record);
         void Flush(ClientState &state, PendingMessage &pending, std::uint64_t nowMicros, std::uint32_t serverTick,
-                   std::vector<std::vector<std::uint8_t>> &messages);
+                   std::optional<std::uint32_t> inputTick, std::vector<std::vector<std::uint8_t>> &messages);
         /// The entry for one object (its bytes and what it records), or false when nothing changed
         bool BuildEntry(ClientState &state, std::uint32_t id, const ObjectState &object,
                         std::vector<std::uint8_t> &entryBytes, SentEntry &sent, bool &full);
@@ -252,6 +254,11 @@ namespace N2Engine::Network
             _entryObserver = std::move(observer);
         }
 
+        /// The input tick in the header of the message being applied (netcode stage B6: the stamp of the newest input the
+        /// server applied to this client's objects; the entries' values include that input and none after it). Valid
+        /// inside the entry observer; nullopt when the message named none.
+        [[nodiscard]] std::optional<std::uint32_t> CurrentInputTick() const noexcept { return _currentInputTick; }
+
         /// The object is gone: its layout goes
         void ForgetObject(NetworkId id) { _layouts.Forget(id); }
 
@@ -275,6 +282,7 @@ namespace N2Engine::Network
         std::uint32_t _latest = 0;
         std::uint32_t _bits = 0;
         bool _ackPending = false;
+        std::optional<std::uint32_t> _currentInputTick;
         std::function<void(std::uint32_t)> _messageObserver;
         std::function<void(NetworkObject &, std::uint32_t)> _entryObserver;
     };

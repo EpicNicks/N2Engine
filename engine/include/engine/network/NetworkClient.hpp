@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <expected>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -18,6 +19,7 @@
 #include "engine/network/NetworkId.hpp"
 #include "engine/network/NetworkInput.hpp"
 #include "engine/network/NetworkInterpolation.hpp"
+#include "engine/network/NetworkPrediction.hpp"
 #include "engine/network/NetworkProtocol.hpp"
 #include "engine/network/NetworkReplication.hpp"
 #include "engine/network/NetworkRpc.hpp"
@@ -85,6 +87,10 @@ namespace N2Engine::Network
         RpcLimits rpc;
         /// True in the Deterministic preset: only RPCs declared cosmetic are sent or run
         bool cosmeticRpcsOnly = false;
+        /// Client prediction of the objects this client owns that have a CharacterController (netcode stage B6). Off by
+        /// default. Needs an input layout with the controls the mapping names, or the client logs the error and does not
+        /// predict (PredictionError).
+        PredictionOptions prediction;
     };
 
     /// What the clock sync did on the client (the estimator's own counters are ClockSync::Stats)
@@ -153,7 +159,16 @@ namespace N2Engine::Network
      * Player input (netcode stage B4): once Joined, the game queues the local input once per fixed tick (QueueInput); each
      * Update sends the newest few unacknowledged frames in one unreliable message, so a lost or reordered datagram loses
      * no input as long as one of the next few arrives; the server's acknowledgements trim the ring of unacknowledged frames,
-     * which never holds more than kMaxUnackedInputFrames. No prediction or reconciliation yet.
+     * which never holds more than kMaxUnackedInputFrames.
+     *
+     * Prediction (netcode stage B6, NetworkPrediction.hpp), when options.prediction.enabled: QueueInput also steps every
+     * CharacterController of an object this client owns, with the input it queues (mapped to a CharacterInput, after the
+     * layout's quantisation, so it is the input the server will read), and keeps the input and the state it got in a
+     * bounded history. The server's state updates carry the stamp of the newest input it applied; when an update for such
+     * an object arrives, Update compares the server's state with the history at that stamp, and on a difference sets the
+     * controller to the server's state and runs the inputs after the stamp through the same step again, showing the
+     * correction as an offset that decays (or as a jump, when it is large). The server stays the authority: the client's
+     * state is a guess, and nothing it computes is sent.
      *
      * Clock and interpolation (netcode stage B3): once Joined, the client pings the server a few times a second and
      * estimates the server's tick from the answers (ClockSync: server time, round trip, jitter), and every Update shows
@@ -246,6 +261,21 @@ namespace N2Engine::Network
         [[nodiscard]] double RenderTick() const noexcept { return _renderTick; }
         [[nodiscard]] const SnapshotInterpolator &Interpolator() const noexcept { return _interpolator; }
 
+        // ---- Prediction (netcode stage B6) -------------------------------------------------------------------------------
+
+        /// True when prediction is on and set up (the mapping resolved against the layout)
+        [[nodiscard]] bool PredictionActive() const noexcept { return _predictionMap.has_value(); }
+        /// Why prediction is off although options.prediction.enabled; empty otherwise
+        [[nodiscard]] const std::string &PredictionError() const noexcept { return _predictionError; }
+        [[nodiscard]] const PredictionStats &PredictionStatistics() const noexcept { return _predictionStats; }
+        /// Whether the object is predicted now
+        [[nodiscard]] bool IsPredicted(NetworkId id) const { return _predicted.contains(id.value); }
+        /// The ticks of history the object holds (0 if it is not predicted)
+        [[nodiscard]] std::size_t PredictionHistorySize(NetworkId id) const;
+        /// The correction still to show for the object, at the clock of the last Update: the displayed position is the
+        /// state's plus this. Zero when none or the object is not predicted.
+        [[nodiscard]] Math::Vector3 PredictionOffset(NetworkId id) const;
+
         /// The hook for an object the game moves itself (a predicted, locally controlled one: netcode stage B6): the
         /// filter is asked for each object before it is interpolated and returns false to leave the object alone. An
         /// object this client owns is never interpolated, filter or not. Runs inside Update.
@@ -271,6 +301,13 @@ namespace N2Engine::Network
         void OnStateMessage(std::uint32_t tick);
         void OnEntryApplied(NetworkObject &object, std::uint32_t tick);
         void ApplyInterpolation();
+        struct PredictedObject;
+        void Predict(const std::vector<float> &values, std::uint32_t tick);
+        void ScanPredicted();
+        void NotePredictedEntry(NetworkObject &object);
+        void ReconcilePredicted();
+        void ApplyPredictedPositions();
+        [[nodiscard]] Math::Vector3 OffsetOf(const PredictedObject &object) const;
         [[nodiscard]] bool IsLocallyOwned(const NetworkObject &object) const noexcept;
         void RefuseJoin(JoinRefusal reason, std::string text);
         void Fail(std::string text);
@@ -302,6 +339,24 @@ namespace N2Engine::Network
         std::uint32_t _nextPingSequence = 1;
         std::uint64_t _nextPingAt = 0;
         double _renderTick = 0.0;
+        struct PredictedObject
+        {
+            explicit PredictedObject(std::size_t capacity) : history(capacity) {}
+            PredictionHistory history;
+            /// A server state waiting for the next reconciliation: the newest by input tick
+            bool hasPending = false;
+            std::uint32_t pendingTick = 0;
+            Physics::CharacterState pendingState;
+            /// The correction being shown: starts at offsetStart at offsetSince and falls linearly to 0
+            Math::Vector3 offsetStart{0.0f, 0.0f, 0.0f};
+            std::uint64_t offsetSince = 0;
+        };
+        std::optional<CharacterInputMap> _predictionMap;
+        PredictionOptions _predictionOptions;
+        std::string _predictionError;
+        PredictionStats _predictionStats;
+        std::map<std::uint32_t, PredictedObject> _predicted;
+        bool _predictRescan = true;
         std::function<bool(const NetworkObject &)> _interpolationFilter;
         NetworkClientState _state = NetworkClientState::Connecting;
         std::string _error;

@@ -38,7 +38,10 @@ namespace N2Engine::Network
     //     0x10 StateUpdate   u32 sequence (not 0, +1 per message the server sends this client), u16 entry count (1 to
     //                        kMaxNetworkObjects), u32 server tick (the fixed tick the
     //                        states were read on, modulo 2^32; netcode stage B3: what the client interpolates remote
-    //                        objects by), then that many entries:
+    //                        objects by), u8 flags (bit 0: the next field is valid; the other bits must be 0), u32 input
+    //                        tick (netcode stage B6: the stamp of the newest input frame the server applied to the
+    //                        objects of the client the message is for, i.e. the input the states include: what the client
+    //                        reconciles its prediction against; 0 and ignored when the flag is clear), then that many entries:
     //                          varint net id, u16 layout hash, varint payload length, payload
     //                        payload: the field mask (one bit per replicated field of the object, low bit first, in
     //                        ceil(fields / 8) bytes; bits past the last field must be 0), then the wire bytes of each
@@ -65,8 +68,8 @@ namespace N2Engine::Network
 
     /// The version of the world messages above (the RPC messages, 0x06, 0x14, 0x86 and 0x87, are in NetworkRpc.hpp). A change to any message layout, or a new message, bumps it (2: state
     /// replication, netcode stage B2; 3: relevance visibility, stage B9; 4: player input, netcode stage B4; 5: clock sync and the server tick
-    /// in every StateUpdate, netcode stage B3; 6: RPCs, netcode stage B7).
-    inline constexpr std::uint16_t kWireVersion = 6;
+    /// in every StateUpdate, netcode stage B3; 6: RPCs, netcode stage B7; 7: the input tick the server applied last, in every StateUpdate, netcode stage B6).
+    inline constexpr std::uint16_t kWireVersion = 7;
 
     /// The largest world message either side sends or accepts (a ServerHello with the longest fingerprint is the
     /// largest: 1 type + 2 version + 311 fingerprint + 4 client id = 318 bytes). The Connection's reliable message size
@@ -130,8 +133,10 @@ namespace N2Engine::Network
     /// The type bytes of the unreliable state messages
     inline constexpr std::uint8_t kStateUpdateType = 0x10;
     inline constexpr std::uint8_t kStateAckType = 0x83;
-    /// The bytes before a StateUpdate's entries: type, sequence, entry count, server tick
-    inline constexpr std::size_t kStateUpdateHeaderBytes = 11;
+    /// The bytes before a StateUpdate's entries: type, sequence, entry count, server tick, flags, input tick
+    inline constexpr std::size_t kStateUpdateHeaderBytes = 16;
+    /// StateUpdate flags bit 0: the input tick field holds the stamp of the newest input applied
+    inline constexpr std::uint8_t kStateUpdateHasInputTick = 0x01;
     /// The most a StateUpdate carries, whatever the transport allows (it must fit one datagram: it never fragments)
     inline constexpr std::size_t kMaxStateUpdateBytes = 1100;
 
@@ -141,6 +146,11 @@ namespace N2Engine::Network
         std::uint16_t entryCount = 0;
         /// The server's fixed tick (32 bits, wrapping) the states in the message were read on
         std::uint32_t tick = 0;
+        /// Netcode stage B6: the stamp (InputFrame::tick) of the newest input frame the server applied to the objects of
+        /// the client this message is for, when it applied one (hasInputTick); the states in the message include that
+        /// input and none after it, which is what the client's prediction history is compared at
+        std::uint32_t inputTick = 0;
+        bool hasInputTick = false;
     };
 
     /// A decoded StateUpdate: the header and the entries' bytes (a view into the message)
@@ -197,7 +207,7 @@ namespace N2Engine::Network
     /// Decodes a StateAck: the type byte, exactly 9 bytes, a latest sequence that is not 0
     [[nodiscard]] std::expected<StateAckMessage, DecodeError> DecodeStateAck(std::span<const std::uint8_t> bytes);
 
-    /// The eleven header bytes of a StateUpdate; the caller appends the entries
+    /// The sixteen header bytes of a StateUpdate; the caller appends the entries
     [[nodiscard]] std::vector<std::uint8_t> EncodeStateUpdateHeader(const StateUpdateHeader &header);
     [[nodiscard]] std::vector<std::uint8_t> Encode(const StateAckMessage &message);
 

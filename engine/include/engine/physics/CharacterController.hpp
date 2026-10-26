@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <string>
 
 #include <math/Vector3.hpp>
@@ -108,6 +109,9 @@ namespace N2Engine::Physics
         void OnAttach() override;
         void OnFixedUpdate() override;
 
+        /// Netcode stage B6: refreshes the replicated cache (below) from the state, then serialises
+        [[nodiscard]] nlohmann::json SerializeReplicated(std::span<const FieldInfo> replicated) override;
+
         static constexpr bool IsSingleton = true;
 
         /// The input of the next ticks (see the class comment). A non-finite move is refused (false).
@@ -121,6 +125,23 @@ namespace N2Engine::Physics
         bool SetState(const CharacterState &state);
         /// The state at `position`, at rest and not grounded (the next step finds the ground)
         bool Teleport(const Math::Vector3 &position);
+
+        /// The step as a function of its arguments only: the next state for `state` and `input` over `dt`, without
+        /// touching the component's state, the object or the held input (what client prediction replays). `state` itself
+        /// is returned when there is no physics backend, the settings are not valid or the arguments are refused (see
+        /// CharacterMotor::Step).
+        [[nodiscard]] CharacterState Simulate(const CharacterState &state, const CharacterInput &input, float dt) const;
+
+        /// Netcode stage B6: true when something else steps this controller (the network layer: the server with the
+        /// owner's input, the owning client with its predicted input). OnFixedUpdate then does nothing, so the fixed
+        /// update cannot step it a second time with a stale held input. Not saved.
+        void SetExternallyDriven(const bool driven) noexcept { _externallyDriven = driven; }
+        [[nodiscard]] bool IsExternallyDriven() const noexcept { return _externallyDriven; }
+
+        /// Netcode stage B6: the part of the state a step depends on, as the server replicated it (on a client: what
+        /// the newest state update carried). velocity.x, velocity.z and the ground normal are results, so they are left
+        /// at rest. Before the first update it is the object's own state.
+        [[nodiscard]] CharacterState GetReplicatedState() const;
 
         /// One step with the current input and `dt`, now; the object moves to the new position. False when it did
         /// not run: no physics backend, settings that are not valid, or a dt that is not above zero and finite.
@@ -150,6 +171,13 @@ namespace N2Engine::Physics
         int layerMask = static_cast<int>(Layers::DefaultRaycastMask);
 
     private:
+        // The replication layer's cache of the state: what the server reads and a client sets (hidden, read-only; set
+        // the state, not these). Sent in millimetres, so a client compares the server's state with its own within that.
+        Math::Vector3 _netPosition{0.0f, 0.0f, 0.0f};
+        float _netVelocityY = 0.0f;
+        bool _netGrounded = false;
+        bool _externallyDriven = false;
+
         CharacterInput _input;
         CharacterState _state;
         bool _stateKnown = false;

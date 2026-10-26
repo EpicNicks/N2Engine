@@ -127,6 +127,10 @@ namespace N2Engine::Network
         std::uint32_t tick = 0;
         /// Whether a frame arrived for the tick, the last one was repeated, or the input is neutral
         InputSource source = InputSource::Neutral;
+        /// Netcode stage B6: the stamp (InputFrame::tick, the client's own) of the frame these values came from; what the
+        /// client's prediction history is keyed by. Valid when hasFrameTick (not for neutral input).
+        std::uint32_t frameTick = 0;
+        bool hasFrameTick = false;
         /// The decoded values, in the layout's order (InputLayout::ValueOffset says where a control's start)
         std::vector<float> values;
     };
@@ -316,6 +320,11 @@ namespace N2Engine::Network
             std::vector<ClockPongMessage> pendingPongs;
             /// Made when the client joins, if the server takes input
             std::unique_ptr<ServerInputBuffer> input;
+            /// The stamp of the newest input frame the game applied (InputFor), and the server tick it was applied on:
+            /// it goes into the header of every state update to this client (netcode stage B6)
+            std::uint32_t appliedFrameTick = 0;
+            std::uint32_t appliedOnTick = 0;
+            bool haveAppliedFrame = false;
             bool dropping = false;
             std::string dropReason;
         };
