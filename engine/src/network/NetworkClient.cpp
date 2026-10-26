@@ -794,6 +794,10 @@ namespace N2Engine::Network
                 _predictRescan = true;
                 continue;
             }
+            if (!predicted.synced)
+            {
+                continue;
+            }
             (void)controller->SetInput(input);
             if (!controller->Step(_predictionOptions.stepSeconds))
             {
@@ -807,8 +811,7 @@ namespace N2Engine::Network
 
     void NetworkClient::NotePredictedEntry(NetworkObject &object)
     {
-        const std::optional<std::uint32_t> inputTick = _replicator.CurrentInputTick();
-        if (!inputTick.has_value() || !object.HasNetworkId())
+        if (!object.HasNetworkId())
         {
             return;
         }
@@ -819,6 +822,25 @@ namespace N2Engine::Network
             return;
         }
         PredictedObject &predicted = found->second;
+        if (!predicted.synced)
+        {
+            // The first state of the object: from here on the controller starts from where the server's is, not from where
+            // the instance happened to be placed (the frames the server applied before this are not predicted)
+            const Physics::CharacterState first = controller->GetReplicatedState();
+            Physics::CharacterState start;
+            start.position = first.position;
+            start.velocity = Math::Vector3(0.0f, first.velocity.y, 0.0f);
+            start.grounded = first.grounded;
+            if (controller->SetState(start))
+            {
+                predicted.synced = true;
+            }
+        }
+        const std::optional<std::uint32_t> inputTick = _replicator.CurrentInputTick();
+        if (!inputTick.has_value())
+        {
+            return;
+        }
         if (predicted.hasPending && TickBefore(*inputTick, predicted.pendingTick))
         {
             return;

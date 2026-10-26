@@ -268,6 +268,8 @@ namespace N2Engine::Network
         /// Why prediction is off although options.prediction.enabled; empty otherwise
         [[nodiscard]] const std::string &PredictionError() const noexcept { return _predictionError; }
         [[nodiscard]] const PredictionStats &PredictionStatistics() const noexcept { return _predictionStats; }
+        /// Zeroes the counters (not the history or the corrections being shown)
+        void ResetPredictionStatistics() noexcept { _predictionStats = PredictionStats{}; }
         /// Whether the object is predicted now
         [[nodiscard]] bool IsPredicted(NetworkId id) const { return _predicted.contains(id.value); }
         /// The ticks of history the object holds (0 if it is not predicted)
@@ -343,6 +345,9 @@ namespace N2Engine::Network
         {
             explicit PredictedObject(std::size_t capacity) : history(capacity) {}
             PredictionHistory history;
+            /// Whether the server has sent this object's state yet: until it has, the controller is not where the server's
+            /// is (the object is not placed), so it is not predicted; the first state sets it (netcode stage B6)
+            bool synced = false;
             /// A server state waiting for the next reconciliation: the newest by input tick
             bool hasPending = false;
             std::uint32_t pendingTick = 0;

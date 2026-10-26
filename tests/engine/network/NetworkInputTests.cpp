@@ -651,6 +651,39 @@ TEST(ServerInputBufferTest, AMissingTickRepeatsTheLastInputThenGoesNeutral)
     EXPECT_EQ(buffer.Resolve(20)->source, InputSource::Repeated);
 }
 
+TEST(ServerInputBufferTest, EveryResolvedInputNamesTheStampOfTheFrameItCameFrom)
+{
+    // What client prediction reconciles at (netcode stage B6): the stamp of the frame, not the tick it was applied on
+    const InputLayout layout = GameLayout();
+    ServerInputBuffer buffer(layout, Options(2, 2), 10);
+    EXPECT_EQ(buffer.Receive(Frame(layout, 10, 1, 1.0f)), InputReceive::Accepted);
+    EXPECT_EQ(buffer.Receive(Frame(layout, 11, 2, 0.5f)), InputReceive::Accepted);
+
+    const auto neutral = buffer.Resolve(11);
+    ASSERT_TRUE(neutral.has_value());
+    EXPECT_EQ(neutral->source, InputSource::Neutral);
+    EXPECT_FALSE(neutral->hasFrameTick) << "neutral input is nobody's frame";
+
+    const auto first = buffer.Resolve(12);
+    EXPECT_EQ(first->source, InputSource::Frame);
+    EXPECT_TRUE(first->hasFrameTick);
+    EXPECT_EQ(first->frameTick, 10u) << "stamped 10, applied on 12";
+    const auto second = buffer.Resolve(13);
+    EXPECT_EQ(second->frameTick, 11u);
+    // Missing ticks repeat the last frame and say so: the stamp stays that of the frame repeated
+    const auto repeated = buffer.Resolve(14);
+    EXPECT_EQ(repeated->source, InputSource::Repeated);
+    EXPECT_TRUE(repeated->hasFrameTick);
+    EXPECT_EQ(repeated->frameTick, 11u);
+    EXPECT_EQ(buffer.Resolve(15)->frameTick, 11u);
+    // Past the repeat limit it is neutral again
+    const auto gone = buffer.Resolve(16);
+    EXPECT_EQ(gone->source, InputSource::Neutral);
+    EXPECT_FALSE(gone->hasFrameTick);
+    // Asked again, a resolved tick answers the same
+    EXPECT_EQ(buffer.Resolve(13)->frameTick, 11u);
+}
+
 TEST(ServerInputBufferTest, WithNoFrameEverTheInputIsNeutral)
 {
     const InputLayout layout = GameLayout();

@@ -140,10 +140,10 @@ TEST(NetworkClockMessageTest, MalformedMessagesAreRefusedWithAReason)
     EXPECT_EQ(DecodeStreamTick(beat).error(), DecodeError::TrailingBytes);
 }
 
-TEST(NetworkClockMessageTest, AStateUpdateCarriesTheServerTickAndTheWireVersionIsSix)
+TEST(NetworkClockMessageTest, AStateUpdateCarriesTheServerTickAndTheInputTickAndTheWireVersionIsSeven)
 {
-    EXPECT_EQ(kWireVersion, 6);
-    EXPECT_EQ(kStateUpdateHeaderBytes, 11u);
+    EXPECT_EQ(kWireVersion, 7);
+    EXPECT_EQ(kStateUpdateHeaderBytes, 16u);
     StateUpdateHeader header;
     header.sequence = 3;
     header.entryCount = 1;
@@ -156,7 +156,38 @@ TEST(NetworkClockMessageTest, AStateUpdateCarriesTheServerTickAndTheWireVersionI
     EXPECT_EQ(view->header.sequence, 3u);
     EXPECT_EQ(view->header.entryCount, 1);
     EXPECT_EQ(view->header.tick, 0xDEADBEEFu);
+    EXPECT_FALSE(view->header.hasInputTick);
     EXPECT_EQ(view->entries.size(), 5u);
+}
+
+TEST(NetworkClockMessageTest, TheInputTickOfAStateUpdateRoundTripsAndIsStrict)
+{
+    StateUpdateHeader header;
+    header.sequence = 9;
+    header.entryCount = 1;
+    header.tick = 77;
+    header.hasInputTick = true;
+    header.inputTick = 0xFFFFFFF0u;
+    std::vector<std::uint8_t> message = EncodeStateUpdateHeader(header);
+    message.insert(message.end(), 5, 0);
+    const auto view = DecodeStateUpdate(message);
+    ASSERT_TRUE(view.has_value());
+    EXPECT_TRUE(view->header.hasInputTick);
+    EXPECT_EQ(view->header.inputTick, 0xFFFFFFF0u);
+    EXPECT_EQ(view->entries.size(), 5u);
+
+    // Flags: bit 0 only. Another bit, or a tick named without its flag, is not something an honest server writes.
+    std::vector<std::uint8_t> unknownBit = message;
+    unknownBit[11] = 0x03;
+    EXPECT_EQ(DecodeStateUpdate(unknownBit).error(), DecodeError::BadValue);
+    std::vector<std::uint8_t> tickWithoutFlag = message;
+    tickWithoutFlag[11] = 0x00;
+    EXPECT_EQ(DecodeStateUpdate(tickWithoutFlag).error(), DecodeError::BadValue);
+    // The writer never writes a tick it was not asked to flag
+    header.hasInputTick = false;
+    const std::vector<std::uint8_t> cleared = EncodeStateUpdateHeader(header);
+    EXPECT_EQ(cleared[11], 0);
+    EXPECT_EQ(cleared[12] | cleared[13] | cleared[14] | cleared[15], 0);
 }
 
 TEST(NetworkClockSyncTest, NothingIsNaNOrZeroDividedBeforeAndAtTheFirstSample)
