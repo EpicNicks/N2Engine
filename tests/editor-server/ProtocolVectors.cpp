@@ -252,6 +252,12 @@ namespace ProtocolVectors
             {"ApplyPrefab", [](BufferReader &r) { return json{{"entityId", ApplyPrefabCmd::Deserialize(r).entityId}}; }},
             {"UnpackPrefab", [](BufferReader &r) { return json{{"entityId", UnpackPrefabCmd::Deserialize(r).entityId}}; }},
             {"SetPhysicsBackend", [](BufferReader &r) { return json{{"backend", SetPhysicsBackendCmd::Deserialize(r).backend}}; }},
+            {"SetNetworkSettings", [](BufferReader &r)
+            {
+                const auto cmd = SetNetworkSettingsCmd::Deserialize(r);
+                return json{{"preset", cmd.preset}, {"settings", cmd.settings}};
+            }},
+            {"GetNetworkValidation", [](BufferReader &r) { return json{{"preset", GetNetworkValidationCmd::Deserialize(r).preset}}; }},
             {"InstantiateEntities", [](BufferReader &r)
             {
                 const auto cmd = InstantiateEntitiesCmd::Deserialize(r);
@@ -375,6 +381,8 @@ namespace ProtocolVectors
             {"SerializedEntities", [](BufferWriter &w, const json &f) { WriteSerializedEntities(w, f.at("clipboard")); }},
             {"EntitiesCreated", [](BufferWriter &w, const json &f) { WriteEntitiesCreated(w, f.at("ids")); }},
             {"PhysicsBackends", [](BufferWriter &w, const json &f) { WritePhysicsBackends(w, f.at("info")); }},
+            {"NetworkSettings", [](BufferWriter &w, const json &f) { WriteNetworkSettings(w, f.at("info")); }},
+            {"NetworkValidation", [](BufferWriter &w, const json &f) { WriteNetworkValidation(w, f.at("report")); }},
             {"AssetPreview",[](BufferWriter &w,const json &f){const auto pixels=FromHex(StringField(f,"pixels"));WriteAssetPreview(w,f.at("info"),pixels);}},
             {"AssetDetail", [](BufferWriter &w, const json &f) { WriteAssetDetail(w, f.at("info")); }},
             {"TextData", [](BufferWriter &w, const json &f) { WriteTextData(w, StringField(f, "text")); }},

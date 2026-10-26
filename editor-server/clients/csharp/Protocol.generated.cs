@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.20.0";
+        public const string ProtocolVersion = "1.21.0";
     }
 
     public enum CommandType : byte
@@ -96,6 +96,9 @@ namespace N2Engine.Editor.Protocol
         UnpackPrefab = 0xAC,
         GetPhysicsBackends = 0xAD,
         SetPhysicsBackend = 0xAE,
+        GetNetworkSettings = 0x51,
+        SetNetworkSettings = 0x52,
+        GetNetworkValidation = 0x53,
     }
 
     public enum ResponseType : byte
@@ -143,6 +146,8 @@ namespace N2Engine.Editor.Protocol
         SerializedEntities = 0x21,
         EntitiesCreated = 0x22,
         PhysicsBackends = 0x23,
+        NetworkSettings = 0x24,
+        NetworkValidation = 0x25,
     }
 
     public struct Vec3
@@ -617,6 +622,168 @@ namespace N2Engine.Editor.Protocol
         public PhysicsBackendInfo[] Backends { get; set; }
     }
 
+    public class NetworkSettingRow
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("key")]
+        public string Key { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("label")]
+        public string Label { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("governed")]
+        public bool Governed { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("locked")]
+        public bool Locked { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("tunable")]
+        public bool Tunable { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("startupChecked")]
+        public bool StartupChecked { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("settingKey")]
+        public string? SettingKey { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("value")]
+        public System.Text.Json.JsonElement Value { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("description")]
+        public string Description { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("lostGuarantee")]
+        public string? LostGuarantee { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("current")]
+        public System.Text.Json.JsonElement? Current { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("atPresetValue")]
+        public bool? AtPresetValue { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("source")]
+        public string Source { get; set; }
+    }
+
+    public class NetworkPresetInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("id")]
+        public string Id { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("label")]
+        public string Label { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("summary")]
+        public string Summary { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("selected")]
+        public bool Selected { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("selectable")]
+        public bool Selectable { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("unavailableReason")]
+        public string? UnavailableReason { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("rows")]
+        public NetworkSettingRow[] Rows { get; set; }
+    }
+
+    public class NetworkNudge
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("show")]
+        public bool Show { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("reasons")]
+        public string[] Reasons { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("networkObjects")]
+        public double NetworkObjects { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("hint")]
+        public string Hint { get; set; }
+    }
+
+    public class NetworkSettingRange
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("key")]
+        public string Key { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("min")]
+        public double Min { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("max")]
+        public double Max { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("default")]
+        public double Default { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("integer")]
+        public bool Integer { get; set; }
+    }
+
+    public class NetworkLostGuarantee
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("settingKey")]
+        public string SettingKey { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("rowKey")]
+        public string RowKey { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("text")]
+        public string Text { get; set; }
+    }
+
+    public class NetworkBackendInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("selected")]
+        public string Selected { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("deterministicSelectable")]
+        public string[] DeterministicSelectable { get; set; }
+    }
+
+    public class NetworkSettingsInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("preset")]
+        public string Preset { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("customised")]
+        public bool Customised { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("storedCustomised")]
+        public bool StoredCustomised { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("tickRate")]
+        public double TickRate { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("values")]
+        public System.Text.Json.JsonElement Values { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("overrides")]
+        public System.Text.Json.JsonElement Overrides { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("ranges")]
+        public NetworkSettingRange[] Ranges { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("lostGuarantees")]
+        public NetworkLostGuarantee[] LostGuarantees { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("presets")]
+        public NetworkPresetInfo[] Presets { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("backend")]
+        public NetworkBackendInfo Backend { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("nudge")]
+        public NetworkNudge Nudge { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("problems")]
+        public string[] Problems { get; set; }
+    }
+
+    public class NetworkRequirementFix
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("label")]
+        public string Label { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("settings")]
+        public System.Text.Json.JsonElement Settings { get; set; }
+    }
+
+    public class NetworkRequirementInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("id")]
+        public string Id { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("text")]
+        public string Text { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("met")]
+        public bool Met { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("detail")]
+        public string Detail { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("fix")]
+        public NetworkRequirementFix? Fix { get; set; }
+    }
+
+    public class NetworkValidationReport
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("preset")]
+        public string Preset { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("projectPreset")]
+        public string ProjectPreset { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("refused")]
+        public bool Refused { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("unmet")]
+        public double Unmet { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("summary")]
+        public string Summary { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("requirements")]
+        public NetworkRequirementInfo[] Requirements { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("warnings")]
+        public string[] Warnings { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("environment")]
+        public System.Text.Json.JsonElement Environment { get; set; }
+    }
+
     public class ClipboardPayload
     {
         [System.Text.Json.Serialization.JsonPropertyName("format")]
@@ -1027,6 +1194,18 @@ namespace N2Engine.Editor.Protocol
         public string Backend;
     }
 
+    public struct SetNetworkSettingsRequest
+    {
+        public string Preset;
+        /// <summary>JSON text: any JSON value</summary>
+        public string Settings;
+    }
+
+    public struct GetNetworkValidationRequest
+    {
+        public string Preset;
+    }
+
     public struct FrameDataResponse
     {
         public uint Width;
@@ -1312,6 +1491,18 @@ namespace N2Engine.Editor.Protocol
     {
         /// <summary>JSON text: PhysicsBackendsInfo</summary>
         public string Info;
+    }
+
+    public struct NetworkSettingsResponse
+    {
+        /// <summary>JSON text: NetworkSettingsInfo</summary>
+        public string Info;
+    }
+
+    public struct NetworkValidationResponse
+    {
+        /// <summary>JSON text: NetworkValidationReport</summary>
+        public string Report;
     }
 
     public struct ErrorCodedResponse

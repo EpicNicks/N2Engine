@@ -62,6 +62,9 @@ namespace
             {"UnpackPrefab", Class::Write},
             // The physics backend picker (since 1.20.0): the list reads, choosing one saves the project file
             {"GetPhysicsBackends", Class::Read}, {"SetPhysicsBackend", Class::Write},
+            // The Network panel (since 1.21.0): the two reads, and the change that saves the project file
+            {"GetNetworkSettings", Class::Read}, {"GetNetworkValidation", Class::Read},
+            {"SetNetworkSettings", Class::Write},
 {"SetLocalTransform", Class::Write}, {"CreateScript", Class::Write},
             {"RescanAssets", Class::Write}, {"SetImportSettings", Class::Write}, {"WriteTextAsset", Class::Write},
             {"CreateScriptAsset", Class::Write}, {"CreateFolder", Class::Write}, {"AddComponent", Class::Write},

@@ -723,6 +723,33 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    struct SetNetworkSettingsCmd
+    {
+        /// "none", "authoritative" or "deterministic" (any case), or empty to keep the preset
+        std::string preset;
+        /// A JSON merge patch for the tunable settings of the network block (an object; {} for none)
+        nlohmann::json settings;
+
+        static SetNetworkSettingsCmd Deserialize(BufferReader &r)
+        {
+            SetNetworkSettingsCmd cmd;
+            cmd.preset = r.ReadString();
+            cmd.settings = ReadBoundedJson(r);
+            return cmd;
+        }
+    };
+
+    struct GetNetworkValidationCmd
+    {
+        /// The preset to check, or empty for the project's own
+        std::string preset;
+
+        static GetNetworkValidationCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
     struct SerializeEntitiesCmd
     {
         /// A JSON array of the objects' UUID strings (checked by the handler)
@@ -1174,6 +1201,26 @@ namespace N2Engine::Editor::Protocol
         BufferWriter payload;
         WriteJson(payload, info);
         w.WriteU8(static_cast<uint8_t>(ResponseType::PhysicsBackends));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// GetNetworkSettings' and SetNetworkSettings' response: the NetworkSettingsInfo as one JSON value
+    inline void WriteNetworkSettings(BufferWriter &w, const nlohmann::json &info)
+    {
+        BufferWriter payload;
+        WriteJson(payload, info);
+        w.WriteU8(static_cast<uint8_t>(ResponseType::NetworkSettings));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// GetNetworkValidation's response: the NetworkValidationReport as one JSON value
+    inline void WriteNetworkValidation(BufferWriter &w, const nlohmann::json &report)
+    {
+        BufferWriter payload;
+        WriteJson(payload, report);
+        w.WriteU8(static_cast<uint8_t>(ResponseType::NetworkValidation));
         w.WriteU32(static_cast<uint32_t>(payload.Size()));
         w.WriteBytes(payload.Data());
     }
