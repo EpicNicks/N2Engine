@@ -692,10 +692,10 @@ namespace N2Engine::Network
             {
                 const Physics::BodyState &body = *object.body;
                 WriteVector(writer, body.position);
-                writer.F32(body.rotation.w);
-                writer.F32(body.rotation.x);
-                writer.F32(body.rotation.y);
-                writer.F32(body.rotation.z);
+                writer.F32(body.rotation.GetW());
+                writer.F32(body.rotation.GetX());
+                writer.F32(body.rotation.GetY());
+                writer.F32(body.rotation.GetZ());
                 WriteVector(writer, body.linearVelocity);
                 WriteVector(writer, body.angularVelocity);
                 writer.U8(body.sleeping ? 1 : 0);
