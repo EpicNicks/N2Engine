@@ -1,0 +1,72 @@
+name: Docs deploy
+
+# Publishes docs/ (static HTML, no build step) to the Vercel project n2engine-docs. A push to master that touches docs/ deploys
+# to production; a pull request that touches docs/ gets a preview deployment. Secrets (repository secrets): VERCEL_TOKEN,
+# VERCEL_ORG_ID (the team or account id), VERCEL_PROJECT_ID. The token is read from the environment, never from a command line.
+# This is separate from tests.yml, whose docs-only pull requests skip the build legs.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs-deploy.yml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs-deploy.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: docs-deploy-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'production' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  deploy:
+    name: docs (Vercel)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Pull requests from forks get no secrets; skip them instead of failing.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the secrets exist
+        run: |
+          for v in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
+            if [ -z "${!v}" ]; then echo "::error::repository secret $v is not set"; exit 1; fi
+          done
+
+      - name: Deploy (production)
+        id: prod
+        if: github.event_name != 'pull_request'
+        working-directory: docs
+        run: |
+          url=$(npx --yes vercel@65.2.0 deploy --prod --yes)
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "Production: $url" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Deploy (preview)
+        id: preview
+        if: github.event_name == 'pull_request'
+        working-directory: docs
+        run: |
+          url=$(npx --yes vercel@65.2.0 deploy --yes)
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "Preview: $url" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment the preview URL on the pull request
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIEW_URL: ${{ steps.preview.outputs.url }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh pr comment "$PR" --body "Docs preview: $PREVIEW_URL" --edit-last --create-if-none
