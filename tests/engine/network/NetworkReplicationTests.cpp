@@ -924,6 +924,29 @@ TEST(ServerReplicatorTest, ADespawnedObjectHasNoBaselineLeft)
     EXPECT_TRUE(rig.replicator.BuildForClient(1, 0, kMaxStateUpdateBytes).empty());
 }
 
+TEST(ServerReplicatorTest, TheInputTickGoesIntoEveryMessageOfATickAndOnlyWhenGiven)
+{
+    DirectRig rig;
+    rig.replicator.BeginTick(rig.side.world);
+    const auto with = rig.replicator.BuildForClient(1, 0, kMaxStateUpdateBytes, 321, 0xFFFFFFFEu);
+    ASSERT_FALSE(with.empty());
+    for (const auto &message : with)
+    {
+        const auto view = DecodeStateUpdate(message);
+        ASSERT_TRUE(view.has_value());
+        EXPECT_EQ(view->header.tick, 321u);
+        EXPECT_TRUE(view->header.hasInputTick);
+        EXPECT_EQ(view->header.inputTick, 0xFFFFFFFEu);
+    }
+    rig.side.Probe(1)->score = 99;
+    rig.replicator.BeginTick(rig.side.world);
+    const auto without = rig.replicator.BuildForClient(1, 1000, kMaxStateUpdateBytes, 322);
+    ASSERT_FALSE(without.empty());
+    const auto view = DecodeStateUpdate(without.front());
+    ASSERT_TRUE(view.has_value());
+    EXPECT_FALSE(view->header.hasInputTick);
+}
+
 TEST(ServerReplicatorTest, TheSameStateIsTheSameBytes)
 {
     DirectRig a;

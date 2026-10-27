@@ -1,6 +1,7 @@
 #include "engine/network/NetworkClient.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 
 #include "engine/Logger.hpp"
@@ -10,6 +11,7 @@
 #include "engine/network/NetworkObject.hpp"
 #include "engine/network/NetworkServer.hpp"
 #include "engine/network/NetworkTransform.hpp"
+#include "engine/physics/CharacterController.hpp"
 
 namespace N2Engine::Network
 {
@@ -59,6 +61,20 @@ namespace N2Engine::Network
         _options.rpc = _options.rpc.Clamped();
         _replicator.SetMessageObserver([this](const std::uint32_t tick) { OnStateMessage(tick); });
         _replicator.SetEntryObserver([this](NetworkObject &object, const std::uint32_t tick) { OnEntryApplied(object, tick); });
+        if (_options.prediction.enabled)
+        {
+            _predictionOptions = _options.prediction.Clamped();
+            auto map = CharacterInputMap::Create(_predictionOptions.mapping, _options.inputLayout);
+            if (map.has_value())
+            {
+                _predictionMap = *map;
+            }
+            else
+            {
+                _predictionError = map.error();
+                Logger::Error(std::format("Client prediction is off: {}", _predictionError));
+            }
+        }
         g_activeClient = this;
     }
 
@@ -135,6 +151,13 @@ namespace N2Engine::Network
             SendClockPing();
             _nextPingAt = _now + (_clock.SampleCount() < kClockBurstSamples ? _options.clockBurstIntervalMicros
                                                                              : _options.clockIntervalMicros);
+        }
+
+        // The server's states for the objects this client predicts, against what it predicted
+        if (_predictionMap.has_value() && _state == NetworkClientState::Joined)
+        {
+            ReconcilePredicted();
+            ApplyPredictedPositions();
         }
 
         // Remote objects at the interpolated time of this update
@@ -582,6 +605,10 @@ namespace N2Engine::Network
 
     void NetworkClient::OnEntryApplied(NetworkObject &object, const std::uint32_t tick)
     {
+        if (_predictionMap.has_value() && IsLocallyOwned(object))
+        {
+            NotePredictedEntry(object);
+        }
         // The object this client controls is not shown from the server's past states (the game moves it)
         if (!_options.interpolate || IsLocallyOwned(object) || !object.HasNetworkId())
         {
@@ -662,7 +689,256 @@ namespace N2Engine::Network
         {
             return std::unexpected(std::string("input can be queued only once the client has joined"));
         }
-        return _input.Queue(tick, values);
+        const std::expected<std::uint32_t, std::string> queued = _input.Queue(tick, values);
+        if (queued.has_value() && _predictionMap.has_value())
+        {
+            // Predict with the input the server will read: the layout's quantisation of the values
+            const InputLayout &layout = _options.inputLayout;
+            if (const std::optional<std::vector<std::uint8_t>> packed = layout.Pack(values); packed.has_value())
+            {
+                if (const std::optional<std::vector<float>> onWire = layout.Unpack(*packed); onWire.has_value())
+                {
+                    Predict(*onWire, tick);
+                }
+            }
+        }
+        return queued;
+    }
+
+    // ---- Prediction (netcode stage B6) ---------------------------------------------------------------------------------
+
+    namespace
+    {
+        Physics::CharacterController *ControllerOf(NetworkObject &object)
+        {
+            return object.GetGameObject().GetComponent<Physics::CharacterController>();
+        }
+
+        float Length(const Math::Vector3 &v)
+        {
+            return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+        }
+    }
+
+    std::size_t NetworkClient::PredictionHistorySize(const NetworkId id) const
+    {
+        const auto found = _predicted.find(id.value);
+        return found == _predicted.end() ? 0 : found->second.history.Size();
+    }
+
+    Math::Vector3 NetworkClient::PredictionOffset(const NetworkId id) const
+    {
+        const auto found = _predicted.find(id.value);
+        return found == _predicted.end() ? Math::Vector3(0.0f, 0.0f, 0.0f) : OffsetOf(found->second);
+    }
+
+    Math::Vector3 NetworkClient::OffsetOf(const PredictedObject &object) const
+    {
+        const std::uint64_t duration = _predictionOptions.smoothingMicros;
+        if (duration == 0 || _now >= object.offsetSince + duration)
+        {
+            return Math::Vector3(0.0f, 0.0f, 0.0f);
+        }
+        const float remaining =
+            1.0f - static_cast<float>(_now - std::min(_now, object.offsetSince)) / static_cast<float>(duration);
+        return Math::Vector3(object.offsetStart.x * remaining, object.offsetStart.y * remaining,
+                             object.offsetStart.z * remaining);
+    }
+
+    void NetworkClient::ScanPredicted()
+    {
+        _predictRescan = false;
+        for (auto it = _predicted.begin(); it != _predicted.end();)
+        {
+            NetworkObject *const object = _world.Find(NetworkId{it->first});
+            if (object == nullptr || !IsLocallyOwned(*object) || ControllerOf(*object) == nullptr)
+            {
+                it = _predicted.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
+        for (const auto &[id, object] : _world.Objects())
+        {
+            if (_predicted.size() >= kMaxPredictedObjects)
+            {
+                break;
+            }
+            if (_predicted.contains(id) || !IsLocallyOwned(*object))
+            {
+                continue;
+            }
+            if (Physics::CharacterController *const controller = ControllerOf(*object))
+            {
+                controller->SetExternallyDriven(true);
+                _predicted.emplace(id, PredictedObject(_predictionOptions.historyTicks));
+            }
+        }
+    }
+
+    void NetworkClient::Predict(const std::vector<float> &values, const std::uint32_t tick)
+    {
+        if (_predictRescan)
+        {
+            ScanPredicted();
+        }
+        const Physics::CharacterInput input = _predictionMap->Map(values);
+        for (auto &[id, predicted] : _predicted)
+        {
+            NetworkObject *const object = _world.Find(NetworkId{id});
+            Physics::CharacterController *const controller = object != nullptr ? ControllerOf(*object) : nullptr;
+            if (controller == nullptr)
+            {
+                _predictRescan = true;
+                continue;
+            }
+            if (!predicted.synced)
+            {
+                continue;
+            }
+            (void)controller->SetInput(input);
+            if (!controller->Step(_predictionOptions.stepSeconds))
+            {
+                continue;
+            }
+            ++_predictionStats.inputsPredicted;
+            (void)predicted.history.Record(tick, input, _predictionOptions.stepSeconds, controller->GetState());
+        }
+        ApplyPredictedPositions();
+    }
+
+    void NetworkClient::NotePredictedEntry(NetworkObject &object)
+    {
+        if (!object.HasNetworkId())
+        {
+            return;
+        }
+        const auto found = _predicted.find(object.GetNetworkId().value);
+        Physics::CharacterController *const controller = ControllerOf(object);
+        if (found == _predicted.end() || controller == nullptr)
+        {
+            return;
+        }
+        PredictedObject &predicted = found->second;
+        if (!predicted.synced)
+        {
+            // The first state of the object: from here on the controller starts from where the server's is, not from where
+            // the instance happened to be placed (the frames the server applied before this are not predicted)
+            const Physics::CharacterState first = controller->GetReplicatedState();
+            Physics::CharacterState start;
+            start.position = first.position;
+            start.velocity = Math::Vector3(0.0f, first.velocity.y, 0.0f);
+            start.grounded = first.grounded;
+            if (controller->SetState(start))
+            {
+                predicted.synced = true;
+            }
+        }
+        const std::optional<std::uint32_t> inputTick = _replicator.CurrentInputTick();
+        if (!inputTick.has_value())
+        {
+            return;
+        }
+        if (predicted.hasPending && TickBefore(*inputTick, predicted.pendingTick))
+        {
+            return;
+        }
+        predicted.hasPending = true;
+        predicted.pendingTick = *inputTick;
+        predicted.pendingState = controller->GetReplicatedState();
+    }
+
+    void NetworkClient::ReconcilePredicted()
+    {
+        if (_predictRescan)
+        {
+            ScanPredicted();
+        }
+        for (auto &[id, predicted] : _predicted)
+        {
+            if (!predicted.hasPending)
+            {
+                continue;
+            }
+            predicted.hasPending = false;
+            NetworkObject *const object = _world.Find(NetworkId{id});
+            Physics::CharacterController *const controller = object != nullptr ? ControllerOf(*object) : nullptr;
+            if (controller == nullptr)
+            {
+                continue;
+            }
+            // What the object shows now: the state and the correction still being shown
+            const Math::Vector3 shown = controller->GetState().position + OffsetOf(predicted);
+            const PredictionStepper stepper = [controller](const Physics::CharacterState &state,
+                                                           const Physics::CharacterInput &input, const float dt)
+            { return controller->Simulate(state, input, dt); };
+
+            const ReconcileResult result =
+                predicted.history.Reconcile(predicted.pendingTick, predicted.pendingState, stepper, _predictionOptions);
+            if (result.outcome == ReconcileOutcome::Ignored)
+            {
+                ++_predictionStats.statesIgnored;
+                continue;
+            }
+            if (result.compared)
+            {
+                ++_predictionStats.comparisons;
+                _predictionStats.maxError = std::max(_predictionStats.maxError, result.error);
+            }
+            if (result.outcome == ReconcileOutcome::Match)
+            {
+                ++_predictionStats.matches;
+                continue;
+            }
+            if (!controller->SetState(result.state))
+            {
+                continue;
+            }
+            const Math::Vector3 delta = shown - controller->GetState().position;
+            const bool snap = result.outcome == ReconcileOutcome::Overflow ||
+                              result.error > _predictionOptions.snapDistance ||
+                              Length(delta) > _predictionOptions.snapDistance;
+            if (result.outcome == ReconcileOutcome::Overflow)
+            {
+                ++_predictionStats.windowOverflows;
+            }
+            else
+            {
+                ++_predictionStats.corrections;
+                _predictionStats.replayedSteps += result.replayed;
+            }
+            if (snap)
+            {
+                ++_predictionStats.snaps;
+                predicted.offsetStart = Math::Vector3(0.0f, 0.0f, 0.0f);
+            }
+            else
+            {
+                predicted.offsetStart = delta;
+            }
+            predicted.offsetSince = _now;
+        }
+    }
+
+    void NetworkClient::ApplyPredictedPositions()
+    {
+        if (!_predictionOptions.applySmoothing)
+        {
+            return;
+        }
+        for (const auto &[id, predicted] : _predicted)
+        {
+            NetworkObject *const object = _world.Find(NetworkId{id});
+            Physics::CharacterController *const controller = object != nullptr ? ControllerOf(*object) : nullptr;
+            Positionable *const positionable = object != nullptr ? object->GetGameObject().GetPositionable() : nullptr;
+            if (controller == nullptr || positionable == nullptr)
+            {
+                continue;
+            }
+            positionable->SetPosition(controller->GetState().position + OffsetOf(predicted));
+        }
     }
 
     void NetworkClient::OnHello(const ServerHelloMessage &hello)
@@ -694,6 +970,7 @@ namespace N2Engine::Network
 
     void NetworkClient::OnSpawn(const SpawnMessage &spawn)
     {
+        _predictRescan = true;
         if (_state != NetworkClientState::Joining && _state != NetworkClientState::Joined)
         {
             Fail("the server sent a spawn before the world was accepted");
@@ -735,6 +1012,7 @@ namespace N2Engine::Network
 
     void NetworkClient::OnDespawn(const DespawnMessage &despawn)
     {
+        _predictRescan = true;
         if (_state != NetworkClientState::Joining && _state != NetworkClientState::Joined)
         {
             Fail("the server sent a despawn before the world was accepted");

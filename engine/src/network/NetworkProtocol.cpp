@@ -338,10 +338,16 @@ namespace N2Engine::Network
         view.header.sequence = reader.U32();
         view.header.entryCount = reader.U16();
         view.header.tick = reader.U32();
+        const std::uint8_t flags = reader.U8();
+        const std::uint32_t inputTick = reader.U32();
+        view.header.hasInputTick = (flags & kStateUpdateHasInputTick) != 0;
+        view.header.inputTick = view.header.hasInputTick ? inputTick : 0;
         view.entries = bytes.subspan(kStateUpdateHeaderBytes);
         // An entry is at least a one byte id, a two byte hash, a one byte length and a one byte mask
         constexpr std::size_t kMinEntryBytes = 5;
-        if (view.header.sequence == 0 || view.header.entryCount == 0 || view.header.entryCount > kMaxNetworkObjects ||
+        // Unknown flag bits, and an input tick named without its flag, are not something an honest server writes
+        if ((flags & ~kStateUpdateHasInputTick) != 0 || (!view.header.hasInputTick && inputTick != 0) ||
+            view.header.sequence == 0 || view.header.entryCount == 0 || view.header.entryCount > kMaxNetworkObjects ||
             static_cast<std::size_t>(view.header.entryCount) * kMinEntryBytes > view.entries.size())
         {
             return std::unexpected(DecodeError::BadValue);
@@ -383,6 +389,8 @@ namespace N2Engine::Network
         writer.U32(header.sequence);
         writer.U16(header.entryCount);
         writer.U32(header.tick);
+        writer.U8(header.hasInputTick ? kStateUpdateHasInputTick : std::uint8_t{0});
+        writer.U32(header.hasInputTick ? header.inputTick : 0u);
         return std::vector<std::uint8_t>(buffer.data(), buffer.data() + writer.Size());
     }
 

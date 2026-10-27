@@ -307,7 +307,7 @@ TEST(NetworkProtocolTest, ADifferentWireVersionIsNamedNotParsed)
     EXPECT_EQ(DecodeServerMessage(bare).error(), DecodeError::UnsupportedVersion);
 
     std::vector<std::uint8_t> accept = Encode(SampleAccept());
-    accept[1] = 7;
+    accept[1] = 77;
     EXPECT_EQ(DecodeClientMessage(accept).error(), DecodeError::UnsupportedVersion);
 
     EXPECT_FALSE(PeekWireVersion(Encode(SampleSpawn())).has_value());

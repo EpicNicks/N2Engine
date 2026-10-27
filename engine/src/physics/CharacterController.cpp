@@ -605,6 +605,38 @@ namespace N2Engine::Physics
         RegisterMember(NAMEOF(maxFallSpeed), maxFallSpeed).Range(0.01, 100000.0).Tooltip("The fastest it falls");
         RegisterMember(NAMEOF(layerMask), layerMask)
             .Tooltip("The layers it collides with, as a bit mask (-1 is every layer). Leave out the layer of its own colliders.");
+        // The replication layer's cache of the state (netcode stage B6), used only on an object that has a NetworkObject
+        RegisterMember("netPosition", _netPosition).Replicated(0.001).Hidden().ReadOnly();
+        RegisterMember("netVelocityY", _netVelocityY).Replicated(0.001).Hidden().ReadOnly();
+        RegisterMember("netGrounded", _netGrounded).Replicated().Hidden().ReadOnly();
+    }
+
+    nlohmann::json CharacterController::SerializeReplicated(const std::span<const FieldInfo> /*replicated*/)
+    {
+        _netPosition = _state.position;
+        _netVelocityY = _state.velocity.y;
+        _netGrounded = _state.grounded;
+        return Serialize();
+    }
+
+    CharacterState CharacterController::GetReplicatedState() const
+    {
+        CharacterState state;
+        state.position = _netPosition;
+        state.velocity = Vector3(0.0f, _netVelocityY, 0.0f);
+        state.grounded = _netGrounded;
+        return state;
+    }
+
+    CharacterState CharacterController::Simulate(const CharacterState &state, const CharacterInput &input, const float dt) const
+    {
+        IPhysicsBackend *backend = Application::GetInstance().Get3DPhysicsBackend();
+        const CharacterSettings settings = GetSettings();
+        if (!backend || !settings.IsValid())
+        {
+            return state;
+        }
+        return CharacterMotor::Step(*backend, settings, state, input, dt);
     }
 
     void CharacterController::OnAttach()
@@ -623,6 +655,10 @@ namespace N2Engine::Physics
 
     void CharacterController::OnFixedUpdate()
     {
+        if (_externallyDriven)
+        {
+            return;
+        }
         // The scaled fixed step: 0 while paused (time scale 0), so nothing moves
         Step(Time::GetFixedDeltaTime());
     }

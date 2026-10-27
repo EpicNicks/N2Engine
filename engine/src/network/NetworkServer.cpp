@@ -993,6 +993,16 @@ namespace N2Engine::Network
             input.client = clientId;
             input.tick = resolved->tick;
             input.source = resolved->source;
+            input.frameTick = resolved->frameTick;
+            input.hasFrameTick = resolved->hasFrameTick;
+            if (resolved->hasFrameTick &&
+                (!client.haveAppliedFrame || TickDifference(resolved->tick, client.appliedOnTick) >= 0))
+            {
+                // The newest tick asked for wins; asking again for an older one changes nothing
+                client.haveAppliedFrame = true;
+                client.appliedFrameTick = resolved->frameTick;
+                client.appliedOnTick = resolved->tick;
+            }
             input.values = std::move(*values);
             return input;
         }
@@ -1059,7 +1069,9 @@ namespace N2Engine::Network
                 if (shown) client.hidden.erase(id); else client.hidden.insert(id);
             }
             const std::vector<std::vector<std::uint8_t>> messages =
-                _replicator.BuildForClient(client.id, _now, client.connection->MaxUnreliableMessageSize(), _inputTick);
+                _replicator.BuildForClient(client.id, _now, client.connection->MaxUnreliableMessageSize(), _inputTick,
+                                           client.haveAppliedFrame ? std::optional<std::uint32_t>(client.appliedFrameTick)
+                                                                   : std::nullopt);
             for (const std::vector<std::uint8_t> &message : messages)
             {
                 // A message that does not get out is as good as a lost one: the next tick sends what is still needed

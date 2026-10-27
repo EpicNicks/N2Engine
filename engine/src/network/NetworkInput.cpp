@@ -311,6 +311,7 @@ namespace N2Engine::Network
         }
         slot.used = true;
         slot.tick = applyTick;
+        slot.frameTick = frame.tick;
         slot.payload = {};
         std::copy_n(frame.payload.begin(), std::min(_payloadBytes, slot.payload.size()), slot.payload.begin());
         MarkSeen(frame.sequence);
@@ -374,7 +375,10 @@ namespace N2Engine::Network
         {
             entry.source = InputSource::Frame;
             entry.payload = slot.payload;
+            entry.frameTick = slot.frameTick;
+            entry.hasFrameTick = true;
             _last = slot.payload;
+            _lastFrameTick = slot.frameTick;
             _haveLast = true;
             _missingStreak = 0;
             slot.used = false;
@@ -385,6 +389,8 @@ namespace N2Engine::Network
         {
             entry.source = InputSource::Repeated;
             entry.payload = _last;
+            entry.frameTick = _lastFrameTick;
+            entry.hasFrameTick = true;
             ++_missingStreak;
             ++_stats.ticksRepeated;
         }
@@ -392,6 +398,8 @@ namespace N2Engine::Network
         {
             entry.source = InputSource::Neutral;
             entry.payload = _neutral;
+            entry.hasFrameTick = false;
+            entry.frameTick = 0;
             if (_missingStreak < 0xFFFFFFFFu)
             {
                 ++_missingStreak;
@@ -406,6 +414,8 @@ namespace N2Engine::Network
         ResolvedInput resolved;
         resolved.tick = entry.tick;
         resolved.source = entry.source;
+        resolved.frameTick = entry.frameTick;
+        resolved.hasFrameTick = entry.hasFrameTick;
         resolved.payload.assign(entry.payload.begin(),
                                 entry.payload.begin() + static_cast<std::ptrdiff_t>(_payloadBytes));
         return resolved;

@@ -178,6 +178,10 @@ namespace N2Engine::Network
     {
         std::uint32_t tick = 0;
         InputSource source = InputSource::Neutral;
+        /// Netcode stage B6: the stamp (InputFrame::tick) of the frame the payload came from: the frame of the tick itself
+        /// (Frame) or of the last one applied before (Repeated). Valid when hasFrameTick: not for neutral input.
+        std::uint32_t frameTick = 0;
+        bool hasFrameTick = false;
         std::vector<std::uint8_t> payload;
     };
 
@@ -234,6 +238,7 @@ namespace N2Engine::Network
         {
             bool used = false;
             std::uint32_t tick = 0;
+            std::uint32_t frameTick = 0;
             InputPayload payload{};
         };
 
@@ -242,6 +247,8 @@ namespace N2Engine::Network
             bool valid = false;
             std::uint32_t tick = 0;
             InputSource source = InputSource::Neutral;
+            std::uint32_t frameTick = 0;
+            bool hasFrameTick = false;
             InputPayload payload{};
         };
 
@@ -260,6 +267,7 @@ namespace N2Engine::Network
         std::array<Slot, kInputWindowTicks> _slots;
         std::array<HistoryEntry, kInputHistoryTicks> _history;
         InputPayload _last{};
+        std::uint32_t _lastFrameTick = 0;
         InputPayload _neutral{};
         bool _haveLast = false;
         std::uint32_t _missingStreak = 0;
