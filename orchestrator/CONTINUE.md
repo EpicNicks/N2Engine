@@ -10,6 +10,7 @@ Read the memory index first, then these memory files: no-claude-coauthor, merge-
 - Gate relaxed by the user (2026-10-16): a branch behind master may merge when master's new commits touch NONE of the PR's files except docs/*.html AND `git merge-tree --write-tree` is conflict-free (implemented in lib/ratify.mjs; master's push CI verifies). Otherwise: `PUT pulls/<n>/update-branch` via the wrapper (CI reruns), or a merge-resolver agent when GitHub refuses (merge conflict).
 - Releases are always PRERELEASE (`--prerelease --latest=false`, "build dependency, not an engine release").
 - Update the progress log (memory `pending-minor-defects.md`) whenever something merges or is decided; lessons in `orchestrator-lessons.md`.
+- Keep the docs pages (docs/*.html) current: every PR that changes behaviour, a wire or protocol version, a setting, a limit or a test must update the matching page in the SAME PR (tell every developer agent; reviewers check it), and every ledger or merge step re-checks the pages it touched against the code (wire version, protocol minor, limits). A stale number found later is fixed in a docs-only PR at once (user instruction, 2026-10-27).
 - Docs/prose edits must be verified against CODE, not neighbouring docs (cost many review rounds). Re-read every scripted edit for syntax (a scripted edit once turned `\n` into real newlines inside string literals).
 
 ## How the pipeline works (tools in orchestrator/tools/)
