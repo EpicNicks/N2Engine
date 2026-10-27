@@ -7,6 +7,11 @@
 #include "engine/network/NetworkId.hpp"
 #include "engine/network/n2net/HashTree.hpp"
 
+namespace N2Engine::Physics
+{
+    class IPhysicsBackend;
+}
+
 namespace N2Engine::Network
 {
     class LayoutCache;
@@ -35,12 +40,23 @@ namespace N2Engine::Network
      */
     inline constexpr std::uint16_t kLayoutFieldId = 0xFFFF;
     inline constexpr std::uint16_t kMetaFieldId = 0xFFFE;
+    /// The physics leaf (netcode C5): IPhysicsBackend::HashSimulatedState as a u64 LE, on object kPhysicsObjectId, which
+    /// no net id is (net ids start at 1). It covers the bodies in the simulation, networked or not, and skips parked ones.
+    inline constexpr std::uint16_t kPhysicsFieldId = 0xFFFD;
+    inline constexpr std::uint32_t kPhysicsObjectId = 0;
 
     /// nullopt when a HashTree bound is exceeded (more than kMaxTreeObjects objects or kMaxFieldsPerObject leaves)
     [[nodiscard]] std::optional<N2Net::HashTree> BuildStateHashTree(const NetworkWorld &world, LayoutCache &layouts,
                                                                     std::uint32_t tick);
 
-    /// A readable name for a leaf the bisection reported: "Component.field" for a field index, "<layout>" or "<meta>".
+    /// The same tree plus the physics leaf when `physics` is not null and has a HashSimulatedState (what the rollback
+    /// runtime exchanges: a rollback peer and a lockstep peer hash the same confirmed state alike, parked bodies or not)
+    [[nodiscard]] std::optional<N2Net::HashTree> BuildStateHashTree(const NetworkWorld &world, LayoutCache &layouts,
+                                                                    std::uint32_t tick,
+                                                                    const Physics::IPhysicsBackend *physics);
+
+    /// A readable name for a leaf the bisection reported: "Component.field" for a field index, "<layout>", "<meta>" or
+    /// "<physics>".
     /// Empty when the object or field is not in the world now.
     [[nodiscard]] std::string DescribeHashedField(const NetworkWorld &world, LayoutCache &layouts, std::uint32_t objectId,
                                                   std::uint16_t fieldId);

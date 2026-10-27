@@ -79,6 +79,11 @@ namespace N2Engine::Physics
         /// A canonical hash of the simulation state (bodies in handle order), for desync detection; nullopt for
         /// "unsupported" (the default). Not 0 for unsupported: 0 is a legal hash.
         [[nodiscard]] virtual std::optional<std::uint64_t> HashState() const { return std::nullopt; }
+        /// The hash two peers compare in a session (netcode C5): only the bodies IN the simulation (a parked, disabled
+        /// body is skipped) and not their handle numbers, combined so that the order of the bodies does not matter. A
+        /// rollback peer that keeps despawned bodies parked, or took a pooled body back, hashes like a lockstep peer
+        /// that destroyed and recreated them. nullopt for "unsupported" (the default).
+        [[nodiscard]] virtual std::optional<std::uint64_t> HashSimulatedState() const { return std::nullopt; }
         /// What Initialize made of the GPU request: the SCENE (and probe) status, Disabled for a backend that never
         /// asks. It does not change when a feature that runs in the GPU scene (particles, soft bodies) fails, so
         /// Physics.IsGpuAvailable reflects the scene only; a feature's own status is GetParticlesGpuStatus and

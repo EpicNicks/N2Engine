@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <memory>
@@ -65,7 +66,18 @@ namespace N2Engine::Network
         std::uint32_t maxForwardMessages = 1024;
         /// Connections at once (joined or not); a connection beyond it is dropped at once
         std::uint32_t maxConnections = 16;
+        /// Spectators at once (netcode C6, Spectate); 0 refuses every one
+        std::uint32_t maxSpectators = 4;
+        /// The largest serialised snapshot the relay passes from a player to a spectator
+        std::uint32_t maxSnapshotBytes = 16u * 1024u * 1024u;
+        /// A spectator whose snapshot has not begun to arrive this long after it was asked for, or has not arrived whole
+        /// twice that long after, is refused (NoSnapshot)
+        std::uint64_t snapshotTimeoutMicros = 10'000'000;
     };
+
+    /// Confirmed ticks of every slot's input (dropped slots synthesised) the relay keeps for spectators: a spectator's
+    /// snapshot tick must be within it, and a spectator that falls further behind is dropped
+    inline constexpr std::uint32_t kSpectatorHistoryTicks = 1024;
 
     enum class RelayState : std::uint8_t
     {
@@ -101,6 +113,10 @@ namespace N2Engine::Network
         std::uint64_t rateLimited = 0;
         std::uint64_t stalls = 0;
         std::uint64_t ticksConfirmed = 0;
+        std::uint64_t spectatorsJoined = 0;
+        /// Snapshots passed whole from a player to a spectator
+        std::uint64_t snapshotsRelayed = 0;
+        std::uint64_t snapshotRequests = 0;
     };
 
     /// What the relay tells its observer (a host that logs)
@@ -117,6 +133,10 @@ namespace N2Engine::Network
             ClientDropped,
             /// A session ended and the relay is waiting for the next one
             Reset,
+            /// A spectator was welcomed
+            Spectating,
+            /// A spectator's snapshot arrived whole; `tick` is its tick
+            SnapshotRelayed,
         };
 
         Type type = Type::Joined;
@@ -147,6 +167,18 @@ namespace N2Engine::Network
      *  - everything is bounded: connections, per-client message and bundle rates, forward budget, the 16 checkpoint
      *    records, the per-peer Connection memory. Nothing a client sends makes the relay allocate by a length it chose.
      *
+     * Spectators (netcode C6, wire version 2). A client may send Spectate instead of Join, before or after the start: it
+     * gets a Welcome with slot kSpectatorSlot and owns no slot (it is never waited for, never dropped as a stall, and its
+     * roots and inputs are not taken). Once the session runs, the relay asks the lowest live player slot for a snapshot
+     * (SnapshotRequest); the player answers with SnapshotData parts of a serialised snapshot of a confirmed tick, which the
+     * relay checks (in order, within maxSnapshotBytes, a tick still in the history and not more than kLockstepWindow
+     * past the relay's confirmed tick, since a player may run ahead of the relay by its own frames in flight) and passes on as
+     * SnapshotPart, paced by the spectator's reliable backlog. From the snapshot's tick on, the spectator is sent every
+     * slot's confirmed input out of a history of kSpectatorHistoryTicks ticks (a dropped slot's synthesised input
+     * included, so a spectator needs no DropSlot), and its ack-only bundles move it on. If the source leaves before the
+     * snapshot is whole the request goes to another player. Bounded by maxSpectators, maxSnapshotBytes and
+     * snapshotTimeoutMicros; a spectator gets the Stop too.
+     *
      * Single-threaded; call Update every pass with a monotonic microsecond clock. After a session ends (every client
      * gone, or the linger over) the relay is back in the Lobby for the next one.
      */
@@ -175,6 +207,8 @@ namespace N2Engine::Network
         [[nodiscard]] std::uint32_t ConfirmedTick() const noexcept;
         /// Clients that joined (seated in a slot)
         [[nodiscard]] std::size_t JoinedCount() const noexcept;
+        /// Spectators connected now
+        [[nodiscard]] std::size_t SpectatorCount() const noexcept;
         [[nodiscard]] std::size_t ConnectionCount() const noexcept { return peers_.size(); }
         [[nodiscard]] bool IsSlotDropped(std::uint32_t slot) const noexcept;
 
@@ -205,6 +239,29 @@ namespace N2Engine::Network
             std::uint64_t lingerUntil = 0;
             DropReason leaveReason = DropReason::Left;
             std::string leaveText;
+
+            // A spectator (Spectate): no slot
+            bool spectator = false;
+            /// A snapshot was asked for (of sourcePeer, under requestId)
+            bool snapshotRequested = false;
+            N2Net::PeerId snapshotSource = N2Net::kInvalidPeer;
+            std::uint32_t requestId = 0;
+            std::uint64_t requestedAt = 0;
+            /// The first part arrived: tick and size are known, the input stream from the tick on is sent
+            bool streaming = false;
+            std::uint32_t snapshotTick = 0;
+            std::uint32_t snapshotTotal = 0;
+            std::uint32_t snapshotReceived = 0;
+            std::uint32_t snapshotForwarded = 0;
+            bool snapshotDone = false;
+            std::deque<std::vector<std::uint8_t>> snapshotQueue;
+        };
+
+        struct HistoryTick
+        {
+            bool valid = false;
+            std::uint32_t tick = 0;
+            std::array<N2Net::LockstepInput, kMaxRelaySlots> inputs{};
         };
 
         struct RootRecord
@@ -226,6 +283,13 @@ namespace N2Engine::Network
         void OnRoot(Peer &peer, std::span<const std::uint8_t> message);
         void OnForward(Peer &peer, std::span<const std::uint8_t> message);
         void OnPause(Peer &peer, std::span<const std::uint8_t> message);
+        void OnSpectate(Peer &peer, std::span<const std::uint8_t> message);
+        void OnSnapshotData(Peer &peer, std::span<const std::uint8_t> message);
+        void RefusePeer(Peer &peer, RefuseReason reason, const std::string &why);
+        /// Asks for snapshots, times them out, passes their parts on
+        void ServeSpectators();
+        void SendSpectatorBundles(Peer &peer, std::span<std::uint8_t> buffer, std::size_t maxFrames);
+        [[nodiscard]] bool AwaitsSnapshotFrom(N2Net::PeerId source) const;
         void StartSession();
         void AdvanceSession();
         void RunTimers();
@@ -266,6 +330,8 @@ namespace N2Engine::Network
         std::uint32_t stopSlotA_ = 0;
         std::uint32_t stopSlotB_ = 0;
         std::uint32_t forwardCount_ = 0;
+        std::uint32_t nextRequestId_ = 0;
+        std::vector<HistoryTick> history_;
         LockstepRelayStats stats_;
         std::function<void(const RelayEvent &)> observer_;
     };

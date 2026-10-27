@@ -225,7 +225,16 @@ namespace N2Engine::Network
 
     std::uint32_t LockstepRuntime::TicksRun() const noexcept
     {
+        if (session_)
+        {
+            return session_->CurrentTick();
+        }
         return scheduler_ ? scheduler_->CurrentTick() : 0;
+    }
+
+    std::uint32_t LockstepRuntime::ConfirmedTick() const noexcept
+    {
+        return session_ ? session_->ConfirmedTick() : TicksRun();
     }
 
     void LockstepRuntime::Notify(const LockstepEvent::Type type, const std::uint32_t slot, const std::uint32_t tick,
@@ -297,7 +306,7 @@ namespace N2Engine::Network
                 JoinMessage join;
                 join.payloadBytes = static_cast<std::uint8_t>(options_.layout.PayloadBytes());
                 join.layoutHash = options_.layout.Hash();
-                SendReliable(Encode(join));
+                SendReliable(options_.spectate ? EncodeSpectate(join) : Encode(join));
             }
             break;
         case N2Net::TransportEventType::PeerDisconnected:
@@ -356,7 +365,8 @@ namespace N2Engine::Network
             }
             break;
         case static_cast<std::uint8_t>(RelayMessage::Start):
-            if (state_ == LockstepState::Lobby)
+            // A spectator starts at its snapshot, not here
+            if (state_ == LockstepState::Lobby && !options_.spectate)
             {
                 state_ = LockstepState::Running;
                 Notify(LockstepEvent::Type::Started, slot_, 0, "");
@@ -371,8 +381,33 @@ namespace N2Engine::Network
                 Notify(LockstepEvent::Type::Refused, 0, 0, error_);
             }
             break;
+        case static_cast<std::uint8_t>(RelayMessage::SnapshotRequest):
+            if (const auto request = DecodeSnapshotRequest(message))
+            {
+                // The latest request wins (the relay gave up on an earlier one)
+                if (!options_.spectate)
+                {
+                    snapshotRequest_ = *request;
+                }
+            }
+            else
+            {
+                Fail("the relay sent a malformed snapshot request");
+            }
+            break;
+        case static_cast<std::uint8_t>(RelayMessage::SnapshotPart):
+            if (options_.spectate)
+            {
+                OnSnapshotPart(message);
+            }
+            break;
         case static_cast<std::uint8_t>(RelayMessage::DropSlot):
         {
+            if (options_.spectate)
+            {
+                // A spectator is sent every slot's confirmed input, a dropped slot's synthesised one included
+                break;
+            }
             const auto drop = DecodeDropSlot(message);
             if (!drop || !scheduler_ || drop->slot >= slotCount_ || drop->slot == slot_)
             {
@@ -420,11 +455,52 @@ namespace N2Engine::Network
             Fail("the relay's welcome does not match this client's version or input layout");
             return;
         }
+        if ((welcome.slot == kSpectatorSlot) != options_.spectate)
+        {
+            Fail(options_.spectate ? "the relay seated this spectator in a slot" : "the relay welcomed this player as a spectator");
+            return;
+        }
         slot_ = welcome.slot;
         slotCount_ = welcome.slotCount;
         hashInterval_ = welcome.hashInterval;
         tickRate_ = welcome.tickRate;
         step_ = 1.0 / static_cast<double>(std::max<std::uint32_t>(tickRate_, 1));
+        dropFill_ = welcome.dropFill == 1 ? N2Net::DropFill::HoldLast : N2Net::DropFill::Neutral;
+        if (options_.spectate)
+        {
+            // The scheduler starts at the snapshot's tick (ApplySnapshot)
+            state_ = LockstepState::Lobby;
+            Notify(LockstepEvent::Type::Welcomed, slot_, 0, std::format("spectator slots={} tickRate={}", slotCount_, tickRate_));
+            return;
+        }
+        if (options_.rollbackWindow > 0)
+        {
+            if (options_.rollbackWindow > kMaxRollbackWindow || !options_.save || !options_.restore)
+            {
+                Fail(std::format("rollback needs a window of 1 to {} and the save and restore hooks", kMaxRollbackWindow));
+                return;
+            }
+            RollbackConfig rollback;
+            rollback.slotCount = slotCount_;
+            rollback.localSlot = slot_;
+            rollback.inputDelay = welcome.inputDelay;
+            rollback.rollbackWindow = options_.rollbackWindow;
+            rollback.eventPolicy = options_.eventPolicy;
+            rollback.layout = *info;
+            RollbackHost host;
+            host.save = options_.save;
+            host.restore = options_.restore;
+            host.step = [this](const N2Net::TickInputs &inputs) { return StepRollback(inputs); };
+            host.confirmed = [this](const std::uint32_t first) { OnConfirmed(first); };
+            host.resimulated = options_.resimulated;
+            host.predict = options_.predict;
+            session_ = std::make_unique<RollbackSession>(rollback, std::move(host));
+            if (!session_->Valid())
+            {
+                Fail("the rollback session refused its configuration: " + session_->Error());
+                return;
+            }
+        }
         N2Net::LockstepConfig config;
         config.slotCount = slotCount_;
         config.inputDelay = welcome.inputDelay;
@@ -466,6 +542,12 @@ namespace N2Engine::Network
         for (const N2Net::LockstepInput &input : bundle->frames)
         {
             (void)scheduler_->Submit(bundle->slot, tick, input);
+            if (session_)
+            {
+                // Early, so a misprediction is found as soon as the input is here (a tick it confirms is final only
+                // once every slot's input is in)
+                (void)session_->SubmitRemote(bundle->slot, tick, input);
+            }
             ++tick;
         }
     }
@@ -535,26 +617,372 @@ namespace N2Engine::Network
             recorderFull_ = true;
         }
         const std::uint32_t done = scheduler_->CurrentTick();
-        if (options_.buildTree && hashInterval_ != 0 && done % hashInterval_ == 0)
+        // A spectator does not report roots: it has no slot to report for
+        if (options_.buildTree && hashInterval_ != 0 && done % hashInterval_ == 0 && !options_.spectate)
         {
             if (std::optional<N2Net::HashTree> tree = options_.buildTree(done))
             {
-                const N2Net::RootMessage root{done, tree->Root()};
-                std::array<std::uint8_t, N2Net::kRootMessageSize> bytes{};
-                const std::size_t size = N2Net::EncodeRootMessage(root, bytes);
-                history_.Push(std::move(*tree));
-                if (size != 0)
-                {
-                    SendReliable(std::vector<std::uint8_t>(bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(size)));
-                    ++stats_.rootsSent;
-                }
+                PublishTree(std::move(*tree));
             }
         }
         return true;
     }
 
+    void LockstepRuntime::PublishTree(N2Net::HashTree tree)
+    {
+        const N2Net::RootMessage root{tree.Tick(), tree.Root()};
+        std::array<std::uint8_t, N2Net::kRootMessageSize> bytes{};
+        const std::size_t size = N2Net::EncodeRootMessage(root, bytes);
+        history_.Push(std::move(tree));
+        if (size != 0)
+        {
+            SendReliable(std::vector<std::uint8_t>(bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(size)));
+            ++stats_.rootsSent;
+        }
+    }
+
+    std::optional<N2Net::LockstepInput> LockstepRuntime::SampleLocal(const std::uint32_t tick)
+    {
+        std::vector<float> values = options_.sampleInput ? options_.sampleInput(tick) : options_.layout.NeutralValues();
+        const auto payload = options_.layout.Pack(values);
+        if (!payload)
+        {
+            Fail("input sampling failed: the sampled input has the wrong number of values");
+            return std::nullopt;
+        }
+        const auto input = ToLockstepInput(options_.layout, std::span<const std::uint8_t>(*payload));
+        if (!input)
+        {
+            Fail("input sampling failed: " + input.error());
+            return std::nullopt;
+        }
+        return *input;
+    }
+
+    void LockstepRuntime::DrainConfirmed()
+    {
+        N2Net::TickInputs inputs;
+        while (state_ == LockstepState::Running && scheduler_->TryAdvance(inputs) == N2Net::AdvanceStatus::Runnable)
+        {
+            if (recorder_ && !recorderFull_ &&
+                !recorder_->RecordInputs(std::span<const N2Net::LockstepInput>(inputs.inputs.data(), slotCount_)))
+            {
+                recorderFull_ = true;
+            }
+            // The session hears every slot's confirmed input, a dropped slot's synthesised one included (Duplicate for
+            // the ones a bundle brought already)
+            for (std::uint32_t slot = 0; slot < slotCount_; ++slot)
+            {
+                if (slot != slot_)
+                {
+                    (void)session_->SubmitRemote(slot, inputs.tick, inputs.inputs[slot]);
+                }
+            }
+        }
+    }
+
+    bool LockstepRuntime::StepRollback(const N2Net::TickInputs &inputs)
+    {
+        if (options_.ownsTickCounter)
+        {
+            clock_.SetTick(inputs.tick);
+        }
+        if (options_.applyTick && !options_.applyTick(inputs, slotCount_))
+        {
+            return false;
+        }
+        if (options_.ownsTickCounter)
+        {
+            clock_.BeginTick();
+        }
+        const std::uint32_t done = inputs.tick + 1;
+        if (options_.buildTree && hashInterval_ != 0 && done % hashInterval_ == 0)
+        {
+            // Built every time the world reaches the checkpoint (again after a resimulation); sent once it is confirmed
+            if (std::optional<N2Net::HashTree> tree = options_.buildTree(done))
+            {
+                pendingTrees_.insert_or_assign(done, std::move(*tree));
+            }
+            else
+            {
+                pendingTrees_.erase(done);
+            }
+        }
+        return true;
+    }
+
+    void LockstepRuntime::OnConfirmed(const std::uint32_t firstUnconfirmed)
+    {
+        // The tree of checkpoint C was last built after the run of tick C - 1 whose inputs are now all confirmed and
+        // used: it is the state a lockstep peer hashes at C
+        while (!pendingTrees_.empty() && pendingTrees_.begin()->first <= firstUnconfirmed)
+        {
+            auto node = pendingTrees_.extract(pendingTrees_.begin());
+            PublishTree(std::move(node.mapped()));
+        }
+        if (options_.confirmed)
+        {
+            options_.confirmed(firstUnconfirmed);
+        }
+    }
+
+    void LockstepRuntime::RunRollbackTicks(const double unscaledDelta)
+    {
+        clock_.BeginFrame(unscaledDelta);
+        const std::uint32_t delay = scheduler_->Config().inputDelay;
+        while (state_ == LockstepState::Running && clock_.TickDue(step_))
+        {
+            if (static_cast<std::int32_t>(scheduler_->NextNeeded(slot_) - session_->CurrentTick()) <=
+                static_cast<std::int32_t>(delay))
+            {
+                const std::optional<N2Net::LockstepInput> input = SampleLocal(scheduler_->NextNeeded(slot_));
+                if (!input)
+                {
+                    return;
+                }
+                std::uint32_t scheduled = 0;
+                std::uint32_t predicted = 0;
+                const N2Net::SubmitResult a = scheduler_->SubmitLocal(slot_, *input, scheduled);
+                const N2Net::SubmitResult b = session_->SubmitLocal(*input, predicted);
+                if (a != N2Net::SubmitResult::Accepted || b != N2Net::SubmitResult::Accepted || scheduled != predicted)
+                {
+                    Fail(std::format("the local input could not be scheduled (tick {} against {})", scheduled, predicted));
+                    return;
+                }
+            }
+            DrainConfirmed();
+            const AdvanceReport report = session_->Advance();
+            if (report.result == AdvanceResult::Failed)
+            {
+                Fail("the rollback session failed: " + session_->Error());
+                return;
+            }
+            if (report.result != AdvanceResult::Ran)
+            {
+                ++stats_.stalls;
+                clock_.ResetAccumulator();
+                break;
+            }
+            clock_.CompleteTick(step_);
+            ++stats_.ticksRun;
+        }
+        clock_.EndFrame(step_);
+    }
+
+    void LockstepRuntime::RunSpectatorTicks(const double unscaledDelta)
+    {
+        clock_.BeginFrame(unscaledDelta);
+        while (state_ == LockstepState::Running && clock_.TickDue(step_))
+        {
+            N2Net::TickInputs inputs;
+            if (scheduler_->TryAdvance(inputs) != N2Net::AdvanceStatus::Runnable)
+            {
+                ++stats_.stalls;
+                clock_.ResetAccumulator();
+                break;
+            }
+            clock_.CompleteTick(step_);
+            if (options_.ownsTickCounter)
+            {
+                clock_.SetTick(inputs.tick);
+            }
+            if (!RunOneTick(inputs))
+            {
+                return;
+            }
+        }
+        clock_.EndFrame(step_);
+    }
+
+    void LockstepRuntime::OnSnapshotPart(const std::span<const std::uint8_t> message)
+    {
+        const auto part = DecodeSnapshotPart(RelayMessage::SnapshotPart, message);
+        if (!part)
+        {
+            Fail("the relay sent a malformed snapshot part");
+            return;
+        }
+        if (scheduler_ || snapshotReady_)
+        {
+            return; // started already
+        }
+        if (part->offset == 0)
+        {
+            // The first part, or the relay asked another player after the first source left: start over
+            if (part->totalBytes > options_.maxSnapshotBytes)
+            {
+                Fail(std::format("the snapshot ({} bytes) is larger than this spectator takes", part->totalBytes));
+                return;
+            }
+            incoming_.clear();
+            incoming_.reserve(part->totalBytes);
+            incomingTick_ = part->tick;
+            incomingTotal_ = part->totalBytes;
+            haveIncoming_ = true;
+        }
+        else if (!haveIncoming_ || part->offset != incoming_.size() || part->tick != incomingTick_ ||
+                 part->totalBytes != incomingTotal_)
+        {
+            Fail("the relay sent snapshot parts out of order");
+            return;
+        }
+        incoming_.insert(incoming_.end(), part->data.begin(), part->data.end());
+        if (incoming_.size() == incomingTotal_)
+        {
+            snapshotReady_ = true;
+        }
+    }
+
+    void LockstepRuntime::ApplySnapshot()
+    {
+        snapshotReady_ = false;
+        auto snapshot = DeserializeWorldSnapshot(incoming_);
+        std::vector<std::uint8_t>().swap(incoming_);
+        if (!snapshot)
+        {
+            Fail("the spectator's snapshot does not decode: " + snapshot.error());
+            return;
+        }
+        if (snapshot->tick != incomingTick_)
+        {
+            Fail("the spectator's snapshot is of another tick than its parts said");
+            return;
+        }
+        if (options_.join)
+        {
+            if (const auto joined = options_.join(*snapshot); !joined)
+            {
+                Fail("joining from the snapshot failed: " + joined.error());
+                return;
+            }
+        }
+        const std::optional<N2Net::LockstepLayoutInfo> info = MakeLockstepLayoutInfo(options_.layout);
+        N2Net::LockstepConfig config;
+        config.slotCount = slotCount_;
+        // Nothing is pre-filled: every input from the snapshot's tick on comes from the relay
+        config.inputDelay = 0;
+        config.stallTimeoutPolls = 0xFFFFFFFFu;
+        config.dropFill = dropFill_;
+        config.startTick = incomingTick_;
+        config.layout = *info;
+        scheduler_ = std::make_unique<N2Net::LockstepScheduler>(config);
+        responder_ = std::make_unique<N2Net::BisectResponder>(history_, options_.responder, now_);
+        state_ = LockstepState::Running;
+        Notify(LockstepEvent::Type::Started, slot_, incomingTick_, "spectating");
+    }
+
+    void LockstepRuntime::ServeSnapshot()
+    {
+        if (!connection_ || !scheduler_ || options_.spectate)
+        {
+            return;
+        }
+        if (snapshotRequest_ && !outgoing_ && options_.save)
+        {
+            WorldSnapshot snapshot;
+            bool have = false;
+            std::uint32_t tick = 0;
+            if (session_)
+            {
+                // A state every earlier tick of which is confirmed: the ring's snapshot at the confirmed tick, or the
+                // world itself when nothing past it has run
+                tick = session_->ConfirmedTick();
+                if (const WorldSnapshot *const held = session_->SnapshotAt(tick); held != nullptr)
+                {
+                    snapshot = *held;
+                    have = true;
+                }
+                else if (session_->CurrentTick() == tick && !session_->PendingRollback().has_value())
+                {
+                    have = options_.save(tick, snapshot);
+                }
+            }
+            else
+            {
+                tick = scheduler_->CurrentTick();
+                have = options_.save(tick, snapshot);
+            }
+            if (have)
+            {
+                OutgoingSnapshot out;
+                out.requestId = *snapshotRequest_;
+                out.tick = tick;
+                out.bytes = SerializeWorldSnapshot(snapshot);
+                outgoing_ = std::move(out);
+                snapshotRequest_.reset();
+            }
+        }
+        if (!outgoing_)
+        {
+            return;
+        }
+        if (snapshotRequest_ && *snapshotRequest_ != outgoing_->requestId)
+        {
+            outgoing_.reset(); // asked again: the relay gave up on this one
+            return;
+        }
+        if (outgoing_->bytes.size() > 0xFFFFFFFFu)
+        {
+            outgoing_.reset();
+            return;
+        }
+        while (outgoing_->offset < outgoing_->bytes.size() && connection_->ReliableBacklogBytes() < 64u * 1024u)
+        {
+            const std::size_t count = std::min(kMaxSnapshotPartBytes, outgoing_->bytes.size() - outgoing_->offset);
+            SnapshotPartMessage part;
+            part.requestId = outgoing_->requestId;
+            part.tick = outgoing_->tick;
+            part.totalBytes = static_cast<std::uint32_t>(outgoing_->bytes.size());
+            part.offset = static_cast<std::uint32_t>(outgoing_->offset);
+            part.data = std::span<const std::uint8_t>(outgoing_->bytes.data() + outgoing_->offset, count);
+            SendReliable(Encode(RelayMessage::SnapshotData, part));
+            if (Finished())
+            {
+                return;
+            }
+            outgoing_->offset += count;
+        }
+        if (outgoing_->offset >= outgoing_->bytes.size())
+        {
+            ++stats_.snapshotsSent;
+            Notify(LockstepEvent::Type::SnapshotSent, slot_, outgoing_->tick, "");
+            outgoing_.reset();
+        }
+    }
+
+    void LockstepRuntime::SendSpectatorAck(const std::uint64_t now)
+    {
+        if (!connection_ || !scheduler_ || state_ != LockstepState::Running || now - lastSendAt_ < options_.sendIntervalMicros)
+        {
+            return;
+        }
+        lastSendAt_ = now;
+        N2Net::InputBundle ack;
+        ack.slot = 0;
+        ack.ackTick = scheduler_->CurrentTick();
+        ack.firstTick = ack.ackTick;
+        ack.payloadBytes = static_cast<std::uint8_t>(options_.layout.PayloadBytes());
+        ack.layoutHash = options_.layout.Hash();
+        std::array<std::uint8_t, N2Net::kMaxPacketSize> buffer{};
+        const std::size_t size = N2Net::EncodeInputBundle(ack, buffer);
+        if (size != 0 && connection_->SendUnreliable(std::span<const std::uint8_t>(buffer.data(), size)) == N2Net::SendResult::Ok)
+        {
+            ++stats_.bundlesSent;
+        }
+    }
+
     void LockstepRuntime::RunTicks(const double unscaledDelta)
     {
+        if (options_.spectate)
+        {
+            RunSpectatorTicks(unscaledDelta);
+            return;
+        }
+        if (session_)
+        {
+            RunRollbackTicks(unscaledDelta);
+            return;
+        }
         clock_.BeginFrame(unscaledDelta);
         const std::uint32_t delay = scheduler_->Config().inputDelay;
         while (state_ == LockstepState::Running && clock_.TickDue(step_))
@@ -778,10 +1206,26 @@ namespace N2Engine::Network
         {
             Fail("the relay did not answer the join in time");
         }
+        if (snapshotReady_ && state_ == LockstepState::Lobby && !stop_)
+        {
+            ApplySnapshot();
+        }
         if (state_ == LockstepState::Running && scheduler_ && !stop_)
         {
             RunTicks(unscaledDeltaSeconds);
-            SendBundle(nowMicros);
+            if (options_.spectate)
+            {
+                SendSpectatorAck(nowMicros);
+            }
+            else
+            {
+                if (session_)
+                {
+                    DrainConfirmed();
+                }
+                SendBundle(nowMicros);
+                ServeSnapshot();
+            }
             Pump(nowMicros);
         }
     }

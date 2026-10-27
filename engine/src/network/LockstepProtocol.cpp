@@ -1,6 +1,7 @@
 #include "engine/network/LockstepProtocol.hpp"
 
 #include <algorithm>
+#include <array>
 
 #include "engine/network/n2net/BisectProtocol.hpp"
 #include "engine/network/n2net/ByteIO.hpp"
@@ -61,6 +62,8 @@ namespace N2Engine::Network
             return "session-running";
         case RefuseReason::Protocol:
             return "protocol";
+        case RefuseReason::NoSnapshot:
+            return "no-snapshot";
         }
         return "unknown";
     }
@@ -104,6 +107,40 @@ namespace N2Engine::Network
         PutU16(out, message.version);
         out.push_back(message.payloadBytes);
         PutU64(out, message.layoutHash);
+        return out;
+    }
+
+    std::vector<std::uint8_t> EncodeSpectate(const JoinMessage &message)
+    {
+        std::vector<std::uint8_t> out = Encode(message);
+        out[0] = static_cast<std::uint8_t>(RelayMessage::Spectate);
+        return out;
+    }
+
+    std::vector<std::uint8_t> EncodeSnapshotRequest(const std::uint32_t requestId)
+    {
+        std::vector<std::uint8_t> out;
+        out.push_back(static_cast<std::uint8_t>(RelayMessage::SnapshotRequest));
+        PutU32(out, requestId);
+        return out;
+    }
+
+    std::vector<std::uint8_t> Encode(const RelayMessage type, const SnapshotPartMessage &message)
+    {
+        if ((type != RelayMessage::SnapshotData && type != RelayMessage::SnapshotPart) || message.data.empty() ||
+            message.data.size() > kMaxSnapshotPartBytes || message.offset > message.totalBytes ||
+            message.data.size() > message.totalBytes - message.offset)
+        {
+            return {};
+        }
+        std::vector<std::uint8_t> out;
+        out.reserve(17 + message.data.size());
+        out.push_back(static_cast<std::uint8_t>(type));
+        PutU32(out, message.requestId);
+        PutU32(out, message.tick);
+        PutU32(out, message.totalBytes);
+        PutU32(out, message.offset);
+        out.insert(out.end(), message.data.begin(), message.data.end());
         return out;
     }
 
@@ -195,6 +232,56 @@ namespace N2Engine::Network
         return message;
     }
 
+    std::optional<JoinMessage> DecodeSpectate(const std::span<const std::uint8_t> bytes) noexcept
+    {
+        if (!Starts(bytes, RelayMessage::Spectate) || bytes.size() != 12)
+        {
+            return std::nullopt;
+        }
+        std::array<std::uint8_t, 12> join{};
+        std::copy(bytes.begin(), bytes.end(), join.begin());
+        join[0] = static_cast<std::uint8_t>(RelayMessage::Join);
+        return DecodeJoin(join);
+    }
+
+    std::optional<std::uint32_t> DecodeSnapshotRequest(const std::span<const std::uint8_t> bytes) noexcept
+    {
+        if (!Starts(bytes, RelayMessage::SnapshotRequest))
+        {
+            return std::nullopt;
+        }
+        N2Net::ByteReader reader(bytes.subspan(1));
+        const std::uint32_t id = reader.U32();
+        if (reader.Failed() || reader.Remaining() != 0)
+        {
+            return std::nullopt;
+        }
+        return id;
+    }
+
+    std::optional<SnapshotPartMessage> DecodeSnapshotPart(const RelayMessage type,
+                                                          const std::span<const std::uint8_t> bytes) noexcept
+    {
+        if ((type != RelayMessage::SnapshotData && type != RelayMessage::SnapshotPart) || !Starts(bytes, type) ||
+            bytes.size() < 18 || bytes.size() > 17 + kMaxSnapshotPartBytes)
+        {
+            return std::nullopt;
+        }
+        N2Net::ByteReader reader(bytes.subspan(1, 16));
+        SnapshotPartMessage message;
+        message.requestId = reader.U32();
+        message.tick = reader.U32();
+        message.totalBytes = reader.U32();
+        message.offset = reader.U32();
+        message.data = bytes.subspan(17);
+        if (reader.Failed() || message.offset > message.totalBytes ||
+            message.data.size() > message.totalBytes - message.offset)
+        {
+            return std::nullopt;
+        }
+        return message;
+    }
+
     std::optional<WelcomeMessage> DecodeWelcome(const std::span<const std::uint8_t> bytes)
     {
         if (!Starts(bytes, RelayMessage::Welcome))
@@ -219,7 +306,8 @@ namespace N2Engine::Network
         }
         const auto neutral = reader.Bytes(message.payloadBytes);
         message.neutral.assign(neutral.begin(), neutral.end());
-        if (message.slotCount < 1 || message.slotCount > kMaxRelaySlots || message.slot >= message.slotCount ||
+        if (message.slotCount < 1 || message.slotCount > kMaxRelaySlots ||
+            (message.slot >= message.slotCount && message.slot != kSpectatorSlot) ||
             message.inputDelay > N2Net::kMaxInputDelay || message.dropFill > 1 || message.tickRate == 0 ||
             message.hashInterval == 0)
         {
@@ -272,7 +360,7 @@ namespace N2Engine::Network
 
     std::optional<RefuseReason> DecodeRefuse(const std::span<const std::uint8_t> bytes) noexcept
     {
-        if (!Starts(bytes, RelayMessage::Refuse) || bytes.size() != 2 || bytes[1] < 1 || bytes[1] > 5)
+        if (!Starts(bytes, RelayMessage::Refuse) || bytes.size() != 2 || bytes[1] < 1 || bytes[1] > 6)
         {
             return std::nullopt;
         }

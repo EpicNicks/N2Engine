@@ -113,6 +113,9 @@ namespace N2Engine
 
         /// Starts a tick: increments the counter
         void BeginTick();
+        /// Sets the counter (Time::GetTick()) to `tick` ticks run: a rollback resimulation (netcode C5) rewinds it to the
+        /// tick it runs again, so that inside a resimulated tick its FixedUpdate sees the Time::GetTick() of the first run
+        void SetTick(std::uint64_t tick);
 
     private:
         SimulationMode _mode = SimulationMode::None;

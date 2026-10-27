@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -105,4 +106,9 @@ namespace N2Engine::Network
     /// Every numeric network setting
     [[nodiscard]] const std::vector<NumericSettingSpec> &NumericSettingSpecs();
     [[nodiscard]] const NumericSettingSpec *FindNumericSpec(std::string_view key);
+
+    /// The deterministic.mode switch (netcode C5): the rollback window a session of these settings runs with
+    /// (LockstepRuntimeOptions::rollbackWindow). deterministic.rollbackWindow, clamped to 0..15, for the Deterministic
+    /// preset in rollback mode; 0 (lockstep) for lockstep mode and for every other preset.
+    [[nodiscard]] std::uint32_t RollbackWindowFor(const NetworkSettings &settings) noexcept;
 }

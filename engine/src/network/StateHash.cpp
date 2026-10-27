@@ -7,13 +7,36 @@
 #include "engine/network/NetworkObject.hpp"
 #include "engine/network/NetworkWorld.hpp"
 #include "engine/network/ReplicationLayout.hpp"
+#include "engine/physics/IPhysicsBackend.hpp"
 
 namespace N2Engine::Network
 {
     std::optional<N2Net::HashTree> BuildStateHashTree(const NetworkWorld &world, LayoutCache &layouts, const std::uint32_t tick)
     {
+        return BuildStateHashTree(world, layouts, tick, nullptr);
+    }
+
+    std::optional<N2Net::HashTree> BuildStateHashTree(const NetworkWorld &world, LayoutCache &layouts, const std::uint32_t tick,
+                                                      const Physics::IPhysicsBackend *const physics)
+    {
         N2Net::HashTreeBuilder builder(tick);
         const WorldReferences references(world);
+
+        if (physics != nullptr)
+        {
+            if (const std::optional<std::uint64_t> hash = physics->HashSimulatedState(); hash.has_value())
+            {
+                std::array<std::uint8_t, 8> bytes{};
+                for (std::size_t i = 0; i < bytes.size(); ++i)
+                {
+                    bytes[i] = static_cast<std::uint8_t>((*hash >> (8 * i)) & 0xFFu);
+                }
+                if (!builder.AddObject(kPhysicsObjectId) || !builder.AddField(kPhysicsObjectId, kPhysicsFieldId, bytes))
+                {
+                    return std::nullopt;
+                }
+            }
+        }
 
         for (const auto &entry : world.Objects())
         {
@@ -62,6 +85,10 @@ namespace N2Engine::Network
     std::string DescribeHashedField(const NetworkWorld &world, LayoutCache &layouts, const std::uint32_t objectId,
                                     const std::uint16_t fieldId)
     {
+        if (objectId == kPhysicsObjectId && fieldId == kPhysicsFieldId)
+        {
+            return "<physics>";
+        }
         NetworkObject *const networkObject = world.Find(NetworkId{objectId});
         if (networkObject == nullptr)
         {

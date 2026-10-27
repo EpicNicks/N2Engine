@@ -6,12 +6,14 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <span>
 #include <string_view>
 #include <vector>
 
 #include <math/DeterministicRandom.hpp>
 
 #include "engine/Transform.hpp"
+#include "engine/physics/BodyState.hpp"
 
 #include "engine/network/NetworkId.hpp"
 #include "engine/network/NetworkObject.hpp"
@@ -42,6 +44,10 @@ namespace N2Engine::Network
             bool active = true;
             /// Every replicated field, unquantised
             ObjectValues values;
+            /// The body of a Rigidbody on the root, as GetBodyState read it (nullopt: none, or not in the simulation).
+            /// Restore does not use it (the physics part is exact); a late joiner whose backend refuses the physics part
+            /// puts the bodies back from it (RestoreForJoin)
+            std::optional<Physics::BodyState> body;
         };
 
         /// The state BEFORE tick `tick` runs (so the world after tick - 1 ticks)
@@ -57,6 +63,29 @@ namespace N2Engine::Network
         std::optional<std::uint32_t> rng;
         /// The registered DeterministicRandom streams (RollbackWorld::AddRandomStream), in registration order
         std::vector<std::uint32_t> streams;
+    };
+
+    /// The bytes of a snapshot that travel to a late joiner or a spectator (netcode C6): "N2WS", a format version, the
+    /// tick, the id counter, the random streams, each object (id, owner, spawned and active flags, prefab, layout hash, its
+    /// replicated fields as CBOR, the root body state), the physics bytes, and an FNV-1a 64-bit checksum of all of it.
+    /// Little-endian. The physics part is still the backend's own bytes: it restores only on the same build, and only
+    /// into a backend with the same bodies (see RestoreForJoin).
+    [[nodiscard]] std::vector<std::uint8_t> SerializeWorldSnapshot(const WorldSnapshot &snapshot);
+    /// The inverse. Every length is checked against the bytes present and against kMaxNetworkObjects and
+    /// kMaxSerializedSnapshotBytes before anything is taken; the error names the first thing wrong.
+    [[nodiscard]] std::expected<WorldSnapshot, std::string> DeserializeWorldSnapshot(std::span<const std::uint8_t> bytes);
+    /// The largest serialised snapshot accepted (64 MiB)
+    inline constexpr std::size_t kMaxSerializedSnapshotBytes = 64u * 1024u * 1024u;
+
+    /// What RestoreForJoin did
+    struct JoinRestoreResult
+    {
+        /// The physics part was restored exactly (RestoreState took it); false: the bodies were put back from the
+        /// per-object body states, which is not the same simulation (contact caches, sleep timers, bodies of objects
+        /// that are not networked are not carried)
+        bool exactPhysics = false;
+        std::size_t spawned = 0;
+        std::size_t removed = 0;
     };
 
     struct RollbackWorldStats
@@ -89,11 +118,11 @@ namespace N2Engine::Network
      * that did not exist at the restore point and unparks the ones that did, so a Rigidbody's body keeps its handle and the
      * physics parked-body contract holds (the enabled bodies at Restore are the ones at Save). A resimulation that spawns
      * the same prefab under the same id takes the parked object back (the pool) and resets its transform and replicated
-     * fields to what they were right after instantiation, and a Rigidbody on its root to that pose with no velocity (the
-     * body keeps its handle, which is what keeps the handle numbering, and so the physics hash, equal to a run that never
-     * rolled back). A spawned object with a Rigidbody on a CHILD is not pooled: a restore destroys it (a body that did not
-     * exist at the snapshot may be created or destroyed freely) and the resimulation instantiates a fresh one, whose
-     * handle can differ from the first run's.
+     * fields to what they were right after instantiation, the local transforms of its whole hierarchy too, and every
+     * Rigidbody in it (on the root or on a child) to its pose with no velocity (each body keeps its handle, which is what
+     * keeps the handle numbering, and so HashState, equal to a run that never rolled back). An object whose hierarchy
+     * changed shape since it was instantiated (children added or removed) is not reused: it is destroyed and a fresh
+     * instance is made.
      *
      * Call Save and Restore only at a tick boundary, after a complete step (the physics backend needs its collision
      * callbacks processed, the scene its attach and destroy queues). Restore also calls SyncTransforms on the backend.
@@ -117,6 +146,17 @@ namespace N2Engine::Network
         /// A failure inside the physics restore (after the objects were rewound) is reported too, and the world is then
         /// not usable: the session must stop.
         [[nodiscard]] std::expected<void, std::string> Restore(const WorldSnapshot &snapshot);
+
+        /// A late joiner or spectator (netcode C6) takes a snapshot another peer made, into a world bound to the same
+        /// scene: registered objects the snapshot does not hold are despawned, spawned objects it holds and this world
+        /// does not are instantiated under their ids, the scene's attach and destroy queues run (so their bodies exist),
+        /// then the objects, fields, id counter and random streams are restored as by Restore. The physics part goes to
+        /// RestoreState; when the backend refuses it (its bodies are not the ones of the snapshot: their slots,
+        /// generations or Jolt ids differ, as they do after bodies were destroyed and recreated on the other peer) the
+        /// bodies of the objects' root Rigidbodies are set from the snapshot's body states instead and exactPhysics is
+        /// false. Errors: a scene object of the snapshot missing here, a prefab that does not instantiate, anything
+        /// Restore refuses.
+        [[nodiscard]] std::expected<JoinRestoreResult, std::string> RestoreForJoin(const WorldSnapshot &snapshot);
 
         /// The simulation spawns `prefab` for `owner` at tick `tick`: the next net id, a parked object of that id and
         /// prefab if there is one, else a new instance. Use this instead of NetworkWorld::AllocateId + SpawnInstance in
@@ -158,10 +198,13 @@ namespace N2Engine::Network
             bool active = true;
             /// The root's local transform right after instantiation (nullopt: it has no Positionable)
             std::optional<Transform> transform;
+            /// The same for every descendant, in GetChildrenRecursive order
+            std::vector<std::optional<Transform>> descendants;
         };
 
         [[nodiscard]] bool PhysicsActive() const;
-        /// A pooled object's Rigidbody (on the root) goes back to its pose with zero velocities and awake
+        /// A pooled object's Rigidbodies (the root's and its descendants') go back to their poses with zero velocities
+        /// and awake
         void ResetBody(GameObject &gameObject) const;
         void ForgetStalePristine();
 

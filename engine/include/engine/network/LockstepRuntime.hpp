@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <expected>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -14,6 +15,7 @@
 #include "engine/SimulationClock.hpp"
 #include "engine/network/InputLayout.hpp"
 #include "engine/network/LockstepProtocol.hpp"
+#include "engine/network/RollbackSession.hpp"
 #include "engine/network/n2net/BisectProtocol.hpp"
 #include "engine/network/n2net/Connection.hpp"
 #include "engine/network/n2net/HashTree.hpp"
@@ -65,6 +67,8 @@ namespace N2Engine::Network
             ReportWritten,
             Refused,
             Failed,
+            /// A player sent a spectator's snapshot whole; `tick` is its tick
+            SnapshotSent,
         };
 
         Type type = Type::Welcomed;
@@ -112,6 +116,36 @@ namespace N2Engine::Network
         /// A readable name for a leaf the bisection reported (DescribeHashedField); optional
         std::function<std::string(std::uint32_t objectId, std::uint16_t fieldId)> describeField;
         std::function<void(const LockstepEvent &)> observer;
+
+        // ===== Rollback (netcode C5) =====
+        /// 0 (the default): lockstep, a tick runs only on confirmed input. 1 to kMaxRollbackWindow: rollback, a tick runs
+        /// on a guess for the inputs that have not arrived, at most this many ticks past the confirmed tick, and a late
+        /// input that differs from the guess rolls the world back and resimulates (RollbackSession). The relay is the same
+        /// either way and a rollback peer and a lockstep peer can share a session. What network.deterministic.mode selects
+        /// (RollbackWindowFor in RollbackRuntime.hpp).
+        std::uint32_t rollbackWindow = 0;
+        RollbackEventPolicy eventPolicy = RollbackEventPolicy::Immediate;
+        /// Writes the state before `tick` (RollbackWorld::Save). Required for rollback. Also what a player answers a
+        /// spectator's snapshot request with: a snapshot of a confirmed tick (without it the request is not answered)
+        std::function<bool(std::uint32_t tick, WorldSnapshot &out)> save;
+        /// Puts a snapshot back (RollbackWorld::Restore). Required for rollback.
+        std::function<std::expected<void, std::string>(const WorldSnapshot &)> restore;
+        /// Optional, rollback: every tick before `firstUnconfirmed` is final (RollbackWorld::ReleaseConfirmed)
+        std::function<void(std::uint32_t firstUnconfirmed)> confirmed;
+        /// Optional, rollback: a resimulation caught up (RollbackWorld::ReleasePool)
+        std::function<void()> resimulated;
+        /// Optional, rollback: the guess for a slot's input (RollbackHost::predict)
+        std::function<N2Net::LockstepInput(std::uint32_t slot, std::uint32_t tick, const N2Net::LockstepInput &last)> predict;
+
+        // ===== Spectating (netcode C6) =====
+        /// Join as a spectator (Spectate): no slot, no input, no roots, before or after the start. The simulation starts
+        /// from a player's snapshot of a confirmed tick and runs every confirmed tick from it.
+        bool spectate = false;
+        /// A spectator's start: put the snapshot into the world (RollbackWorld::RestoreForJoin). An error ends the session
+        /// as a failure. Without it the spectator runs its ticks from the world as it is.
+        std::function<std::expected<void, std::string>(const WorldSnapshot &)> join;
+        /// The largest snapshot a spectator takes
+        std::uint32_t maxSnapshotBytes = 16u * 1024u * 1024u;
     };
 
     struct LockstepRuntimeStats
@@ -125,6 +159,8 @@ namespace N2Engine::Network
         std::uint64_t rootsSent = 0;
         std::uint64_t bisectRequestsServed = 0;
         std::uint64_t framesBehind = 0;
+        /// Snapshots sent whole to the relay for a spectator
+        std::uint64_t snapshotsSent = 0;
     };
 
     /// What the relay's Stop said, once the runtime has seen it
@@ -168,6 +204,20 @@ namespace N2Engine::Network
      * the caller: Update never blocks. The web build has no threads, so there the bisection is skipped and the report is
      * written with divergence none.
      *
+     * Rollback mode (rollbackWindow > 0, netcode C5). The same connection, relay, bundles, drop and stop; the scheduler
+     * still collects every confirmed input (so DropSlot, the bundles, the acknowledgements and the replay are lockstep's),
+     * and a RollbackSession runs the ticks: on the confirmed inputs it has and a guess for the rest, at most rollbackWindow
+     * ticks past the confirmed tick (WindowFull waits, like a lockstep stall). A remote input that differs from the guess
+     * rolls back to the snapshot before it (save, restore) and resimulates. Desync detection is over CONFIRMED ticks: the
+     * tree of checkpoint tick C is built whenever the world reaches C (again after a resimulation) and its root is sent
+     * only once every tick before C is confirmed, which is the state a lockstep peer hashes. With ownsTickCounter the
+     * counter is set back to the tick being resimulated.
+     *
+     * Spectators (spectate, netcode C6) send Spectate, get a Welcome with kSpectatorSlot, receive a player's snapshot
+     * (SnapshotPart, through the relay), start their scheduler at its tick and then run every confirmed tick the relay
+     * sends. A player answers the relay's SnapshotRequest with SerializeWorldSnapshot of a confirmed tick (in lockstep the
+     * world as it is, in rollback the ring's snapshot of the confirmed tick), in parts paced by its reliable backlog.
+     *
      * Single-threaded. The SimulationClock's tick counter is Time::GetTick(), process-wide; the runtime touches it only
      * with ownsTickCounter.
      */
@@ -196,8 +246,14 @@ namespace N2Engine::Network
         }
         [[nodiscard]] std::uint32_t Slot() const noexcept { return slot_; }
         [[nodiscard]] std::uint32_t SlotCount() const noexcept { return slotCount_; }
-        /// Ticks run so far (the scheduler's CurrentTick)
+        /// Ticks run so far (the scheduler's CurrentTick; under rollback the session's, predicted ticks included)
         [[nodiscard]] std::uint32_t TicksRun() const noexcept;
+        /// Every tick before it ran on confirmed input only and is final (TicksRun outside rollback)
+        [[nodiscard]] std::uint32_t ConfirmedTick() const noexcept;
+        [[nodiscard]] bool IsSpectator() const noexcept { return options_.spectate; }
+        /// The rollback session (rollback mode, after the welcome); nullptr otherwise
+        [[nodiscard]] const RollbackSession *Session() const noexcept { return session_.get(); }
+        [[nodiscard]] RollbackSession *Session() noexcept { return session_.get(); }
         [[nodiscard]] std::uint32_t HashInterval() const noexcept { return hashInterval_; }
         [[nodiscard]] std::uint32_t TickRate() const noexcept { return tickRate_; }
         [[nodiscard]] const std::string &Error() const noexcept { return error_; }
@@ -220,7 +276,20 @@ namespace N2Engine::Network
         void OnBundle(std::span<const std::uint8_t> message);
         void OnForwardFrom(std::span<const std::uint8_t> message, std::uint64_t now);
         void RunTicks(double unscaledDelta);
+        void RunRollbackTicks(double unscaledDelta);
+        void RunSpectatorTicks(double unscaledDelta);
         bool RunOneTick(const N2Net::TickInputs &inputs);
+        /// The local input for `tick`, sampled and packed; nullopt after a Fail
+        std::optional<N2Net::LockstepInput> SampleLocal(std::uint32_t tick);
+        /// Rollback: the scheduler's newly confirmed ticks go to the recorder and to the session
+        void DrainConfirmed();
+        bool StepRollback(const N2Net::TickInputs &inputs);
+        void OnConfirmed(std::uint32_t firstUnconfirmed);
+        void PublishTree(N2Net::HashTree tree);
+        void OnSnapshotPart(std::span<const std::uint8_t> message);
+        void ApplySnapshot();
+        void ServeSnapshot();
+        void SendSpectatorAck(std::uint64_t now);
         void SendBundle(std::uint64_t now);
         void BeginStop(const StopMessage &stop);
         void StepStop(std::uint64_t now);
@@ -236,6 +305,25 @@ namespace N2Engine::Network
         N2Net::PeerId server_ = N2Net::kInvalidPeer;
         std::unique_ptr<N2Net::Connection> connection_;
         std::unique_ptr<N2Net::LockstepScheduler> scheduler_;
+        std::unique_ptr<RollbackSession> session_;
+        /// Rollback: checkpoint trees built and not yet confirmed, by tick
+        std::map<std::uint32_t, N2Net::HashTree> pendingTrees_;
+        /// A spectator's snapshot request to answer (its id)
+        std::optional<std::uint32_t> snapshotRequest_;
+        struct OutgoingSnapshot
+        {
+            std::uint32_t requestId = 0;
+            std::uint32_t tick = 0;
+            std::vector<std::uint8_t> bytes;
+            std::size_t offset = 0;
+        };
+        std::optional<OutgoingSnapshot> outgoing_;
+        /// A spectator's snapshot as it arrives
+        std::vector<std::uint8_t> incoming_;
+        std::uint32_t incomingTick_ = 0;
+        std::uint32_t incomingTotal_ = 0;
+        bool haveIncoming_ = false;
+        bool snapshotReady_ = false;
         std::unique_ptr<Replay::LockstepRecorder> recorder_;
         N2Net::HashTreeHistory history_;
         std::unique_ptr<N2Net::BisectResponder> responder_;
@@ -245,6 +333,7 @@ namespace N2Engine::Network
         std::uint32_t slotCount_ = 0;
         std::uint32_t hashInterval_ = 30;
         std::uint32_t tickRate_ = 60;
+        N2Net::DropFill dropFill_ = N2Net::DropFill::Neutral;
         double step_ = 1.0 / 60.0;
         std::uint32_t relayAck_ = 0;
         std::uint64_t startedAt_ = 0;
