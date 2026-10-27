@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -46,6 +47,7 @@ namespace N2Engine
         // Decides how many fixed ticks each Tick runs (its accumulator is the catch-up time carried from one Tick to the
         // next) and owns the tick counter
         SimulationClock _simulationClock;
+        std::function<void(double)> _fixedTickDriver;
 
     private:
         /// Installs the UI hit provider (UI::UISystem) on the pointer dispatcher
@@ -116,6 +118,18 @@ namespace N2Engine
          * ticks that ran (0 without a current scene).
          */
         std::uint32_t StepTicks(std::uint32_t count);
+        /// Runs the frame's fixed ticks in place of the clock (netcode C5): called with the frame's unscaled delta
+        using FixedTickDriver = std::function<void(double unscaledDeltaSeconds)>;
+        /**
+         * Hands the fixed-step loop to a network session (RollbackRuntime). While a driver is set, each Tick calls it once
+         * with the frame's unscaled delta where it would run its own fixed steps, and the driver decides which ticks run
+         * and runs each with StepTicks(1) (a lockstep or rollback session runs a tick only when its inputs allow, and a
+         * rollback resimulates ticks the clock already counted); the clock's accumulator is cleared after it, so no time
+         * builds up behind the driver. Everything else of the frame is unchanged. An empty function gives the loop back;
+         * Shutdown clears it.
+         */
+        void SetFixedTickDriver(FixedTickDriver driver);
+        [[nodiscard]] bool HasFixedTickDriver() const { return static_cast<bool>(_fixedTickDriver); }
         /// Makes the next Tick measure its frame from now rather than from the last Tick: call it when ticking resumes
         /// after a pause, so the pause isn't one long frame
         void ResetFrameClock();

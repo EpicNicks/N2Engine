@@ -654,12 +654,23 @@ void Application::Tick(const TickOptions &options)
             curScene.ProcessAttachQueue();
         }
 
-        while (_simulationClock.TickDue(Time::GetFixedUnscaledDeltaTime()))
+        if (_fixedTickDriver)
         {
-            RunFixedTick(curScene);
-            _simulationClock.CompleteTick(Time::GetFixedUnscaledDeltaTime());
+            // A network session decides the ticks (it runs each through StepTicks); nothing builds up behind it. A copy:
+            // the driver may remove itself
+            const FixedTickDriver driver = _fixedTickDriver;
+            driver(static_cast<double>(Time::GetUnscaledDeltaTime()));
+            _simulationClock.ResetAccumulator();
         }
-        _simulationClock.EndFrame(Time::GetFixedUnscaledDeltaTime());
+        else
+        {
+            while (_simulationClock.TickDue(Time::GetFixedUnscaledDeltaTime()))
+            {
+                RunFixedTick(curScene);
+                _simulationClock.CompleteTick(Time::GetFixedUnscaledDeltaTime());
+            }
+            _simulationClock.EndFrame(Time::GetFixedUnscaledDeltaTime());
+        }
         // OnMouse*: after the fixed steps (so it picks against this frame's physics) and before Update,
         // where Unity sends them
         _pointerDispatcher.Update();
@@ -753,6 +764,11 @@ std::uint32_t Application::StepTicks(const std::uint32_t count)
     return ran;
 }
 
+void Application::SetFixedTickDriver(FixedTickDriver driver)
+{
+    _fixedTickDriver = std::move(driver);
+}
+
 void Application::ResetFrameClock()
 {
     Time::ResetFrameClock();
@@ -774,6 +790,7 @@ void Application::Shutdown()
     // singleton, so tearing subsystems down from ~Application would use them after destruction.
     // Scenes go first, while the audio sources and physics bodies their components hold can still be
     // released (left to SceneManager's static, they'd be freed after those subsystems were gone).
+    _fixedTickDriver = nullptr;
     SceneManager::UnloadScenes();
     Audio::AudioSystem::Instance().Shutdown();
     _3DphysicsBackend.reset(); // ~PhysXBackend releases the PhysX SDK, ~JoltBackend Jolt's bodies

@@ -74,4 +74,13 @@ namespace N2Engine::Network
         }
         return nullptr;
     }
+
+    std::uint32_t RollbackWindowFor(const NetworkSettings &settings) noexcept
+    {
+        if (settings.preset != NetworkPreset::Deterministic || settings.deterministic.mode != DeterministicMode::Rollback)
+        {
+            return 0;
+        }
+        return static_cast<std::uint32_t>(std::clamp(settings.deterministic.rollbackWindow, 0, 15));
+    }
 }

@@ -231,6 +231,11 @@ namespace N2Engine::Physics
         /// simulation its pose, its velocities and whether it is awake), with every float canonicalised: any NaN is one
         /// value and -0 is +0. It does not read Jolt's byte layout. nullopt before Initialize.
         [[nodiscard]] std::optional<std::uint64_t> HashState() const override;
+        /// The session hash (netcode C5): every body in the simulation (active and enabled; a parked body is skipped)
+        /// hashed on its own with FNV-1a over its kind, pose, velocities and awake flag (canonical floats, as in
+        /// HashState), and the per-body hashes summed (mod 2^64) with the count of bodies, so neither handle numbers nor
+        /// slot order reach it. nullopt before Initialize.
+        [[nodiscard]] std::optional<std::uint64_t> HashSimulatedState() const override;
 
         // ===== For diagnostics and tests =====
 

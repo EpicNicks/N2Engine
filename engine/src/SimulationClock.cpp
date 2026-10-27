@@ -132,3 +132,8 @@ void SimulationClock::BeginTick()
 {
     ++Time::tick;
 }
+
+void SimulationClock::SetTick(const std::uint64_t tick)
+{
+    Time::tick = tick;
+}

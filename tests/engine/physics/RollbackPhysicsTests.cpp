@@ -35,9 +35,13 @@ namespace N2PhysicsTests
         constexpr const char *kBallPrefab = "RbPhysBall";
         constexpr float kStep = 1.0f / 60.0f;
 
+        constexpr const char *kPairPrefab = "RbPhysPair";
+
         struct Outcome
         {
             std::optional<std::uint64_t> physics;
+            /// HashSimulatedState: parked bodies skipped, handle numbers not hashed
+            std::optional<std::uint64_t> simulated;
             std::uint64_t root = 0;
             std::string fields;
 
@@ -65,6 +69,21 @@ namespace N2PhysicsTests
                 body->SetGravityEnabled(true);
                 EXPECT_TRUE(PrefabManager::RegisterPrefab(kBallPrefab, prefabRoot));
 
+                // A prefab whose Rigidbody is on a CHILD (the root only carries the net identity and its transform)
+                const GameObject::Ptr pairRoot = GameObject::Create("PairPrefab");
+                pairRoot->CreatePositionable();
+                pairRoot->AddComponent<NetworkObject>();
+                pairRoot->AddComponent<NetworkTransform>();
+                const GameObject::Ptr pairChild = GameObject::Create("PairBody");
+                pairChild->CreatePositionable();
+                pairChild->GetPositionable()->SetLocalPosition(Vector3(0.0f, 0.75f, 0.0f));
+                pairChild->AddComponent<SphereCollider>()->SetRadius(0.4f);
+                Rigidbody *const childBody = pairChild->AddComponent<Rigidbody>();
+                childBody->SetBodyType(BodyType::Dynamic);
+                childBody->SetGravityEnabled(true);
+                pairRoot->AddChild(pairChild);
+                EXPECT_TRUE(PrefabManager::RegisterPrefab(kPairPrefab, pairRoot));
+
                 const GameObject::Ptr floor = GameObject::Create("Floor");
                 floor->CreatePositionable();
                 floor->GetPositionable()->SetPosition(Vector3(0.0f, 0.0f, 0.0f));
@@ -84,6 +103,7 @@ namespace N2PhysicsTests
                 SceneManager::ProcessAnyPendingSceneChange();
                 Application::GetInstance().Set3DPhysicsBackend(nullptr);
                 PrefabManager::UnregisterPrefab(kBallPrefab);
+                PrefabManager::UnregisterPrefab(kPairPrefab);
             }
 
             void AddBall(const std::uint32_t number, const Vector3 &position)
@@ -110,7 +130,7 @@ namespace N2PhysicsTests
                 }
                 if (tick == 5 || tick == 12)
                 {
-                    const auto spawned = rollback.Spawn(kBallPrefab, 0, tick);
+                    const auto spawned = rollback.Spawn(tick == 5 ? spawnPrefab : kBallPrefab, 0, tick);
                     ASSERT_TRUE(spawned.has_value()) << spawned.error();
                     GameObject &ball = (*spawned)->GetGameObject();
                     if (ball.GetPositionable() == nullptr)
@@ -154,6 +174,7 @@ namespace N2PhysicsTests
             {
                 Outcome outcome;
                 outcome.physics = backend->HashState();
+                outcome.simulated = backend->HashSimulatedState();
                 const auto tree = BuildStateHashTree(world, rollback.Layouts(), tick);
                 EXPECT_TRUE(tree.has_value());
                 outcome.root = tree.has_value() ? tree->Root() : 0;
@@ -182,6 +203,8 @@ namespace N2PhysicsTests
             }
 
             JoltBackend *backend = InstallBackend();
+            /// What tick 5 spawns (tick 12 always spawns a ball)
+            const char *spawnPrefab = kBallPrefab;
             Scene *scene = nullptr;
             NetworkWorld world;
             RollbackWorld rollback{world, backend};
@@ -194,10 +217,12 @@ namespace N2PhysicsTests
         Outcome straight10;
         Outcome straight14;
         Outcome straight20;
+        std::uint64_t straight4Tree = 0;
         {
             Game game;
             game.Run(0, 4);
             straight4 = game.Capture(4);
+            straight4Tree = BuildStateHashTree(game.world, game.rollback.Layouts(), 4, game.backend)->Root();
             game.Run(4, 10);
             straight10 = game.Capture(10);
             game.Run(10, 14);
@@ -226,11 +251,19 @@ namespace N2PhysicsTests
         ASSERT_TRUE(restored.has_value()) << restored.error();
         {
             // The replicated state is exactly the saved one. Jolt's HashState also counts a PARKED body (the spawned
-            // ball is parked and waiting in the pool), which the straight run never created, so the physics hash is
-            // compared again once the resimulation has used the pool (tick 10).
+            // ball is parked and waiting in the pool), which the straight run never created, so that hash is compared
+            // again once the resimulation has used the pool (tick 10). HashSimulatedState, the one sessions exchange,
+            // skips the parked body and matches at once.
             const Outcome restored4 = game.Capture(4);
             EXPECT_EQ(restored4.root, straight4.root);
             EXPECT_EQ(restored4.fields, straight4.fields);
+            ASSERT_TRUE(restored4.simulated.has_value());
+            EXPECT_EQ(restored4.simulated, straight4.simulated);
+            EXPECT_NE(restored4.physics, straight4.physics) << "HashState still counts the parked body";
+            // The physics leaf of the session tree agrees too
+            const auto restoredTree = BuildStateHashTree(game.world, game.rollback.Layouts(), 4, game.backend);
+            ASSERT_TRUE(restoredTree.has_value());
+            EXPECT_EQ(restoredTree->Root(), straight4Tree);
         }
         EXPECT_EQ(game.world.Count(), 2u);
         EXPECT_GE(game.rollback.Stats().spawnsUndone, 1u);
@@ -287,6 +320,84 @@ namespace N2PhysicsTests
         const auto restored = game.rollback.Restore(snapshot);
         EXPECT_FALSE(restored.has_value());
         EXPECT_EQ(game.Capture(10), before);
+    }
+
+    TEST(RollbackPhysicsTest, APrefabWithARigidbodyOnAChildIsPooledAndKeepsItsBodyAcrossARollback)
+    {
+        Outcome straight10;
+        Outcome straight20;
+        {
+            Game game;
+            game.spawnPrefab = kPairPrefab;
+            game.Run(0, 10);
+            straight10 = game.Capture(10);
+            game.Run(10, 20);
+            straight20 = game.Capture(20);
+        }
+        ASSERT_TRUE(straight20.physics.has_value());
+
+        Game game;
+        game.spawnPrefab = kPairPrefab;
+        game.Run(0, 4);
+        WorldSnapshot at4;
+        ASSERT_TRUE(game.rollback.Save(4, at4));
+        game.Run(4, 10);
+        ASSERT_EQ(game.Capture(10), straight10);
+        NetworkObject *const pair = game.world.Find(NetworkId{3});
+        ASSERT_NE(pair, nullptr);
+        ASSERT_EQ(pair->GetPrefabName(), kPairPrefab);
+        const Rigidbody *const childBody = pair->GetGameObject().GetChild(0)->GetComponent<Rigidbody>();
+        ASSERT_NE(childBody, nullptr);
+        const PhysicsBodyHandle handle = childBody->GetHandle();
+
+        ASSERT_TRUE(game.rollback.Restore(at4).has_value());
+        EXPECT_EQ(game.rollback.Stats().released, 0u) << "the spawned pair is parked for the pool, not destroyed";
+        game.Run(4, 10);
+        EXPECT_GE(game.rollback.Stats().spawnsPooled, 1u) << "the resimulated spawn took the parked pair back";
+        NetworkObject *const again = game.world.Find(NetworkId{3});
+        ASSERT_EQ(again, pair) << "the same object";
+        EXPECT_EQ(again->GetGameObject().GetChild(0)->GetComponent<Rigidbody>()->GetHandle(), handle)
+            << "the child's body kept its handle";
+        // Same handles, so even HashState (handle order) is the straight run's
+        EXPECT_EQ(game.Capture(10), straight10);
+        game.Run(10, 20);
+        EXPECT_EQ(game.Capture(20), straight20);
+    }
+
+    TEST(RollbackPhysicsTest, ASerialisedSnapshotWithJoltBytesRestoresAJoinerExactlyAndBothRunOnAlike)
+    {
+        std::vector<std::uint8_t> bytes;
+        Outcome first10;
+        Outcome first14;
+        {
+            Game game;
+            game.Run(0, 10); // ball 2 despawned at tick 8 (parked), the ball of tick 5 is id 3
+            WorldSnapshot snapshot;
+            ASSERT_TRUE(game.rollback.Save(10, snapshot));
+            ASSERT_TRUE(snapshot.hasPhysics);
+            bytes = SerializeWorldSnapshot(snapshot);
+            first10 = game.Capture(10);
+            game.Run(10, 14); // another spawn at tick 12
+            first14 = game.Capture(14);
+        }
+
+        Game joiner; // the scene as loaded: balls 1 and 2, nothing spawned
+        const auto decoded = DeserializeWorldSnapshot(bytes);
+        ASSERT_TRUE(decoded.has_value()) << decoded.error();
+        const auto joined = joiner.rollback.RestoreForJoin(*decoded);
+        ASSERT_TRUE(joined.has_value()) << joined.error();
+        EXPECT_EQ(joined->spawned, 1u);
+        EXPECT_EQ(joined->removed, 1u) << "ball 2 is gone on the other peer";
+        EXPECT_TRUE(joined->exactPhysics) << "the joiner's bodies are the snapshot's: the Jolt bytes were taken";
+        const Outcome at10 = joiner.Capture(10);
+        EXPECT_EQ(at10.root, first10.root);
+        EXPECT_EQ(at10.fields, first10.fields);
+        EXPECT_EQ(at10.simulated, first10.simulated) << "the session hash agrees (the other peer still parks ball 2)";
+        joiner.Run(10, 14);
+        const Outcome at14 = joiner.Capture(14);
+        EXPECT_EQ(at14.root, first14.root);
+        EXPECT_EQ(at14.fields, first14.fields);
+        EXPECT_EQ(at14.simulated, first14.simulated);
     }
 }
 

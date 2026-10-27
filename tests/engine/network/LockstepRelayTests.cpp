@@ -663,7 +663,7 @@ TEST(LockstepProtocolTest, RandomBytesNeverDecodeToSomethingOutOfRange)
         }
         if (const auto welcome = DecodeWelcome(bytes))
         {
-            EXPECT_LT(welcome->slot, welcome->slotCount);
+            EXPECT_TRUE(welcome->slot < welcome->slotCount || welcome->slot == kSpectatorSlot);
             EXPECT_LE(welcome->slotCount, kMaxRelaySlots);
             EXPECT_EQ(welcome->neutral.size(), welcome->payloadBytes);
         }
@@ -681,6 +681,17 @@ TEST(LockstepProtocolTest, RandomBytesNeverDecodeToSomethingOutOfRange)
         (void)DecodePause(bytes);
         (void)DecodeForward(RelayMessage::To, bytes);
         (void)DecodeForward(RelayMessage::From, bytes);
+        (void)DecodeSpectate(bytes);
+        (void)DecodeSnapshotRequest(bytes);
+        for (const RelayMessage type : {RelayMessage::SnapshotData, RelayMessage::SnapshotPart})
+        {
+            if (const auto part = DecodeSnapshotPart(type, bytes))
+            {
+                EXPECT_LE(part->offset, part->totalBytes);
+                EXPECT_LE(part->data.size(), part->totalBytes - part->offset);
+                EXPECT_LE(part->data.size(), kMaxSnapshotPartBytes);
+            }
+        }
     }
 }
 

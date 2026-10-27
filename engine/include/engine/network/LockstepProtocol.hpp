@@ -32,16 +32,27 @@ namespace N2Engine::Network
      *     0x43 Stop      u8 reason, u32 tick, u8 slotA, u8 slotB, u64 rootA, u64 rootB: the session is over
      *     0x44 Refuse    u8 reason: the join was refused
      *     0x45 From      u8 sender slot, then a bisect request or reply of that slot
+     *     0x46 SnapshotRequest  u32 request id: send the relay a serialised snapshot of a confirmed tick (version 2)
+     *     0x47 SnapshotPart     the body of a SnapshotData, to the spectator it was asked for (version 2)
      *   client to relay (0x60 to 0x7F), reliable
      *     0x60 Join      u16 version, u8 payloadBytes, u64 layoutHash
      *     0x61 To        u8 target slot, then a bisect request or reply for that slot
      *     0x62 Pause     u8 paused (1 or 0): the page is hidden (a browser tab in the background), so a stall is not a drop yet
+     *     0x63 Spectate  the body of a Join: join as a spectator, late or not (version 2). The Welcome's slot is
+     *                    kSpectatorSlot.
+     *     0x64 SnapshotData  u32 request id, u32 tick, u32 total bytes, u32 offset, then 1 to kMaxSnapshotPartBytes bytes of
+     *                    a SerializeWorldSnapshot result, in order (version 2)
      *
      * Every decoder checks its lengths against the bytes present and its caps before it takes anything, refuses trailing
      * bytes, and allocates nothing a count asks for. The wire version of this protocol is separate from the world
-     * protocol's kWireVersion: a lockstep session does not speak the world protocol at all.
+     * protocol's kWireVersion: a lockstep session does not speak the world protocol at all. Version 2 (netcode C5/C6)
+     * added the spectator and snapshot messages and the NoSnapshot refusal; a version 1 client is refused at its Join.
      */
-    inline constexpr std::uint16_t kLockstepWireVersion = 1;
+    inline constexpr std::uint16_t kLockstepWireVersion = 2;
+    /// The slot of a spectator's Welcome: it owns no slot and sends no input
+    inline constexpr std::uint8_t kSpectatorSlot = 0xFF;
+    /// The most snapshot bytes one SnapshotData or SnapshotPart carries (the message less its 17-byte head, with room)
+    inline constexpr std::size_t kMaxSnapshotPartBytes = 3584;
     /// The largest session message: a bisect reply (kMaxBisectReplySize, 2569) plus the envelope, with room
     inline constexpr std::size_t kLockstepMaxMessageBytes = 4096;
     /// Slots the relay seats: the replay format's cap (a session is recorded as an n2replay file)
@@ -58,9 +69,13 @@ namespace N2Engine::Network
         Stop = 0x43,
         Refuse = 0x44,
         From = 0x45,
+        SnapshotRequest = 0x46,
+        SnapshotPart = 0x47,
         Join = 0x60,
         To = 0x61,
         Pause = 0x62,
+        Spectate = 0x63,
+        SnapshotData = 0x64,
     };
 
     enum class RefuseReason : std::uint8_t
@@ -74,6 +89,8 @@ namespace N2Engine::Network
         SessionRunning = 4,
         /// A client sent a Join twice, or a malformed one
         Protocol = 5,
+        /// A spectator could not be given a snapshot (no player sent one in time, the source left, it was too large)
+        NoSnapshot = 6,
     };
 
     enum class DropReason : std::uint8_t
@@ -143,6 +160,17 @@ namespace N2Engine::Network
         std::uint64_t rootB = 0;
     };
 
+    /// A piece of a serialised snapshot (SnapshotData from a player, SnapshotPart to a spectator)
+    struct SnapshotPartMessage
+    {
+        std::uint32_t requestId = 0;
+        /// The snapshot's tick: the state before it (every earlier tick ran on confirmed input)
+        std::uint32_t tick = 0;
+        std::uint32_t totalBytes = 0;
+        std::uint32_t offset = 0;
+        std::span<const std::uint8_t> data;
+    };
+
     /// A forwarded bisect message and the slot at its other end (the target in To, the sender in From)
     struct ForwardedMessage
     {
@@ -151,6 +179,12 @@ namespace N2Engine::Network
     };
 
     [[nodiscard]] std::vector<std::uint8_t> Encode(const JoinMessage &message);
+    /// A Spectate: the bytes of a Join under type 0x63
+    [[nodiscard]] std::vector<std::uint8_t> EncodeSpectate(const JoinMessage &message);
+    [[nodiscard]] std::vector<std::uint8_t> EncodeSnapshotRequest(std::uint32_t requestId);
+    /// `type` is SnapshotData or SnapshotPart. Empty when the data is empty, over kMaxSnapshotPartBytes, or reaches past
+    /// totalBytes.
+    [[nodiscard]] std::vector<std::uint8_t> Encode(RelayMessage type, const SnapshotPartMessage &message);
     [[nodiscard]] std::vector<std::uint8_t> Encode(const WelcomeMessage &message);
     [[nodiscard]] std::vector<std::uint8_t> Encode(const DropSlotMessage &message);
     [[nodiscard]] std::vector<std::uint8_t> Encode(const StopMessage &message);
@@ -162,8 +196,14 @@ namespace N2Engine::Network
                                                           std::span<const std::uint8_t> inner);
 
     /// Each decoder takes the whole message, type byte included, and refuses a wrong type, a short or long message and a
-    /// value out of range (slot at or over kMaxRelaySlots, payload over 32 bytes, an unknown reason)
+    /// value out of range (slot at or over kMaxRelaySlots, payload over 32 bytes, an unknown reason). A Welcome's slot
+    /// may also be kSpectatorSlot.
     [[nodiscard]] std::optional<JoinMessage> DecodeJoin(std::span<const std::uint8_t> bytes) noexcept;
+    [[nodiscard]] std::optional<JoinMessage> DecodeSpectate(std::span<const std::uint8_t> bytes) noexcept;
+    [[nodiscard]] std::optional<std::uint32_t> DecodeSnapshotRequest(std::span<const std::uint8_t> bytes) noexcept;
+    /// `type` is SnapshotData or SnapshotPart: 1 to kMaxSnapshotPartBytes bytes of data, offset + size within totalBytes
+    [[nodiscard]] std::optional<SnapshotPartMessage> DecodeSnapshotPart(RelayMessage type,
+                                                                        std::span<const std::uint8_t> bytes) noexcept;
     [[nodiscard]] std::optional<WelcomeMessage> DecodeWelcome(std::span<const std::uint8_t> bytes);
     [[nodiscard]] std::optional<DropSlotMessage> DecodeDropSlot(std::span<const std::uint8_t> bytes) noexcept;
     [[nodiscard]] std::optional<StopMessage> DecodeStop(std::span<const std::uint8_t> bytes) noexcept;

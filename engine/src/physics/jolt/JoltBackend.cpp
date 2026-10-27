@@ -3823,6 +3823,57 @@ namespace N2Engine::Physics
         return hasher.Value();
     }
 
+    std::optional<std::uint64_t> JoltBackend::HashSimulatedState() const
+    {
+        const Impl &s = *_impl;
+        if (!s.initialized)
+        {
+            return std::nullopt;
+        }
+        // Each body in the simulation on its own (no index, no generation), then an order-free sum: the slot a body
+        // happens to occupy differs between a peer that parks despawned bodies and one that destroys them
+        std::uint64_t sum = 0;
+        std::uint32_t count = 0;
+        for (const Impl::BodyData &data : s.bodies)
+        {
+            if (!data.active || !data.enabled)
+            {
+                continue;
+            }
+            StateHasher hasher;
+            hasher.Word(static_cast<std::uint32_t>(data.motion));
+            JPH::RVec3 position;
+            JPH::Quat rotation;
+            s.Bodies().GetPositionAndRotation(data.id, position, rotation);
+            hasher.Float(static_cast<float>(position.GetX()));
+            hasher.Float(static_cast<float>(position.GetY()));
+            hasher.Float(static_cast<float>(position.GetZ()));
+            hasher.Float(rotation.GetX());
+            hasher.Float(rotation.GetY());
+            hasher.Float(rotation.GetZ());
+            hasher.Float(rotation.GetW());
+            if (data.motion != MotionKind::Static)
+            {
+                const JPH::Vec3 linear = s.Bodies().GetLinearVelocity(data.id);
+                const JPH::Vec3 angular = s.Bodies().GetAngularVelocity(data.id);
+                hasher.Float(linear.GetX());
+                hasher.Float(linear.GetY());
+                hasher.Float(linear.GetZ());
+                hasher.Float(angular.GetX());
+                hasher.Float(angular.GetY());
+                hasher.Float(angular.GetZ());
+                hasher.Word(s.Bodies().IsActive(data.id) ? 1u : 0u);
+            }
+            sum += hasher.Value();
+            ++count;
+        }
+        StateHasher total;
+        total.Word(count);
+        total.Word(static_cast<std::uint32_t>(sum & 0xFFFFFFFFu));
+        total.Word(static_cast<std::uint32_t>(sum >> 32));
+        return total.Value();
+    }
+
     // ===== Diagnostics and tests =====
 
     Math::Vector3 JoltBackend::GetInertiaTensor(const PhysicsBodyHandle body) const
