@@ -874,7 +874,7 @@ WantedBy=multi-user.target</code></pre>
 <table>
 <thead><tr><th>A client &hellip;</th><th>Counter</th></tr></thead>
 <tbody>
-<tr><td>sends an undecodable message (including a wire version that is not 6, and a state acknowledgement that is truncated or has a zero sequence)</td><td><code>droppedMalformed</code></td></tr>
+<tr><td>sends an undecodable message (including a wire version that is not 7, and a state acknowledgement that is truncated or has a zero sequence)</td><td><code>droppedMalformed</code></td></tr>
 <tr><td>sends a server message</td><td><code>droppedUnauthorized</code></td></tr>
 <tr><td>sends a second accept; sends on the unreliable channel anything but a state acknowledgement or, <span class="badge">PR #TBD</span>, input frames (a state update included: state only ever travels from the server; <a href="#input-authority">the input offences</a>); acknowledges state before it joined, or a state update the server never sent <span class="badge">PR #226</span></td><td><code>droppedProtocol</code></td></tr>
 <tr><td>sends more than <code>maxClientMessagesPerSecond</code> (32) in a second (reliable messages), or more than <code>maxClientAcksPerSecond</code> (1024) state acknowledgements in a second <span class="badge">PR #226</span>; the check comes before the decode</td><td><code>droppedRateLimited</code></td></tr>
