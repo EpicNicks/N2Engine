@@ -366,6 +366,7 @@ TEST_F(LuaProjectSceneTest, BehaviourScriptsLoad)
              std::pair{"Camera Controller", "res://scripts/CameraController.lua"},
              std::pair{"Quit Handler", "res://scripts/QuitHandler.lua"},
              std::pair{"Smoke HUD", "res://scripts/SmokeHud.lua"},
+             std::pair{"Station Keys", "res://scripts/StationKeys.lua"},
              std::pair{"Particle Station", "res://scripts/ParticleStation.lua"},
              std::pair{"Soft Body Station", "res://scripts/SoftBodyStation.lua"},
              std::pair{"Material Textured Cube", "res://scripts/Spin.lua"},
