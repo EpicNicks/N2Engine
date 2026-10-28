@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.21.0";
+        public const string ProtocolVersion = "1.22.0";
     }
 
     public enum CommandType : byte
@@ -859,6 +859,8 @@ namespace N2Engine.Editor.Protocol
         public bool ErrorCodes;
         /// <summary>Optional trailing: the default (false, 0 or empty) when the payload ends before it</summary>
         public string User;
+        /// <summary>Optional trailing: the default (false, 0 or empty) when the payload ends before it</summary>
+        public bool Yield;
     }
 
     public struct PollEventsRequest

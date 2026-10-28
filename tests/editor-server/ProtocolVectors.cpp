@@ -118,7 +118,7 @@ namespace ProtocolVectors
             {
                 const auto cmd = HelloCmd::Deserialize(r);
                 return json{{"clientName", cmd.clientName}, {"protocolVersion", cmd.protocolVersion}, {"token", cmd.token},
-                            {"errorCodes", cmd.errorCodes}, {"user", cmd.user}};
+                            {"errorCodes", cmd.errorCodes}, {"user", cmd.user}, {"yield", cmd.yield}};
             }},
             {"PollEvents", [](BufferReader &r)
             {

@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP bridge (n2-mcp) · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="particles.html">Particles</a></li>
+<li><a href="soft-bodies.html">Soft bodies</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+<li><a href="netcode.html">Netcode (n2net)</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+<li><a href="editor-extensions.html">Lua editor extensions</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="editor.html">Editor projects</a></li>
+<li><a href="mcp.html" aria-current="page">MCP bridge (n2-mcp)</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+<li><a href="web-build.html">Web build</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>MCP bridge (n2-mcp)</h1>
+<p class="lead"><code>n2-mcp</code> is a program, kept in the frontend repository (<code>N2Engine-Electron-Frontend</code>, folder <code>mcp/</code>), that lets an AI agent such as Claude Code inspect and change an N2Engine project. It speaks the Model Context Protocol (MCP) on stdio to the agent and the <a href="logging-and-editor.html#hello">editor protocol</a> to an <code>N2EditorHost</code>. This page covers how to run it, the safety model, the tools that exist today, and how it shares a host with a person, including the engine's <code>yield</code> Hello flag (protocol 1.22.0).</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#what">What it is</a></li>
+<li><a href="#running">Running it</a></li>
+<li><a href="#register">Registering it with Claude Code and Claude Desktop</a></li>
+<li><a href="#safety">The safety model</a></li>
+<li><a href="#tools">The tools that exist today</a></li>
+<li><a href="#sessions">Agent sessions, undo and revert</a></li>
+<li><a href="#resources">Resources and prompts</a></li>
+<li><a href="#limits">Limits</a></li>
+<li><a href="#coexistence">Sharing the host with a person, and the yield flag</a></li>
+<li><a href="#not-built">What is not built yet</a></li>
+<li><a href="#verification">What this page is based on</a></li>
+</ol>
+</div>
+
+<div class="callout note">
+<p class="callout-title">Where the code is</p>
+<p>The bridge is not part of this repository. This page was written from its source on the frontend repository's <code>master</code> (<code>mcp/src/cli.ts</code>, <code>main.ts</code>, <code>bridge.ts</code>, <code>host.ts</code>, <code>policy.ts</code>, <code>limits.ts</code>, <code>scrub.ts</code>, <code>server.ts</code>, <code>tools.ts</code>, <code>tools-write.ts</code>, <code>play.ts</code>, <code>resources.ts</code>, <code>prompts.ts</code>, <code>session.ts</code>) and its README. The bridge is version 0.1.0. When the two disagree, the frontend code is right; check <code>n2-mcp --help</code> for the options of the build you have.</p>
+</div>
+
+<h2 id="what">What it is</h2>
+<p>The bridge is an ordinary editor protocol client with <strong>its own token</strong>. It adds no power of its own: the host's roles, <code>--read-only</code> mode, single-session rule and audit lines apply to the agent exactly as to a person's editor (<a href="logging-and-editor.html#user-tokens">Per-user tokens and roles</a>). What it adds is the translation: MCP tools (typed, bounded, described for a model) on one side, protocol commands on the other, with the project's text treated as untrusted data on the way back.</p>
+<p>It is a separate Node program (Node 22 or later, no Electron), built from the frontend repository into one file, <code>dist/n2-mcp.mjs</code>, with <code>npm run build:mcp</code> (<code>npm run build</code> does it too). It reuses that repository's protocol client and host launcher. It serves MCP over stdio, in both the 2026-07-28 and the handshake-based 2025-11-25 revisions of the specification (the SDK picks per connection how the client opens it). It talks to the host lazily: nothing is started or connected until a tool call (or, to list the write tools correctly, the first <code>tools/list</code> when writes are not turned off), so a client that only probes the server neither starts a host nor holds the host's one session.</p>
+
+<h2 id="running">Running it</h2>
+<p>Exactly one of two backends:</p>
+<pre class="lang-text"><code>node dist/n2-mcp.mjs --launch &lt;projectPath&gt; [--host-path &lt;N2EditorHost&gt;] [--renderer opengl|software] [options]
+node dist/n2-mcp.mjs --connect &lt;host:port&gt; --fingerprint &lt;sha256&gt; (--token-env &lt;VAR&gt; | --token-file &lt;path&gt;) [--user &lt;name&gt;] [options]</code></pre>
+
+<h3 id="launch"><code>--launch</code>: a host of the bridge's own</h3>
+<ul>
+<li>Starts <code>N2EditorHost --project &lt;dir&gt; --port 0 --tokens-file &lt;temp file&gt; --exit-on-stdin-eof</code> on loopback. The host binary comes from <code>--host-path</code>, else from the <code>N2ENGINE_HOST</code> environment variable (the editor's own name for it); with neither, the bridge refuses to start.</li>
+<li>The host has one user, <code>n2-mcp</code>, with the <strong>editor</strong> role and a fresh random 256-bit token. The bridge writes only the token's SHA-256 to a 0600 file in a new temp folder (the tokens file is hashes only: <a href="logging-and-editor.html#user-tokens">Per-user tokens</a>), keeps the token in its own memory, and never puts it in the host's arguments or environment. It removes the file and ends the host when it exits. The host also ends by itself when the bridge's stdin pipe to it closes. A host built without TLS support cannot hash tokens, so <code>--launch</code> needs a TLS build.</li>
+<li>The host is started on the first tool call. It is not started with <code>--exit-on-disconnect</code>, so an idle disconnect leaves it up and the next call reconnects.</li>
+<li>Only this backend has the <a href="#play-tools">play tools</a>.</li>
+<li><code>--renderer opengl|software</code> and <code>--ready-timeout &lt;ms&gt;</code> (default 30000) belong to this backend, as does <code>--host-path</code>.</li>
+</ul>
+
+<h3 id="connect"><code>--connect</code>: a running host</h3>
+<ul>
+<li>Connects over <strong>TLS with a pinned certificate fingerprint</strong>. <code>--fingerprint</code> is required (the certificate's SHA-256, 64 hex digits, colons allowed): there is no trust on first use, because nobody is at the prompt. The host prints it in its ready line (<code>N2EditorHost ready port=... tls=1 fingerprint=...</code>). Plaintext is not offered.</li>
+<li>The token comes from exactly one of <code>--token-env &lt;VARIABLE&gt;</code> (the variable is read and then removed from the bridge's environment) or <code>--token-file &lt;path&gt;</code> (on POSIX the file must not be readable by group or others). <strong>A token is never accepted as an argument</strong>: <code>--token</code> and <code>--password</code> are errors, since arguments show up in process listings, shell history and client configs.</li>
+<li><code>--user &lt;name&gt;</code> is the token's user in the host's tokens file (1 to 64 characters of <code>A-Z a-z 0-9 . _ @ -</code>); it is sent in <code>Hello</code> (protocol 1.12.0).</li>
+<li><code>host:port</code> may be <code>[::1]:9999</code> or <code>localhost:9999</code>.</li>
+</ul>
+
+<h3 id="options">Options</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Option</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>--allow-admin</code></td><td>Serve even when the host gave the connection the admin role. Refused by default.</td></tr>
+<tr><td><code>--read-only</code></td><td>No write or play tool is listed or callable, whatever the host allows (and listing then never connects).</td></tr>
+<tr><td><code>--allow-irreversible</code></td><td>The operator's consent for <a href="#irreversible">irreversible operations</a>, for clients that cannot ask the person.</td></tr>
+<tr><td><code>--max-writes &lt;n&gt;</code></td><td>Host write commands one agent session may make (default 2000, 1 to 999999).</td></tr>
+<tr><td><code>--write-tools a,b,...</code></td><td>List only these write and play tools (names such as <code>n2_create_entity</code>; an unknown name is an error).</td></tr>
+<tr><td><code>--disable-tools a,b,...</code></td><td>Never list these tools, read, write or play. A resource goes with its tool.</td></tr>
+<tr><td><code>--keep-journal</code></td><td>Keep the folder with the backups of overwritten files when the bridge exits (default: delete it).</td></tr>
+<tr><td><code>--busy-wait &lt;ms&gt;</code></td><td>How long to wait before the one more try when the host is busy (default 3000, at most 10000).</td></tr>
+<tr><td><code>--call-timeout &lt;ms&gt;</code></td><td>How long one tool call may wait for the host (default 60000, at most 600000).</td></tr>
+<tr><td><code>--help</code>, <code>--version</code></td><td>Usage; the bridge name and version.</td></tr>
+</tbody>
+</table>
+</div>
+<p>The command line is strict: an unknown option, an option of the other backend, or both backends together is an error (exit code 2). The bridge writes MCP messages to stdout and nothing else; its log goes to stderr, scrubbed.</p>
+<p><strong>Environment variables.</strong> <code>N2ENGINE_HOST</code> (the host binary for <code>--launch</code>) and whichever variable <code>--token-env</code> names.</p>
+
+<p class="src">Source (frontend repository): <code>mcp/src/cli.ts</code> &mdash; <code>parseArgs</code>, <code>readToken</code>, <code>Usage</code>; <code>mcp/src/host.ts</code> &mdash; <code>launchConnector</code>, <code>connectConnector</code>; <code>mcp/src/main.ts</code>.</p>
+
+<h2 id="register">Registering it with Claude Code and Claude Desktop</h2>
+<p>For Claude Code, <code>claude mcp add [options] &lt;name&gt; -- &lt;command&gt; [args...]</code> adds a stdio server (scopes <code>local</code>, <code>project</code> or <code>user</code>), or a project's <code>.mcp.json</code> can be committed because it holds no secret (<code>${VAR}</code> and <code>${VAR:-default}</code> are expanded in <code>command</code>, <code>args</code> and <code>env</code>):</p>
+<pre class="lang-json"><code>{
+  "mcpServers": {
+    "n2engine": {
+      "command": "node",
+      "args": ["tools/n2-mcp.mjs", "--launch", "${CLAUDE_PROJECT_DIR:-.}", "--renderer", "software"],
+      "env": { "N2ENGINE_HOST": "${N2ENGINE_HOST}" }
+    },
+    "n2engine-staging": {
+      "command": "node",
+      "args": ["tools/n2-mcp.mjs", "--connect", "editor.example.net:9999", "--fingerprint", "&lt;64 hex digits&gt;", "--user", "agent-claude", "--token-env", "N2_AGENT_TOKEN"],
+      "env": { "N2_AGENT_TOKEN": "${N2_AGENT_TOKEN}" }
+    }
+  }
+}</code></pre>
+<p>The same with the command line: <code>claude mcp add --transport stdio --scope project n2engine -- node tools/n2-mcp.mjs --launch . --renderer software</code>. Claude Desktop takes the same <code>mcpServers</code> shape in <code>claude_desktop_config.json</code> with absolute paths; prefer <code>--token-file</code> there, since that file is plain text. The syntax is as the frontend README gives it; the bridge's own tests drive it with the MCP SDK's client, not with Claude Code or Claude Desktop (see <a href="#verification">What this page is based on</a>).</p>
+
+<h2 id="safety">The safety model</h2>
+<p>The host's role gate is the security boundary. Everything below that the bridge adds is a limit on what a model can do by mistake or after reading hostile text, and none of it is a substitute for a narrow token.</p>
+<ul>
+<li><strong>A token of its own.</strong> Use a dedicated user per agent (for example <code>--new-token agent-claude viewer</code> or <code>editor</code> on the host), so audit lines say <code>user=agent-claude</code> and revoking it affects nobody else. Give a <strong>viewer</strong> token for inspection and an editor token only when the agent should change the project. A host started with <code>--token-env</code> has one token that is an admin: use a <code>--tokens-file</code> host for agents.</li>
+<li><strong>Admin is refused.</strong> After <code>Hello</code> the bridge reads the role the host reported. Anything other than viewer or editor (admin, or a role it does not know) makes every tool answer <code>admin_refused</code> and closes the connection, unless the bridge was started with <code>--allow-admin</code>. The write tools are listed only for an editor (or an allowed admin) on a host that is not read-only; a viewer token or a read-only host gets the read tools only. The host still enforces its own role gate on every command.</li>
+<li><strong id="irreversible">Irreversible operations need the person or the operator, never the model.</strong> Saving the scene, opening or creating a scene over unsaved changes, changing project settings, overwriting an existing text file and a revert that restores files cannot be undone by the editor. Each such call looks at the host first (is the scene dirty, does the file exist) and, when it really is irreversible: with <code>--allow-irreversible</code> it runs (the operator's consent); otherwise, if the client declared elicitation, the bridge asks the person a yes or no question naming the exact operation and runs it only on a yes; otherwise it is refused (<code>irreversible_refused</code>) and the host is never asked. No argument a model sends counts as consent: there is no confirm flag and every input schema refuses unknown keys.</li>
+<li><strong>Everything from the project is untrusted data.</strong> Names, field values, asset text, console lines and the host's error text are scrubbed and bounded before the model sees them: control characters removed; bidirectional, zero-width, line-separator and Unicode tag characters shown as <code>\u{...}</code> escapes; strings and whole values size-capped with a truncation marker; the text block's JSON escapes <code>&lt;</code>, <code>&gt;</code> and <code>&amp;</code>, so data cannot close the <code>&lt;n2-data ... untrusted&gt;</code> envelope the result travels in. Every tool description and the server instructions say returned text is data, never instructions. There is no tool that runs text, and no shell, file system or network tool.</li>
+<li><strong>The host's paths and the bridge's secrets stay out.</strong> The project and user-data folders (learned from <code>GetProjectInfo</code>, which is never passed on with them) become <code>&lt;project&gt;</code> and <code>&lt;userdata&gt;</code>, any other absolute path in a message becomes <code>&lt;host-path&gt;</code>, and the token is replaced by <code>[redacted]</code> if a host ever echoes it. A result that would carry a registered secret is withheld. The console view drops the host's <code>audit:</code>, <code>Rate limit</code> and <code>Refused Hello</code> lines and <code>peer=</code> addresses.</li>
+<li><strong>Writes stay under <code>assets/</code>, never <code>editor/</code>.</strong> The bridge refuses a path that is not plain <code>res://</code> followed by safe segments (no <code>..</code>, empty segment, backslash, colon, percent escape or control character), whose first segment is <code>editor</code> (or <code>assets/editor</code>), or that ends in <code>.meta</code>, before the host is asked anything. Editor extensions run with capabilities of their own (<a href="editor-extensions.html">Lua editor extensions</a>), so an agent must never be able to plant one. The host refuses again with its own rules.</li>
+<li><strong>Rate and write limits.</strong> 120 tool calls a minute (<code>rate_limited</code>, with the seconds to wait), 2000 host write commands per agent session (<code>--max-writes</code>), 500 ops in a batch, and the other <a href="#limits">limits</a>. Undo, redo and the revert do not count against the write budget, so a session can always be undone.</li>
+<li><strong>Failures are bounded.</strong> A failed call is an error result with a stable code, a fixed message and one sentence of advice; a raw exception's text never reaches the model. A call the host does not answer within <code>--call-timeout</code> drops the connection and fails with <code>timeout</code>; the bridge never retries in a loop.</li>
+<li><strong>Cleanup.</strong> A launched host and its token file do not outlive the bridge (stdin closing, SIGINT, SIGTERM, SIGHUP, and a last-resort handler at exit).</li>
+</ul>
+<p>The error codes are <code>invalid_argument</code>, <code>rate_limited</code>, <code>read_only</code>, <code>forbidden</code>, <code>busy</code>, <code>auth_failed</code>, <code>fingerprint_mismatch</code>, <code>incompatible_protocol</code>, <code>connection_lost</code>, <code>host_unavailable</code>, <code>admin_refused</code>, <code>timeout</code>, <code>extensions_disabled</code>, <code>extension_failed</code>, <code>extension_faulted</code>, <code>host_error</code>, <code>result_too_large</code> and <code>internal</code>, plus those of the write and play tools (such as <code>budget_exceeded</code>, <code>session_conflict</code>, <code>confirmation_declined</code>, <code>irreversible_refused</code>, <code>play_not_running</code>, <code>play_failed</code> and <code>cancelled</code>).</p>
+<p class="src">Source (frontend repository): <code>mcp/src/bridge.ts</code> &mdash; <code>ensureLink</code> (the admin check); <code>mcp/src/policy.ts</code>; <code>mcp/src/server.ts</code> &mdash; <code>callTool</code>; <code>mcp/src/scrub.ts</code>; <code>mcp/src/errors.ts</code>; <code>mcp/src/write-core.ts</code>.</p>
+
+<h2 id="tools">The tools that exist today</h2>
+<p>These are the tools registered on the frontend's <code>master</code>, from <code>mcp/tool-schemas.golden.json</code> and the tool sources. Every result has the same shape (<code>{source, untrusted, truncated, nextCursor?, notes?, data}</code>) as structured content plus a text block holding a one-line summary and the same data in the envelope. Large results are paged (<code>nextCursor</code>).</p>
+
+<h3 id="read-tools">Read tools (11)</h3>
+<p>Annotated as read-only and idempotent. Always listed (unless <code>--disable-tools</code> removes one).</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Tool</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td><code>n2_status</code></td><td>Where am I: the host's protocol and engine versions, the bridge's role, whether the host is read-only, the project, the open scene and whether it has unsaved changes, play state, engine health, history size. Call it first.</td></tr>
+<tr><td><code>n2_get_project_info</code></td><td>The open project: name, id, engine version, startup scene, scenes and settings (project paths shown as <code>res://</code> only).</td></tr>
+<tr><td><code>n2_get_hierarchy</code></td><td>The open scene's entities as a flat depth-first list, 200 per page; <code>rootId</code>, <code>maxDepth</code>, <code>cursor</code>.</td></tr>
+<tr><td><code>n2_get_entity</code></td><td>One entity in full: header, local and world transform, up to 50 children, its components with saved field values (64 KB of values).</td></tr>
+<tr><td><code>n2_get_component_types</code></td><td>The component types the host can create, with whether an entity can have only one and the field count; <code>filter</code> by name.</td></tr>
+<tr><td><code>n2_describe_component</code></td><td>One component type's fields as a JSON Schema (types, ranges, enums, references as UUID strings, defaults).</td></tr>
+<tr><td><code>n2_list_assets</code></td><td>Folders and assets under a folder, sorted, 200 per page; <code>recursive</code>, <code>type</code>.</td></tr>
+<tr><td><code>n2_get_asset_info</code></td><td>One asset by <code>res://</code> path or UUID: type, size, sub-assets, import settings.</td></tr>
+<tr><td><code>n2_read_text_asset</code></td><td>A project text file's text (a script, a material, JSON...), at most 100 KB a call (32 KB by default), with a truncation note and <code>nextCursor</code>.</td></tr>
+<tr><td><code>n2_get_console</code></td><td>The host's log lines (latest, or what is new since a cursor); <code>level</code>, <code>contains</code>.</td></tr>
+<tr><td><code>n2_screenshot</code></td><td>A PNG of the scene: <code>view</code> <code>editor</code> (the editor camera, default) or <code>game</code> (the main camera); 768x432 by default, long side at most 1568 px. It leaves the host's viewport at the picture's size.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3 id="write-tools">Write tools (22)</h3>
+<p>Listed only when the host lets this token change the project: an editor (or an allowed admin) on a host that is not read-only, and not hidden by <code>--read-only</code>, <code>--write-tools</code> or <code>--disable-tools</code>. The bridge asks the host once and sends <code>tools/list_changed</code> if the answer changes; a host that cannot be reached at that moment lists the read tools only. Every edit call runs inside one edit group labelled <code>AI: &lt;tool&gt; #&lt;n&gt;</code> (it appears in the editor's Edit menu), opened and closed inside the call and never held between calls; if a command fails the group is closed and its step undone, so a failed call leaves nothing.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Tool</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td><code>n2_create_entity</code></td><td>An entity with name, parent and place, a preset (empty, cube, sphere, quad, lights), local transform, tag, layer, active flag and components with initial values: one step.</td></tr>
+<tr><td><code>n2_destroy_entity</code></td><td>Deletes an entity and its children (undoable).</td></tr>
+<tr><td><code>n2_set_transform</code></td><td>Part or all of the local transform; parts left out keep their values.</td></tr>
+<tr><td><code>n2_set_parent</code></td><td>Reparents (<code>parentId</code> null for the root), at a sibling index, keeping the world transform unless told otherwise.</td></tr>
+<tr><td><code>n2_set_properties</code></td><td>Name (this is the rename), active flag, tag, layer.</td></tr>
+<tr><td><code>n2_add_component</code></td><td>Adds a component of a type from <code>n2_get_component_types</code>, optionally with field values.</td></tr>
+<tr><td><code>n2_remove_component</code></td><td>Removes a component by its UUID.</td></tr>
+<tr><td><code>n2_set_component_fields</code></td><td>Sets fields of a component, all or nothing; the host's clamped values are echoed.</td></tr>
+<tr><td><code>n2_duplicate_entity</code></td><td>A copy with children and components, next to the original.</td></tr>
+<tr><td><code>n2_apply_batch</code></td><td>Up to 500 ops of the kinds above as one undo step, all or nothing; ops can refer to an earlier op's result.</td></tr>
+<tr><td><code>n2_undo</code>, <code>n2_redo</code></td><td>Move the agent's own steps only (at most 20 per call); they refuse and change nothing if a person edited after the agent or the history was cleared.</td></tr>
+<tr><td><code>n2_create_scene</code>, <code>n2_open_scene</code>, <code>n2_save_scene</code></td><td>New scene (optionally written to a new file), open a scene file, save. Opening or creating clears the host's undo history; opening over unsaved changes and saving are <a href="#irreversible">irreversible operations</a>.</td></tr>
+<tr><td><code>n2_write_text_asset</code></td><td>Creates or overwrites a text file under <code>assets/</code> (100 KB, 200 writes per session). An overwrite keeps the previous text as a backup in the session and is irreversible-gated.</td></tr>
+<tr><td><code>n2_create_script</code></td><td>A new Lua behaviour script from the editor's template; never overwrites.</td></tr>
+<tr><td><code>n2_set_project_settings</code></td><td>A JSON merge patch (RFC 7386) of the project settings; irreversible-gated.</td></tr>
+<tr><td><code>n2_begin_session</code>, <code>n2_session_summary</code>, <code>n2_end_session</code>, <code>n2_session_revert</code></td><td>Agent sessions, <a href="#sessions">below</a>.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Every write tool except <code>n2_begin_session</code> takes an optional <code>sessionId</code>; without one the call is journaled in an implicit session. The annotations (<code>readOnlyHint</code>, <code>destructiveHint</code>, <code>idempotentHint</code>, <code>openWorldHint</code>) are hints that clients treat as untrusted; the safety above does not rely on them.</p>
+
+<h3 id="play-tools">Play tools (6, <code>--launch</code> only)</h3>
+<p>A <code>--connect</code> bridge has no play tools at all: they are not registered, listed or callable. A <code>--launch</code> bridge lists them with the write tools (the same conditions). The game is a <em>second</em> <code>N2EditorHost</code> that the bridge starts with <code>--play &lt;snapshot&gt;</code>, the same project and renderer, and a fresh token in that child's environment only; the edit host writes a snapshot of the open scene as it is in memory (unsaved edits included, nothing saved), so nothing done in the game changes the scene or the project.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Tool</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td><code>n2_play_start</code></td><td>Starts the game from the open scene and answers its state. A second call answers the running game.</td></tr>
+<tr><td><code>n2_play_stop</code></td><td>Ends the game (Shutdown, then a kill after a grace period). Not an error when none runs.</td></tr>
+<tr><td><code>n2_play_control</code></td><td><code>pause</code>, <code>resume</code>, or <code>step</code> 1 to 600 frames of a paused game (fixed timestep, so a test repeats), in chunks of 100 frames with progress and a cancellation check between them.</td></tr>
+<tr><td><code>n2_play_input</code></td><td>Up to 256 input events (key, mouse button, pointer, scroll, release all), applied all or none.</td></tr>
+<tr><td><code>n2_play_observe</code></td><td>The game's state, its log lines since the previous observe, up to 8 live entities by id, and optionally a PNG of the main camera.</td></tr>
+<tr><td><code>n2_play_script</code></td><td>A whole playtest in one call: up to 50 ops (input, step, screenshot, expectLog), the game paused first and left paused. Stops at a failed <code>expectLog</code> unless told to continue; a script that ends early releases every key it held.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Play budgets per agent session: 20,000 stepped frames and 50 game pictures; the step, pause, input and snapshot commands also count against <code>--max-writes</code>.</p>
+
+<h2 id="sessions">Agent sessions, undo and revert</h2>
+<p><code>n2_begin_session({label})</code> answers a <code>sessionId</code> that later calls pass. A session keeps a <strong>journal</strong> (per write: the tool, a scrubbed one-line summary, the undo step's label, the entities touched, the file written with its hash, and how an irreversible operation was confirmed), the labels of its own steps, a write counter, and the <strong>backups</strong> of text files it overwrote (a 0600 file in a private temp folder, deleted at exit unless <code>--keep-journal</code>). Sixteen sessions at most; one idle for 24 hours is dropped.</p>
+<p><code>n2_session_summary</code> says what changed so far; <code>n2_end_session</code> answers the final summary and forgets the session (the journal and backups go, so a revert is no longer possible). <code>n2_session_revert</code> undoes the session's steps in reverse and then restores overwritten files from the backups. It works <em>only while the host's newest undo steps are exactly the session's own, in order</em>; otherwise it refuses and changes nothing. It restores a file only if it still holds what the agent wrote, and leaves files the agent created in place (the host cannot delete files), listing them. Restoring files is irreversible-gated; <code>restoreFiles: false</code> reverts the steps only. Text-asset writes are not undone by the host's own undo: only a revert restores them, from the backup.</p>
+<p>The person sees the agent's steps in the editor's Edit menu as <code>AI: ...</code> and can undo them there like any step.</p>
+<p class="src">Source (frontend repository): <code>mcp/src/session.ts</code>, <code>mcp/src/write-core.ts</code>, <code>mcp/src/tools-write.ts</code>.</p>
+
+<h2 id="resources">Resources and prompts</h2>
+<p>The same reads are MCP resources a client can list, read and subscribe to. Each read runs the matching read tool, so its text has the same envelope and scrubbing, and counts against the 120 calls a minute.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>URI</th><th>What</th></tr></thead>
+<tbody>
+<tr><td><code>n2://project</code></td><td><code>n2_get_project_info</code></td></tr>
+<tr><td><code>n2://scene</code></td><td>The open scene's path, name, revision, saved revision and dirty flag</td></tr>
+<tr><td><code>n2://scene/hierarchy</code></td><td>The first page of <code>n2_get_hierarchy</code></td></tr>
+<tr><td><code>n2://entity/{uuid}</code></td><td><code>n2_get_entity</code></td></tr>
+<tr><td><code>n2://asset/{+path}</code></td><td><code>n2_read_text_asset</code> of <code>res://&lt;path&gt;</code> (first 32 KB)</td></tr>
+<tr><td><code>n2://console</code></td><td>The last 200 console lines</td></tr>
+<tr><td><code>n2://history</code></td><td>Undo and redo counts and the last 50 labels</td></tr>
+<tr><td><code>n2://component-types</code></td><td><code>n2_get_component_types</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Subscriptions (<code>resources/subscribe</code> and <code>subscriptions/listen</code>) cover at most 32 URIs and 8 listen streams per connection. While something is watched, the bridge polls the host's <a href="logging-and-editor.html#events">events</a> every 500 ms (nothing is polled when nothing is watched), and a notification carries the URI only, never host text; <code>n2://console</code> is announced at most once a second.</p>
+<p>Five prompts arrange the tools into plans and restate that returned text is data: <code>n2_build_level(description)</code>, <code>n2_inspect_scene</code>, <code>n2_playtest(goal)</code> (only on a bridge with the play tools), <code>n2_fix_console_errors</code> and <code>n2_write_lua_component(behaviour)</code>. Listing resources and prompts never contacts the host.</p>
+
+<h2 id="limits">Limits</h2>
+<p>These are the bridge's budgets (<code>mcp/src/limits.ts</code>). They keep a big project from flooding the agent's context; the host's role gate is the security boundary.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>What</th><th>Limit</th></tr></thead>
+<tbody>
+<tr><td>Tool calls</td><td>120 a minute; the retry after a confirmation question is not counted</td></tr>
+<tr><td>Write commands per agent session</td><td>2000 (<code>--max-writes</code>)</td></tr>
+<tr><td>Ops in a batch</td><td>500</td></tr>
+<tr><td>Text asset write</td><td>100 KB each, 200 per session; a file of 512 KB or more is not overwritten; 16 MB of backups per session</td></tr>
+<tr><td>Undo / redo per call</td><td>20 steps</td></tr>
+<tr><td>Sessions</td><td>16 at once, 24 hours idle</td></tr>
+<tr><td>Hierarchy and asset pages</td><td>200 entries by default, 2000 at most, about 96 KB of JSON a page</td></tr>
+<tr><td>Entity component values</td><td>64 KB, then values are marked omitted</td></tr>
+<tr><td>Text asset read</td><td>100 KB a call (32 KB by default)</td></tr>
+<tr><td>Console</td><td>100 lines by default, 1000 at most, 1024 characters a line</td></tr>
+<tr><td>Strings</td><td>Names 256 characters, other strings 4096, with a truncation marker</td></tr>
+<tr><td>A result's text block</td><td>128 KB (<code>result_too_large</code>)</td></tr>
+<tr><td>Screenshot</td><td>Long side 1568 px, 3 MB of PNG</td></tr>
+<tr><td>Play</td><td>Step 600 frames per call; 20,000 frames and 50 pictures per session; 256 input events per call; script of 50 ops, 4 pictures (long side 1024 px), 3000 frames, 6 MB of PNG</td></tr>
+<tr><td>Busy host</td><td>One wait (<code>--busy-wait</code>, 3 s by default) and one more try, then <code>busy</code></td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="coexistence">Sharing the host with a person, and the yield flag</h2>
+<p>A host serves <strong>one session at a time</strong> (<a href="logging-and-editor.html#preauth-busy">A second authenticated client</a>). The bridge's connection is a session like an editor's, so an agent and a person contend for the same host. What happens depends on who arrives second:</p>
+<ul>
+<li><strong>The bridge finds the host busy</strong> (a person's editor, or another agent, holds it): the host answers <code>busy</code>; the bridge waits <code>--busy-wait</code> and tries <strong>once</strong> more, then answers the tool call with its own <code>busy</code> error. It never loops. A dropped or idle-closed session is reopened by the next call.</li>
+<li><strong>A person arrives while the agent holds the host:</strong> by the host's usual rules (<a href="logging-and-editor.html#preauth-busy">above</a>) the person's editor preempts the agent only with a strictly higher role, and the same user with the same role takes the session over. So give the agent a user of its own and a role at or below the person's: a person with an admin or editor role over an agent with a lower role preempts it; a person with the <em>same</em> role as the agent, as another user, is turned away with <code>busy</code> until the agent's session ends. That is the gap the <code>yield</code> flag closes.</li>
+<li><strong>The agent must never take a person's session:</strong> the arbiter's same-user takeover would let an agent that shares a person's token and user replace the person's session. Use a per-agent user and token.</li>
+</ul>
+
+<h3 id="yield">The Hello <code>yield</code> flag (protocol 1.22.0)</h3>
+<p>Since protocol 1.22.0 the engine's <code>Hello</code> request has a trailing <code>yield</code> bool (false when absent; after <code>errorCodes</code> and <code>user</code>). A client that sets it says: I am an agent, give way to people. The host applies these rules in <code>SessionArbiter::Decide</code>, in this order (details and tests: <a href="logging-and-editor.html#preauth-yield">The yield flag</a>):</p>
+<ol>
+<li>No session is active: <code>Accept</code> (a yielding client too).</li>
+<li>The candidate yields: <code>Busy</code>. It never takes over or preempts, not even from the same user, not even with a higher role, not even on a host with no token.</li>
+<li>The active session yields and the candidate does not: <code>Preempt</code>, whatever the roles. A viewer preempts a yielding admin; the same user preempts its own yielding session; a host with no token preempts it too.</li>
+<li>Otherwise the existing rules.</li>
+</ol>
+<p>So an agent that sets <code>yield</code> gets an idle host, and as soon as any person's editor connects (with a token that is valid and does not itself yield) the agent's session is closed and the person's is served. The flag belongs to the connection (a later <code>Hello</code> on it replaces it), <code>ServerInfo</code> is unchanged, and the host logs <code>yield=1</code> on the line that says the client said <code>Hello</code>.</p>
+<div class="callout warning">
+<p class="callout-title">Engine side done, bridge side not yet</p>
+<p>The engine ships the flag in 1.22.0. As of the frontend <code>master</code> this page was written from, the bridge does <strong>not</strong> send it: its protocol client has no <code>yield</code> option, and its <code>Hello</code> carries only the client name, the token, the user and <code>errorCodes</code>. The frontend README lists "the <code>yield</code> Hello flag" under "Not there yet". Making the bridge send <code>yield: true</code> by default (design decision M8 of the MCP proposal) is a frontend change after the frontend syncs to protocol 1.22.0; until it lands, a bridge session behaves as described in the first list above, not as in the yield rules.</p>
+</div>
+
+<h3 id="electron">Beside an open editor (<code>--electron</code>)</h3>
+<p>A planned <code>--electron</code> backend would let the agent work through the running Electron editor instead of contending for the host. It does not exist yet; see <a href="#not-built">What is not built yet</a>.</p>
+
+<h2 id="not-built">What is not built yet</h2>
+<ul>
+<li><strong>The bridge sending <code>yield</code>.</strong> The engine accepts the flag from 1.22.0; the bridge does not send it yet (above).</li>
+<li><strong>The <code>--electron</code> backend</strong> (working beside an open editor with request multiplexing and the editor's confirmation dialogs): listed under "Not there yet" in the frontend README; the engine's MCP proposal calls it MCP6.</li>
+<li><strong>Streamable HTTP transport:</strong> not built; the proposal defers it (MCP7), loopback only with a bearer token when it comes.</li>
+<li><strong>An end-to-end smoke test in this repository's CI</strong> that drives a real host through the bridge (the proposal's MCP4) does not exist; nothing in this repository's CI exercises the bridge.</li>
+<li><strong>Known gaps</strong> listed by the frontend README: <code>n2_screenshot</code> does not restore the host's viewport size afterwards.</li>
+</ul>
+
+<h2 id="verification">What this page is based on</h2>
+<div class="callout open-question">
+<p class="callout-title">Read from code, not run</p>
+<p>This page was written by reading the bridge's source and README on the frontend repository's <code>master</code> (the commit where it syncs to protocol 1.21.0). Nobody ran the bridge against a real <code>N2EditorHost</code>, Claude Code or Claude Desktop while writing it. The frontend README itself records as not verified: the write and play tools against a real host (its tests use a fake host written from the protocol documentation, and a fake child process for the game), the confirmation prompt in a real Claude Code or Claude Desktop, and whether those clients show resources, subscriptions, prompts or progress. The numbers above are the constants in <code>mcp/src/limits.ts</code>.</p>
+</div>
+
+<div class="page-footer">
+<span>Describes master through PR #34; the bridge sections describe the frontend repository's master (protocol 1.21.0 sync) and the engine's protocol 1.22.0.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>

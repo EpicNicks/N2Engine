@@ -1204,6 +1204,8 @@ namespace N2Engine::Editor
             /// The token's hash for an identity from the tokens file, so a reload that rotates the token ends the connection
             TokenHash hash{};
             bool fromTokensFile = false;
+            /// The Hello said the client yields to people (since 1.22.0); the arbiter judges the session by it
+            bool yield = false;
         };
         /// The identity Hello would give a client with this token (and user, when it names one); nullopt when it doesn't
         /// match. Needs no authentication on a host without a token: that is an unauthenticated identity.

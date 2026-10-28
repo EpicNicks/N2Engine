@@ -118,9 +118,11 @@ namespace
         return info;
     }
 
-    /// A Hello as each minor version's client sends it: 1.10 has three fields, 1.11 adds errorCodes, 1.12 adds user
+    /// A Hello as each minor version's client sends it: 1.10 has three fields, 1.11 adds errorCodes, 1.12 adds user,
+    /// 1.22 adds yield
     std::vector<uint8_t> HelloPayload(const std::string &token, const std::optional<bool> errorCodes = true,
-                                      const std::optional<std::string> &user = std::nullopt)
+                                      const std::optional<std::string> &user = std::nullopt,
+                                      const std::optional<bool> yield = std::nullopt)
     {
         BufferWriter w;
         w.WriteString("tokens test");
@@ -130,6 +132,8 @@ namespace
             w.WriteBool(*errorCodes);
         if (user.has_value())
             w.WriteString(*user);
+        if (yield.has_value())
+            w.WriteBool(*yield);
         return w.Release();
     }
 

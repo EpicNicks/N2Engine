@@ -217,13 +217,18 @@ namespace N2Engine::Editor::Protocol
         /// has no user): the user whose token this is, for a host with a tokens file. A client that sends it must send
         /// errorCodes first.
         std::string user;
+        /// Since 1.22.0, a trailing field (false when the client doesn't send it): the client is an agent that yields to
+        /// people. It never takes over or preempts a session, and any non-yielding client preempts its session. A client
+        /// that sends it must send errorCodes and user first.
+        bool yield = false;
 
         static HelloCmd Deserialize(BufferReader &r)
         {
             // Braced initialisation evaluates left to right, so the fields are read in order
-            HelloCmd cmd{r.ReadString(), r.ReadString(), r.ReadString(), false, {}};
+            HelloCmd cmd{r.ReadString(), r.ReadString(), r.ReadString(), false, {}, false};
             cmd.errorCodes = ReadTrailing(r, &BufferReader::ReadBool, false);
             cmd.user = ReadTrailing(r, &BufferReader::ReadString, std::string{});
+            cmd.yield = ReadTrailing(r, &BufferReader::ReadBool, false);
             return cmd;
         }
     };

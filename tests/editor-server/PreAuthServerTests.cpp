@@ -102,8 +102,10 @@ namespace
         return {Alice, Zed, Bob, Erin, Carol, Dave};
     }
 
-    /// A Hello as a 1.12+ client sends it: errorCodes, then the user whose token this is
-    std::vector<uint8_t> HelloPayloadFor(const TestUser &user, const bool errorCodes)
+    /// A Hello as a 1.12+ client sends it: errorCodes, then the user whose token this is; a 1.22+ client adds yield
+    /// (`yield` empty: a client that sends none)
+    std::vector<uint8_t> HelloPayloadFor(const TestUser &user, const bool errorCodes,
+                                         const std::optional<bool> yield = std::nullopt)
     {
         BufferWriter w;
         w.WriteString("pre-auth test");
@@ -111,6 +113,10 @@ namespace
         w.WriteString(user.token);
         w.WriteBool(errorCodes);
         w.WriteString(user.name);
+        if (yield.has_value())
+        {
+            w.WriteBool(*yield);
+        }
         return w.Release();
     }
 
@@ -524,9 +530,10 @@ namespace
         }
 
         /// A client that says Hello as this user (with the token and the user's name)
-        std::optional<Frame> HelloAs(TestClient &client, const TestUser &user, const bool errorCodes = false)
+        std::optional<Frame> HelloAs(TestClient &client, const TestUser &user, const bool errorCodes = false,
+                                     const std::optional<bool> yield = std::nullopt)
         {
-            return Roundtrip(server, client, CommandType::Hello, HelloPayloadFor(user, errorCodes));
+            return Roundtrip(server, client, CommandType::Hello, HelloPayloadFor(user, errorCodes, yield));
         }
 
         // Before the server: it is stopped first, and its threads read the peer
@@ -1387,6 +1394,183 @@ TEST(SessionPolicyTest, ALaterHelloOnTheSessionChangesWhatTheArbiterJudgesAgains
     const auto stillThere = Roundtrip(rig.server, session, CommandType::GetPlayState);
     ASSERT_TRUE(stillThere.has_value());
     EXPECT_NE(stillThere->type, ErrorType) << stillThere->Text();
+}
+
+// ---- The Hello yield flag (protocol 1.22.0)
+
+namespace
+{
+    /// `active` has the session and yielded in its Hello; `candidate` (not yielding) says Hello and preempts it, whatever
+    /// the roles and even when it is the same user (which without the flag is a Takeover)
+    void ExpectPreemptsAYieldingSession(const TestUser &active, const TestUser &candidate)
+    {
+        TokensFile tokens(AllUsers());
+        if (!tokens.Ok())
+        {
+            GTEST_SKIP() << NoTokensFileSupport;
+        }
+        Rig rig(RoleOptions(tokens));
+        ASSERT_TRUE(rig.started);
+
+        TestClient agent(rig.server.GetPort());
+        ASSERT_TRUE(agent.IsConnected());
+        const auto agentHello = rig.HelloAs(agent, active, false, true);
+        ASSERT_TRUE(agentHello.has_value());
+        ASSERT_EQ(agentHello->type, ServerInfoType) << agentHello->Text();
+
+        TestClient human(rig.server.GetPort());
+        ASSERT_TRUE(human.IsConnected());
+        const auto humanHello = rig.HelloAs(human, candidate, false, false);
+        ASSERT_TRUE(humanHello.has_value());
+        ASSERT_EQ(humanHello->type, ServerInfoType) << candidate.name << " over a yielding " << active.name << ": "
+                                                   << humanHello->Text();
+        EXPECT_TRUE(agent.IsClosedWithin(5000)) << "the yielding session is closed";
+
+        EXPECT_EQ(rig.server.SessionPreemptions(), 1u);
+        EXPECT_EQ(rig.server.SessionTakeovers(), 0u);
+        EXPECT_EQ(rig.server.BusyRefusals(), 0u);
+        const auto works = Roundtrip(rig.server, human, CommandType::GetPlayState);
+        ASSERT_TRUE(works.has_value());
+        EXPECT_NE(works->type, ErrorType) << works->Text();
+    }
+
+    /// `active` has the session (not yielding); `candidate` yields in its Hello and is turned away, even from the same
+    /// user and even with a higher role. The session is untouched.
+    void ExpectYieldingCandidateIsBusy(const TestUser &active, const TestUser &candidate)
+    {
+        TokensFile tokens(AllUsers());
+        if (!tokens.Ok())
+        {
+            GTEST_SKIP() << NoTokensFileSupport;
+        }
+        Rig rig(RoleOptions(tokens));
+        ASSERT_TRUE(rig.started);
+
+        TestClient holder(rig.server.GetPort());
+        ASSERT_TRUE(holder.IsConnected());
+        const auto holderHello = rig.HelloAs(holder, active);
+        ASSERT_TRUE(holderHello.has_value());
+        ASSERT_EQ(holderHello->type, ServerInfoType) << holderHello->Text();
+
+        TestClient agent(rig.server.GetPort());
+        ASSERT_TRUE(agent.IsConnected());
+        const auto answer = rig.HelloAs(agent, candidate, true, true);
+        ASSERT_TRUE(answer.has_value());
+        ASSERT_EQ(answer->type, ErrorCodedType) << answer->Text();
+        EXPECT_EQ(DecodeCoded(*answer).code, std::string(ErrorCodeBusy));
+        EXPECT_TRUE(agent.IsClosedWithin(5000));
+
+        EXPECT_EQ(rig.server.BusyRefusals(), 1u);
+        EXPECT_EQ(rig.server.SessionPreemptions(), 0u);
+        EXPECT_EQ(rig.server.SessionTakeovers(), 0u);
+        const auto stillThere = Roundtrip(rig.server, holder, CommandType::GetPlayState);
+        ASSERT_TRUE(stillThere.has_value()) << "the session was not touched";
+        EXPECT_NE(stillThere->type, ErrorType) << stillThere->Text();
+    }
+}
+
+TEST(SessionPolicyTest, AViewerHumanPreemptsAYieldingAdminAgent)
+{
+    ExpectPreemptsAYieldingSession(Alice, Carol);
+}
+
+TEST(SessionPolicyTest, AnEditorHumanPreemptsAYieldingEditorAgentOfAnotherUser)
+{
+    ExpectPreemptsAYieldingSession(Bob, Erin);
+}
+
+TEST(SessionPolicyTest, TheSameUserWithoutTheFlagPreemptsAYieldingSessionInsteadOfTakingItOver)
+{
+    ExpectPreemptsAYieldingSession(Alice, Alice);
+}
+
+TEST(SessionPolicyTest, AYieldingCandidateIsTurnedAwayFromAHumansSession)
+{
+    ExpectYieldingCandidateIsBusy(Carol, Dave);
+}
+
+TEST(SessionPolicyTest, AYieldingAdminIsTurnedAwayFromAViewersSession)
+{
+    ExpectYieldingCandidateIsBusy(Carol, Alice);
+}
+
+TEST(SessionPolicyTest, AYieldingCandidateOfTheSameUserDoesNotTakeTheSessionOver)
+{
+    ExpectYieldingCandidateIsBusy(Alice, Alice);
+}
+
+TEST(SessionPolicyTest, AYieldingCandidateIsAcceptedWhenNobodyIsActive)
+{
+    TokensFile tokens(AllUsers());
+    if (!tokens.Ok())
+    {
+        GTEST_SKIP() << NoTokensFileSupport;
+    }
+    Rig rig(RoleOptions(tokens));
+    ASSERT_TRUE(rig.started);
+
+    TestClient agent(rig.server.GetPort());
+    ASSERT_TRUE(agent.IsConnected());
+    const auto hello = rig.HelloAs(agent, Alice, false, true);
+    ASSERT_TRUE(hello.has_value());
+    EXPECT_EQ(hello->type, ServerInfoType) << hello->Text();
+    EXPECT_EQ(rig.server.BusyRefusals(), 0u);
+}
+
+TEST(SessionPolicyTest, AClientWithoutTheFieldDoesNotYield)
+{
+    // A 1.21 client sends no yield: it is not a yielding session, so another user of the same role is turned away
+    // and its own user takes it over
+    TokensFile tokens(AllUsers());
+    if (!tokens.Ok())
+    {
+        GTEST_SKIP() << NoTokensFileSupport;
+    }
+    Rig rig(RoleOptions(tokens));
+    ASSERT_TRUE(rig.started);
+
+    TestClient holder(rig.server.GetPort());
+    ASSERT_TRUE(holder.IsConnected());
+    const auto holderHello = rig.HelloAs(holder, Bob, false, std::nullopt);
+    ASSERT_TRUE(holderHello.has_value());
+    ASSERT_EQ(holderHello->type, ServerInfoType) << holderHello->Text();
+
+    TestClient other(rig.server.GetPort());
+    ASSERT_TRUE(other.IsConnected());
+    const auto answer = rig.HelloAs(other, Erin, false, false);
+    ASSERT_TRUE(answer.has_value());
+    EXPECT_EQ(answer->type, ErrorType) << "turned away";
+    EXPECT_EQ(rig.server.SessionPreemptions(), 0u);
+}
+
+TEST(SessionPolicyTest, ALaterHelloOnTheSessionCanSetTheFlag)
+{
+    TokensFile tokens(AllUsers());
+    if (!tokens.Ok())
+    {
+        GTEST_SKIP() << NoTokensFileSupport;
+    }
+    Rig rig(RoleOptions(tokens));
+    ASSERT_TRUE(rig.started);
+
+    // bob starts without the flag (a viewer would be turned away) and says Hello again with it: the same editor of
+    // another user now preempts the session
+    TestClient session(rig.server.GetPort());
+    ASSERT_TRUE(session.IsConnected());
+    const auto first = rig.HelloAs(session, Bob, false, false);
+    ASSERT_TRUE(first.has_value());
+    ASSERT_EQ(first->type, ServerInfoType) << first->Text();
+    const auto second = rig.HelloAs(session, Bob, false, true);
+    ASSERT_TRUE(second.has_value());
+    ASSERT_EQ(second->type, ServerInfoType) << second->Text();
+
+    TestClient candidate(rig.server.GetPort());
+    ASSERT_TRUE(candidate.IsConnected());
+    const auto answer = rig.HelloAs(candidate, Carol);
+    ASSERT_TRUE(answer.has_value());
+    EXPECT_EQ(answer->type, ServerInfoType) << answer->Text();
+    EXPECT_TRUE(session.IsClosedWithin(5000));
+    EXPECT_EQ(rig.server.SessionPreemptions(), 1u);
 }
 
 TEST(SessionPolicyTest, PreemptionEndsTheOldSessionAsADisconnectDoesBeforeTheNewHelloRuns)

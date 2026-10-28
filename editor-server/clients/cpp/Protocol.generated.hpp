@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.21.0";
+inline constexpr const char *ProtocolVersion = "1.22.0";
 
 enum class CommandType : uint8_t
 {
@@ -194,6 +194,7 @@ struct HelloCmd
     std::string token;
     bool errorCodes; // optional trailing: the default (false, 0 or empty) when the payload ends before it
     std::string user; // optional trailing: the default (false, 0 or empty) when the payload ends before it
+    bool yield; // optional trailing: the default (false, 0 or empty) when the payload ends before it
 };
 
 struct PollEventsCmd
