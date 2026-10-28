@@ -9,7 +9,7 @@ return {
         name = "Physics",
         camera = Vector3(-3.5, 0.0, 20.0),
         look = "The blue cube and the red sphere fall onto the grey floor and come to rest; the sphere rolls off "
-            .. "the cube's edge. Nothing passes through the floor. F: drop a ball. Z: put the cube and sphere back.",
+            .. "the cube's edge. Nothing passes through the floor. G: drop a ball. Z: put the cube and sphere back.",
     },
     {
         name = "World text",

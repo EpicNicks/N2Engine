@@ -2,7 +2,7 @@
 -- station, 11, have their own scripts). Each key acts only while the camera is at its station, as in
 -- SoftBodyStation.lua; the HUD text of each station (SmokeStations.lua, DemoStations.lua) names them. The spin toggle
 -- on M is in Spin.lua.
---   1 Physics       F drops a green ball, Z puts the cube and sphere back and removes the balls
+--   1 Physics       G drops a green ball, Z puts the cube and sphere back and removes the balls
 --   2 World text    T changes the large sample text
 --   3 Text effects  T cycles the size of the five sample words
 --   4 World canvas  Space clicks the orange button (the same Button:Click a mouse click ends in)
@@ -17,7 +17,7 @@ StationKeys.__index = StationKeys
 
 local RANGE = 12.0 -- how far from the station's camera the camera still counts as being at it (in x)
 local MAX_BALLS = 12
-local BALL_XS = { -2.5, 1.5, -0.5, 3.0, -4.0, 0.5 } -- where F drops the balls, in turn
+local BALL_XS = { -2.5, 1.5, -0.5, 3.0, -4.0, 0.5 } -- where G drops the balls, in turn
 local LARGE_TEXTS = { "SDF text 1.0", "Quartz jumps 1.0", "WAVE Fi 0123 1.0" }
 local EFFECT_WORDS = { "Outline", "Shadow", "Glow", "Softness", "Combined" }
 local EFFECT_SIZES = { 0.7, 0.5, 0.8 } -- em, 0.7 as scene.lua builds them

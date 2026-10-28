@@ -1,4 +1,4 @@
--- The physics station's bodies (scene.lua builds the first ones, StationKeys.lua makes new ones on keys F and Z). A
+-- The physics station's bodies (scene.lua builds the first ones, StationKeys.lua makes new ones on keys G and Z). A
 -- dynamic Rigidbody ignores changes to its object's position, so putting a body back means making a new one.
 -- Each function returns an object in no scene yet; the caller adds it.
 

@@ -62,7 +62,7 @@ local actions = {
     ["Soft Bodies Backend"] = { { type = "KeyboardButton", key = "J" } },
     ["Soft Bodies Push"] = { { type = "KeyboardButton", key = "V" } },
     -- The other stations (scripts/StationKeys.lua; Spin.lua for the spin toggle)
-    ["Physics Drop Ball"] = { { type = "KeyboardButton", key = "F" } },
+    ["Physics Drop Ball"] = { { type = "KeyboardButton", key = "G" } },
     ["Physics Reset"] = { { type = "KeyboardButton", key = "Z" } },
     ["Text Next"] = { { type = "KeyboardButton", key = "T" } },
     ["Press Button"] = { { type = "KeyboardButton", key = "Space" } },
