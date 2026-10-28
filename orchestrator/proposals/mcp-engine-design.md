@@ -61,7 +61,7 @@ Marks:
 **Engine changes:**
 - **None are required for v1:** no protocol bump, so no clash with 1.14.0.
 - Recommended before agents touch shared hosts: audit item 10 (F9, viewer log filtering) and item 11 (F10, path-free errors). The bridge redacts in the meantime.
-- One small protocol addition later (1.15.0): a Hello `yield` flag, so an agent session never preempts or takes over a human's and is itself preempted by any human.
+- One small protocol addition later (shipped as 1.22.0): a Hello `yield` flag, so an agent session never preempts or takes over a human's and is itself preempted by any human.
 
 **Plan:** 8 stages (section 9). MCP1-MCP3 give a useful local and CI agent without any engine change. Twelve decisions M1-M12 are in section 11.
 
@@ -407,7 +407,7 @@ Exceeding one gives a tool error naming the budget. "Servers MUST … Rate limit
 | Same token for human and agent | **Takeover**: forbidden by guidance; the bridge warns if Hello's `user` equals the `$USER`-like name in its config [E] |
 | `--electron` (MCP6) | No arbitration needed. The Electron app is the session, and agent requests queue behind the human's. Before each agent call it settles pending inspector edits and closes its client groups (`edit-controller.ts` sequence, lua-editor-extensions §4.3). The human's undo menu shows `AI: …` steps |
 
-**Proposed engine change (MCP5, protocol 1.15.0, M8):** a trailing Hello field `yield: bool`, false when absent.
+**Proposed engine change (MCP5, protocol 1.22.0, M8):** a trailing Hello field `yield: bool`, false when absent.
 - A yielding candidate never Takes over or Preempts: it gets Accept only when no session is active, else Busy.
 - A yielding active session is preempted by **any** authenticated non-yielding candidate, whatever the role.
 - It is pure logic in `SessionArbiter::Decide` (a static function with tests [V `EditorServer.cpp:3058`]).
@@ -545,7 +545,7 @@ Claude Desktop: the same `mcpServers` shape in `claude_desktop_config.json` [M].
 | **MCP2** | frontend | **Write tools**: create/modify/fields/add/remove/duplicate/destroy, `apply_edits` with rollback, undo/redo with the `AI:` rule, agent sessions (journal, end, revert), text-asset writes with backups, script and folder creation, save/open/new/project settings/import settings behind the irreversible tier (elicitation via SDK; `--allow-irreversible`); policy flags; write budgets | L (~1300) | Edit-semantics and confirmation tests with the fake host | — |
 | **MCP3** | frontend | **Play tools** (`--launch` only): start/stop through `play-session.ts`, control, input, observe, `play_script` with progress and cancellation between ops; resources and subscriptions over the event pump; prompts | M (~800) | Fake-host tests for play flows; prompt listing | — |
 | **MCP4** | engine | `docs/mcp.html` (section 8) plus a docs index entry; `tests/smoke/editor_host_smoke.py --scenario mcp` on the Linux x86_64 leg with a pinned bridge ref; add `setup-node` there | M (docs ~400 + smoke ~250) | The smoke drives a real host end to end | **A real Claude Code session** against `--launch`, and a `--connect` against the Docker image (checklist in the docs) |
-| **MCP5** | engine + frontend | Protocol **1.15.0** (after E-X2's 1.14.0): Hello trailing `yield`; `SessionArbiter::Decide` rules plus unit tests; regenerated clients and vectors; docs `#hello`; frontend sync; the bridge sends `yield: true` by default | S engine (~250) + S frontend | `SessionArbiterTests`, the socket arbiter tests, the protocol job | Decision M8 |
+| **MCP5** | engine + frontend | Protocol **1.22.0** (shipped; the slot moved because other minors were taken first): Hello trailing `yield`; `SessionArbiter::Decide` rules plus unit tests; regenerated clients and vectors; docs `#hello`; frontend sync; the bridge sends `yield: true` by default | S engine (~250) + S frontend | `SessionArbiterTests`, the socket arbiter tests, the protocol job | Decision M8 |
 | **MCP6** | frontend | **`--electron` co-presence:** a main-process agent endpoint (a named pipe or Unix socket plus a per-launch secret in a 0600 file under userData), an "Allow AI agent for this project" toggle, a banner, request multiplexing through the main `EngineClient` with edit settlement, native confirmation dialogs for the irreversible tier, and agent steps visible in the Edit menu | L (~1500) | Node unit tests (multiplexer, settlement order), DOM tests (banner, toggle, disabled in read-only and viewer modes) | **Live Electron session with an agent** (UX) |
 | **MCP7** | frontend (optional) | Streamable HTTP mode: loopback-only, bearer, Origin and Host allow lists, 405 on GET/DELETE, both eras | M (~600) | DNS-rebinding tests (bad Origin → 403, bad Host → 403, missing bearer → 401), non-loopback bind refused | Decision M6 |
 | **Later** | both | Extension tools (`InvokeMenuItem` as dynamic tools plus `tools/list_changed` on `extensionsChanged`) after E-X3/E-X4; netcode harness tools after `N2Server` | M each | — | — |
@@ -595,7 +595,7 @@ Spec pages used: https://modelcontextprotocol.io/specification/versioning, https
 - **M5 Admin tokens:** the bridge refuses an admin role (and caps `--launch` at editor policy) unless `--allow-admin` is given? Recommendation: yes.
 - **M6 HTTP transport:** defer Streamable HTTP (MCP7). When it comes, loopback only with a bearer token and Origin/Host checks, and no OAuth or remote HTTP. Remote hosts are reached by running the bridge beside the agent. Recommendation: yes, defer.
 - **M7 Irreversible operations** (save, project settings, open over unsaved changes, file-restoring revert): require elicitation, and when the client lacks it, allow them only if the operator started the bridge with `--allow-irreversible`, never on a model-supplied `confirm` flag? Recommendation: yes.
-- **M8 `yield` Hello flag** (protocol 1.15.0, after E-X2): agent sessions never preempt or take over, and are preempted by any authenticated human? Recommendation: yes, as MCP5.
+- **M8 `yield` Hello flag** (protocol 1.22.0): agent sessions never preempt or take over, and are preempted by any authenticated human? Recommendation: yes, as MCP5.
 - **M9 Play tools only in `--launch` mode** (remote play stays disabled, as the host docs say)? Recommendation: yes.
 - **M10 Prerequisites:** do audit items 10 (log filtering) and 11 (path-free errors) before agents are pointed at shared or remote hosts, with the bridge redacting meanwhile? Recommendation: yes, before MCP4's `--connect` docs.
 - **M11 Electron co-presence** (`--electron`, MCP6) as the answer to "agent and human at once", rather than a multi-session host? Recommendation: yes, after MCP2.
