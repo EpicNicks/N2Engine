@@ -299,7 +299,7 @@ node dist/n2-mcp.mjs --connect &lt;host:port&gt; --fingerprint &lt;sha256&gt; (-
 <p>A host serves <strong>one session at a time</strong> (<a href="logging-and-editor.html#preauth-busy">A second authenticated client</a>). The bridge's connection is a session like an editor's, so an agent and a person contend for the same host. What happens depends on who arrives second:</p>
 <ul>
 <li><strong>The bridge finds the host busy</strong> (a person's editor, or another agent, holds it): the host answers <code>busy</code>; the bridge waits <code>--busy-wait</code> and tries <strong>once</strong> more, then answers the tool call with its own <code>busy</code> error. It never loops. A dropped or idle-closed session is reopened by the next call.</li>
-<li><strong>A person arrives while the agent holds the host:</strong> by the host's usual rules (<a href="logging-and-editor.html#preauth-busy">above</a>) the person's editor preempts the agent only with a strictly higher role, and the same user with the same role takes the session over. So give the agent a user of its own and a role at or below the person's: a person with an admin or editor role over an agent with a lower role preempts it; a person with the <em>same</em> role as the agent, as another user, is turned away with <code>busy</code> until the agent's session ends. That is the gap the <code>yield</code> flag closes.</li>
+<li><strong>A person arrives while the agent holds the host:</strong> by the host's usual rules (<a href="logging-and-editor.html#preauth-busy">above</a>) the person's editor preempts the agent only with a strictly higher role, and the same user with the same role takes the session over. So give the agent a user of its own and a role at or below the person's: a person with an admin or editor role over an agent with a lower role preempts it; a person with the <em>same</em> role as the agent, as another user, is turned away with <code>busy</code> until the agent's session ends. With <code>--no-yield</code>, or against a host before 1.22.0, that is how it works. A default bridge sends <code>yield</code> and gives way instead (below).</li>
 <li><strong>The agent must never take a person's session:</strong> the arbiter's same-user takeover would let an agent that shares a person's token and user replace the person's session. Use a per-agent user and token.</li>
 </ul>
 
@@ -312,9 +312,9 @@ node dist/n2-mcp.mjs --connect &lt;host:port&gt; --fingerprint &lt;sha256&gt; (-
 <li>Otherwise the existing rules.</li>
 </ol>
 <p>So an agent that sets <code>yield</code> gets an idle host, and as soon as any person's editor connects (with a token that is valid and does not itself yield) the agent's session is closed and the person's is served. The flag belongs to the connection (a later <code>Hello</code> on it replaces it), <code>ServerInfo</code> is unchanged, and the host logs <code>yield=1</code> on the line that says the client said <code>Hello</code>.</p>
-<div class="callout warning">
-<p class="callout-title">Engine side done, bridge side not yet</p>
-<p>The engine ships the flag in 1.22.0. As of the frontend <code>master</code> this page was written from, the bridge does <strong>not</strong> send it: its protocol client has no <code>yield</code> option, and its <code>Hello</code> carries only the client name, the token, the user and <code>errorCodes</code>. The frontend README lists "the <code>yield</code> Hello flag" under "Not there yet". Making the bridge send <code>yield: true</code> by default (design decision M8 of the MCP proposal) is a frontend change after the frontend syncs to protocol 1.22.0; until it lands, a bridge session behaves as described in the first list above, not as in the yield rules.</p>
+<div class="callout note">
+<p class="callout-title">The bridge yields by default</p>
+<p>Since the frontend syncs to protocol 1.22.0 (frontend PR #64), the bridge sends <code>yield: true</code> in its <code>Hello</code>, for both <code>--launch</code> and <code>--connect</code>; <code>--no-yield</code> leaves it out. A bridge that finds the host in use answers <code>busy</code> saying it yields to people, and waits longer after each consecutive busy answer (up to the 10 second cap). If a person takes the host while the bridge holds it, the bridge's next call fails with a <code>busy</code> error saying the host ended its session, and the bridge reconnects only when the host accepts it. The <code>Hello</code> goes out before the bridge knows the host's version, so it always sends the field; a host before 1.22.0 does not read it. Nobody ran this against a real 1.22.0 host: the frontend tests use a fake host that models the arbiter rules written from this documentation.</p>
 </div>
 
 <h3 id="electron">Beside an open editor (<code>--electron</code>)</h3>
@@ -322,7 +322,6 @@ node dist/n2-mcp.mjs --connect &lt;host:port&gt; --fingerprint &lt;sha256&gt; (-
 
 <h2 id="not-built">What is not built yet</h2>
 <ul>
-<li><strong>The bridge sending <code>yield</code>.</strong> The engine accepts the flag from 1.22.0; the bridge does not send it yet (above).</li>
 <li><strong>The <code>--electron</code> backend</strong> (working beside an open editor with request multiplexing and the editor's confirmation dialogs): listed under "Not there yet" in the frontend README; the engine's MCP proposal calls it MCP6.</li>
 <li><strong>Streamable HTTP transport:</strong> not built; the proposal defers it (MCP7), loopback only with a bearer token when it comes.</li>
 <li><strong>An end-to-end smoke test in this repository's CI</strong> that drives a real host through the bridge (the proposal's MCP4) does not exist; nothing in this repository's CI exercises the bridge.</li>
@@ -332,11 +331,11 @@ node dist/n2-mcp.mjs --connect &lt;host:port&gt; --fingerprint &lt;sha256&gt; (-
 <h2 id="verification">What this page is based on</h2>
 <div class="callout open-question">
 <p class="callout-title">Read from code, not run</p>
-<p>This page was written by reading the bridge's source and README on the frontend repository's <code>master</code> (the commit where it syncs to protocol 1.21.0). Nobody ran the bridge against a real <code>N2EditorHost</code>, Claude Code or Claude Desktop while writing it. The frontend README itself records as not verified: the write and play tools against a real host (its tests use a fake host written from the protocol documentation, and a fake child process for the game), the confirmation prompt in a real Claude Code or Claude Desktop, and whether those clients show resources, subscriptions, prompts or progress. The numbers above are the constants in <code>mcp/src/limits.ts</code>.</p>
+<p>This page was written by reading the bridge's source and README on the frontend repository's <code>master</code> (the commit where it syncs to protocol 1.22.0 and sends <code>yield</code>). Nobody ran the bridge against a real <code>N2EditorHost</code>, Claude Code or Claude Desktop while writing it. The frontend README itself records as not verified: the write and play tools against a real host (its tests use a fake host written from the protocol documentation, and a fake child process for the game), the confirmation prompt in a real Claude Code or Claude Desktop, and whether those clients show resources, subscriptions, prompts or progress. The numbers above are the constants in <code>mcp/src/limits.ts</code>.</p>
 </div>
 
 <div class="page-footer">
-<span>Describes master through PR #34; the bridge sections describe the frontend repository's master (protocol 1.21.0 sync) and the engine's protocol 1.22.0.</span>
+<span>Describes master through PR #34; the bridge sections describe the frontend repository's master (protocol 1.22.0 sync) and the engine's protocol 1.22.0.</span>
 <a href="index.html">Back to overview</a>
 </div>
 
