@@ -132,13 +132,14 @@ test("a 1.10 or 1.11 ServerInfo and Hello decode with the optional trailing fiel
   // ... and a string cut short is malformed, not defaulted
   assert.throws(() => protocol.decodeServerInfoResponse(full.subarray(0, full.length - 2)), RangeError)
 
-  const hello = { clientName: "editor", protocolVersion: "1.16.0", token: "t", errorCodes: true, user: "alice" }
+  const hello = { clientName: "editor", protocolVersion: "1.16.0", token: "t", errorCodes: true, user: "alice", yield: true }
   const helloFull = protocol.encodeHelloRequest(hello)
   assert.deepEqual(protocol.decodeHelloRequest(helloFull), hello)
-  const helloBare = protocol.encodeHelloRequest({ ...hello, user: "" })
-  // A 1.11 client sends no user; a 1.10 client sends no errorCodes either
-  assert.deepEqual(protocol.decodeHelloRequest(helloBare.subarray(0, helloBare.length - 4)), { ...hello, user: "" })
-  assert.deepEqual(protocol.decodeHelloRequest(helloBare.subarray(0, helloBare.length - 5)), { ...hello, errorCodes: false, user: "" })
+  const helloBare = protocol.encodeHelloRequest({ ...hello, user: "", yield: false })
+  // A 1.21 client sends no yield; a 1.11 client sends no user either; a 1.10 client sends no errorCodes either
+  assert.deepEqual(protocol.decodeHelloRequest(helloBare.subarray(0, helloBare.length - 1)), { ...hello, user: "", yield: false })
+  assert.deepEqual(protocol.decodeHelloRequest(helloBare.subarray(0, helloBare.length - 5)), { ...hello, user: "", yield: false })
+  assert.deepEqual(protocol.decodeHelloRequest(helloBare.subarray(0, helloBare.length - 6)), { ...hello, errorCodes: false, user: "", yield: false })
 })
 
 test("decoders read from a view with an offset (a Buffer slice) and ignore trailing bytes", realProtocol, () => {
@@ -150,7 +151,7 @@ test("decoders read from a view with an offset (a Buffer slice) and ignore trail
 })
 
 test("a string keeps a leading byte order mark (U+FEFF) through encode and decode", realProtocol, () => {
-  const value = { clientName: "\uFEFFeditor", protocolVersion: "1.0.0", token: "\uFEFF", errorCodes: true, user: "\uFEFFalice" }
+  const value = { clientName: "\uFEFFeditor", protocolVersion: "1.0.0", token: "\uFEFF", errorCodes: true, user: "\uFEFFalice", yield: false }
   assert.deepEqual(protocol.decodeHelloRequest(protocol.encodeHelloRequest(value)), value)
   // An Error's message is decoded straight from the payload, as text
   const error = { message: "\uFEFFbad" }
@@ -160,11 +161,11 @@ test("a string keeps a leading byte order mark (U+FEFF) through encode and decod
 test("a truncated payload throws a RangeError", realProtocol, () => {
   const vector = vectors.requests.find((v) => v.command === "Hello")
   const payload = fromHex(vector.payload)
-  // Hello's last fields (errorCodes, user) are optional trailing, so cutting them whole is an older client's payload;
-  // cutting into the user string, or into token, is not
-  assert.throws(() => protocol.decodeHelloRequest(payload.subarray(0, payload.length - 2)), RangeError)
+  // Hello's last fields (errorCodes, user, yield) are optional trailing, so cutting them whole is an older client's
+  // payload; cutting into the user string, or into token, is not
+  assert.throws(() => protocol.decodeHelloRequest(payload.subarray(0, payload.length - 3)), RangeError)
   const userBytes = new TextEncoder().encode(vector.fields.user).length
-  const tokenEnd = payload.length - 1 - 4 - userBytes
+  const tokenEnd = payload.length - 1 - 1 - 4 - userBytes
   assert.deepEqual(protocol.decodeHelloRequest(payload.subarray(0, tokenEnd)).errorCodes, false)
   assert.throws(() => protocol.decodeHelloRequest(payload.subarray(0, tokenEnd - 2)), RangeError)
   assert.throws(() => protocol.decodeHelloRequest(new Uint8Array(0)), RangeError)

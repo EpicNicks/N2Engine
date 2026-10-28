@@ -14,12 +14,18 @@ namespace N2Engine::Editor
      * "Arbiter"). Plain logic, no sockets and no clock. EditorServer's OfferToSession applies it (PR S-4).
      *
      * Given the active session (none, or a user and a role) and a verified candidate:
-     *  - no active session: Accept;
+     * In this order:
+     *  - no active session: Accept (a yielding candidate too);
+     *  - the candidate yields (Hello `yield`, since 1.22.0): Busy, never Takeover or Preempt, even from the same user and
+     *    even on a noTokenHost;
+     *  - the active session yields and the candidate does not: Preempt, whatever the roles, the same user and a
+     *    noTokenHost included;
+     *  - a host without any token (`noTokenHost`): Takeover (every client is an admin with an empty user: the newest one
+     *    takes over);
      *  - same user and same role: Takeover (the newest connection of the same user replaces the old one);
      *  - the candidate's role is strictly higher (admin > editor > viewer): Preempt;
      *  - otherwise: Busy.
-     * A host without any token (`noTokenHost`) treats every client as an admin with an empty user: the newest one takes
-     * over. (The same follows from the rule above for any host where everybody shares one identity.)
+     * Whole-struct equality is not used: `yield` is judged by its own rules above.
      *
      * Decide is a pure function; SessionArbiter adds a mutex-guarded holder of the active session (Begin/End) with no
      * call out while the lock is held. The decision names what should happen to the old session; closing it and waiting
@@ -30,6 +36,8 @@ namespace N2Engine::Editor
         /// Empty on a host without named users
         std::string user;
         TokenRole role = TokenRole::Viewer;
+        /// The client asked to yield to people (Hello `yield`, since 1.22.0)
+        bool yield = false;
 
         [[nodiscard]] bool operator==(const SessionIdentity &other) const = default;
     };

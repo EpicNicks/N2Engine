@@ -195,7 +195,23 @@ TEST(ProtocolVectorTest, ShortPayloadsOfOlderPeersDecodeWithTheDefaults)
     const HelloCmd withUser = HelloCmd::Deserialize(userReader);
     EXPECT_FALSE(withUser.errorCodes);
     EXPECT_EQ(withUser.user, "alice");
+    EXPECT_FALSE(withUser.yield) << "a 1.12 client does not send yield: false";
     EXPECT_FALSE(userReader.HasData());
+
+    // A 1.22 client says whether it yields to people (after errorCodes and user)
+    BufferWriter helloWithYield;
+    helloWithYield.WriteString("agent");
+    helloWithYield.WriteString("1.22.0");
+    helloWithYield.WriteString("token");
+    helloWithYield.WriteBool(true);
+    helloWithYield.WriteString("agent-claude");
+    helloWithYield.WriteBool(true);
+    BufferReader yieldReader(helloWithYield.Data());
+    const HelloCmd withYield = HelloCmd::Deserialize(yieldReader);
+    EXPECT_TRUE(withYield.errorCodes);
+    EXPECT_EQ(withYield.user, "agent-claude");
+    EXPECT_TRUE(withYield.yield);
+    EXPECT_FALSE(yieldReader.HasData());
 }
 
 // Each response vector's fields, written by the server's builder, give the vector's frame: byte for byte, except that

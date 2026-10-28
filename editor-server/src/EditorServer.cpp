@@ -3256,7 +3256,7 @@ namespace N2Engine::Editor
         if (evaluation.result == HelloEvaluation::Result::Accepted)
         {
             verified.payload = std::move(payload);
-            verified.identity = SessionIdentity{evaluation.identity.user, evaluation.identity.role};
+            verified.identity = SessionIdentity{evaluation.identity.user, evaluation.identity.role, evaluation.identity.yield};
             verified.errorCodes = cmd->errorCodes;
             return true;
         }
@@ -3323,7 +3323,7 @@ namespace N2Engine::Editor
             return;
         }
         const ConnectionIdentity identity = CurrentIdentity();
-        _arbiter->UpdateIdentity(connection.sessionId, SessionIdentity{identity.user, identity.role});
+        _arbiter->UpdateIdentity(connection.sessionId, SessionIdentity{identity.user, identity.role, identity.yield});
     }
 
     bool EditorServer::OfferToSession(PreAuthJob &job, std::optional<std::vector<uint8_t>> hello,
@@ -3433,6 +3433,14 @@ namespace N2Engine::Editor
                                     : std::format("Session takeover: the session of user={} role={} is closed for a newer "
                                                   "connection of the same user peer={}",
                                                   userText(*effective), TokenRoleName(effective->role), peerText));
+                    }
+                    else if (effective->yield)
+                    {
+                        ++_sessionPreemptions;
+                        PostLog(std::format("Session preemption: the yielding session of user={} role={} is closed for a "
+                                            "client that does not yield (user={} role={}) peer={}",
+                                            userText(*effective), TokenRoleName(effective->role), userText(candidate),
+                                            TokenRoleName(candidate.role), peerText));
                     }
                     else
                     {
@@ -4743,6 +4751,7 @@ namespace N2Engine::Editor
             }
             evaluation.identity = std::move(*matched);
         }
+        evaluation.identity.yield = cmd.yield;
         const ConnectionIdentity &identity = evaluation.identity;
         const std::string whoInParentheses =
             identity.authenticated
@@ -4809,7 +4818,11 @@ namespace N2Engine::Editor
         // authentication has nobody to name)
         const std::string who =
             identity.authenticated ? std::format("user={} role={}", identity.user, TokenRoleName(identity.role)) : std::string{};
-        const std::string whoAtEnd = who.empty() ? std::string{} : " " + who;
+        std::string whoAtEnd = who.empty() ? std::string{} : " " + who;
+        if (cmd.yield)
+        {
+            whoAtEnd += " yield=1";
+        }
 
         const auto clientVersion = ParseProtocolVersion(cmd.protocolVersion);
         const auto serverVersion = ParseProtocolVersion(ProtocolVersion);

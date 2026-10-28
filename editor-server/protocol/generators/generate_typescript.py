@@ -55,14 +55,18 @@ WRITE_METHOD = {
 READ_METHOD = dict(WRITE_METHOD, bytes="rest")
 
 # Names a generated decoder uses itself, so a field can't be named after them (fields become its local variables)
-RESERVED_FIELD_NAMES = {
-    "reader", "payload",
-    # JavaScript reserved words
+RESERVED_FIELD_NAMES = {"reader", "payload"}
+# JavaScript reserved words: fine as property names (the types, the encoders and the returned object), but a decoder's
+# local variable for such a field gets a trailing underscore
+JS_RESERVED_WORDS = {
     "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do", "else", "enum",
     "export", "extends", "false", "finally", "for", "function", "if", "import", "in", "instanceof", "new", "null",
     "return", "super", "switch", "this", "throw", "true", "try", "typeof", "var", "void", "while", "with", "yield",
     "let", "static", "implements", "interface", "package", "private", "protected", "public", "await",
 }
+
+def local_name(field: str) -> str:
+    return field + "_" if field in JS_RESERVED_WORDS else field
 
 RUNTIME = '''// ==================== Codec runtime ====================
 
@@ -405,10 +409,11 @@ def decoder(function: str, type_name: str, fields: dict, protocol: dict, doc: st
             if field in optional:
                 # Added in a later minor version: a payload from an older peer ends before it
                 default = {"bool": "false", "string": '""'}.get(ftype, "0")
-                lines.append(f"  const {field} = reader.remaining > 0 ? {read} : {default};")
+                lines.append(f"  const {local_name(field)} = reader.remaining > 0 ? {read} : {default};")
             else:
-                lines.append(f"  const {field} = {read};")
-        lines.append(f"  return {{ {', '.join(fields)} }};")
+                lines.append(f"  const {local_name(field)} = {read};")
+        returned = ", ".join(f if local_name(f) == f else f"{f}: {local_name(f)}" for f in fields)
+        lines.append(f"  return {{ {returned} }};")
     lines.append("}")
     lines.append("")
     return lines

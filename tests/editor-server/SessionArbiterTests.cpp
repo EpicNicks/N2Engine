@@ -16,9 +16,9 @@ namespace
 {
     constexpr std::array<TokenRole, 3> Roles = {TokenRole::Viewer, TokenRole::Editor, TokenRole::Admin};
 
-    SessionIdentity Who(const std::string &user, const TokenRole role)
+    SessionIdentity Who(const std::string &user, const TokenRole role, const bool yield = false)
     {
-        return SessionIdentity{user, role};
+        return SessionIdentity{user, role, yield};
     }
 
     int Rank(const TokenRole role)
@@ -251,4 +251,136 @@ TEST(SessionArbiterTest, AnIdentityUpdateForASessionThatIsNotActiveIsIgnored)
     arbiter.End(second.sessionId);
     arbiter.UpdateIdentity(second.sessionId, Who("mallory", TokenRole::Viewer));
     EXPECT_FALSE(arbiter.Active().has_value()) << "an update does not start a session";
+}
+
+// ==================== The Hello yield flag (protocol 1.22.0) ====================
+
+TEST(SessionArbiterYieldTest, AYieldingCandidateIsAcceptedWhenNobodyIsActive)
+{
+    for (const TokenRole role : Roles)
+    {
+        for (const bool noTokenHost : {false, true})
+        {
+            EXPECT_EQ(SessionArbiter::Decide(std::nullopt, Who("agent", role, true), noTokenHost).decision,
+                      ArbiterDecision::Accept);
+        }
+    }
+}
+
+TEST(SessionArbiterYieldTest, AYieldingCandidateNeverTakesOverOrPreempts)
+{
+    // Against a non-yielding and a yielding active session, every role pairing, the same user and another one, with and
+    // without a token on the host: Busy every time
+    for (const bool activeYields : {false, true})
+    {
+        for (const TokenRole active : Roles)
+        {
+            for (const TokenRole candidate : Roles)
+            {
+                for (const char *candidateUser : {"alice", "agent"})
+                {
+                    for (const bool noTokenHost : {false, true})
+                    {
+                        const ArbiterVerdict verdict = SessionArbiter::Decide(
+                            Who("alice", active, activeYields), Who(candidateUser, candidate, true), noTokenHost);
+                        EXPECT_EQ(verdict.decision, ArbiterDecision::Busy)
+                            << "active " << Rank(active) << (activeYields ? " yields" : "") << ", candidate "
+                            << Rank(candidate) << " user " << candidateUser << (noTokenHost ? ", no token" : "");
+                        EXPECT_NE(std::string(verdict.reason), "");
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST(SessionArbiterYieldTest, AnyNonYieldingCandidatePreemptsAYieldingSession)
+{
+    for (const TokenRole active : Roles)
+    {
+        for (const TokenRole candidate : Roles)
+        {
+            for (const char *candidateUser : {"alice", "carol"})
+            {
+                for (const bool noTokenHost : {false, true})
+                {
+                    // A lower role, an equal one, the same user (which would be a Takeover without the flag), all Preempt
+                    const ArbiterVerdict verdict = SessionArbiter::Decide(
+                        Who("alice", active, true), Who(candidateUser, candidate, false), noTokenHost);
+                    EXPECT_EQ(verdict.decision, ArbiterDecision::Preempt)
+                        << "active " << Rank(active) << ", candidate " << Rank(candidate) << " user " << candidateUser
+                        << (noTokenHost ? ", no token" : "");
+                    EXPECT_NE(std::string(verdict.reason), "");
+                }
+            }
+        }
+    }
+}
+
+TEST(SessionArbiterYieldTest, ANonYieldingActiveSessionIsJudgedByTheOldRules)
+{
+    // The flag on neither side changes nothing: the rule matrices above (same user, another user, no token host) hold.
+    // Spot checks with the candidate's flag false explicitly:
+    EXPECT_EQ(SessionArbiter::Decide(Who("alice", TokenRole::Admin), Who("alice", TokenRole::Admin)).decision,
+              ArbiterDecision::Takeover);
+    EXPECT_EQ(SessionArbiter::Decide(Who("carol", TokenRole::Viewer), Who("bob", TokenRole::Editor)).decision,
+              ArbiterDecision::Preempt);
+    EXPECT_EQ(SessionArbiter::Decide(Who("bob", TokenRole::Editor), Who("carol", TokenRole::Viewer)).decision,
+              ArbiterDecision::Busy);
+    EXPECT_EQ(SessionArbiter::Decide(Who("bob", TokenRole::Editor), Who("erin", TokenRole::Admin), true).decision,
+              ArbiterDecision::Takeover);
+}
+
+TEST(SessionArbiterYieldTest, TheHolderRecordsTheFlagAndAHumanPreemptsAnAgent)
+{
+    SessionArbiter arbiter;
+    const SessionArbiter::BeginResult agent = arbiter.Begin(Who("agent", TokenRole::Admin, true));
+    ASSERT_NE(agent.sessionId, 0u);
+    ASSERT_TRUE(arbiter.Active().has_value());
+    EXPECT_TRUE(arbiter.Active()->yield);
+
+    // A second agent is turned away and the first is untouched
+    const SessionArbiter::BeginResult otherAgent = arbiter.Begin(Who("agent2", TokenRole::Admin, true));
+    EXPECT_EQ(otherAgent.verdict.decision, ArbiterDecision::Busy);
+    EXPECT_EQ(otherAgent.sessionId, 0u);
+    EXPECT_EQ(arbiter.ActiveSessionId(), agent.sessionId);
+
+    // A viewer human preempts the admin agent
+    const SessionArbiter::BeginResult human = arbiter.Begin(Who("carol", TokenRole::Viewer));
+    EXPECT_EQ(human.verdict.decision, ArbiterDecision::Preempt);
+    EXPECT_EQ(human.replacedSessionId, agent.sessionId);
+    EXPECT_FALSE(arbiter.Active()->yield);
+}
+
+TEST(SessionArbiterYieldTest, ALaterHelloCanChangeTheFlag)
+{
+    SessionArbiter arbiter;
+    const SessionArbiter::BeginResult session = arbiter.Begin(Who("bob", TokenRole::Editor));
+    ASSERT_NE(session.sessionId, 0u);
+    // Not yielding: its own user takes it over, a lower role is turned away
+    EXPECT_EQ(arbiter.Evaluate(Who("bob", TokenRole::Editor)).decision, ArbiterDecision::Takeover);
+    EXPECT_EQ(arbiter.Evaluate(Who("carol", TokenRole::Viewer)).decision, ArbiterDecision::Busy);
+
+    arbiter.UpdateIdentity(session.sessionId, Who("bob", TokenRole::Editor, true));
+    EXPECT_TRUE(arbiter.Active()->yield);
+    EXPECT_EQ(arbiter.Evaluate(Who("bob", TokenRole::Editor)).decision, ArbiterDecision::Preempt);
+    EXPECT_EQ(arbiter.Evaluate(Who("carol", TokenRole::Viewer)).decision, ArbiterDecision::Preempt);
+    EXPECT_EQ(arbiter.Evaluate(Who("bob", TokenRole::Editor, true)).decision, ArbiterDecision::Busy);
+
+    arbiter.UpdateIdentity(session.sessionId, Who("bob", TokenRole::Editor, false));
+    EXPECT_EQ(arbiter.Evaluate(Who("carol", TokenRole::Viewer)).decision, ArbiterDecision::Busy);
+}
+
+TEST(SessionArbiterYieldTest, ANoTokenHostPreemptsAYieldingSessionAndRefusesAYieldingCandidate)
+{
+    SessionArbiter arbiter(true);
+    const SessionArbiter::BeginResult agent = arbiter.Begin(Who("", TokenRole::Admin, true));
+    ASSERT_NE(agent.sessionId, 0u);
+    EXPECT_EQ(arbiter.Evaluate(Who("", TokenRole::Admin, true)).decision, ArbiterDecision::Busy);
+    EXPECT_EQ(arbiter.Evaluate(Who("", TokenRole::Admin)).decision, ArbiterDecision::Preempt);
+    arbiter.End(agent.sessionId);
+    const SessionArbiter::BeginResult human = arbiter.Begin(Who("", TokenRole::Admin));
+    ASSERT_NE(human.sessionId, 0u);
+    EXPECT_EQ(arbiter.Evaluate(Who("", TokenRole::Admin, true)).decision, ArbiterDecision::Busy);
+    EXPECT_EQ(arbiter.Evaluate(Who("", TokenRole::Admin)).decision, ArbiterDecision::Takeover);
 }

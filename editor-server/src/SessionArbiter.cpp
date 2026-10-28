@@ -25,6 +25,14 @@ namespace N2Engine::Editor
         {
             return {ArbiterDecision::Accept, "no session is active"};
         }
+        if (candidate.yield)
+        {
+            return {ArbiterDecision::Busy, "a yielding client never takes over or preempts a session"};
+        }
+        if (active->yield)
+        {
+            return {ArbiterDecision::Preempt, "the active session yields to any client that does not"};
+        }
         if (noTokenHost)
         {
             return {ArbiterDecision::Takeover, "a host without a token: the newest client takes over"};
