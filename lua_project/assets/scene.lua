@@ -22,6 +22,7 @@ local Stations = require("scripts.SmokeStations")
 local DemoStations = require("scripts.DemoStations")
 local Emitters = require("scripts.ParticleEmitters")
 local SoftBodies = require("scripts.SoftBodies")
+local PhysicsBodies = require("scripts.PhysicsBodies")
 
 local scene = SceneManager.GetCurrentScene()
 if scene == nil then
@@ -60,6 +61,14 @@ local actions = {
     ["Soft Bodies Reset"] = { { type = "KeyboardButton", key = "R" } },
     ["Soft Bodies Backend"] = { { type = "KeyboardButton", key = "J" } },
     ["Soft Bodies Push"] = { { type = "KeyboardButton", key = "V" } },
+    -- The other stations (scripts/StationKeys.lua; Spin.lua for the spin toggle)
+    ["Physics Drop Ball"] = { { type = "KeyboardButton", key = "G" } },
+    ["Physics Reset"] = { { type = "KeyboardButton", key = "Z" } },
+    ["Text Next"] = { { type = "KeyboardButton", key = "T" } },
+    ["Press Button"] = { { type = "KeyboardButton", key = "Space" } },
+    ["Spin Toggle"] = { { type = "KeyboardButton", key = "M" } },
+    ["Material Next"] = { { type = "KeyboardButton", key = "N" } },
+    ["Passes Order"] = { { type = "KeyboardButton", key = "O" } },
 }
 for index = 1, #Stations do
     actions["Station " .. index] = { { type = "KeyboardButton", key = "Key" .. index } }
@@ -194,26 +203,10 @@ table.insert(roots, sun)
 
 -- ===== Station 1: physics (the original test scene) =====
 
--- Falling cube
-local cube = GameObject.Create("TestCube")
-cube:AddComponent("CubeRenderer"):SetColor(Color.Blue)
-cube:AddComponent("BoxCollider"):SetSize(Vector3.One)
-local cubeBody = cube:AddComponent("Rigidbody")
-cubeBody:SetBodyType(BodyType.Dynamic)
-cubeBody:SetGravityEnabled(true)
-
--- Falling sphere, offset so it lands on the cube's edge
-local SPHERE_RADIUS = 1.0
-local sphere = GameObject.Create("TestSphere")
-sphere:CreatePositionable()
-sphere:GetPositionable():SetPosition(Vector3(0.5, 4.0, 0.0))
-local sphereRenderer = sphere:AddComponent("SphereRenderer")
-sphereRenderer:SetRadius(SPHERE_RADIUS)
-sphereRenderer:SetColor(Color.Red)
-sphere:AddComponent("SphereCollider"):SetRadius(SPHERE_RADIUS)
-local sphereBody = sphere:AddComponent("Rigidbody")
-sphereBody:SetGravityEnabled(true)
-sphereBody:SetBodyType(BodyType.Dynamic)
+-- Falling cube and, offset so it lands on the cube's edge, a falling sphere (scripts/PhysicsBodies.lua, which
+-- StationKeys.lua also uses to put them back on Z)
+local cube = PhysicsBodies.CreateCube()
+local sphere = PhysicsBodies.CreateSphere()
 
 -- Static floor (a collider without a Rigidbody doesn't move)
 local FLOOR_SIZE = Vector3(30.0, 1.0, 30.0)
@@ -612,20 +605,20 @@ do
     local hud = UI.CreateCanvas("Smoke HUD")
     table.insert(roots, hud)
 
-    -- Bottom-left, 580 x 112: the stations' cameras keep everything that matters in the top four fifths of the window
+    -- Bottom-left, 580 x 124: the stations' cameras keep everything that matters in the top four fifths of the window
     local background = Panel(hud, "HUD Background", Color.new(0.0, 0.0, 0.0, 0.6))
     local rect = background:GetComponent("RectTransform")
     rect:SetAnchorMin(Vector2(0, 0))
     rect:SetAnchorMax(Vector2(0, 0))
     rect:SetPivot(Vector2(0, 0))
     rect:SetAnchoredPosition(Vector2(8, 8))
-    rect:SetSizeDelta(Vector2(580, 112))
+    rect:SetSizeDelta(Vector2(580, 124))
 
     Layout(Label(background, "HUD Title", "", { size = 18, wrap = false }), 10, 4, 560, 22)
     Layout(Label(background, "HUD Keys", "Keys 1-7, 8 9 0 -: stations   WASD: move   Arrows: look   U: UI panel   "
-        .. "H: this HUD   Esc: quit", { size = 12, color = Color.new(0.8, 0.8, 0.85, 1.0), wrap = false }),
-        10, 28, 560, 16)
-    Layout(Label(background, "HUD Caption", "", { size = 12, color = CAPTION }), 10, 46, 560, 62)
+        .. "H: HUD   Esc: quit   Station keys: see below", { size = 12, color = Color.new(0.8, 0.8, 0.85, 1.0),
+        wrap = false }), 10, 28, 560, 16)
+    Layout(Label(background, "HUD Caption", "", { size = 12, color = CAPTION }), 10, 46, 560, 74)
 
     hud:AddComponent("LuaComponent"):SetScript("res://scripts/SmokeHud.lua")
 end
@@ -640,6 +633,11 @@ table.insert(roots, cameraController)
 local particleStation = GameObject.Create("Particle Station")
 particleStation:AddComponent("LuaComponent"):SetScript("res://scripts/ParticleStation.lua")
 table.insert(roots, particleStation)
+
+-- The keys of stations 1 to 6, 9 and 10 (each acts only while the camera is at its station)
+local stationKeys = GameObject.Create("Station Keys")
+stationKeys:AddComponent("LuaComponent"):SetScript("res://scripts/StationKeys.lua")
+table.insert(roots, stationKeys)
 
 -- The same for the soft bodies and their signs
 local softBodyStation = GameObject.Create("Soft Body Station")

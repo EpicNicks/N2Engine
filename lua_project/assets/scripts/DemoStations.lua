@@ -20,7 +20,8 @@ return {
         camera = Vector3(150.0, -1.0, 9.0),
         look = "A world-space panel with two buttons. Button A has a yellow trigger volume in front of it: it still "
             .. "clicks, because triggers never block a world canvas. Button B has a solid green block in front: "
-            .. "clicking it hits the block, so its counter stays 0. Hover: darker. Hold: darker still.",
+            .. "clicking it hits the block, so its counter stays 0. Hover: darker. Hold: darker still. Space: click A "
+            .. "from the keyboard (B has no key: a keyboard click would skip the block).",
     },
     {
         name = "Text effect passes",
@@ -29,7 +30,8 @@ return {
         look = "TextRenderer:AddEffectPass on a grey board: an outline, a shadow and a glow, each one pass; then the "
             .. "same yellow and red passes twice. Before: added order puts red in front and hides the yellow. "
             .. "After: explicit orders bring the yellow back in front. Last: a pass at order -300 behind the "
-            .. "settings shadow. The glow needs OpenGL.",
+            .. "settings shadow. The glow needs OpenGL. O: give the Before word"
+            .. " the After word's pass orders, and back.",
     },
     {
         name = "Soft bodies",
