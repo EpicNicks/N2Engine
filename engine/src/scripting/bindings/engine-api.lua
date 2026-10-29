@@ -2649,6 +2649,36 @@ function Network.GetPredictionTuning() end
 ---@return boolean applied
 function Network.SetPredictionTuning(tuning) end
 
+---The tick to stamp the client's input with now so that it reaches the server just in time:
+---floor(server tick) + ceil((RTT / 2 + jitter allowance) * tick rate) - the server's input delay (the server applies a frame stamped T on
+---tick T + delay, so the delay is slack that lets the stamp be earlier). nil on a process that runs no client and before the clock has synced.
+---@return number? tick
+function Network.GetSuggestedInputTick() end
+
+---@class TimeDilation
+---@field enabled boolean Opt-in; off by default. When on, the engine runs the client's fixed-step clock a little fast or slow to keep input stamps at the suggested tick (Authoritative mode only; the server and lockstep/rollback are never touched)
+---@field minScale number Slowest the fixed-step clock may run (0.5 to 1, default 0.9)
+---@field maxScale number Fastest (1 to 2, default 1.1)
+---@field deadZoneTicks number A lead error within this many ticks is left alone (0 to 10, default 0.5)
+---@field gainPerTick number Scale change per tick of error beyond the dead zone (default 0.02)
+---@field smoothingMs number Time constant of the low-pass filter on the error (default 250)
+---@field maxSlewPerSecond number The scale moves at most this much a second (default 0.25)
+---@field resyncTicks number An error over this many ticks holds or skips that many ticks at once instead (default 10)
+---@field resyncCooldownMs number After a resync the controller waits this long (default 1000)
+---@field scale number (read-only) the fixed-step factor in force now
+---@field leadTicks number? (read-only) how many ticks the client's newest input stamp is ahead of the suggested tick; nil until known
+
+---The client's time dilation setting and state. nil on a process that runs no client.
+---@return TimeDilation? dilation
+function Network.GetTimeDilation() end
+
+---Changes the fields present in `dilation` (the others keep their value) on the running client. Values are clamped. An unknown or
+---read-only field, or a value of the wrong type (enabled: a boolean; the rest: a number of 0 or more) is an error and changes nothing.
+---Returns false when there is no client.
+---@param dilation TimeDilation|table
+---@return boolean applied
+function Network.SetTimeDilation(dilation) end
+
 -- ===== APPLICATION =====
 
 ---@class Application

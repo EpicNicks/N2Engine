@@ -360,6 +360,124 @@ namespace N2Engine::Scripting::Bindings
             }
             return client->SetPredictionTuning(tuning);
         }
+
+        /// Network.GetSuggestedInputTick(): the tick to stamp input with now (NetworkClient::SuggestedInputTick); nil without
+        /// a client or before its clock has synced
+        sol::object GetSuggestedInputTick(sol::this_state state)
+        {
+            Network::NetworkClient *const client = Network::NetworkClient::Active();
+            const std::optional<std::uint32_t> tick = client != nullptr ? client->SuggestedInputTick() : std::nullopt;
+            if (!tick.has_value())
+            {
+                return sol::make_object(state, sol::lua_nil);
+            }
+            return sol::make_object(state, static_cast<double>(*tick));
+        }
+
+        /// Network.GetTimeDilation(): the client's time dilation { enabled, minScale, maxScale, deadZoneTicks, gainPerTick,
+        /// smoothingMs, maxSlewPerSecond, resyncTicks, resyncCooldownMs } plus the read-only { scale, leadTicks } (leadTicks
+        /// nil until known); nil when this process runs no client
+        sol::object GetTimeDilation(sol::this_state state)
+        {
+            Network::NetworkClient *const client = Network::NetworkClient::Active();
+            if (client == nullptr)
+            {
+                return sol::make_object(state, sol::lua_nil);
+            }
+            const Network::TimeDilationOptions &options = client->GetTimeDilation();
+            sol::table table = sol::state_view(state).create_table();
+            table["enabled"] = options.enabled;
+            table["minScale"] = options.minScale;
+            table["maxScale"] = options.maxScale;
+            table["deadZoneTicks"] = options.deadZoneTicks;
+            table["gainPerTick"] = options.gainPerTick;
+            table["smoothingMs"] = static_cast<double>(options.smoothingMicros) / 1000.0;
+            table["maxSlewPerSecond"] = options.maxSlewPerSecond;
+            table["resyncTicks"] = options.resyncTicks;
+            table["resyncCooldownMs"] = static_cast<double>(options.resyncCooldownMicros) / 1000.0;
+            table["scale"] = client->FixedStepScale();
+            if (const std::optional<double> lead = client->InputLeadTicks())
+            {
+                table["leadTicks"] = *lead;
+            }
+            return sol::make_object(state, table);
+        }
+
+        /// Network.SetTimeDilation(t): the fields present in `t` replace the client's (values are clamped); an unknown or
+        /// read-only field, or one of the wrong type, is an error and changes nothing. Returns false without a client.
+        bool SetTimeDilation(const sol::table &fields)
+        {
+            Network::NetworkClient *const client = Network::NetworkClient::Active();
+            if (client == nullptr)
+            {
+                return false;
+            }
+            Network::TimeDilationOptions options = client->GetTimeDilation();
+            for (const auto &pair : fields)
+            {
+                if (pair.first.get_type() != sol::type::string)
+                {
+                    throw std::runtime_error("Network.SetTimeDilation: the keys must be field names");
+                }
+                const std::string key = pair.first.as<std::string>();
+                if (key == "enabled")
+                {
+                    if (pair.second.get_type() != sol::type::boolean)
+                    {
+                        throw std::runtime_error("Network.SetTimeDilation: enabled must be a boolean");
+                    }
+                    options.enabled = pair.second.as<bool>();
+                    continue;
+                }
+                if (pair.second.get_type() != sol::type::number)
+                {
+                    throw std::runtime_error(std::format("Network.SetTimeDilation: {} must be a number", key));
+                }
+                const double value = pair.second.as<double>();
+                if (!std::isfinite(value) || value < 0.0)
+                {
+                    throw std::runtime_error(std::format("Network.SetTimeDilation: {} must be a number of 0 or more", key));
+                }
+                if (key == "minScale")
+                {
+                    options.minScale = value;
+                }
+                else if (key == "maxScale")
+                {
+                    options.maxScale = value;
+                }
+                else if (key == "deadZoneTicks")
+                {
+                    options.deadZoneTicks = value;
+                }
+                else if (key == "gainPerTick")
+                {
+                    options.gainPerTick = value;
+                }
+                else if (key == "smoothingMs")
+                {
+                    options.smoothingMicros = static_cast<std::uint64_t>(std::min(value, 5000.0) * 1000.0);
+                }
+                else if (key == "maxSlewPerSecond")
+                {
+                    options.maxSlewPerSecond = value;
+                }
+                else if (key == "resyncTicks")
+                {
+                    options.resyncTicks = value;
+                }
+                else if (key == "resyncCooldownMs")
+                {
+                    options.resyncCooldownMicros = static_cast<std::uint64_t>(std::min(value, 10000.0) * 1000.0);
+                }
+                else
+                {
+                    throw std::runtime_error(std::format("Network.SetTimeDilation: unknown field '{}'", key));
+                }
+            }
+            client->SetTimeDilation(options);
+            return true;
+        }
     }
 
     void BindNetwork(LuaRuntime &runtime)
@@ -378,5 +496,8 @@ namespace N2Engine::Scripting::Bindings
         network["GetJitter"] = [](sol::this_state state) { return ClientSeconds(state, true); };
         network["GetPredictionTuning"] = [](sol::this_state state) { return GetPredictionTuning(state); };
         network["SetPredictionTuning"] = [](const sol::table &fields) { return SetPredictionTuning(fields); };
+        network["GetSuggestedInputTick"] = [](sol::this_state state) { return GetSuggestedInputTick(state); };
+        network["GetTimeDilation"] = [](sol::this_state state) { return GetTimeDilation(state); };
+        network["SetTimeDilation"] = [](const sol::table &fields) { return SetTimeDilation(fields); };
     }
 }

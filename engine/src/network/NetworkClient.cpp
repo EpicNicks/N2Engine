@@ -52,8 +52,10 @@ namespace N2Engine::Network
     NetworkClient::NetworkClient(N2Net::ITransport &transport, NetworkWorld &world, NetworkClientOptions options)
         : _transport(transport), _world(world), _options(std::move(options)),
           _input(_options.inputLayout, _options.inputRedundancy), _clock(_options.clock),
-          _interpolator(_options.interpolation)
+          _interpolator(_options.interpolation), _dilation(_options.timeDilation)
     {
+        _options.serverInputDelayTicks = std::min(_options.serverInputDelayTicks, kMaxInputDelayTicks);
+        _options.jitterAllowance = std::isfinite(_options.jitterAllowance) ? std::clamp(_options.jitterAllowance, 0.0, 8.0) : 1.0;
         _localFingerprint = MakeFingerprint(_options.scenePath, _options.sceneHash, _world.SceneObjectCount(),
                                             _options.prefabs, _options.inputLayout);
         _options.clockBurstIntervalMicros = std::max<std::uint64_t>(_options.clockBurstIntervalMicros, kMinClockIntervalMicros);
@@ -159,6 +161,9 @@ namespace N2Engine::Network
             ReconcilePredicted();
             ApplyPredictedPositions();
         }
+
+        // Time dilation (opt-in): judge the lead of the game's input stamps against the suggested tick
+        UpdateDilation();
 
         // Remote objects at the interpolated time of this update
         ApplyInterpolation();
@@ -690,6 +695,12 @@ namespace N2Engine::Network
             return std::unexpected(std::string("input can be queued only once the client has joined"));
         }
         const std::expected<std::uint32_t, std::string> queued = _input.Queue(tick, values);
+        if (queued.has_value())
+        {
+            _hasInputTick = true;
+            _lastInputTick = tick;
+            _lastInputAt = _now;
+        }
         if (queued.has_value() && _predictionMap.has_value())
         {
             // Predict with the input the server will read: the layout's quantisation of the values
@@ -703,6 +714,87 @@ namespace N2Engine::Network
             }
         }
         return queued;
+    }
+
+    // ---- Input lead and time dilation (netcode stage B6 follow-up) -------------------------------------------------------
+
+    std::optional<double> NetworkClient::SuggestedInputTickExact()
+    {
+        if (!_clock.Synced() || _clock.TickRate() == 0)
+        {
+            return std::nullopt;
+        }
+        const double rate = static_cast<double>(_clock.TickRate());
+        const double lead = (static_cast<double>(_clock.RttMicros()) * 0.5 +
+                             _options.jitterAllowance * static_cast<double>(_clock.JitterMicros())) *
+                            rate / kMicrosPerSecond;
+        return std::max(0.0, _clock.ServerTick(_now) + lead - static_cast<double>(_options.serverInputDelayTicks));
+    }
+
+    std::optional<std::uint32_t> NetworkClient::SuggestedInputTick()
+    {
+        if (!_clock.Synced() || _clock.TickRate() == 0)
+        {
+            return std::nullopt;
+        }
+        const double rate = static_cast<double>(_clock.TickRate());
+        const double lead = std::ceil((static_cast<double>(_clock.RttMicros()) * 0.5 +
+                                       _options.jitterAllowance * static_cast<double>(_clock.JitterMicros())) *
+                                      rate / kMicrosPerSecond);
+        const double tick = std::floor(_clock.ServerTick(_now)) + lead - static_cast<double>(_options.serverInputDelayTicks);
+        return static_cast<std::uint32_t>(static_cast<std::uint64_t>(std::max(0.0, tick)));
+    }
+
+    std::optional<double> NetworkClient::InputLeadTicks()
+    {
+        if (!_hasInputTick)
+        {
+            return std::nullopt;
+        }
+        const std::optional<double> target = SuggestedInputTickExact();
+        if (!target.has_value())
+        {
+            return std::nullopt;
+        }
+        // Compare modulo 2^32, as stamps are: the whole-tick part as a signed distance, the fraction as is
+        const double floorTarget = std::floor(*target);
+        const std::int32_t whole =
+            TickDifference(_lastInputTick, static_cast<std::uint32_t>(static_cast<std::uint64_t>(floorTarget)));
+        return static_cast<double>(whole) + 0.5 - (*target - floorTarget);
+    }
+
+    double NetworkClient::FixedStepScale() const noexcept
+    {
+        return _state == NetworkClientState::Joined ? _dilation.Scale() : 1.0;
+    }
+
+    std::int32_t NetworkClient::TakeFixedStepAdjustTicks() noexcept
+    {
+        return _state == NetworkClientState::Joined ? _dilation.TakeResyncTicks() : 0;
+    }
+
+    void NetworkClient::UpdateDilation()
+    {
+        if (!_dilation.Options().enabled)
+        {
+            return;
+        }
+        if (_state != NetworkClientState::Joined)
+        {
+            _dilation.Reset();
+            return;
+        }
+        // A game that stopped stamping (paused, loading) has no lead to judge; a resync's hold is excused
+        constexpr std::uint64_t kStaleMicros = 1'000'000;
+        if (!_dilation.InCooldown(_now) && _hasInputTick && _now > _lastInputAt && _now - _lastInputAt > kStaleMicros)
+        {
+            _dilation.Reset();
+            return;
+        }
+        if (const std::optional<double> lead = InputLeadTicks(); lead.has_value())
+        {
+            _dilation.Update(_now, *lead);
+        }
     }
 
     // ---- Prediction (netcode stage B6) ---------------------------------------------------------------------------------
