@@ -886,7 +886,9 @@ namespace N2Engine::Network
                 continue;
             }
             // What the object shows now: the state and the correction still being shown
-            const Math::Vector3 shown = controller->GetState().position + OffsetOf(predicted);
+            // (A rider is placed on its platform as the platform is now: the state's world position was set at the last
+            // step, and the platform has moved since, which is not part of the correction)
+            const Math::Vector3 shown = controller->Anchored(controller->GetState()).position + OffsetOf(predicted);
             const PredictionStepper stepper = [controller](const Physics::CharacterState &state,
                                                            const Physics::CharacterInput &input, const float dt)
             { return controller->Simulate(state, input, dt); };
