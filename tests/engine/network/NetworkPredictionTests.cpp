@@ -199,6 +199,53 @@ TEST(PredictionOptionsTest, ClampedBoundsEveryKnob)
     EXPECT_EQ(options.Clamped().historyTicks, kMaxPredictionHistory);
 }
 
+TEST(PredictionOptionsTest, FromSettingsTakesTickRateSmoothingAndSnapThreshold)
+{
+    NetworkSettings settings;
+    settings.tickRate = 30;
+    settings.authoritative.smoothingMs = 250;
+    settings.authoritative.snapThreshold = 2.5;
+    const PredictionOptions options = PredictionOptions::FromSettings(settings);
+    EXPECT_FLOAT_EQ(options.stepSeconds, 1.0f / 30.0f);
+    EXPECT_EQ(options.smoothingMicros, 250'000u);
+    EXPECT_FLOAT_EQ(options.snapDistance, 2.5f);
+    EXPECT_FLOAT_EQ(options.positionEpsilon, 0.01f);
+    EXPECT_FALSE(options.enabled) << "settings do not switch prediction on";
+
+    // The defaults of the settings are the defaults of the options
+    const PredictionOptions defaults = PredictionOptions::FromSettings(NetworkSettings{});
+    EXPECT_EQ(defaults.smoothingMicros, PredictionOptions{}.smoothingMicros);
+    EXPECT_FLOAT_EQ(defaults.snapDistance, PredictionOptions{}.snapDistance);
+    EXPECT_FLOAT_EQ(defaults.stepSeconds, PredictionOptions{}.stepSeconds);
+}
+
+TEST(PredictionOptionsTest, TuningReplacesOnlyItsFieldsAndIsClamped)
+{
+    PredictionOptions base;
+    base.stepSeconds = 1.0f / 30.0f;
+    base.historyTicks = 32;
+    base.mapping.moveSpeed = 7.0f;
+
+    PredictionTuning tuning = PredictionTuning::Of(base);
+    EXPECT_FLOAT_EQ(tuning.positionEpsilon, 0.01f);
+    EXPECT_EQ(tuning.smoothingMicros, 100'000u);
+    tuning.positionEpsilon = 0.05f;
+    tuning.snapDistance = 3.0f;
+    tuning.smoothingMicros = 1ull << 60;
+    tuning.velocityEpsilon = std::numeric_limits<float>::quiet_NaN();
+    tuning.applySmoothing = false;
+    const PredictionOptions out = tuning.AppliedTo(base);
+    EXPECT_FLOAT_EQ(out.positionEpsilon, 0.05f);
+    EXPECT_FLOAT_EQ(out.snapDistance, 3.0f);
+    EXPECT_EQ(out.smoothingMicros, 5'000'000u);
+    EXPECT_FLOAT_EQ(out.velocityEpsilon, 0.05f) << "not finite: the default";
+    EXPECT_FALSE(out.applySmoothing);
+    // What the step depends on is untouched
+    EXPECT_FLOAT_EQ(out.stepSeconds, 1.0f / 30.0f);
+    EXPECT_EQ(out.historyTicks, 32u);
+    EXPECT_FLOAT_EQ(out.mapping.moveSpeed, 7.0f);
+}
+
 // ---- The history -------------------------------------------------------------------------------------------------------
 
 TEST(PredictionHistoryTest, RecordsRisingTicksOnly)

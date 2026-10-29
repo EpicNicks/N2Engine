@@ -720,6 +720,16 @@ namespace N2Engine::Network
         }
     }
 
+    bool NetworkClient::SetPredictionTuning(const PredictionTuning &tuning) noexcept
+    {
+        if (!_predictionMap.has_value())
+        {
+            return false;
+        }
+        _predictionOptions = tuning.AppliedTo(_predictionOptions);
+        return true;
+    }
+
     std::size_t NetworkClient::PredictionHistorySize(const NetworkId id) const
     {
         const auto found = _predicted.find(id.value);

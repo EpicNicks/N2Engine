@@ -183,6 +183,7 @@
 <li><a href="#prediction-server">The server's step</a></li>
 <li><a href="#prediction-client">The client: predict, compare, replay</a></li>
 <li><a href="#prediction-smoothing">Smoothing</a></li>
+<li><a href="#prediction-tuning">Tuning it live</a></li>
 <li><a href="#prediction-limits">Limits and what is not verified</a></li>
 <li><a href="#prediction-tests">Its tests</a></li>
 </ol>
@@ -1341,7 +1342,11 @@ Network::SetDeclaredInputLayout(std::move(*layout));           // what a host co
 </ul>
 
 <h3 id="prediction-smoothing">Smoothing <span class="badge">B6</span></h3>
-<p>When a correction moves the state, the client records the difference between what was shown and the new state as an offset that falls linearly to zero over <code>smoothingMicros</code> (default 100 ms; the project setting <code>network.authoritative.smoothingMs</code>). With <code>applySmoothing</code> (default) every <code>Update</code> and every <code>QueueInput</code> puts the object at state + offset; otherwise the game reads <code>PredictionOffset(id)</code>. A correction over <code>snapDistance</code> (default 1.0; <code>snapThreshold</code>) or a window overflow is a jump with no offset. A host copies the three project settings into <code>PredictionOptions</code> (<code>smoothingMs</code>, <code>snapThreshold</code>, and the tick rate for <code>stepSeconds</code>); nothing does it for it. <code>predictionMaxMs</code> is not used: the window is <code>historyTicks</code> (8 to 128).</p>
+<p>When a correction moves the state, the client records the difference between what was shown and the new state as an offset that falls linearly to zero over <code>smoothingMicros</code> (default 100 ms; the project setting <code>network.authoritative.smoothingMs</code>). With <code>applySmoothing</code> (default) every <code>Update</code> and every <code>QueueInput</code> puts the object at state + offset; otherwise the game reads <code>PredictionOffset(id)</code>. A correction over <code>snapDistance</code> (default 1.0; <code>snapThreshold</code>) or a window overflow is a jump with no offset. <code>PredictionOptions::FromSettings(NetworkSettings)</code> builds the options from the three project settings (<code>smoothingMs</code>, <code>snapThreshold</code>, and the tick rate for <code>stepSeconds</code>); a host calls it and sets <code>enabled</code> and the mapping; nothing does it for the host. <code>predictionMaxMs</code> is not used: the window is <code>historyTicks</code> (8 to 128).</p>
+
+<h3 id="prediction-tuning">Tuning it live <span class="badge">B6</span></h3>
+<p>The feel of a correction (how big an error counts, when it snaps, how long it slides) can be changed while the client runs, so it can be tuned by playing. <code>NetworkClient::SetPredictionTuning(PredictionTuning)</code> replaces <code>positionEpsilon</code> (0.01), <code>velocityEpsilon</code> (0.05), <code>snapDistance</code> (1.0), <code>smoothingMicros</code> (100 ms, at most 5 s) and <code>applySmoothing</code>; <code>GetPredictionTuning()</code> reads them. Values are clamped like <code>PredictionOptions::Clamped</code>; the call returns false (and changes nothing) when prediction is not active. It takes effect at the next <code>Update</code>. What the step depends on (<code>stepSeconds</code>, the mapping, <code>historyTicks</code>) is deliberately not tunable live: it has to match the server. The defaults were not changed.</p>
+<p>From Lua: <code>Network.GetPredictionTuning()</code> returns <code>{ positionEpsilon, velocityEpsilon, snapDistance, smoothingMs, applySmoothing }</code> (nil without a client whose prediction is on) and <code>Network.SetPredictionTuning({ snapDistance = 2, smoothingMs = 150 })</code> changes the fields given and returns true; an unknown field or a bad value is an error that changes nothing. A game can bind these to keys or its debug console while playing; the project settings <code>network.authoritative.smoothingMs</code> and <code>snapThreshold</code> stay the saved defaults (copy a value you like into them). The epsilons have no project setting.</p>
 
 <h3 id="prediction-limits">Limits and what is not verified <span class="badge">B6</span></h3>
 <ul>
@@ -1358,7 +1363,7 @@ Network::SetDeclaredInputLayout(std::move(*layout));           // what a host co
 
 <h3 id="prediction-tests">Its tests <span class="badge">B6</span></h3>
 <ul>
-<li><code>CharacterInputMapTest.*</code>, <code>PredictionOptionsTest.*</code>, <code>PredictionHistoryTest.*</code> (<code>tests/engine/network/NetworkPredictionTests.cpp</code>): the mapping and its bounds, the history with a scripted stepper (match, replay equal to a straight run for every acknowledged tick, ignored states, overflow, same tick twice, wrap, bounded replay).</li>
+<li><code>CharacterInputMapTest.*</code>, <code>PredictionOptionsTest.*</code>, <code>PredictionHistoryTest.*</code> (<code>tests/engine/network/NetworkPredictionTests.cpp</code>; <code>FromSettings</code> and the tuning clamps are in <code>PredictionOptionsTest.*</code>; live tuning from C++ and Lua is in <code>PredictionSessionTest.TheTuningCanBeChangedWhileTheClientRuns</code> and <code>LuaReadsAndChangesTheTuning</code>): the mapping and its bounds, the history with a scripted stepper (match, replay equal to a straight run for every acknowledged tick, ignored states, overflow, same tick twice, wrap, bounded replay).</li>
 <li><code>PredictionSessionTest.*</code> (<code>tests/engine/network/NetworkPredictionSessionTests.cpp</code>): server, client and character controller on the simulator and a real physics backend: no correction on a clean link, a push corrected by replay and smoothed, a large error snapped, a lossy reordering link converging, two clients each moving only their own pawn, off by default and a mapping error, the server step.</li>
 </ul>
 

@@ -2631,6 +2631,24 @@ function Network.GetRtt() end
 ---@return number? seconds
 function Network.GetJitter() end
 
+---@class PredictionTuning
+---@field positionEpsilon number Server and predicted position agree within this many units (default 0.01)
+---@field velocityEpsilon number ... and vertical speed within this (default 0.05)
+---@field snapDistance number A correction over this many units snaps instead of sliding (default 1)
+---@field smoothingMs number A smaller correction fades out over this many milliseconds (default 100; 0 to 5000)
+---@field applySmoothing boolean true: the engine shows the smoothed position; false: read the offset yourself
+
+---The client prediction tuning in force, for tuning the feel live. nil on a process that runs no client or whose prediction is off.
+---@return PredictionTuning? tuning
+function Network.GetPredictionTuning() end
+
+---Changes the fields present in `tuning` (the others keep their value) on the running client; takes effect at the next frame.
+---An unknown field, a value that is not a number of 0 or more (applySmoothing: a boolean) is an error and changes nothing.
+---Returns false when there is no client with prediction on.
+---@param tuning PredictionTuning|table
+---@return boolean applied
+function Network.SetPredictionTuning(tuning) end
+
 -- ===== APPLICATION =====
 
 ---@class Application

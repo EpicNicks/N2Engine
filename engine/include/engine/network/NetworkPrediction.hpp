@@ -11,6 +11,7 @@
 #include <math/Vector3.hpp>
 
 #include "engine/network/InputLayout.hpp"
+#include "engine/network/NetworkSettings.hpp"
 #include "engine/physics/CharacterController.hpp"
 
 namespace N2Engine::Network
@@ -99,6 +100,28 @@ namespace N2Engine::Network
         bool applySmoothing = true;
 
         [[nodiscard]] PredictionOptions Clamped() const noexcept;
+
+        /// The options the project's network settings give: stepSeconds from tickRate, smoothingMicros from
+        /// authoritative.smoothingMs and snapDistance from authoritative.snapThreshold. The rest (mapping, epsilons,
+        /// history, enabled) keep the values of a default PredictionOptions: set them after.
+        [[nodiscard]] static PredictionOptions FromSettings(const NetworkSettings &settings) noexcept;
+    };
+
+    /// The part of PredictionOptions that is safe to change while a client runs, because it only decides how an error is
+    /// judged and shown, never what the step computes (that, the step size, the mapping and the history length, must stay
+    /// what the server uses). NetworkClient::SetPredictionTuning applies it between two Updates; the values are clamped as
+    /// PredictionOptions::Clamped does.
+    struct PredictionTuning
+    {
+        float positionEpsilon = 0.01f;
+        float velocityEpsilon = 0.05f;
+        float snapDistance = 1.0f;
+        std::uint64_t smoothingMicros = 100'000;
+        bool applySmoothing = true;
+
+        [[nodiscard]] static PredictionTuning Of(const PredictionOptions &options) noexcept;
+        /// `options` with the tuning fields replaced by these (clamped)
+        [[nodiscard]] PredictionOptions AppliedTo(const PredictionOptions &options) const noexcept;
     };
 
     struct PredictionStats

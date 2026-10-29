@@ -1235,6 +1235,7 @@ return Bouncer
 <li><code>Network.GetServerTime()</code> returns the server's time in seconds (its fixed tick divided by its tick rate). On a client it is the estimate, as of the last network update: it never decreases, and it is nil until the first answer to a clock ping has arrived. On a process that runs a server and no client it is the server's own tick count over its tick rate; in a process that runs neither it is nil.</li>
 <li><code>Network.GetServerTick()</code> returns the server's fixed tick: fractional on a client, whole on a server. nil in the same cases.</li>
 <li><code>Network.GetRtt()</code> and <code>Network.GetJitter()</code> return the round trip to the server and its jitter in seconds (the median of the recent clock pings and their mean absolute deviation from it). nil on a process that runs no client, and before its clock has synced.</li>
+<li><code>Network.GetPredictionTuning()</code> returns the client prediction tuning <code>{ positionEpsilon, velocityEpsilon, snapDistance, smoothingMs, applySmoothing }</code> (nil without a client whose prediction is on); <code>Network.SetPredictionTuning(t)</code> changes the fields given, returns true, and raises an error (changing nothing) for an unknown field or bad value. For tuning the feel live; see <a href="netcode.html#prediction-tuning">netcode</a>.</li>
 </ul>
 <pre><code>local t = Network.GetServerTime()
 if t then Log.Info(string.format("server time %.3f, rtt %.0f ms", t, (Network.GetRtt() or 0) * 1000)) end</code></pre>

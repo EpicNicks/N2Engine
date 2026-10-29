@@ -22,6 +22,7 @@
 #include "engine/network/n2net/SimTransport.hpp"
 #include "engine/physics/CharacterController.hpp"
 #include "engine/prefabs/PrefabManager.hpp"
+#include "engine/scripting/LuaRuntime.hpp"
 
 // Client prediction end to end (netcode stage B6): a NetworkServer that steps the owner's CharacterController with the
 // owner's input, and NetworkClients that predict the same step, over seeded virtual links with no sleeps, on a real
@@ -446,6 +447,86 @@ TEST_F(PredictionSessionTest, ALargeErrorSnapsInsteadOfSliding)
     EXPECT_EQ(rig.client->PredictionOffset(*rig.pawnId).Length(), 0.0f);
     Ticks(10, &Idle);
     EXPECT_LT(Distance(rig.Controller()->GetState().position, theirs->GetState().position), 0.01f);
+}
+
+TEST_F(PredictionSessionTest, TheTuningCanBeChangedWhileTheClientRuns)
+{
+    ClientRig &rig = AddClient(Clean());
+    JoinWithPawn(rig);
+    CharacterController *const theirs = ServerController(rig);
+    Ticks(120, &Idle);
+
+    const PredictionTuning initial = rig.client->GetPredictionTuning();
+    EXPECT_FLOAT_EQ(initial.snapDistance, 1.0f);
+    EXPECT_EQ(initial.smoothingMicros, 100'000u);
+
+    // A snap distance of 20 turns the 8 unit teleport of ALargeErrorSnapsInsteadOfSliding into a smoothed correction
+    PredictionTuning wide = initial;
+    wide.snapDistance = 20.0f;
+    ASSERT_TRUE(rig.client->SetPredictionTuning(wide));
+    EXPECT_FLOAT_EQ(rig.client->GetPredictionTuning().snapDistance, 20.0f);
+    const std::uint64_t wideBefore = rig.client->PredictionStatistics().corrections;
+    const std::uint64_t snapsBefore = rig.client->PredictionStatistics().snaps;
+    ASSERT_TRUE(theirs->Teleport(theirs->GetState().position + Math::Vector3(8.0f, 0.0f, -3.0f)));
+    for (int i = 0; i < 20 && rig.client->PredictionStatistics().corrections == wideBefore; ++i)
+    {
+        Tick(&Idle);
+    }
+    EXPECT_GT(rig.client->PredictionStatistics().corrections, wideBefore);
+    EXPECT_EQ(rig.client->PredictionStatistics().snaps, snapsBefore) << "8 units is under the widened snap distance";
+    EXPECT_GT(rig.client->PredictionOffset(*rig.pawnId).Length(), 1.0f);
+    Ticks(10, &Idle);
+
+    // Smoothing off: the next correction is shown at once (no offset)
+    PredictionTuning none = rig.client->GetPredictionTuning();
+    none.smoothingMicros = 0;
+    ASSERT_TRUE(rig.client->SetPredictionTuning(none));
+    const std::uint64_t before = rig.client->PredictionStatistics().corrections;
+    ASSERT_TRUE(theirs->Teleport(theirs->GetState().position + Math::Vector3(0.4f, 0.0f, 0.0f)));
+    for (int i = 0; i < 20 && rig.client->PredictionStatistics().corrections == before; ++i)
+    {
+        Tick(&Idle);
+    }
+    EXPECT_GT(rig.client->PredictionStatistics().corrections, before);
+    EXPECT_EQ(rig.client->PredictionOffset(*rig.pawnId).Length(), 0.0f);
+
+    // Without prediction there is nothing to tune
+    ClientRig &off = AddClient(Clean(), false);
+    EXPECT_FALSE(off.client->SetPredictionTuning(wide));
+}
+
+TEST_F(PredictionSessionTest, LuaReadsAndChangesTheTuning)
+{
+    static const bool luaReady = Scripting::LuaRuntime::Instance().Initialize();
+    ASSERT_TRUE(luaReady);
+    sol::state &lua = Scripting::LuaRuntime::Instance().GetState();
+    ClientRig &rig = AddClient(Clean()); // the most recent client is the active one
+    JoinWithPawn(rig);
+
+    const auto run = [&lua](const std::string &code)
+    { return lua.safe_script(code, sol::script_pass_on_error); };
+    const sol::protected_function_result got = run("return Network.GetPredictionTuning()");
+    ASSERT_TRUE(got.valid());
+    const sol::table table = got;
+    EXPECT_FLOAT_EQ(table["positionEpsilon"].get<float>(), 0.01f);
+    EXPECT_FLOAT_EQ(table["snapDistance"].get<float>(), 1.0f);
+    EXPECT_DOUBLE_EQ(table["smoothingMs"].get<double>(), 100.0);
+    EXPECT_TRUE(table["applySmoothing"].get<bool>());
+
+    const sol::protected_function_result set = run("return Network.SetPredictionTuning({ smoothingMs = 250, snapDistance = 2 })");
+    ASSERT_TRUE(set.valid());
+    EXPECT_TRUE(set.get<bool>());
+    EXPECT_EQ(rig.client->GetPredictionTuning().smoothingMicros, 250'000u);
+    EXPECT_FLOAT_EQ(rig.client->GetPredictionTuning().snapDistance, 2.0f);
+    EXPECT_FLOAT_EQ(rig.client->GetPredictionTuning().positionEpsilon, 0.01f) << "fields not given keep their value";
+
+    // A typo or a bad value is an error and changes nothing
+    EXPECT_FALSE(run("Network.SetPredictionTuning({ smoothingMS = 5 })").valid());
+    EXPECT_FALSE(run("Network.SetPredictionTuning({ snapDistance = -1 })").valid());
+    EXPECT_FALSE(run("Network.SetPredictionTuning({ applySmoothing = 1 })").valid());
+    EXPECT_FALSE(run("Network.SetPredictionTuning({ snapDistance = 9, smoothingMs = 'x' })").valid());
+    EXPECT_EQ(rig.client->GetPredictionTuning().smoothingMicros, 250'000u);
+    EXPECT_FLOAT_EQ(rig.client->GetPredictionTuning().snapDistance, 2.0f);
 }
 
 TEST_F(PredictionSessionTest, ALossyReorderingLinkConvergesToTheServersState)

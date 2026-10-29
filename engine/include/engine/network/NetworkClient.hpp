@@ -278,6 +278,13 @@ namespace N2Engine::Network
         /// state's plus this. Zero when none or the object is not predicted.
         [[nodiscard]] Math::Vector3 PredictionOffset(NetworkId id) const;
 
+        /// The tuning in force (the clamped options.prediction values; defaults while prediction is off)
+        [[nodiscard]] PredictionTuning GetPredictionTuning() const noexcept { return PredictionTuning::Of(_predictionOptions); }
+        /// Changes how errors are judged and shown while the client runs: false (nothing changed) when prediction is not
+        /// active. Values are clamped. Takes effect at the next Update; a correction already being shown keeps the
+        /// duration it was measured against only until the next frame (the offset is recomputed from the new duration).
+        bool SetPredictionTuning(const PredictionTuning &tuning) noexcept;
+
         /// The hook for an object the game moves itself (a predicted, locally controlled one: netcode stage B6): the
         /// filter is asked for each object before it is interpolated and returns false to leave the object alone. An
         /// object this client owns is never interpolated, filter or not. Runs inside Update.

@@ -133,6 +133,37 @@ namespace N2Engine::Network
         return out;
     }
 
+    PredictionOptions PredictionOptions::FromSettings(const NetworkSettings &settings) noexcept
+    {
+        PredictionOptions out;
+        out.stepSeconds = settings.tickRate > 0 ? 1.0f / static_cast<float>(settings.tickRate) : out.stepSeconds;
+        out.smoothingMicros = static_cast<std::uint64_t>(std::max(settings.authoritative.smoothingMs, 0)) * 1000u;
+        out.snapDistance = static_cast<float>(settings.authoritative.snapThreshold);
+        return out.Clamped();
+    }
+
+    PredictionTuning PredictionTuning::Of(const PredictionOptions &options) noexcept
+    {
+        PredictionTuning tuning;
+        tuning.positionEpsilon = options.positionEpsilon;
+        tuning.velocityEpsilon = options.velocityEpsilon;
+        tuning.snapDistance = options.snapDistance;
+        tuning.smoothingMicros = options.smoothingMicros;
+        tuning.applySmoothing = options.applySmoothing;
+        return tuning;
+    }
+
+    PredictionOptions PredictionTuning::AppliedTo(const PredictionOptions &options) const noexcept
+    {
+        PredictionOptions out = options;
+        out.positionEpsilon = positionEpsilon;
+        out.velocityEpsilon = velocityEpsilon;
+        out.snapDistance = snapDistance;
+        out.smoothingMicros = smoothingMicros;
+        out.applySmoothing = applySmoothing;
+        return out.Clamped();
+    }
+
     // ---- PredictionHistory -------------------------------------------------------------------------------------------
 
     PredictionHistory::PredictionHistory(const std::size_t capacity)
