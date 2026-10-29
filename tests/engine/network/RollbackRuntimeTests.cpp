@@ -711,6 +711,7 @@ TEST(RollbackRuntimeFollowUpTest, ALongSessionDoesNotDriftAndItsRingsAndPoolsSta
     }
 }
 
+#if N2NET_HAS_UDP // the web build has no sockets
 TEST(RollbackRuntimeFollowUpTest, TwoRollbackPeersAgreeOverRealLoopbackUdpSockets)
 {
     ShotPrefab prefab;
@@ -762,6 +763,7 @@ TEST(RollbackRuntimeFollowUpTest, TwoRollbackPeersAgreeOverRealLoopbackUdpSocket
     EXPECT_EQ(relay.Stats().desyncs, 0u);
     EXPECT_GE(CompareHistories(*a.runtime, *b.runtime), 15u);
 }
+#endif
 
 // ===== RollbackRuntime in Application's fixed loop =====
 
