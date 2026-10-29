@@ -543,6 +543,20 @@ jobs:
           ALSOFT_DRIVERS: "null"
           PYTHONDONTWRITEBYTECODE: "1"
 
+      # The n2-mcp bridge (MCP4) against this real host: the script fetches the frontend commit pinned in
+      # tests/smoke/mcp-bridge-ref.txt, builds the single-file bridge with npm and drives it over stdio as an MCP client.
+      # This leg only (x86_64, Clang), so the other legs are not slowed.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: n2-mcp bridge smoke test (pinned bridge, real host)
+        timeout-minutes: 15
+        run: python3 tests/smoke/editor_host_smoke.py --scenario mcp --config Release --exe build/bin/N2EditorHost
+        env:
+          ALSOFT_DRIVERS: "null"
+          PYTHONDONTWRITEBYTECODE: "1"
+
       # The physics determinism corpus (stage J7): ten scenes on Jolt, 600 ticks each, hashed every 60 ticks; the hashes are
       # written to determinism-hashes.json and uploaded for the `determinism` job, which compares every leg with the others and
       # with tests/golden/physics-determinism.json. ctest ran the same tests above (what they assert concerns this binary

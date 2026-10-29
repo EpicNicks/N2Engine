@@ -5,7 +5,10 @@ Runs the real N2EditorHost end to end. Scenarios:
   host  create a project, start the host on it and talk to it over its TCP protocol, then the exit flags
   tls   start a --tls host, check its identity files, pin its certificate, restart it and require the same one
   attach  no host is started: connect to one that is already running (--port, --tls, --token-env) and check its health
-  all   host and tls (the default)
+  mcp   the n2-mcp bridge (built from the commit in tests/smoke/mcp-bridge-ref.txt; needs git, node 22+ and npm) driven
+        over stdio as an MCP client against a real --tls --tokens-file host: tools, read and write flows with undo, the
+        refused irreversible tier, bad credentials, and the yield rules; then --launch unless --no-launch (docs/mcp.html)
+  all   host and tls (the default; not mcp)
 
 --expect-physics on|off|any (default any) says whether the host under test was built with PhysX: on requires the
 Physics subsystem to be Running (the Linux PhysX legs and the Docker image), off requires Disabled, any (Windows legs
@@ -638,6 +641,304 @@ def scenario_tls(hosts, version):
     say("The restarted --tls host reused the certificate")
 
 
+# ---- Scenario: mcp ----
+# The n2-mcp bridge (frontend repository, mcp/) driven over stdio as an MCP client, against a real host. The bridge is
+# built from the commit pinned in tests/smoke/mcp-bridge-ref.txt. See docs/mcp.html#verified.
+
+BRIDGE_REF_FILE = Path(__file__).resolve().parent / "mcp-bridge-ref.txt"
+NEW_TOKEN_LINE = re.compile(r"^token: (\S+)", re.M)
+
+
+def read_bridge_ref():
+    """(repository URL, full commit sha) from tests/smoke/mcp-bridge-ref.txt: `repo=` and `commit=` lines."""
+    values = {}
+    for line in read_text(BRIDGE_REF_FILE).splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, _, value = line.partition("=")
+            values[key.strip()] = value.strip()
+    check(values.get("repo") and re.fullmatch(r"[0-9a-f]{40}", values.get("commit", "")),
+          "%s needs repo=<url> and commit=<40 hex digits>" % BRIDGE_REF_FILE.name)
+    return values["repo"], values["commit"]
+
+
+def run_checked(command, cwd, what, env=None, timeout=900):
+    result = subprocess.run(command, cwd=str(cwd), env=env, capture_output=True, timeout=timeout)
+    if result.returncode != 0:
+        tail = (result.stdout + result.stderr).decode("utf-8", "replace")[-3000:]
+        raise SmokeFailure("%s failed (exit %d):\n%s" % (what, result.returncode, tail))
+
+
+def build_bridge(work):
+    """Fetches the pinned frontend commit, installs its packages (no install scripts: Electron's binary isn't needed
+    for the bridge) and bundles the bridge. Returns the path of the single-file bundle, dist/n2-mcp.mjs."""
+    repo, commit = read_bridge_ref()
+    src = work / "frontend"
+    src.mkdir()
+    say("Building the bridge from %s at %s" % (repo, commit))
+    run_checked(["git", "init", "-q"], src, "git init")
+    run_checked(["git", "fetch", "-q", "--depth", "1", repo, commit], src, "git fetch of the pinned commit")
+    run_checked(["git", "checkout", "-q", "FETCH_HEAD"], src, "git checkout of the pinned commit")
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(src), capture_output=True).stdout.decode().strip()
+    check(head == commit, "Checked out %s, expected the pinned %s" % (head, commit))
+    npm = shutil.which("npm")
+    check(npm, "npm isn't on PATH (the mcp scenario needs Node 22 or later)")
+    env = dict(os.environ, ELECTRON_SKIP_BINARY_DOWNLOAD="1")
+    run_checked([npm, "ci", "--ignore-scripts", "--no-audit", "--no-fund"], src, "npm ci", env=env)
+    run_checked([npm, "run", "build:mcp"], src, "npm run build:mcp", env=env)
+    bundle = src / "dist" / "n2-mcp.mjs"
+    check(bundle.is_file(), "npm run build:mcp made no %s" % bundle)
+    return bundle
+
+
+def docs_tool_lists():
+    """The tool names docs/mcp.html lists: read, write and play, from the first cell of each table row of the three
+    sections (so a name that only appears in a description doesn't count)."""
+    html = read_text(REPO_ROOT / "docs" / "mcp.html")
+    lists = {}
+    for key in ("read-tools", "write-tools", "play-tools"):
+        start = html.index('id="%s"' % key)
+        end = html.find("<h3", start + 1)
+        section = html[start:end if end >= 0 else len(html)]
+        names = []
+        for cell in re.findall(r"<tr><td>(.*?)</td>", section, re.S):
+            names += re.findall(r"<code>(n2_[a-z_]+)</code>", cell)
+        lists[key] = names
+    check(len(lists["read-tools"]) == 11 and len(lists["write-tools"]) == 22 and len(lists["play-tools"]) == 6,
+          "docs/mcp.html lists %d read, %d write, %d play tools, expected 11, 22 and 6" % (
+              len(lists["read-tools"]), len(lists["write-tools"]), len(lists["play-tools"])))
+    return lists
+
+
+class McpSmoke:
+    """Small assertion helper: names the step that failed, and prints the bridge's stderr (see scenario_mcp)."""
+
+    def __init__(self):
+        self.bridges = []
+        self.secrets = []  # tokens: none may appear in a bridge's stderr or in a tool result
+        self.seen_text = []
+
+    def step(self, text):
+        say("mcp: " + text)
+
+    def tool(self, bridge, name, arguments=None, expect_error=None):
+        """Calls a tool. expect_error: None (must succeed), True (must fail) or a substring of the error text."""
+        result = bridge.call(name, arguments)
+        self.seen_text.append(result.text + json.dumps(result.structured))
+        say("  %s(%s) -> %s" % (name, json.dumps(arguments or {}), result))
+        if expect_error is None:
+            check(not result.is_error, "%s failed: %s" % (name, result.text[:600]))
+        else:
+            check(result.is_error, "%s should have failed, got: %s" % (name, result.text[:600]))
+            if expect_error is not True:
+                check(expect_error in result.text, "%s failed, but not with %r: %s" % (name, expect_error, result.text[:600]))
+        return result
+
+
+def make_tokens(hosts, work, users):
+    """Tokens for the users ((name, role) pairs) from the host's own --new-token, and the tokens file they go in.
+    Returns ({name: token}, path)."""
+    tokens, entries = {}, []
+    for name, role in users:
+        out = hosts.run(["--new-token", name, role]).stdout.decode("utf-8", "replace")
+        match = NEW_TOKEN_LINE.search(out)
+        entry = [line for line in out.splitlines() if line.startswith("{")]
+        check(match and len(entry) == 1, "--new-token %s %s printed no token and entry: %r" % (name, role, out[:200]))
+        tokens[name] = match.group(1)
+        entries.append(json.loads(entry[0]))
+    path = work / "mcp-tokens.json"
+    path.write_text(json.dumps(entries), encoding="utf-8")
+    if os.name != "nt":
+        path.chmod(0o600)
+    return tokens, path
+
+
+def scenario_mcp(hosts, work, version, bridge_path, node, with_launch):
+    mcp = McpSmoke()
+    from n2_mcp_client import McpClient, bridge_env  # noqa: PLC0415 (only this scenario needs it)
+
+    try:
+        node = shutil.which(node)
+        check(node, "node isn't on PATH (the mcp scenario needs Node 22 or later)")
+        bundle = Path(bridge_path).resolve() if bridge_path else build_bridge(work)
+        check(bundle.is_file(), "No bridge bundle at %s" % bundle)
+        lists = docs_tool_lists()
+        read_names, write_names, play_names = lists["read-tools"], lists["write-tools"], lists["play-tools"]
+
+        project, _ = scenario_create(hosts, work)
+        tokens, tokens_file = make_tokens(hosts, work, [("agent", "editor"), ("watcher", "viewer"), ("person", "editor")])
+        mcp.secrets = list(tokens.values())
+        proc = hosts.start("mcp-host", ["--tls", "--port", "0", "--project", str(project), "--renderer", "software",
+                                        "--tokens-file", str(tokens_file)])
+        match = wait_ready_line(proc, TLS_READY_LINE, "The --tls host")
+        port, fingerprint = int(match.group(1)), match.group(2)
+
+        def start_bridge(name, token_name, extra=None, token=None):
+            env = bridge_env(N2_MCP_SMOKE_TOKEN=token if token is not None else tokens[token_name])
+            args = ["--connect", "127.0.0.1:%d" % port, "--fingerprint", fingerprint, "--user", token_name,
+                    "--token-env", "N2_MCP_SMOKE_TOKEN", "--busy-wait", "500"] + (extra or [])
+            bridge = McpClient(node, bundle, args, env, work, name)
+            mcp.bridges.append(bridge)
+            bridge.initialize()
+            return bridge
+
+        def stop_bridge(bridge):
+            code = bridge.close()
+            check(code == 0, "The bridge (%s) exited with code %s after its stdin closed" % (bridge.name, code))
+            time.sleep(1.0)  # the host notices the closed connection a moment later
+
+        # ---- Refused: a bad token, an absent one, a wrong fingerprint ----
+        mcp.step("a bad token is refused")
+        bad = start_bridge("bad-token", "agent", token="not-the-token")
+        mcp.tool(bad, "n2_status", expect_error="auth_failed")
+        stop_bridge(bad)
+
+        mcp.step("an absent token: the bridge won't start")
+        result = subprocess.run([node, str(bundle), "--connect", "127.0.0.1:%d" % port, "--fingerprint", fingerprint,
+                                 "--token-env", "N2_MCP_SMOKE_ABSENT"], capture_output=True, timeout=30,
+                                env=bridge_env(N2_MCP_SMOKE_ABSENT=""), stdin=subprocess.DEVNULL)
+        check(result.returncode == 2, "The bridge with no token exited with %d, expected 2" % result.returncode)
+
+        mcp.step("a wrong certificate fingerprint is refused")
+        env = bridge_env(N2_MCP_SMOKE_TOKEN=tokens["agent"])
+        wrong = McpClient(node, bundle, ["--connect", "127.0.0.1:%d" % port, "--fingerprint", "0" * 64, "--user", "agent",
+                                         "--token-env", "N2_MCP_SMOKE_TOKEN"], env, work, "wrong-fingerprint")
+        mcp.bridges.append(wrong)
+        wrong.initialize()
+        mcp.tool(wrong, "n2_status", expect_error="fingerprint_mismatch")
+        stop_bridge(wrong)
+
+        # ---- A viewer sees the read tools only ----
+        mcp.step("a viewer token lists the 11 read tools")
+        viewer = start_bridge("viewer", "watcher")
+        names = viewer.list_tools()
+        check(sorted(names) == sorted(read_names), "Viewer tools/list: %s, docs/mcp.html lists %s" % (sorted(names), sorted(read_names)))
+        status = mcp.tool(viewer, "n2_status")
+        role = status.data["host"]["role"]
+        check(role == "viewer", "n2_status for the viewer says role %r" % role)
+        stop_bridge(viewer)
+
+        # ---- An editor: the read tools, the write tools, no play tools (--connect) ----
+        agent = start_bridge("agent", "agent")
+        names = agent.list_tools()
+        mcp.step("an editor token lists %d read + %d write tools, no play tools" % (len(read_names), len(write_names)))
+        check(sorted(names) == sorted(read_names + write_names),
+              "Editor tools/list: %s, docs/mcp.html lists %s" % (sorted(names), sorted(read_names + write_names)))
+        check(not set(names) & set(play_names), "A --connect bridge lists play tools: %s" % sorted(set(names) & set(play_names)))
+
+        mcp.step("read flow")
+        status = mcp.tool(agent, "n2_status").data
+        check(status["host"]["role"] == "editor", "n2_status says role %r" % status["host"]["role"])
+        check((status.get("project") or {}).get("name") == "Smoke Project", "n2_status names project %r" % status.get("project"))
+        check((status.get("scene") or {}).get("path") == "res://scenes/Main.scene", "n2_status names scene %r" % status.get("scene"))
+        hierarchy = mcp.tool(agent, "n2_get_hierarchy").data
+        before = [node_["name"] for node_ in hierarchy["nodes"]]
+        project_info = mcp.tool(agent, "n2_get_project_info").data
+        check(project_info.get("name") == "Smoke Project", "n2_get_project_info names %r" % project_info.get("name"))
+
+        mcp.step("write flow with undo")
+        created = mcp.tool(agent, "n2_create_entity", {"name": "Bridge Cube", "preset": "Cube"}).data
+        entity_id = created["entityId"]
+        entity = mcp.tool(agent, "n2_get_entity", {"entityId": entity_id}).data
+        check("Bridge Cube" in json.dumps(entity) and "CubeRenderer" in json.dumps(entity),
+              "n2_get_entity doesn't describe the cube the bridge made: %s" % json.dumps(entity)[:400])
+        names_now = [node_["name"] for node_ in mcp.tool(agent, "n2_get_hierarchy").data["nodes"]]
+        check("Bridge Cube" in names_now, "The created entity isn't in the hierarchy: %s" % names_now)
+        mcp.tool(agent, "n2_set_properties", {"entityId": entity_id, "name": "Bridge Renamed"})
+        node_names = [node_["name"] for node_ in mcp.tool(agent, "n2_get_hierarchy").data["nodes"]]
+        check("Bridge Renamed" in node_names and "Bridge Cube" not in node_names, "The rename isn't in the hierarchy: %s" % node_names)
+        scene = mcp.tool(agent, "n2_status").data["scene"]
+        check(scene.get("dirty") is True, "n2_status says the scene is clean after edits: %s" % scene)
+        mcp.tool(agent, "n2_undo")
+        node_names = [node_["name"] for node_ in mcp.tool(agent, "n2_get_hierarchy").data["nodes"]]
+        check("Bridge Cube" in node_names and "Bridge Renamed" not in node_names, "Undo didn't restore the name: %s" % node_names)
+        mcp.tool(agent, "n2_undo")
+        node_names = [node_["name"] for node_ in mcp.tool(agent, "n2_get_hierarchy").data["nodes"]]
+        check(node_names == before, "Undoing both steps left %s, expected %s" % (node_names, before))
+        scene = mcp.tool(agent, "n2_status").data["scene"]
+        check(scene.get("dirty") is False, "n2_status says the scene is dirty after undoing every step: %s" % scene)
+        saved_on_disk = read_text(project / "assets" / "scenes" / "Main.scene")
+        check("Bridge" not in saved_on_disk, "The scene file holds an entity the agent made and undid")
+
+        mcp.step("the irreversible tier is refused without --allow-irreversible")
+        mcp.tool(agent, "n2_create_entity", {"name": "Unsaved", "preset": "Empty"})
+        mcp.tool(agent, "n2_save_scene", expect_error="irreversible_refused")
+        check("Unsaved" not in read_text(project / "assets" / "scenes" / "Main.scene"), "A refused save wrote the scene")
+        mcp.tool(agent, "n2_undo")
+        mcp.tool(agent, "n2_set_project_settings", {"settings": {"name": "Renamed By Agent"}}, expect_error="irreversible_refused")
+        check(json.loads(read_text(project / "project.n2proj")).get("name") == "Smoke Project", "A refused settings patch changed the project")
+
+        # ---- Yield: a person takes the host from the bridge ----
+        mcp.step("a client that doesn't yield preempts the bridge's session")
+        person = f.connect(port, tls=True)
+        person.expect(f.HELLO, f.hello_payload("CI smoke test (a person)", version, tokens["person"]), f.SERVER_INFO,
+                      "Hello of the person (does not yield) while the bridge holds the host")
+        # Either wording: the call in flight when the host closes the session ("The host ended the bridge's session"), or
+        # the first call after it ("... ended the bridge's earlier session for it"), which finds the host in use
+        preempted = mcp.tool(agent, "n2_status", expect_error="The host ended the bridge's")
+        check("busy" in preempted.text, "The preempted call isn't a busy error: %s" % preempted.text[:300])
+        person.expect(f.GET_ENGINE_HEALTH, b"", f.ENGINE_HEALTH, "GetEngineHealth of the person's session")
+        mcp.step("the bridge doesn't take the host back while the person holds it")
+        again = mcp.tool(agent, "n2_status", expect_error="does not take the host")
+        check("busy" in again.text, "The call while a person holds the host isn't a busy error: %s" % again.text[:300])
+        mcp.step("a bridge started while a person holds the host gets busy, and the person keeps it")
+        late = start_bridge("late", "agent")
+        mcp.tool(late, "n2_status", expect_error="does not take the host")
+        person.expect(f.GET_ENGINE_HEALTH, b"", f.ENGINE_HEALTH, "GetEngineHealth after the second bridge was refused")
+        stop_bridge(late)
+        person.close()
+        time.sleep(1.0)
+        mcp.step("the first bridge reconnects once the person has left")
+        for attempt in range(5):
+            result = agent.call("n2_status")
+            if not result.is_error:
+                break
+            time.sleep(1.0)
+        check(not result.is_error, "The bridge didn't reconnect after the person left: %s" % result.text[:300])
+        stop_bridge(agent)
+
+        # ---- --launch: the bridge starts a host of its own (a second project, so the two hosts don't share files) ----
+        if with_launch:
+            mcp.step("--launch: the bridge starts and ends its own host")
+            launch_project = work / "n2 launch project"
+            created = hosts.run(["--create", str(launch_project), "--name", "Launch Project"])
+            check(created.returncode == 0, "--create of the launch project exited with %d" % created.returncode)
+            launcher = McpClient(node, bundle, ["--launch", str(launch_project), "--host-path", str(hosts.exe),
+                                                "--renderer", "software"], bridge_env(), work, "launch")
+            mcp.bridges.append(launcher)
+            launcher.initialize()
+            names = launcher.list_tools()
+            check(sorted(names) == sorted(read_names + write_names + play_names),
+                  "--launch tools/list: %s, docs/mcp.html lists %s" % (sorted(names), sorted(read_names + write_names + play_names)))
+            status = mcp.tool(launcher, "n2_status").data
+            check((status.get("project") or {}).get("name") == "Launch Project", "--launch n2_status names %r" % status.get("project"))
+            made = mcp.tool(launcher, "n2_create_entity", {"name": "Launched Cube", "preset": "Cube"}).data
+            mcp.tool(launcher, "n2_undo")
+            names_now = [node_["name"] for node_ in mcp.tool(launcher, "n2_get_hierarchy").data["nodes"]]
+            check("Launched Cube" not in names_now and made["entityId"], "Undo left the launched cube: %s" % names_now)
+            stop_bridge(launcher)
+
+        # ---- No token reaches a bridge's log or a tool result ----
+        mcp.step("no token in a bridge's stderr or in any tool result")
+        for bridge in mcp.bridges:
+            err = bridge.stderr_text()
+            for secret in mcp.secrets:
+                check(secret not in err, "The bridge (%s) logged an access token" % bridge.name)
+        for text in mcp.seen_text:
+            for secret in mcp.secrets:
+                check(secret not in text, "A tool result holds an access token")
+        say("mcp: all assertions passed")
+    except Exception:
+        for bridge in mcp.bridges:
+            bridge.kill()
+            say("----- bridge (%s) stderr -----" % bridge.name)
+            say(bridge.stderr_text().rstrip("\n"))
+        raise
+    finally:
+        for bridge in mcp.bridges:
+            bridge.kill()
+
+
 def scenario_attach(port, tls, token_env, version, expect_physics):
     """Connects to a host somebody else started (the Docker image's, say), says Hello and checks its health."""
     token = os.environ.get(token_env, "") if token_env else ""
@@ -654,7 +955,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--exe", help="path to N2EditorHost (N2EditorHost.exe on Windows); not used by --scenario attach")
     parser.add_argument("--config", default="Release", help="Debug or Release: Debug builds log to the console")
-    parser.add_argument("--scenario", choices=("host", "tls", "attach", "all"), default="all")
+    parser.add_argument("--scenario", choices=("host", "tls", "attach", "mcp", "all"), default="all")
+    parser.add_argument("--bridge", help="mcp: a built n2-mcp.mjs to use instead of building the pinned commit")
+    parser.add_argument("--node", default="node", help="mcp: the node executable (22 or later)")
+    parser.add_argument("--no-launch", action="store_true", help="mcp: skip the --launch part")
     parser.add_argument("--expect-physics", choices=("on", "off", "any"), default="any",
                         help="whether the host was built with PhysX: on needs Physics Running, off needs Disabled")
     parser.add_argument("--port", type=int, help="attach: the running host's port")
@@ -685,6 +989,8 @@ def main():
             scenario_host(hosts, work, args.config, version, args.expect_physics)
         if args.scenario in ("tls", "all"):
             scenario_tls(hosts, version)
+        if args.scenario == "mcp":
+            scenario_mcp(hosts, work, version, args.bridge, args.node, not args.no_launch)
     except Exception as error:  # noqa: BLE001
         hosts.kill_all()
         hosts.dump()

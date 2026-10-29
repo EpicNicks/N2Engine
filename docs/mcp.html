@@ -69,7 +69,7 @@
 <div class="content">
 
 <h1>MCP bridge (n2-mcp)</h1>
-<p class="lead"><code>n2-mcp</code> is a program, kept in the frontend repository (<code>N2Engine-Electron-Frontend</code>, folder <code>mcp/</code>), that lets an AI agent such as Claude Code inspect and change an N2Engine project. It speaks the Model Context Protocol (MCP) on stdio to the agent and the <a href="logging-and-editor.html#hello">editor protocol</a> to an <code>N2EditorHost</code>. This page covers how to run it, the safety model, the tools that exist today, and how it shares a host with a person, including the engine's <code>yield</code> Hello flag (protocol 1.22.0).</p>
+<p class="lead"><code>n2-mcp</code> is a program, kept in the frontend repository (<code>N2Engine-Electron-Frontend</code>, folder <code>mcp/</code>), that lets an AI agent such as Claude Code inspect and change an N2Engine project. It speaks the Model Context Protocol (MCP) on stdio to the agent and the <a href="logging-and-editor.html#hello">editor protocol</a> to an <code>N2EditorHost</code>. This page covers how to run it, the safety model, the tools that exist today, and how it shares a host with a person, including the engine's <code>yield</code> Hello flag (protocol 1.22.0), what CI now runs against a real host (<a href="#verified">Verified in CI</a>) and what only a person can check (<a href="#checklist">Checklist for a person</a>).</p>
 
 <div class="toc">
 <p class="toc-title">On this page</p>
@@ -84,6 +84,8 @@
 <li><a href="#limits">Limits</a></li>
 <li><a href="#coexistence">Sharing the host with a person, and the yield flag</a></li>
 <li><a href="#not-built">What is not built yet</a></li>
+<li><a href="#verified">Verified in CI</a></li>
+<li><a href="#checklist">Checklist for a person</a></li>
 <li><a href="#verification">What this page is based on</a></li>
 </ol>
 </div>
@@ -132,6 +134,7 @@ node dist/n2-mcp.mjs --connect &lt;host:port&gt; --fingerprint &lt;sha256&gt; (-
 <tr><td><code>--disable-tools a,b,...</code></td><td>Never list these tools, read, write or play. A resource goes with its tool.</td></tr>
 <tr><td><code>--keep-journal</code></td><td>Keep the folder with the backups of overwritten files when the bridge exits (default: delete it).</td></tr>
 <tr><td><code>--busy-wait &lt;ms&gt;</code></td><td>How long to wait before the one more try when the host is busy (default 3000, at most 10000).</td></tr>
+<tr><td><code>--no-yield</code></td><td>Leave <code>yield</code> out of <code>Hello</code> (the bridge yields by default, <a href="#yield">below</a>). For a host no person shares.</td></tr>
 <tr><td><code>--call-timeout &lt;ms&gt;</code></td><td>How long one tool call may wait for the host (default 60000, at most 600000).</td></tr>
 <tr><td><code>--help</code>, <code>--version</code></td><td>Usage; the bridge name and version.</td></tr>
 </tbody>
@@ -158,7 +161,7 @@ node dist/n2-mcp.mjs --connect &lt;host:port&gt; --fingerprint &lt;sha256&gt; (-
     }
   }
 }</code></pre>
-<p>The same with the command line: <code>claude mcp add --transport stdio --scope project n2engine -- node tools/n2-mcp.mjs --launch . --renderer software</code>. Claude Desktop takes the same <code>mcpServers</code> shape in <code>claude_desktop_config.json</code> with absolute paths; prefer <code>--token-file</code> there, since that file is plain text. The syntax is as the frontend README gives it; the bridge's own tests drive it with the MCP SDK's client, not with Claude Code or Claude Desktop (see <a href="#verification">What this page is based on</a>).</p>
+<p>The same with the command line: <code>claude mcp add --transport stdio --scope project n2engine -- node tools/n2-mcp.mjs --launch . --renderer software</code>. Claude Desktop takes the same <code>mcpServers</code> shape in <code>claude_desktop_config.json</code> with absolute paths; prefer <code>--token-file</code> there, since that file is plain text. The syntax is as the frontend README gives it; the bridge's own tests drive it with the MCP SDK's client and CI drives it with a small client of its own (<a href="#verified">Verified in CI</a>); neither is Claude Code or Claude Desktop (<a href="#checklist">Checklist for a person</a>).</p>
 
 <h2 id="safety">The safety model</h2>
 <p>The host's role gate is the security boundary. Everything below that the bridge adds is a limit on what a model can do by mistake or after reading hostile text, and none of it is a substitute for a narrow token.</p>
@@ -298,8 +301,8 @@ node dist/n2-mcp.mjs --connect &lt;host:port&gt; --fingerprint &lt;sha256&gt; (-
 <h2 id="coexistence">Sharing the host with a person, and the yield flag</h2>
 <p>A host serves <strong>one session at a time</strong> (<a href="logging-and-editor.html#preauth-busy">A second authenticated client</a>). The bridge's connection is a session like an editor's, so an agent and a person contend for the same host. What happens depends on who arrives second:</p>
 <ul>
-<li><strong>The bridge finds the host busy</strong> (a person's editor, or another agent, holds it): the host answers <code>busy</code>; the bridge waits <code>--busy-wait</code> and tries <strong>once</strong> more, then answers the tool call with its own <code>busy</code> error. It never loops. A dropped or idle-closed session is reopened by the next call.</li>
-<li><strong>A person arrives while the agent holds the host:</strong> by the host's usual rules (<a href="logging-and-editor.html#preauth-busy">above</a>) the person's editor preempts the agent only with a strictly higher role, and the same user with the same role takes the session over. So give the agent a user of its own and a role at or below the person's: a person with an admin or editor role over an agent with a lower role preempts it; a person with the <em>same</em> role as the agent, as another user, is turned away with <code>busy</code> until the agent's session ends. With <code>--no-yield</code>, or against a host before 1.22.0, that is how it works. A default bridge sends <code>yield</code> and gives way instead (below).</li>
+<li><strong>The bridge finds the host busy</strong> (a person's editor, or another agent, holds it): the host answers <code>busy</code>; the bridge waits <code>--busy-wait</code> and tries <strong>once</strong> more, then answers the tool call with its own <code>busy</code> error. It never loops. A dropped or idle-closed session is reopened by the next call. A bridge that yields (the default) is never served by a host that is in use, whoever holds it and with whatever role.</li>
+<li><strong>A person arrives while the agent holds the host:</strong> with the default (the bridge yields), the host closes the bridge's session for any client that does not yield, whatever the roles (<a href="#yield">below</a>). With <code>--no-yield</code>, or against a host before 1.22.0, the host's usual rules apply (<a href="logging-and-editor.html#preauth-busy">above</a>): the person's editor preempts the agent only with a strictly higher role, and the same user with the same role takes the session over; a person with the <em>same</em> role as the agent, as another user, is turned away with <code>busy</code> until the agent's session ends. That is the gap the <code>yield</code> flag closes. Give the agent a user of its own either way.</li>
 <li><strong>The agent must never take a person's session:</strong> the arbiter's same-user takeover would let an agent that shares a person's token and user replace the person's session. Use a per-agent user and token.</li>
 </ul>
 
@@ -314,28 +317,73 @@ node dist/n2-mcp.mjs --connect &lt;host:port&gt; --fingerprint &lt;sha256&gt; (-
 <p>So an agent that sets <code>yield</code> gets an idle host, and as soon as any person's editor connects (with a token that is valid and does not itself yield) the agent's session is closed and the person's is served. The flag belongs to the connection (a later <code>Hello</code> on it replaces it), <code>ServerInfo</code> is unchanged, and the host logs <code>yield=1</code> on the line that says the client said <code>Hello</code>.</p>
 <div class="callout note">
 <p class="callout-title">The bridge yields by default</p>
-<p>Since the frontend syncs to protocol 1.22.0 (frontend PR #64), the bridge sends <code>yield: true</code> in its <code>Hello</code>, for both <code>--launch</code> and <code>--connect</code>; <code>--no-yield</code> leaves it out. A bridge that finds the host in use answers <code>busy</code> saying it yields to people, and waits longer after each consecutive busy answer (up to the 10 second cap). If a person takes the host while the bridge holds it, the bridge's next call fails with a <code>busy</code> error saying the host ended its session, and the bridge reconnects only when the host accepts it. The <code>Hello</code> goes out before the bridge knows the host's version, so it always sends the field; a host before 1.22.0 does not read it. Nobody ran this against a real 1.22.0 host: the frontend tests use a fake host that models the arbiter rules written from this documentation.</p>
+<p>Since the frontend syncs to protocol 1.22.0 (frontend PR #64), the bridge sends <code>yield: true</code> in its <code>Hello</code>, for both <code>--launch</code> and <code>--connect</code>; <code>--no-yield</code> leaves it out. A bridge that finds the host in use answers <code>busy</code> saying it yields to people, and waits longer after each consecutive busy answer (up to the 10 second cap). If a person takes the host while the bridge holds it, the bridge's next call fails with a <code>busy</code> error saying the host ended its session, and the bridge reconnects only when the host accepts it. The <code>Hello</code> goes out before the bridge knows the host's version, so it always sends the field; a host before 1.22.0 does not read it. The frontend's own tests use a fake host that models the arbiter rules; the engine's CI smoke test runs the same rules against a real 1.22.0 host with the bridge at the pinned commit (<a href="#verified">Verified in CI</a>): a client that does not yield preempts the bridge, the bridge's next call is <code>busy</code> with a message that begins "The host ended the bridge's", and the bridge does not take the host back while the person holds it.</p>
 </div>
 
 <h3 id="electron">Beside an open editor (<code>--electron</code>)</h3>
-<p>A planned <code>--electron</code> backend would let the agent work through the running Electron editor instead of contending for the host. It does not exist yet; see <a href="#not-built">What is not built yet</a>.</p>
+<p>An <code>--electron</code> backend, which lets the agent work through the running Electron editor instead of contending for the host, has since been merged in the frontend repository (its PR #65). This page does not describe it yet: it was written from the code before that PR, and the bridge the CI smoke test pins (<code>tests/smoke/mcp-bridge-ref.txt</code>) predates it, so nothing in this repository runs it. See the frontend README.</p>
 
 <h2 id="not-built">What is not built yet</h2>
 <ul>
-<li><strong>The <code>--electron</code> backend</strong> (working beside an open editor with request multiplexing and the editor's confirmation dialogs): listed under "Not there yet" in the frontend README; the engine's MCP proposal calls it MCP6.</li>
+<li><strong>Documenting and testing the <code>--electron</code> backend</strong> (working beside an open editor; the engine's MCP proposal calls it MCP6): merged in the frontend as its PR #65 after this page was written, so it is not described here, and the pinned bridge in the smoke test predates it.</li>
 <li><strong>Streamable HTTP transport:</strong> not built; the proposal defers it (MCP7), loopback only with a bearer token when it comes.</li>
-<li><strong>An end-to-end smoke test in this repository's CI</strong> that drives a real host through the bridge (the proposal's MCP4) does not exist; nothing in this repository's CI exercises the bridge.</li>
 <li><strong>Known gaps</strong> listed by the frontend README: <code>n2_screenshot</code> does not restore the host's viewport size afterwards.</li>
 </ul>
 
+<h2 id="verified">Verified in CI</h2>
+<p>Since MCP4 the engine's CI drives the bridge against a <strong>real</strong> <code>N2EditorHost</code>: <code>python3 tests/smoke/editor_host_smoke.py --scenario mcp --config Release --exe build/bin/N2EditorHost</code>, a step of the <code>linux (Release, x86_64, Clang)</code> job only (<code>actions/setup-node@v5</code>, Node 22, 15 minute timeout; the other legs are not slowed). Nothing is mocked on the host side: it is the host the job just built, started with <code>--tls --tokens-file</code> on a project made with <code>--create</code>, on the software renderer. The script:</p>
+<ol>
+<li>Fetches the frontend commit named in <code>tests/smoke/mcp-bridge-ref.txt</code>, runs <code>npm ci --ignore-scripts</code> and <code>npm run build:mcp</code> there, and checks that the checked-out commit is the pinned one. The bridge it tests is therefore a known commit, not whatever <code>master</code> is today.</li>
+<li>Makes three tokens with the host's own <code>--new-token</code> (an editor for the agent, a viewer, and an editor standing in for a person) and drives the bridge with <code>--connect</code> over stdio as an MCP client (<code>tests/smoke/n2_mcp_client.py</code>: newline-delimited JSON-RPC, protocol revision 2025-11-25, no client capabilities).</li>
+</ol>
+<p>What it asserts, each against the real host:</p>
+<ul>
+<li><strong>Refusals.</strong> A wrong token gives <code>auth_failed</code>; an absent token variable stops the bridge at start (exit code 2); a wrong certificate fingerprint gives <code>fingerprint_mismatch</code>.</li>
+<li><strong>Tool lists.</strong> A viewer's <code>tools/list</code> is exactly the eleven read tools of the <a href="#read-tools">table above</a>; an editor's over <code>--connect</code> is those plus the twenty-two <a href="#write-tools">write tools</a> and none of the <a href="#play-tools">play tools</a>; <code>--launch</code> lists all thirty-nine. The expected names are read from this page's own tables (the first cell of each row), so a tool added to or removed from the bridge without this page fails the step when the pin is bumped.</li>
+<li><strong>Read flow.</strong> <code>n2_status</code> (role, project name, open scene), <code>n2_get_hierarchy</code>, <code>n2_get_project_info</code> and <code>n2_get_entity</code>.</li>
+<li><strong>Write flow with undo.</strong> <code>n2_create_entity</code> (a cube), <code>n2_set_properties</code> (a rename), the hierarchy and <code>n2_status</code> (dirty) after the edits, then <code>n2_undo</code> twice: the name comes back, then the entity is gone, the scene is clean again, and the scene file on disk never held the entity.</li>
+<li><strong>Irreversible tier.</strong> With no <code>--allow-irreversible</code> and a client that declared no elicitation, <code>n2_save_scene</code> over unsaved changes and <code>n2_set_project_settings</code> are refused with <code>irreversible_refused</code>, and the scene file and <code>project.n2proj</code> on disk are unchanged.</li>
+<li><strong>Yield.</strong> The default bridge holds the host; a second client that does not yield (a plain editor protocol <code>Hello</code> from Python, with another user's token) takes the session; the bridge's next call is a <code>busy</code> error that begins "The host ended the bridge's"; while that client holds the host the bridge's calls stay <code>busy</code> ("does not take the host") and the client's session keeps working; a second bridge started meanwhile gets <code>busy</code> too; and once the client has left, the first bridge's call succeeds again.</li>
+<li><strong><code>--launch</code>.</strong> A bridge that starts a host of its own (<code>--host-path</code> the host under test, on a second project) lists the thirty-nine tools, answers <code>n2_status</code>, creates an entity and undoes it, and exits with code 0 when its stdin closes.</li>
+<li><strong>No token leaks.</strong> None of the three tokens appears in any bridge's stderr or in any tool result the script saw.</li>
+</ul>
+<p>When an assertion fails the script prints which one, the bridge's stderr and the hosts' logs.</p>
+
+<h3 id="verified-not">What the smoke test does not run</h3>
+<ul>
+<li>The elicitation prompt (the client declares none), and the <code>--allow-irreversible</code> path.</li>
+<li>The play tools (they are only listed), resources, subscriptions, prompts, screenshots, <code>n2_apply_batch</code>, text asset writes, <code>n2_session_revert</code>, <code>--token-file</code>, <code>--allow-admin</code> and the admin refusal, and <code>--read-only</code> (the bridge's flag or the host's).</li>
+<li>The 2026-07-28 revision of MCP (the script opens the connection the 2025-11-25 way).</li>
+<li>Any host but the Linux x86_64 Clang one in CI, the Docker image, a person's Electron editor, Claude Code and Claude Desktop (<a href="#checklist">below</a>).</li>
+</ul>
+
+<h3 id="verified-bump">The pinned bridge, and how to bump it</h3>
+<p><code>tests/smoke/mcp-bridge-ref.txt</code> holds two lines, <code>repo=</code> (the frontend repository's clone URL) and <code>commit=</code> (a full 40-digit sha). To move to a newer bridge: take the sha of the frontend's <code>master</code> (<code>git rev-parse origin/master</code> there), put it in <code>commit=</code>, run the scenario locally (below) and open a PR that changes that file; CI runs it on the Linux leg. Bump it when the frontend changes the tools, the yield behaviour or the protocol sync, and in the PR that changes host behaviour a bridge relies on. A tool list that no longer matches this page, or a changed message, fails the step: fix the page or the assertion in the same PR.</p>
+
+<h3 id="verified-local">Running it locally</h3>
+<p>You need a host built with TLS support (<code>-DN2ENGINE_EDITOR_TLS=ON</code>: <code>--tokens-file</code> hashes tokens with SHA-256), <code>git</code>, Node 22 or later and npm, and network access to GitHub and the npm registry:</p>
+<pre class="lang-text"><code>python tests/smoke/editor_host_smoke.py --scenario mcp --exe build/bin/Release/N2EditorHost.exe
+python3 tests/smoke/editor_host_smoke.py --scenario mcp --exe build/bin/N2EditorHost</code></pre>
+<p>Options: <code>--bridge &lt;path to n2-mcp.mjs&gt;</code> tests a bundle you built yourself instead of the pinned commit, <code>--no-launch</code> skips the <code>--launch</code> part, <code>--node</code> names the Node executable and <code>--work-dir</code> says where the project and logs go. The scenario was also run on Windows (MSVC, Visual Studio generator, PhysX off, TLS on) while it was written, and passed there, <code>--launch</code> included; CI runs it on Linux only.</p>
+<p class="src">Source: <code>tests/smoke/editor_host_smoke.py</code> &mdash; <code>scenario_mcp</code>, <code>build_bridge</code>, <code>docs_tool_lists</code>; <code>tests/smoke/n2_mcp_client.py</code>; <code>tests/smoke/mcp-bridge-ref.txt</code>; <code>.github/workflows/tests.yml</code> (the step <em>n2-mcp bridge smoke test</em>). See also <a href="testing.html#mcp-smoke-test">Testing</a>.</p>
+
+<h2 id="checklist">Checklist for a person</h2>
+<p>These are what no CI job can check: they need Claude Code, Claude Desktop or the Electron editor, and a person to read the prompts. Do them once per bridge release and note the client's version beside each result. None of them has been done.</p>
+<ol>
+<li><strong>A real Claude Code session against <code>--launch</code>.</strong> Register the bridge exactly as the frontend README says (<a href="#register">above</a>: <code>claude mcp add --transport stdio --scope project n2engine -- node tools/n2-mcp.mjs --launch . --renderer software</code>, with <code>N2ENGINE_HOST</code> set to a host built with TLS). In a session, ask it to list the hierarchy, create an entity, undo it, and end its session (<code>n2_end_session</code>). Check that Claude Code's own tool approval appears for the write tools, that the entity shows in the hierarchy and disappears on undo, and that the launched host ends when the session ends. Then make the scene dirty and ask it to save, and look at what Claude Code does for the <a href="#irreversible">irreversible</a> tool: either it asks you a yes or no question that names the operation (a no gives <code>confirmation_declined</code>, a yes runs it), or the call is refused with <code>irreversible_refused</code>. Record which: only a client that declares elicitation is asked.</li>
+<li><strong><code>--connect</code> against the Docker image.</strong> Start the image as <a href="editor.html#linux-host">Running the host on Linux</a> describes, with a tokens file that has an editor user for the agent, take the fingerprint from the ready line, and register a <code>--connect</code> bridge with <code>--fingerprint</code>, <code>--user</code> and <code>--token-env</code>. Ask Claude Code for <code>n2_status</code> and a hierarchy listing; check the role it reports and that it lists no play tools. CI does this against a host built in the job, not against the image.</li>
+<li><strong>A person's editor taking the host from the bridge.</strong> With the bridge connected and a call made, connect the Electron editor to the same host with another user's token. Check that the editor connects and is not refused, that the bridge's next call answers <code>busy</code> with the message that the host ended its session, what Claude Code does with that message (it should stop and tell you, not loop), and that the agent does not take the host back while the editor is connected. CI does this with a Python stand-in for the editor, not with the editor.</li>
+<li><strong>Claude Desktop, if you use it.</strong> Add the bridge to <code>claude_desktop_config.json</code> as <a href="#register">above</a> (absolute paths, <code>--token-file</code> rather than <code>--token-env</code>), restart it and repeat the read and write steps of the first item. Note whether it shows resources, prompts and the approval prompts, which the frontend README records as unknown.</li>
+</ol>
+
 <h2 id="verification">What this page is based on</h2>
 <div class="callout open-question">
-<p class="callout-title">Read from code, not run</p>
-<p>This page was written by reading the bridge's source and README on the frontend repository's <code>master</code> (the commit where it syncs to protocol 1.22.0 and sends <code>yield</code>). Nobody ran the bridge against a real <code>N2EditorHost</code>, Claude Code or Claude Desktop while writing it. The frontend README itself records as not verified: the write and play tools against a real host (its tests use a fake host written from the protocol documentation, and a fake child process for the game), the confirmation prompt in a real Claude Code or Claude Desktop, and whether those clients show resources, subscriptions, prompts or progress. The numbers above are the constants in <code>mcp/src/limits.ts</code>.</p>
+<p class="callout-title">Partly run, partly read from code</p>
+<p>This page was first written by reading the bridge's source and README on the frontend repository's <code>master</code>. What has now also been run, against a real <code>N2EditorHost</code> and the bridge at the commit in <code>tests/smoke/mcp-bridge-ref.txt</code> (a commit that includes the frontend's MCP5-FE, PR #64, but predates its <code>--electron</code> backend, PR #65, which nothing in this repository runs), is what <a href="#verified">Verified in CI</a> lists: the tool lists, the read and write tools named there, undo, the refused irreversible tier, bad credentials and the yield behaviour. Everything else on this page is still from reading code: the other tools (the play tools above all), the resources and prompts, and the limits (the constants in <code>mcp/src/limits.ts</code>). The frontend README itself records as not verified the confirmation prompt in a real Claude Code or Claude Desktop, and whether those clients show resources, subscriptions, prompts or progress. Nobody has run Claude Code or Claude Desktop against the bridge for this page (<a href="#checklist">Checklist for a person</a>).</p>
 </div>
 
 <div class="page-footer">
-<span>Describes master through PR #34; the bridge sections describe the frontend repository's master (protocol 1.22.0 sync) and the engine's protocol 1.22.0.</span>
+<span>Describes master through PR #34; the bridge sections describe the frontend repository's master (protocol 1.22.0 sync) and the engine's protocol 1.22.0; the smoke test pins an earlier frontend commit (see Verified in CI).</span>
 <a href="index.html">Back to overview</a>
 </div>
 
