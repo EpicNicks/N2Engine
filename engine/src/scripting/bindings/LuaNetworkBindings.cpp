@@ -11,6 +11,7 @@
 #include <math/Vector2.hpp>
 #include <math/Vector3.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -281,6 +282,84 @@ namespace N2Engine::Scripting::Bindings
             const std::uint64_t micros = jitter ? client->JitterMicros() : client->RttMicros();
             return sol::make_object(state, static_cast<double>(micros) / 1.0e6);
         }
+
+        /// Network.GetPredictionTuning(): { positionEpsilon, velocityEpsilon, snapDistance, smoothingMs, applySmoothing } of
+        /// the client's prediction; nil when this process runs no client or its prediction is off
+        sol::object GetPredictionTuning(sol::this_state state)
+        {
+            Network::NetworkClient *const client = Network::NetworkClient::Active();
+            if (client == nullptr || !client->PredictionActive())
+            {
+                return sol::make_object(state, sol::lua_nil);
+            }
+            const Network::PredictionTuning tuning = client->GetPredictionTuning();
+            sol::table table = sol::state_view(state).create_table();
+            table["positionEpsilon"] = tuning.positionEpsilon;
+            table["velocityEpsilon"] = tuning.velocityEpsilon;
+            table["snapDistance"] = tuning.snapDistance;
+            table["smoothingMs"] = static_cast<double>(tuning.smoothingMicros) / 1000.0;
+            table["applySmoothing"] = tuning.applySmoothing;
+            return sol::make_object(state, table);
+        }
+
+        /// Network.SetPredictionTuning(t): the fields present in `t` replace the client's; an unknown field, or one of the
+        /// wrong type, is an error and changes nothing. Returns false when there is no client with prediction on.
+        bool SetPredictionTuning(const sol::table &fields)
+        {
+            Network::NetworkClient *const client = Network::NetworkClient::Active();
+            if (client == nullptr || !client->PredictionActive())
+            {
+                return false;
+            }
+            Network::PredictionTuning tuning = client->GetPredictionTuning();
+            for (const auto &pair : fields)
+            {
+                if (pair.first.get_type() != sol::type::string)
+                {
+                    throw std::runtime_error("Network.SetPredictionTuning: the keys must be field names");
+                }
+                const std::string key = pair.first.as<std::string>();
+                if (key == "applySmoothing")
+                {
+                    if (pair.second.get_type() != sol::type::boolean)
+                    {
+                        throw std::runtime_error("Network.SetPredictionTuning: applySmoothing must be a boolean");
+                    }
+                    tuning.applySmoothing = pair.second.as<bool>();
+                    continue;
+                }
+                if (pair.second.get_type() != sol::type::number)
+                {
+                    throw std::runtime_error(std::format("Network.SetPredictionTuning: {} must be a number", key));
+                }
+                const double value = pair.second.as<double>();
+                if (!std::isfinite(value) || value < 0.0)
+                {
+                    throw std::runtime_error(std::format("Network.SetPredictionTuning: {} must be a number of 0 or more", key));
+                }
+                if (key == "positionEpsilon")
+                {
+                    tuning.positionEpsilon = static_cast<float>(value);
+                }
+                else if (key == "velocityEpsilon")
+                {
+                    tuning.velocityEpsilon = static_cast<float>(value);
+                }
+                else if (key == "snapDistance")
+                {
+                    tuning.snapDistance = static_cast<float>(value);
+                }
+                else if (key == "smoothingMs")
+                {
+                    tuning.smoothingMicros = static_cast<std::uint64_t>(std::min(value, 5000.0) * 1000.0);
+                }
+                else
+                {
+                    throw std::runtime_error(std::format("Network.SetPredictionTuning: unknown field '{}'", key));
+                }
+            }
+            return client->SetPredictionTuning(tuning);
+        }
     }
 
     void BindNetwork(LuaRuntime &runtime)
@@ -297,5 +376,7 @@ namespace N2Engine::Scripting::Bindings
         network["GetServerTick"] = [](sol::this_state state) { return GetServerTick(state); };
         network["GetRtt"] = [](sol::this_state state) { return ClientSeconds(state, false); };
         network["GetJitter"] = [](sol::this_state state) { return ClientSeconds(state, true); };
+        network["GetPredictionTuning"] = [](sol::this_state state) { return GetPredictionTuning(state); };
+        network["SetPredictionTuning"] = [](const sol::table &fields) { return SetPredictionTuning(fields); };
     }
 }
