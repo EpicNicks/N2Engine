@@ -37,6 +37,11 @@ namespace N2Engine::Server
             "  --relay-stall <p>       drop (default: DropSlot, the session goes on) or stop, for a stalled or lost client\n"
             "  --relay-stall-ms <n>    how long the others wait for a slot before it is stalled, 100 to 600000 (default 5000)\n"
             "  --relay-layout <path>   a JSON list of input controls; default: the layout the project's Lua declared\n"
+            "  --relay-spectators <n>  spectators the relay takes at once, 0 to 16, 0 refuses every one (default 4)\n"
+            "  --relay-snapshot-max-mb <n>\n"
+            "                          the largest snapshot the relay passes to a spectator, in MiB, 1 to 64 (default 16)\n"
+            "  --relay-snapshot-timeout-ms <n>\n"
+            "                          how long a spectator waits for its snapshot to begin, 1000 to 120000 (default 10000)\n"
             "  --exit-on-stdin-eof     stop when stdin closes (a launcher that has gone away)\n"
             "  --log-level <level>     info (default), warn or error\n"
             "  --log-file <path>       also append the log lines to this file (created 0600 on POSIX)\n"
@@ -152,7 +157,8 @@ namespace N2Engine::Server
             const bool takesValue = arg == "-p" || arg == "--port" || arg == "--bind" || arg == "--project" ||
                                     arg == "--scene" || arg == "--tokens-file" || arg == "--max-clients" ||
                                     arg == "--websocket-port" || arg == "--websocket-origin" || arg == "--protocol-id" || arg == "--log-level" || arg == "--log-file" ||
-                                    arg == "--relay-players" || arg == "--relay-stall" || arg == "--relay-stall-ms" || arg == "--relay-layout";
+                                    arg == "--relay-players" || arg == "--relay-stall" || arg == "--relay-stall-ms" || arg == "--relay-layout" ||
+                                    arg == "--relay-spectators" || arg == "--relay-snapshot-max-mb" || arg == "--relay-snapshot-timeout-ms";
             if (!takesValue)
             {
                 return std::unexpected(std::format("Unknown option: {} (see --help)", Shown(arg)));
@@ -191,6 +197,37 @@ namespace N2Engine::Server
                     return std::unexpected("Invalid --relay-stall-ms: " + Shown(value) + " (expected a whole number from 100 to 600000)");
                 }
                 options.relayStallMs = *ms;
+                continue;
+            }
+            if (arg == "--relay-spectators")
+            {
+                const std::optional<int> count = Editor::ParseWholeNumber(value, 0, 16);
+                if (!count)
+                {
+                    return std::unexpected("Invalid --relay-spectators: " + Shown(value) + " (expected a whole number from 0 to 16)");
+                }
+                options.relaySpectators = *count;
+                continue;
+            }
+            if (arg == "--relay-snapshot-max-mb")
+            {
+                const std::optional<int> mb = Editor::ParseWholeNumber(value, 1, 64);
+                if (!mb)
+                {
+                    return std::unexpected("Invalid --relay-snapshot-max-mb: " + Shown(value) + " (expected a whole number from 1 to 64)");
+                }
+                options.relaySnapshotMaxMb = *mb;
+                continue;
+            }
+            if (arg == "--relay-snapshot-timeout-ms")
+            {
+                const std::optional<int> ms = Editor::ParseWholeNumber(value, 1000, 120000);
+                if (!ms)
+                {
+                    return std::unexpected("Invalid --relay-snapshot-timeout-ms: " + Shown(value) +
+                                           " (expected a whole number from 1000 to 120000)");
+                }
+                options.relaySnapshotTimeoutMs = *ms;
                 continue;
             }
             if (arg == "--relay-layout")
@@ -313,9 +350,11 @@ namespace N2Engine::Server
             return std::unexpected("--project is required (see --help)");
         }
         if (!options.relay && (options.relayPlayers != 2 || options.relayStallStops || options.relayStallMs != 5000 ||
-                               !options.relayLayoutFile.empty()))
+                               !options.relayLayoutFile.empty() || options.relaySpectators != 4 ||
+                               options.relaySnapshotMaxMb != 16 || options.relaySnapshotTimeoutMs != 10000))
         {
-            return std::unexpected("--relay-players, --relay-stall, --relay-stall-ms and --relay-layout only apply with --relay");
+            return std::unexpected("--relay-players, --relay-stall, --relay-stall-ms, --relay-layout, --relay-spectators, "
+                                   "--relay-snapshot-max-mb and --relay-snapshot-timeout-ms only apply with --relay");
         }
         // Fail closed: a server on a non-loopback address must have a tokens file (every session is encrypted, but a
         // server with no tokens admits nobody), or be told explicitly that it may

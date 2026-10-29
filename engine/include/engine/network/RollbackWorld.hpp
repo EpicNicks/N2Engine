@@ -165,8 +165,9 @@ namespace N2Engine::Network
                                                                        std::uint32_t tick);
 
         /// Activates the pooled objects Spawn handed out inactive (those with a Rigidbody), with their bodies at the pose
-        /// the game gave them and no velocity. Call it where the scene's attach queue runs, at the end of the tick and
-        /// before Save; a fresh instance gets its body at the same point.
+        /// the game gave them and no velocity. Call it where the scene's attach queue runs: after the tick's logic has
+        /// set the poses and before the physics step (a fresh instance gets its body there), and again at the end of the
+        /// tick before Save (a no-op when nothing is waiting). RollbackRuntime does both.
         void CommitSpawns();
 
         /// The simulation despawns `id` at tick `tick` (parks it). False when it is not registered.

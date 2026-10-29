@@ -355,3 +355,38 @@ Ordering: A1-A2 first (they also unblock #157 S2), A3-A5 in parallel with C1-C2;
 - **N13** Deterministic v1 without late join (spectators only from the start) until rollback state serialisation exists? Recommendation: yes.
 - **N14** On a detected desync, v1 ends the session and writes a desync report + replay (no automatic resync)? Recommendation: yes.
 - **N15** Add the cross-leg golden-hash aggregation job to CI now (physics-free scenes), as a non-required check until #156 lands? Recommendation: yes, non-required at first.
+
+
+## 9. C5 follow-up design notes (2026-10-28, assessed, not implemented)
+
+These three came out of the C5 remainder (#257). Each is a design decision with a protocol or hash consequence, so none was guessed in code.
+
+### 9.1 Player join after the start, and rejoin of a dropped slot
+
+Today only spectators join late (wire version 2). A player needs two things a spectator does not: an input slot and an input history the others agree on.
+
+- **Option A, slot reservation with a join tick.** The relay keeps the slot of a dropped player marked "reclaimable". A rejoiner sends `Rejoin(slot, token)`, the relay picks a join tick T (confirmed tick + inputDelay + margin), tells every peer `SlotRejoin(slot, T)` on the reliable channel, and asks a live player for a snapshot of a confirmed tick at or before T (the spectator machinery). Every peer treats the slot as dropped (synthesised input) up to T and as live from T on; the rejoiner restores the snapshot and runs confirmed ticks up to T on all inputs the relay has kept (kSpectatorHistoryTicks), then submits its own input from T. DropSlot already means "synthesised input from tick X" on every peer, so SlotRejoin is its mirror image. Needs a lockstep wire version 3 and a new message pair; the hash tree is unchanged.
+- **Option B, join only at agreed checkpoints.** Same, but T must be a hash checkpoint and the snapshot is taken exactly at it, so the rejoiner's first root is comparable at once. Simpler to verify, longer wait for the player (up to hashInterval ticks, 0.5 s at the default).
+- **Option C, no player join; spectator-to-player promotion only.** A spectator that already runs in step asks to take a free slot at tick T. Smallest change (the snapshot is already in step), the same wire messages as A for the slot part.
+
+Recommendation: C then A. A spectator that is already in step removes the snapshot problem, and the slot-switch message (`SlotRejoin`) is the same one A needs, so C is the first half of A. New players joining a session whose slot count was never reached (a lobby) already works. Open question for the user: should a rejoin keep the same slot (and so the same avatar) or take any free one? Recommendation: same slot, matched by the join token's user name, which the relay already sees.
+
+### 9.2 Lua state beyond the declared replicated fields
+
+Today a snapshot holds a Lua script's `replicated = true` fields only; locals, upvalues and coroutines diverge after a rollback (test `RollbackLuaTest`, pinned both ways) and only the desync detector notices.
+
+- **Option A, keep the contract** (N7 as decided): rollback-relevant Lua state must be a declared replicated field. Add a lint at scene load (a script that is in a rollback project and has a module-level local assigned in `OnFixedUpdate`) as a warning. Cheap, no engine risk.
+- **Option B, snapshot the script's `self` table** (all non-function, non-userdata fields, deep copy of plain tables). Covers the usual "I keep a timer in self.timer" case without a declaration. Cost: a deep copy per script per tick of the window; needs a stable serialisation order (D7's ordered iteration) and cannot cover upvalues.
+- **Option C, snapshot the Lua interpreter** (a custom allocator and a heap copy). Not feasible with the vendored Lua and `lua_State` pointers held by bindings.
+
+Recommendation: A now (a warning plus the documented scope), B only if games ask for it, as an opt-in `rollbackState = true` on a script field table so nothing is copied that the author did not name. C is rejected.
+
+### 9.3 The spectator fallback when the joiner backend refuses the physics bytes
+
+Today `RestoreForJoin` falls back to per-object body states (`exactPhysics` false), the spectator reports no roots and may drift undetected.
+
+- **Option A, refuse the join** (`NoSnapshot` or a new `PhysicsMismatch` refusal): a spectator never runs a view that may be wrong. Honest and trivial; the cost is that a spectator whose scene differs (bodies of non-networked objects created in a different order) cannot watch at all.
+- **Option B, keep the fallback but verify it**: the spectator reports roots for the networked-object part of the tree only (a tree without the physics leaf) so a drift is still detected by the relay against a player's own such root. Needs players to send a second, physics-free root (a wire change: a second root per checkpoint) or the relay to hold two trees.
+- **Option C, make the bodies match**: have the joining host build its scene through the same ordered creation path as the players (RestoreForJoin already instantiates spawned objects under their ids), so the Jolt bytes apply. This is the real fix and removes the cause for the common case.
+
+Recommendation: C as the goal, A as the interim for a spectator whose restore was not exact (an `exactPhysics` false result ends the session as Failed with a clear message, unless the host sets `allowInexactPhysics`). It makes the unsafe case opt-in instead of silent, with no wire change.

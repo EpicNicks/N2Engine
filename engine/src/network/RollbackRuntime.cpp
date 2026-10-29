@@ -126,6 +126,10 @@ namespace N2Engine::Network
         {
             return false;
         }
+        // A pooled spawn is handed out inactive and the game has now set its pose: activate it BEFORE the step, where a
+        // fresh instance gets its body (StepTicks runs the attach queue first), or on a resimulation the object would
+        // join the physics step, and its FixedUpdate, one tick later than it did the first time
+        _rollback.CommitSpawns();
         if (app.StepTicks(1) != 1)
         {
             return false;

@@ -108,7 +108,7 @@ TEST(N2ServerOptionsTest, HelpWinsOverEverythingElse)
     // Every option the parser takes is in the usage text
     const std::string usage(ServerUsage());
     for (const char *option : {"--project", "--scene", "--bind", "--port", "--tokens-file", "--max-clients", "--protocol-id",
-                               "--insecure-bind", "--relay", "--relay-players", "--relay-stall", "--relay-stall-ms", "--relay-layout", "--exit-on-stdin-eof", "--log-level", "--log-file",
+                               "--insecure-bind", "--relay", "--relay-players", "--relay-stall", "--relay-stall-ms", "--relay-layout", "--relay-spectators", "--relay-snapshot-max-mb", "--relay-snapshot-timeout-ms", "--exit-on-stdin-eof", "--log-level", "--log-file",
                                "--new-token"})
     {
         EXPECT_NE(usage.find(option), std::string::npos) << option;
@@ -269,6 +269,38 @@ TEST(N2ServerOptionsTest, RelayOptionsAreCheckedAndNeedRelay)
     EXPECT_NE(ErrorOf(Serving({"--relay", "--relay-stall-ms", "5"})).find("--relay-stall-ms"), std::string::npos);
     EXPECT_NE(ErrorOf(Serving({"--relay-stall", "stop"})).find("only apply with --relay"), std::string::npos);
     EXPECT_NE(ErrorOf(Serving({"--relay", "--relay-layout"})).find("missing a value"), std::string::npos);
+}
+
+TEST(N2ServerOptionsTest, RelaySpectatorOptionsParseWithTheDocumentedDefaultsAndBounds)
+{
+    const auto defaults = Parse(Serving({"--relay"}));
+    ASSERT_TRUE(defaults.has_value()) << defaults.error();
+    EXPECT_EQ(defaults->relaySpectators, 4);
+    EXPECT_EQ(defaults->relaySnapshotMaxMb, 16);
+    EXPECT_EQ(defaults->relaySnapshotTimeoutMs, 10000);
+
+    const auto tuned = Parse(Serving({"--relay", "--relay-spectators", "0", "--relay-snapshot-max-mb", "64",
+                                      "--relay-snapshot-timeout-ms", "1000"}));
+    ASSERT_TRUE(tuned.has_value()) << tuned.error();
+    EXPECT_EQ(tuned->relaySpectators, 0);
+    EXPECT_EQ(tuned->relaySnapshotMaxMb, 64);
+    EXPECT_EQ(tuned->relaySnapshotTimeoutMs, 1000);
+    const auto most = Parse(Serving({"--relay", "--relay-spectators", "16", "--relay-snapshot-max-mb", "1",
+                                     "--relay-snapshot-timeout-ms", "120000"}));
+    ASSERT_TRUE(most.has_value()) << most.error();
+    EXPECT_EQ(most->relaySpectators, 16);
+
+    EXPECT_NE(ErrorOf(Serving({"--relay", "--relay-spectators", "17"})).find("--relay-spectators"), std::string::npos);
+    EXPECT_NE(ErrorOf(Serving({"--relay", "--relay-spectators", "-1"})).find("--relay-spectators"), std::string::npos);
+    EXPECT_NE(ErrorOf(Serving({"--relay", "--relay-snapshot-max-mb", "0"})).find("--relay-snapshot-max-mb"), std::string::npos);
+    EXPECT_NE(ErrorOf(Serving({"--relay", "--relay-snapshot-max-mb", "65"})).find("--relay-snapshot-max-mb"), std::string::npos);
+    EXPECT_NE(ErrorOf(Serving({"--relay", "--relay-snapshot-timeout-ms", "999"})).find("--relay-snapshot-timeout-ms"), std::string::npos);
+    EXPECT_NE(ErrorOf(Serving({"--relay", "--relay-snapshot-timeout-ms", "abc"})).find("--relay-snapshot-timeout-ms"), std::string::npos);
+    EXPECT_NE(ErrorOf(Serving({"--relay", "--relay-spectators"})).find("missing a value"), std::string::npos);
+    // Without --relay each one is an error
+    EXPECT_NE(ErrorOf(Serving({"--relay-spectators", "0"})).find("only apply with --relay"), std::string::npos);
+    EXPECT_NE(ErrorOf(Serving({"--relay-snapshot-max-mb", "8"})).find("only apply with --relay"), std::string::npos);
+    EXPECT_NE(ErrorOf(Serving({"--relay-snapshot-timeout-ms", "2000"})).find("only apply with --relay"), std::string::npos);
 }
 
 TEST(N2ServerOptionsTest, NewTokenTakesAUserAndARoleAndNeedsATokensFile)
