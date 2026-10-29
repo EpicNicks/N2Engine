@@ -718,6 +718,9 @@ namespace N2Engine::Server
                 relayOptions.tickRate = netOptions.tickRate;
                 relayOptions.stallPolicy = options.relayStallStops ? Network::StallPolicy::Stop : Network::StallPolicy::Drop;
                 relayOptions.stallTimeoutMicros = static_cast<std::uint64_t>(options.relayStallMs) * 1000;
+                relayOptions.maxSpectators = static_cast<std::uint32_t>(options.relaySpectators);
+                relayOptions.maxSnapshotBytes = static_cast<std::uint32_t>(options.relaySnapshotMaxMb) * 1024u * 1024u;
+                relayOptions.snapshotTimeoutMicros = static_cast<std::uint64_t>(options.relaySnapshotTimeoutMs) * 1000;
                 relayOptions.maxConnections = static_cast<std::uint32_t>(std::min(options.maxClients, 64));
                 relay = std::make_unique<Network::LockstepRelay>(transport, std::move(relayOptions));
                 if (!relay->Valid())

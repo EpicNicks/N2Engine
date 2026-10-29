@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <thread>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -20,6 +22,7 @@
 #include "engine/network/NetworkSettings.hpp"
 #include "engine/network/RollbackRuntime.hpp"
 #include "engine/network/n2net/SimTransport.hpp"
+#include "engine/network/n2net/UdpTransport.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 
 // Netcode C5 remainder and C6: the relay-connected rollback runtime (LockstepRuntime in rollback mode) against the
@@ -99,6 +102,12 @@ namespace
         {
             SimTransport &transport = network.AddEndpoint();
             EXPECT_TRUE(network.Link(relayTransport->Id(), transport.Id(), link));
+            return AttachPeer(transport, index, window, spectate);
+        }
+
+        /// The same peer over any transport (a real UDP socket in the loopback test)
+        Peer &AttachPeer(ITransport &transport, const std::uint32_t index, const std::uint32_t window, const bool spectate = false)
+        {
             auto created = std::make_unique<Peer>(slots, layout);
             Peer &peer = *created;
             LockstepRuntimeOptions options;
@@ -556,6 +565,202 @@ TEST(RollbackRuntimeRelayTest, ASpectatorIsRefusedWhenTheRelayTakesNone)
     ASSERT_TRUE(session.RunUntil([&] { return spectator.runtime->Finished(); }, 20000));
     EXPECT_EQ(spectator.runtime->State(), LockstepState::Refused);
     EXPECT_EQ(spectator.runtime->Refusal(), RefuseReason::SessionFull);
+}
+
+// ===== C5 follow-up coverage: more peers, a leaving snapshot source, long sessions, real sockets =====
+
+TEST(RollbackRuntimeFollowUpTest, FourPlayersOfMixedModesAndTwoSpectatorsAllAgreeOnEveryConfirmedCheckpoint)
+{
+    ShotPrefab prefab;
+    RelaySession session(51, 4, LateLink());
+    Peer &rollback8 = session.AddPeer(0, 8);
+    Peer &rollback3 = session.AddPeer(1, 3);
+    Peer &rollback15 = session.AddPeer(2, 15);
+    Peer &lockstep = session.AddPeer(3, 0);
+    Peer &early = session.AddPeer(4, 0, true); // a spectator that asks before the session has started
+    ASSERT_TRUE(session.RunUntil(
+        [&]
+        {
+            return rollback8.runtime->ConfirmedTick() >= 300 && rollback3.runtime->ConfirmedTick() >= 300 &&
+                   rollback15.runtime->ConfirmedTick() >= 300 && lockstep.runtime->ConfirmedTick() >= 300;
+        }));
+    Peer &late = session.AddPeer(5, 0, true);
+    ASSERT_TRUE(session.RunUntil(
+        [&]
+        {
+            return early.runtime->TicksRun() >= 450 && late.runtime->TicksRun() >= 450 && lockstep.runtime->TicksRun() >= 450;
+        }));
+    for (Peer *peer : {&rollback8, &rollback3, &rollback15, &lockstep, &early, &late})
+    {
+        ASSERT_EQ(peer->runtime->State(), LockstepState::Running) << peer->runtime->Error();
+    }
+    EXPECT_EQ(session.relay->JoinedCount(), 4u);
+    EXPECT_EQ(session.relay->SpectatorCount(), 2u);
+    EXPECT_EQ(session.relay->Stats().desyncs, 0u);
+    EXPECT_GE(session.relay->Stats().rootsReceived, 4u * (300u / kHashInterval) - 8u);
+    for (Peer *peer : {&rollback8, &rollback3, &rollback15})
+    {
+        EXPECT_GT(peer->runtime->Session()->Stats().rollbacks, 0u);
+        EXPECT_GE(CompareHistories(*peer->runtime, *lockstep.runtime), 8u);
+    }
+    for (Peer *spectator : {&early, &late})
+    {
+        std::size_t compared = 0;
+        for (const auto &[tick, root] : spectator->confirmedRoots)
+        {
+            if (const auto found = lockstep.confirmedRoots.find(tick); found != lockstep.confirmedRoots.end())
+            {
+                EXPECT_EQ(found->second, root) << "tick " << tick;
+                ++compared;
+            }
+        }
+        EXPECT_GE(compared, 5u);
+    }
+}
+
+TEST(RollbackRuntimeFollowUpTest, ThePlayerAskedForASnapshotLeavingAtAnyPointStillGivesTheSpectatorItsView)
+{
+    // The relay asks the lowest live slot; it leaves between the request and the end of the transfer (the delay in
+    // simulator steps after the request is swept). The request must go to another player and the spectator must run on.
+    for (const std::uint32_t delay : {0u, 1u, 2u, 4u, 9u, 20u, 60u})
+    {
+        SCOPED_TRACE("delay " + std::to_string(delay));
+        ShotPrefab prefab;
+        RelaySession session(60 + delay, 3, LateLink());
+        Peer &source = session.AddPeer(0, 8);
+        ASSERT_TRUE(session.RunUntil([&] { return source.runtime->State() == LockstepState::Lobby; }, 20000));
+        ASSERT_EQ(source.runtime->Slot(), 0u);
+        Peer &lockstep = session.AddPeer(1, 0);
+        Peer &other = session.AddPeer(2, 6);
+        ASSERT_TRUE(session.RunUntil([&] { return lockstep.runtime->ConfirmedTick() >= 120; }));
+        Peer &spectator = session.AddPeer(3, 0, true);
+        ASSERT_TRUE(session.RunUntil([&] { return session.relay->Stats().snapshotRequests >= 1; }, 20000));
+        for (std::uint32_t i = 0; i < delay; ++i)
+        {
+            session.Step();
+        }
+        source.runtime->Leave();
+        source.frozen = true;
+        ASSERT_TRUE(session.RunUntil([&] { return spectator.runtime->TicksRun() >= 400 && lockstep.runtime->TicksRun() >= 400; }))
+            << "state " << ToString(spectator.runtime->State()) << " " << spectator.runtime->Error();
+        EXPECT_EQ(spectator.runtime->State(), LockstepState::Running);
+        EXPECT_EQ(lockstep.runtime->State(), LockstepState::Running);
+        EXPECT_EQ(other.runtime->State(), LockstepState::Running);
+        EXPECT_EQ(session.relay->Stats().desyncs, 0u);
+        EXPECT_EQ(session.relay->SpectatorCount(), 1u);
+        std::size_t compared = 0;
+        for (const auto &[tick, root] : spectator.confirmedRoots)
+        {
+            if (const auto found = lockstep.confirmedRoots.find(tick); found != lockstep.confirmedRoots.end())
+            {
+                EXPECT_EQ(found->second, root) << "tick " << tick;
+                ++compared;
+            }
+        }
+        EXPECT_GE(compared, 5u);
+    }
+}
+
+TEST(RollbackRuntimeFollowUpTest, ALongSessionDoesNotDriftAndItsRingsAndPoolsStayBounded)
+{
+    ShotPrefab prefab;
+    SimLinkConfig link;
+    link.latencyMicros = 4'000;
+    link.jitterMicros = 3'000;
+    link.lossPpm = 20'000;
+    link.reorderPpm = 20'000;
+    link.reorderDelayMicros = 4'000;
+    RelaySession session(71, 3, link);
+    Peer &rollback8 = session.AddPeer(0, 8);
+    Peer &rollback4 = session.AddPeer(1, 4);
+    Peer &lockstep = session.AddPeer(2, 0);
+    constexpr std::uint32_t kTicks = 5000;
+    std::size_t maxParked = 0;
+    std::size_t maxObjects = 0;
+    std::uint32_t maxAhead = 0;
+    std::size_t maxTrees = 0;
+    for (int step = 0; step < 120000 && lockstep.runtime->ConfirmedTick() < kTicks; ++step)
+    {
+        session.Step();
+        for (Peer *peer : {&rollback8, &rollback4})
+        {
+            maxParked = std::max(maxParked, peer->arena.world.Parked().size());
+            maxObjects = std::max(maxObjects, peer->arena.world.Count());
+            maxAhead = std::max(maxAhead, peer->runtime->TicksRun() - peer->runtime->ConfirmedTick());
+            maxTrees = std::max(maxTrees, peer->runtime->History().Trees().size());
+        }
+    }
+    ASSERT_GE(lockstep.runtime->ConfirmedTick(), kTicks);
+    ASSERT_EQ(rollback8.runtime->State(), LockstepState::Running) << rollback8.runtime->Error();
+    ASSERT_EQ(rollback4.runtime->State(), LockstepState::Running) << rollback4.runtime->Error();
+    EXPECT_EQ(session.relay->Stats().desyncs, 0u) << "no drift in 5000 ticks";
+    EXPECT_GE(session.relay->Stats().rootsReceived, 3u * (kTicks / kHashInterval) - 12u);
+    EXPECT_GE(CompareHistories(*rollback8.runtime, *lockstep.runtime), 30u);
+    EXPECT_GE(CompareHistories(*rollback4.runtime, *lockstep.runtime), 30u);
+    EXPECT_GT(rollback8.runtime->Session()->Stats().rollbacks, 100u) << "the run really rolled back, many times";
+    // Bounded: how far past the confirmed tick a peer runs (the window), the live and the parked objects, the history
+    EXPECT_LE(maxAhead, 9u + 1u);
+    EXPECT_LE(maxObjects, 40u);
+    EXPECT_LE(maxParked, 64u) << "released as the snapshots that need them leave the ring";
+    EXPECT_LE(maxTrees, 64u) << "historyDepth";
+    for (Peer *peer : {&rollback8, &rollback4})
+    {
+        // Nothing from before the ring can be restored to
+        EXPECT_EQ(peer->runtime->Session()->SnapshotAt(0), nullptr);
+        EXPECT_LE(peer->arena.world.Parked().size(), 64u);
+    }
+}
+
+TEST(RollbackRuntimeFollowUpTest, TwoRollbackPeersAgreeOverRealLoopbackUdpSockets)
+{
+    ShotPrefab prefab;
+    RelaySession session(81, 2, SimLinkConfig{}); // only its peer factory is used; the relay below is the real one
+    UdpTransportOptions relayOpen;
+    relayOpen.acceptUnknownPeers = true;
+    UdpOpenResult relayResult = UdpTransport::Open(relayOpen, false);
+    if (relayResult.error != UdpError::None)
+    {
+        GTEST_SKIP() << "no loopback UDP socket here: " << relayResult.message;
+    }
+    UdpTransportOptions clientOpen;
+    clientOpen.acceptUnknownPeers = false;
+    UdpOpenResult aResult = UdpTransport::Open(clientOpen, false);
+    UdpOpenResult bResult = UdpTransport::Open(clientOpen, false);
+    ASSERT_EQ(aResult.error, UdpError::None) << aResult.message;
+    ASSERT_EQ(bResult.error, UdpError::None) << bResult.message;
+    LockstepRelayOptions relayOptions;
+    relayOptions.protocolId = 0x5151;
+    relayOptions.slotCount = 2;
+    relayOptions.layout = session.layout;
+    relayOptions.tickRate = 500;
+    relayOptions.hashInterval = kHashInterval;
+    LockstepRelay relay(*relayResult.transport, relayOptions);
+    ASSERT_TRUE(relay.Valid());
+    Peer &a = session.AttachPeer(*aResult.transport, 0, 8);
+    Peer &b = session.AttachPeer(*bResult.transport, 1, 5);
+    ASSERT_EQ(aResult.transport->Connect("127.0.0.1", relayResult.transport->LocalPort()).error, UdpError::None);
+    ASSERT_EQ(bResult.transport->Connect("127.0.0.1", relayResult.transport->LocalPort()).error, UdpError::None);
+
+    const auto start = std::chrono::steady_clock::now();
+    auto last = start;
+    const auto deadline = start + std::chrono::seconds(30);
+    while (std::chrono::steady_clock::now() < deadline && (a.runtime->ConfirmedTick() < 400 || b.runtime->ConfirmedTick() < 400))
+    {
+        const auto now = std::chrono::steady_clock::now();
+        const auto micros = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now - start).count());
+        const double delta = std::chrono::duration<double>(now - last).count();
+        last = now;
+        relay.Update(micros);
+        a.runtime->Update(micros, delta);
+        b.runtime->Update(micros, delta);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_EQ(a.runtime->State(), LockstepState::Running) << a.runtime->Error();
+    ASSERT_EQ(b.runtime->State(), LockstepState::Running) << b.runtime->Error();
+    ASSERT_GE(a.runtime->ConfirmedTick(), 400u);
+    ASSERT_GE(b.runtime->ConfirmedTick(), 400u);
+    EXPECT_EQ(relay.Stats().desyncs, 0u);
+    EXPECT_GE(CompareHistories(*a.runtime, *b.runtime), 15u);
 }
 
 // ===== RollbackRuntime in Application's fixed loop =====

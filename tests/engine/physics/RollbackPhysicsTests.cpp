@@ -16,7 +16,15 @@
 #include <nlohmann/json.hpp>
 
 #include "../network/NetworkTestSupport.hpp"
+#include <map>
+
+#include "engine/network/InputLayout.hpp"
+#include "engine/network/LockstepRelay.hpp"
+#include "engine/network/LockstepRuntime.hpp"
 #include "engine/network/NetworkObject.hpp"
+#include "engine/network/NetworkSettings.hpp"
+#include "engine/network/RollbackRuntime.hpp"
+#include "engine/network/n2net/SimTransport.hpp"
 #include "engine/network/NetworkTransform.hpp"
 #include "engine/network/NetworkWorld.hpp"
 #include "engine/network/ReplicationLayout.hpp"
@@ -122,7 +130,10 @@ namespace N2PhysicsTests
             }
 
             /// The simulation's own decisions for a tick: impulses, a despawn and two spawns
-            void Logic(const std::uint32_t tick)
+            void Logic(const std::uint32_t tick) { Logic(tick, rollback); }
+
+            /// The same, spawning and despawning through `rb` (a RollbackRuntime's world, when a session drives the game)
+            void Logic(const std::uint32_t tick, RollbackWorld &rb)
             {
                 if (tick == 3)
                 {
@@ -130,7 +141,7 @@ namespace N2PhysicsTests
                 }
                 if (tick == 5 || tick == 12)
                 {
-                    const auto spawned = rollback.Spawn(tick == 5 ? spawnPrefab : kBallPrefab, 0, tick);
+                    const auto spawned = rb.Spawn(tick == 5 ? spawnPrefab : kBallPrefab, 0, tick);
                     ASSERT_TRUE(spawned.has_value()) << spawned.error();
                     GameObject &ball = (*spawned)->GetGameObject();
                     if (ball.GetPositionable() == nullptr)
@@ -141,7 +152,7 @@ namespace N2PhysicsTests
                 }
                 if (tick == 8)
                 {
-                    EXPECT_TRUE(rollback.Despawn(NetworkId{2}, tick));
+                    EXPECT_TRUE(rb.Despawn(NetworkId{2}, tick));
                 }
                 if (tick == 9)
                 {
@@ -362,6 +373,142 @@ namespace N2PhysicsTests
         EXPECT_EQ(game.Capture(10), straight10);
         game.Run(10, 20);
         EXPECT_EQ(game.Capture(20), straight20);
+    }
+
+    // Physics through the relay (C5 follow-up): a RollbackRuntime with a Jolt backend joins a LockstepRelay next to a peer
+    // whose input changes every tick, so the guesses are wrong often and the Jolt world is rolled back many times, with
+    // spawns, a despawn and impulses inside the window. The roots it publishes for confirmed checkpoints (the tree has the
+    // physics leaf) must be those of a straight, never rolled back run of the same confirmed inputs.
+    TEST(RollbackPhysicsTest, ARollbackRuntimeWithJoltThroughTheRelayPublishesTheStraightRunsRoots)
+    {
+        using namespace N2Engine::N2Net;
+        auto created = InputLayout::Create({{"move", InputControlKind::Vector2, 8, 1.0f, true}});
+        ASSERT_TRUE(created.has_value());
+        const InputLayout layout = *created;
+        constexpr std::uint32_t kInterval = 10;
+        const auto logic = [&layout](Game &game, RollbackWorld &rb, const TickInputs &inputs)
+        {
+            game.Logic(inputs.tick, rb);
+            const auto values = layout.Unpack(inputs.inputs[1].Bytes());
+            if (values && std::abs((*values)[0]) > 0.5f)
+            {
+                game.world.Find(NetworkId{1})->GetGameObject().GetComponent<Rigidbody>()->AddImpulse(
+                    Vector3((*values)[0] * 0.2f, 0.0f, (*values)[1] * 0.2f));
+            }
+            return true;
+        };
+
+        SimNetwork network(91);
+        SimTransport &relayTransport = network.AddEndpoint();
+        SimTransport &transportA = network.AddEndpoint();
+        SimTransport &transportB = network.AddEndpoint();
+        SimLinkConfig link;
+        link.latencyMicros = 25'000;
+        link.jitterMicros = 15'000;
+        ASSERT_TRUE(network.Link(relayTransport.Id(), transportA.Id(), link));
+        ASSERT_TRUE(network.Link(relayTransport.Id(), transportB.Id(), link));
+        LockstepRelayOptions relayOptions;
+        relayOptions.protocolId = 0x6363;
+        relayOptions.slotCount = 2;
+        relayOptions.layout = layout;
+        relayOptions.tickRate = 60;
+        relayOptions.hashInterval = kInterval;
+        LockstepRelay relay(relayTransport, relayOptions);
+
+        Application &app = Application::GetInstance();
+        std::vector<TickInputs> confirmed;
+        std::vector<std::pair<std::uint32_t, std::uint64_t>> published;
+        std::uint64_t rollbacks = 0;
+        {
+            Game game;
+            NetworkSettings settings;
+            settings.preset = NetworkPreset::Deterministic;
+            settings.deterministic.mode = DeterministicMode::Rollback;
+            settings.deterministic.rollbackWindow = 8;
+            RollbackWorld *runtimeWorld = nullptr;
+            RollbackRuntimeOptions options;
+            options.session.protocolId = 0x6363;
+            options.session.layout = layout;
+            options.session.historyDepth = 64;
+            options.session.sampleInput = [](const std::uint32_t) { return std::vector<float>{0.0f, 0.0f}; };
+            options.session.applyTick = [&](const TickInputs &inputs, std::uint32_t)
+            { return logic(game, *runtimeWorld, inputs); };
+            options.clock = [&network] { return network.NowMicros(); };
+            RollbackRuntime runtime(transportA, game.world, game.backend, settings, std::move(options));
+            runtimeWorld = &runtime.World();
+            ASSERT_EQ(runtime.RollbackWindow(), 8u) << "the Jolt backend can snapshot, so the session is rollback";
+
+            LockstepRuntimeOptions other;
+            other.protocolId = 0x6363;
+            other.layout = layout;
+            other.sampleInput = [](const std::uint32_t tick)
+            {
+                return std::vector<float>{static_cast<float>((tick * 5) % 7) / 3.0f - 1.0f,
+                                          static_cast<float>((tick * 3) % 5) / 2.0f - 1.0f};
+            };
+            other.applyTick = [&confirmed](const TickInputs &inputs, std::uint32_t)
+            {
+                confirmed.push_back(inputs);
+                return true;
+            };
+            LockstepRuntime peerB(transportB, std::move(other));
+
+            constexpr double kFrame = 1.0 / 60.0;
+            for (int frame = 0; frame < 6000 && runtime.Session().ConfirmedTick() < 160; ++frame)
+            {
+                network.Advance(16'667);
+                relay.Update(network.NowMicros());
+                TickOptions tick;
+                tick.pollEvents = false;
+                tick.render = false;
+                tick.deltaSeconds = kFrame;
+                app.Tick(tick);
+                peerB.Update(network.NowMicros(), kFrame);
+            }
+            ASSERT_EQ(runtime.Session().State(), LockstepState::Running) << runtime.Session().Error();
+            ASSERT_GE(runtime.Session().ConfirmedTick(), 160u);
+            ASSERT_NE(runtime.Session().Session(), nullptr);
+            rollbacks = runtime.Session().Session()->Stats().rollbacks;
+            for (const HashTree &tree : runtime.Session().History().Trees())
+            {
+                published.emplace_back(tree.Tick(), tree.Root());
+            }
+            EXPECT_EQ(relay.Stats().desyncs, 0u);
+        }
+        EXPECT_GT(rollbacks, 5u) << "the Jolt world was rolled back repeatedly";
+        ASSERT_GE(published.size(), 8u);
+
+        std::map<std::uint32_t, std::uint64_t> straight;
+        {
+            Game game;
+            Scene &scene = SceneManager::GetCurSceneRef();
+            for (const TickInputs &inputs : confirmed)
+            {
+                app.GetSimulationClock().SetTick(inputs.tick);
+                logic(game, game.rollback, inputs);
+                game.rollback.CommitSpawns(); // as RollbackRuntime::RunTick, before the step
+                ASSERT_EQ(app.StepTicks(1), 1u);
+                scene.ProcessAttachQueue();
+                game.rollback.CommitSpawns();
+                scene.ProcessDestroyed();
+                if ((inputs.tick + 1) % kInterval == 0)
+                {
+                    straight[inputs.tick + 1] =
+                        BuildStateHashTree(game.world, game.rollback.Layouts(), inputs.tick + 1, game.backend)->Root();
+                }
+            }
+        }
+        std::size_t compared = 0;
+        for (const auto &[tick, root] : published)
+        {
+            if (const auto found = straight.find(tick); found != straight.end())
+            {
+                EXPECT_EQ(found->second, root) << "tick " << tick;
+                ++compared;
+            }
+        }
+        EXPECT_GE(compared, 8u);
+        app.SetSimulationMode(SimulationMode::None);
     }
 
     TEST(RollbackPhysicsTest, ASerialisedSnapshotWithJoltBytesRestoresAJoinerExactlyAndBothRunOnAlike)
