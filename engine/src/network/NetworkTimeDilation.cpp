@@ -111,7 +111,9 @@ namespace N2Engine::Network
         }
         else
         {
-            const double alpha = 1.0 - std::exp(-seconds * 1.0e6 / static_cast<double>(_options.smoothingMicros));
+            // A first-order low-pass with time constant smoothingMicros; dt / (tau + dt) needs no transcendental function
+            const double tau = static_cast<double>(_options.smoothingMicros) / 1.0e6;
+            const double alpha = seconds / (tau + seconds);
             _filter += alpha * (errorTicks - _filter);
         }
 
