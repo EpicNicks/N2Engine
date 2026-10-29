@@ -465,13 +465,15 @@ TEST_F(PredictionSessionTest, TheTuningCanBeChangedWhileTheClientRuns)
     wide.snapDistance = 20.0f;
     ASSERT_TRUE(rig.client->SetPredictionTuning(wide));
     EXPECT_FLOAT_EQ(rig.client->GetPredictionTuning().snapDistance, 20.0f);
+    const std::uint64_t wideBefore = rig.client->PredictionStatistics().corrections;
+    const std::uint64_t snapsBefore = rig.client->PredictionStatistics().snaps;
     ASSERT_TRUE(theirs->Teleport(theirs->GetState().position + Math::Vector3(8.0f, 0.0f, -3.0f)));
-    for (int i = 0; i < 20 && rig.client->PredictionStatistics().corrections == 0; ++i)
+    for (int i = 0; i < 20 && rig.client->PredictionStatistics().corrections == wideBefore; ++i)
     {
         Tick(&Idle);
     }
-    EXPECT_GE(rig.client->PredictionStatistics().corrections, 1u);
-    EXPECT_EQ(rig.client->PredictionStatistics().snaps, 0u);
+    EXPECT_GT(rig.client->PredictionStatistics().corrections, wideBefore);
+    EXPECT_EQ(rig.client->PredictionStatistics().snaps, snapsBefore) << "8 units is under the widened snap distance";
     EXPECT_GT(rig.client->PredictionOffset(*rig.pawnId).Length(), 1.0f);
     Ticks(10, &Idle);
 
