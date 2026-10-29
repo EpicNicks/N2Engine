@@ -509,6 +509,12 @@ namespace N2PhysicsTests
         }
         EXPECT_GE(compared, 8u);
         app.SetSimulationMode(SimulationMode::None);
+        // Leave the engine clock with a zero frame delta, as other tests (coroutines) assume
+        TickOptions rest;
+        rest.pollEvents = false;
+        rest.render = false;
+        rest.deltaSeconds = 0.0;
+        app.Tick(rest);
     }
 
     TEST(RollbackPhysicsTest, ASerialisedSnapshotWithJoltBytesRestoresAJoinerExactlyAndBothRunOnAlike)
