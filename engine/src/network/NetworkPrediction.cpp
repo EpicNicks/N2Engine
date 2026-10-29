@@ -40,6 +40,8 @@ namespace N2Engine::Network
             state.position = server.position;
             state.velocity = Math::Vector3(0.0f, server.velocity.y, 0.0f);
             state.grounded = server.grounded;
+            state.ground = server.ground;
+            state.groundLocal = server.ground != 0 ? server.groundLocal : Math::Vector3(0.0f, 0.0f, 0.0f);
             return state;
         }
     }
@@ -239,7 +241,7 @@ namespace N2Engine::Network
                                                  const PredictionStepper &step, const PredictionOptions &options)
     {
         ReconcileResult result;
-        if (!Finite3(server.position) || !std::isfinite(server.velocity.y) || _count == 0)
+        if (!Finite3(server.position) || !std::isfinite(server.velocity.y) || !Finite3(server.groundLocal) || _count == 0)
         {
             return result;
         }
@@ -265,8 +267,13 @@ namespace N2Engine::Network
         {
             const CharacterState &predicted = At(found).state;
             result.compared = true;
-            result.error = Distance(predicted.position, server.position);
-            const bool agrees = result.error <= options.positionEpsilon &&
+            // Riding (wire version 8): two states on the same body are compared by their offsets in its local space, so
+            // the body's own motion (and the lag of this machine's copy of it) is not an error; on different grounds
+            // they are compared in the world frame (the caller has put the server's state in this machine's frame)
+            const bool sameRide = predicted.ground != 0 && predicted.ground == server.ground;
+            result.error = sameRide ? Distance(predicted.groundLocal, server.groundLocal)
+                                    : Distance(predicted.position, server.position);
+            const bool agrees = result.error <= options.positionEpsilon && predicted.ground == server.ground &&
                                 std::fabs(predicted.velocity.y - server.velocity.y) <= options.velocityEpsilon &&
                                 predicted.grounded == server.grounded;
             _hasConfirmed = true;
@@ -340,6 +347,7 @@ namespace N2Engine::Network
             return ServerStepResult::NoController;
         }
         controller->SetExternallyDriven(true);
+        controller->SetGroundMap(&server.World());
         CharacterInput input;
         if (object.HasNetworkId())
         {

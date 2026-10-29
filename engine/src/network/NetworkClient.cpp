@@ -783,6 +783,7 @@ namespace N2Engine::Network
             if (Physics::CharacterController *const controller = ControllerOf(*object))
             {
                 controller->SetExternallyDriven(true);
+                controller->SetGroundMap(&_world);
                 _predicted.emplace(id, PredictedObject(_predictionOptions.historyTicks));
             }
         }
@@ -841,7 +842,9 @@ namespace N2Engine::Network
             start.position = first.position;
             start.velocity = Math::Vector3(0.0f, first.velocity.y, 0.0f);
             start.grounded = first.grounded;
-            if (controller->SetState(start))
+            start.ground = first.ground;
+            start.groundLocal = first.groundLocal;
+            if (controller->SetState(controller->Anchored(start)))
             {
                 predicted.synced = true;
             }
@@ -857,7 +860,10 @@ namespace N2Engine::Network
         }
         predicted.hasPending = true;
         predicted.pendingTick = *inputTick;
-        predicted.pendingState = controller->GetReplicatedState();
+        // The server's state in this machine's frame: a ride on a body this client has is placed on its copy of the body
+        // (the offset is the server's, the world position follows this client's pose of the body); a ride on a body it
+        // does not have (not replicated to it, not yet spawned, gone) is the world frame, from the server's position
+        predicted.pendingState = controller->Anchored(controller->GetReplicatedState());
     }
 
     void NetworkClient::ReconcilePredicted()

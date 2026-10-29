@@ -15,6 +15,7 @@
 #include "engine/common/ScriptUtils.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
 #include "engine/physics/Raycast.hpp"
+#include "engine/physics/Rigidbody.hpp"
 
 namespace N2Engine::Physics
 {
@@ -244,6 +245,8 @@ namespace N2Engine::Physics
             /// Vertical move only: stopped by ground that can be stood on
             bool hitWalkable = false;
             Vector3 walkableNormal = Vector3(0.0f, 1.0f, 0.0f);
+            /// Vertical move only: the contact that stopped it (what the character stands on)
+            RaycastHit walkableHit;
             /// Vertical move only: stopped while going up
             bool hitCeiling = false;
             /// Horizontal move only: met a surface steeper than the slope limit, or the rim of a step (a wall)
@@ -301,6 +304,7 @@ namespace N2Engine::Physics
                     {
                         result.hitWalkable = true;
                         result.walkableNormal = support.normal;
+                        result.walkableHit = hit;
                         break;
                     }
                     if (direction.y > 0.0f)
@@ -404,7 +408,8 @@ namespace N2Engine::Physics
     }
 
     CharacterState CharacterMotor::Step(IPhysicsBackend &backend, const CharacterSettings &settings,
-                                        const CharacterState &state, const CharacterInput &input, const float dt)
+                                        const CharacterState &state, const CharacterInput &input, const float dt,
+                                        RaycastHit *const groundHit)
     {
         if (!settings.IsValid() || !IsFinite3(state.position) || !(dt > 0.0f) || !std::isfinite(dt))
         {
@@ -485,6 +490,7 @@ namespace N2Engine::Physics
 
         // Vertical move: stops on ground it can stand on, or under a ceiling
         bool landed = false;
+        RaycastHit contact;
         Vector3 groundNormal(0.0f, 1.0f, 0.0f);
         const float verticalDelta = vy * dt;
         if (std::abs(verticalDelta) > kMinMove)
@@ -494,6 +500,7 @@ namespace N2Engine::Physics
             if (vertical.hitWalkable)
             {
                 landed = true;
+                contact = vertical.walkableHit;
                 groundNormal = vertical.walkableNormal;
                 vy = 0.0f;
             }
@@ -516,6 +523,7 @@ namespace N2Engine::Physics
                 {
                     position = snap.position;
                     landed = true;
+                    contact = snap.walkableHit;
                     groundNormal = snap.walkableNormal;
                     vy = 0.0f;
                 }
@@ -531,6 +539,7 @@ namespace N2Engine::Physics
                         const float drop = std::max(hit.distance - c.skin, 0.0f);
                         position = Vector3(position.x, position.y - drop, position.z);
                         landed = true;
+                        contact = hit;
                         groundNormal = normal;
                         vy = 0.0f;
                     }
@@ -554,6 +563,10 @@ namespace N2Engine::Physics
             achievedZ = 0.0f;
         }
         next.velocity = Vector3(achievedX, vy, achievedZ);
+        if (landed && groundHit != nullptr)
+        {
+            *groundHit = contact;
+        }
         return next;
     }
 
@@ -584,6 +597,17 @@ namespace N2Engine::Physics
         mixFloat(state.groundNormal.y);
         mixFloat(state.groundNormal.z);
         mixByte(state.grounded ? 1u : 0u);
+        if (state.ground != 0)
+        {
+            // (Only a riding state: a state in the world frame hashes as it always did)
+            mixByte(state.ground);
+            mixByte(state.ground >> 8);
+            mixByte(state.ground >> 16);
+            mixByte(state.ground >> 24);
+            mixFloat(state.groundLocal.x);
+            mixFloat(state.groundLocal.y);
+            mixFloat(state.groundLocal.z);
+        }
         return hash;
     }
 
@@ -609,6 +633,8 @@ namespace N2Engine::Physics
         RegisterMember("netPosition", _netPosition).Replicated(0.001).Hidden().ReadOnly();
         RegisterMember("netVelocityY", _netVelocityY).Replicated(0.001).Hidden().ReadOnly();
         RegisterMember("netGrounded", _netGrounded).Replicated().Hidden().ReadOnly();
+        RegisterMember("netGround", _netGround).Replicated().Hidden().ReadOnly();
+        RegisterMember("netGroundLocal", _netGroundLocal).Replicated(0.001).Hidden().ReadOnly();
     }
 
     nlohmann::json CharacterController::SerializeReplicated(const std::span<const FieldInfo> /*replicated*/)
@@ -616,6 +642,8 @@ namespace N2Engine::Physics
         _netPosition = _state.position;
         _netVelocityY = _state.velocity.y;
         _netGrounded = _state.grounded;
+        _netGround = static_cast<int>(_state.ground);
+        _netGroundLocal = _state.ground != 0 ? _state.groundLocal : Vector3(0.0f, 0.0f, 0.0f);
         return Serialize();
     }
 
@@ -625,7 +653,64 @@ namespace N2Engine::Physics
         state.position = _netPosition;
         state.velocity = Vector3(0.0f, _netVelocityY, 0.0f);
         state.grounded = _netGrounded;
+        state.ground = _netGround > 0 ? static_cast<std::uint32_t>(_netGround) : 0u;
+        state.groundLocal = state.ground != 0 ? _netGroundLocal : Vector3(0.0f, 0.0f, 0.0f);
         return state;
+    }
+
+    namespace
+    {
+        /// The pose the physics scene has for the kinematic body of `object`; false for any other object
+        bool KinematicPose(IPhysicsBackend &backend, GameObject &object, Vector3 &position, Math::Quaternion &rotation)
+        {
+            const Rigidbody *const body = object.GetComponent<Rigidbody>();
+            if (body == nullptr || !body->IsInitialized() || body->GetBodyType() != BodyType::Kinematic ||
+                !object.IsActiveInHierarchy())
+            {
+                return false;
+            }
+            position = backend.GetPosition(body->GetHandle());
+            rotation = backend.GetRotation(body->GetHandle());
+            return IsFinite3(position);
+        }
+    }
+
+    bool CharacterController::CanResolveGround(const std::uint32_t key) const
+    {
+        IPhysicsBackend *const backend = Application::GetInstance().Get3DPhysicsBackend();
+        if (backend == nullptr || _groundMap == nullptr || key == 0)
+        {
+            return false;
+        }
+        GameObject *const object = _groundMap->BodyOf(key);
+        Vector3 position;
+        Math::Quaternion rotation;
+        return object != nullptr && KinematicPose(*backend, *object, position, rotation);
+    }
+
+    CharacterState CharacterController::Anchored(const CharacterState &state) const
+    {
+        if (state.ground == 0)
+        {
+            return state;
+        }
+        CharacterState out = state;
+        IPhysicsBackend *const backend = Application::GetInstance().Get3DPhysicsBackend();
+        GameObject *const object = (backend != nullptr && _groundMap != nullptr) ? _groundMap->BodyOf(state.ground) : nullptr;
+        Vector3 position;
+        Math::Quaternion rotation;
+        if (object != nullptr && KinematicPose(*backend, *object, position, rotation) && IsFinite3(state.groundLocal))
+        {
+            out.position = position + rotation * state.groundLocal;
+            if (IsFinite3(out.position))
+            {
+                return out;
+            }
+        }
+        // Not here (or not usable): the world frame, from the position the state holds
+        out.ground = 0;
+        out.groundLocal = Vector3(0.0f, 0.0f, 0.0f);
+        return out;
     }
 
     CharacterState CharacterController::Simulate(const CharacterState &state, const CharacterInput &input, const float dt) const
@@ -636,7 +721,28 @@ namespace N2Engine::Physics
         {
             return state;
         }
-        return CharacterMotor::Step(*backend, settings, state, input, dt);
+        // Carried by the body it stood on: the step starts where that body (as this machine has it now) puts the offset
+        const CharacterState start = Anchored(state);
+        RaycastHit contact;
+        CharacterState next = CharacterMotor::Step(*backend, settings, start, input, dt, &contact);
+        next.ground = 0;
+        next.groundLocal = Vector3(0.0f, 0.0f, 0.0f);
+        if (next.grounded && _groundMap != nullptr && contact.rigidbody != nullptr)
+        {
+            GameObject &body = contact.rigidbody->GetGameObject();
+            Vector3 position;
+            Math::Quaternion rotation;
+            if (KinematicPose(*backend, body, position, rotation))
+            {
+                const std::uint32_t key = _groundMap->KeyOf(body);
+                if (key != 0)
+                {
+                    next.ground = key;
+                    next.groundLocal = rotation.Conjugate() * (next.position - position);
+                }
+            }
+        }
+        return next;
     }
 
     void CharacterController::OnAttach()
@@ -690,7 +796,8 @@ namespace N2Engine::Physics
 
     bool CharacterController::SetState(const CharacterState &state)
     {
-        if (!IsFinite3(state.position) || !IsFinite3(state.velocity) || !IsFinite3(state.groundNormal))
+        if (!IsFinite3(state.position) || !IsFinite3(state.velocity) || !IsFinite3(state.groundNormal) ||
+            !IsFinite3(state.groundLocal))
         {
             return false;
         }
@@ -740,7 +847,7 @@ namespace N2Engine::Physics
             }
         }
 
-        const CharacterState next = CharacterMotor::Step(*backend, settings, _state, _input, dt);
+        const CharacterState next = Simulate(_state, _input, dt);
         _input.jump = false; // a jump is one press
         const bool moved = next.position.x != _state.position.x || next.position.y != _state.position.y ||
                            next.position.z != _state.position.z;

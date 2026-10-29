@@ -20,7 +20,11 @@
 #include "engine/network/NetworkServer.hpp"
 #include "engine/network/NetworkWorld.hpp"
 #include "engine/network/n2net/SimTransport.hpp"
+#include "engine/network/InterestManagement.hpp"
+#include "engine/network/NetworkTransform.hpp"
+#include "engine/physics/BoxCollider.hpp"
 #include "engine/physics/CharacterController.hpp"
+#include "engine/physics/Rigidbody.hpp"
 #include "engine/prefabs/PrefabManager.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 
@@ -606,6 +610,312 @@ TEST_F(PredictionSessionTest, TheServerStepNeedsAControllerAndGivesAnUnownedObje
     EXPECT_NEAR(controller->GetState().position.x, 0.0f, 1e-4f);
     EXPECT_NEAR(controller->GetState().position.z, 0.0f, 1e-4f);
     EXPECT_TRUE(controller->IsExternallyDriven());
+}
+
+// ---- Riding a kinematic platform (wire version 8) -----------------------------------------------------------------------
+//
+// The server and the clients of these tests share one physics world, so the platform exists twice (the server's and the
+// client's copy, which lags it). Each peer's platform is on its own layer and each peer's pawn collides with its own
+// platform only (the layer mask of its controller), as each would in a process of its own.
+
+namespace
+{
+    constexpr const char *kPlatform = "PredictionTest_Platform";
+    constexpr int kServerPlatformLayer = 8;
+    constexpr int kClientPlatformLayer = 9;
+
+    using Path = Math::Vector3 (*)(std::uint32_t);
+
+    Math::Vector3 PlatformStill(std::uint32_t) { return Math::Vector3(0.0f, 0.25f, 0.0f); }
+    /// 1.8 units a second along x, from the origin: 9 units in 300 ticks
+    Math::Vector3 PlatformLinear(const std::uint32_t n) { return Math::Vector3(0.03f * static_cast<float>(n), 0.25f, 0.0f); }
+    /// A circle of radius 4 at 3.6 units a second
+    Math::Vector3 PlatformCircle(const std::uint32_t n)
+    {
+        const float angle = 0.015f * static_cast<float>(n);
+        return Math::Vector3(4.0f * std::cos(angle) - 4.0f, 0.25f, 4.0f * std::sin(angle));
+    }
+
+    /// A slow walk in a small circle (it stays on a 6 unit platform)
+    std::vector<float> Stroll(const std::uint32_t s)
+    {
+        const std::uint32_t n = s - kStartTick;
+        const float angle = static_cast<float>(n) * 0.045f;
+        return Values(0.0f, 0.15f * std::cos(angle), 0.15f * std::sin(angle));
+    }
+
+    /// 90 ticks east at full speed (off a platform 3 units from its centre), idle, then back west with a jump now and then
+    std::vector<float> OffAndOn(const std::uint32_t s)
+    {
+        const std::uint32_t n = s - kStartTick;
+        if (n < 90)
+        {
+            return Values(0.0f, 1.0f, 0.0f);
+        }
+        if (n < 150)
+        {
+            return Idle(s);
+        }
+        return Values(((n - 150) % 25) == 24 ? 1.0f : 0.0f, -1.0f, 0.0f);
+    }
+}
+
+class RidingSessionTest : public PredictionSessionTest
+{
+protected:
+    RidingSessionTest() : platformRegistered(MakePlatformPrefab()) {}
+
+    ~RidingSessionTest() override { PrefabManager::UnregisterPrefab(kPlatform); }
+
+    static bool MakePlatformPrefab()
+    {
+        const GameObject::Ptr root = GameObject::Create(std::string("Prefab_") + kPlatform);
+        root->CreatePositionable();
+        root->GetPositionable()->SetPosition(Math::Vector3(0.0f, 0.25f, 0.0f));
+        root->AddComponent<NetworkObject>();
+        root->AddComponent<NetworkTransform>();
+        root->AddComponent<Physics::Rigidbody>()->SetBodyType(Physics::BodyType::Kinematic);
+        root->AddComponent<Physics::BoxCollider>()->SetSize(Math::Vector3(6.0f, 0.5f, 6.0f));
+        return PrefabManager::RegisterPrefab(kPlatform, root);
+    }
+
+    GameObject &ServerPlatform() { return serverPeer.world.Find(platformId)->GetGameObject(); }
+
+    /// Joins, spawns the platform and the pawn, and puts each peer's pawn and platform on its own layer
+    void SetUpRide(ClientRig &rig)
+    {
+        ASSERT_TRUE(platformRegistered);
+        ASSERT_TRUE(RunUntil([&] { return rig.client->IsJoined(); }));
+        const auto platform = server->Spawn(kPlatform);
+        ASSERT_TRUE(platform.has_value()) << platform.error();
+        platformId = *platform;
+        ASSERT_TRUE(RunUntil([&] { return rig.peer.world.Find(platformId) != nullptr; }));
+        serverPeer.scene->ProcessAttachQueue();
+        rig.peer.scene->ProcessAttachQueue();
+        ServerPlatform().SetLayer(kServerPlatformLayer);
+        rig.peer.world.Find(platformId)->GetGameObject().SetLayer(kClientPlatformLayer);
+        JoinWithPawn(rig);
+        ServerController(rig)->layerMask = static_cast<int>(Layers::DefaultRaycastMask & ~(1u << kClientPlatformLayer));
+        rig.Controller()->layerMask = static_cast<int>(Layers::DefaultRaycastMask & ~(1u << kServerPlatformLayer));
+        Application::GetInstance().Get3DPhysicsBackend()->ApplyPendingChanges();
+    }
+
+    /// One game tick with the server's platform at `path(tick)`; the physics scene steps once so the bodies move
+    void RideTick(std::vector<float> (*script)(std::uint32_t), const Path path)
+    {
+        if (serverPeer.world.Find(platformId) != nullptr)
+        {
+            ServerPlatform().GetPositionable()->SetPosition(path(tickIndex));
+        }
+        Application::GetInstance().Get3DPhysicsBackend()->Update(kDt);
+        Tick(script);
+    }
+
+    void RideTicks(const std::uint32_t count, std::vector<float> (*script)(std::uint32_t), const Path path)
+    {
+        for (std::uint32_t i = 0; i < count; ++i)
+        {
+            RideTick(script, path);
+        }
+    }
+
+    /// Lets the pawn land on the still platform and the first states arrive, then zeroes the counters
+    void SettleOnPlatform(ClientRig &rig)
+    {
+        RideTicks(150, &Idle, &PlatformStill);
+        rig.client->ResetPredictionStatistics();
+    }
+
+    bool platformRegistered;
+    NetworkId platformId;
+};
+
+TEST_F(RidingSessionTest, ThePawnStandsOnTheServersPlatformAndKnowsIt)
+{
+    ClientRig &rig = AddClient(Clean());
+    SetUpRide(rig);
+    SettleOnPlatform(rig);
+    const CharacterState server = ServerController(rig)->GetState();
+    const CharacterState mine = rig.Controller()->GetState();
+    EXPECT_TRUE(server.grounded);
+    EXPECT_EQ(server.ground, platformId.value);
+    EXPECT_EQ(mine.ground, platformId.value) << "the client predicts the ride on its own copy of the platform";
+    EXPECT_NEAR(server.position.y, 0.5f + 1.0f + 0.02f, 0.05f) << "on the platform's top, not the floor";
+    EXPECT_NEAR(server.groundLocal.x, mine.groundLocal.x, 0.01f);
+    EXPECT_NEAR(server.groundLocal.y, mine.groundLocal.y, 0.01f);
+    EXPECT_NEAR(server.groundLocal.z, mine.groundLocal.z, 0.01f);
+}
+
+TEST_F(RidingSessionTest, APlatformMovingInALineCostsNoCorrection)
+{
+    ClientRig &rig = AddClient(Clean());
+    SetUpRide(rig);
+    SettleOnPlatform(rig);
+    const Math::Vector3 startWorld = ServerController(rig)->GetState().position;
+    RideTicks(300, &Idle, &PlatformLinear);
+    const PredictionStats stats = rig.client->PredictionStatistics();
+    // The platform was still at x = 0 when the linear phase began, and its path starts at x = 4.5 (the tick the phase
+    // starts on): it jumps there on the first tick, and the pawn is carried with it. The pawn then stands on the platform
+    // where the platform's last pose puts it (the pawn spawned at x = 0, so its local offset is 0).
+    EXPECT_NEAR(ServerController(rig)->GetState().position.x, PlatformLinear(tickIndex - 1).x, 0.1f);
+    EXPECT_GT(ServerController(rig)->GetState().position.x - startWorld.x, 9.0f);
+    EXPECT_EQ(ServerController(rig)->GetState().ground, platformId.value);
+    EXPECT_EQ(rig.Controller()->GetState().ground, platformId.value);
+    EXPECT_GT(stats.matches, 200u);
+    EXPECT_EQ(stats.corrections, 0u) << "the platform's motion is not an error in its own frame";
+    EXPECT_EQ(stats.snaps, 0u);
+    EXPECT_EQ(stats.windowOverflows, 0u);
+    EXPECT_LT(stats.maxError, 0.01f);
+}
+
+TEST_F(RidingSessionTest, APlatformOnACircleWithAWalkingPawnCostsNoCorrection)
+{
+    ClientRig &rig = AddClient(Clean());
+    SetUpRide(rig);
+    SettleOnPlatform(rig);
+    RideTicks(450, &Stroll, &PlatformCircle);
+    const PredictionStats stats = rig.client->PredictionStatistics();
+    EXPECT_GT(stats.inputsPredicted, 400u);
+    EXPECT_EQ(rig.Controller()->GetState().ground, platformId.value);
+    EXPECT_EQ(stats.corrections, 0u);
+    EXPECT_EQ(stats.snaps, 0u);
+    EXPECT_LT(stats.maxError, 0.01f);
+    // The offset stayed on the platform while the platform went round
+    EXPECT_LT(std::fabs(ServerController(rig)->GetState().groundLocal.x), 1.0f);
+    EXPECT_LT(std::fabs(ServerController(rig)->GetState().groundLocal.z), 1.0f);
+}
+
+TEST_F(RidingSessionTest, ARiderOnALossyLinkConvergesToTheServersOffset)
+{
+    ClientRig &rig = AddClient(Impaired());
+    SetUpRide(rig);
+    SettleOnPlatform(rig); // the start-up gap is corrected by design: the counters start after it
+    RideTicks(400, &Stroll, &PlatformCircle);
+    const PredictionStats stats = rig.client->PredictionStatistics();
+    EXPECT_EQ(stats.windowOverflows, 0u);
+    EXPECT_EQ(stats.snaps, 0u);
+    // The platform keeps moving while the input stops: the two end on the same ground at the same offset
+    RideTicks(180, &Idle, &PlatformCircle);
+    const CharacterState server = ServerController(rig)->GetState();
+    const CharacterState mine = rig.Controller()->GetState();
+    EXPECT_EQ(server.ground, platformId.value);
+    EXPECT_EQ(mine.ground, platformId.value);
+    EXPECT_LT(Distance(server.groundLocal, mine.groundLocal), 0.02f);
+    EXPECT_EQ(rig.client->PredictionOffset(*rig.pawnId).Length(), 0.0f);
+}
+
+TEST_F(RidingSessionTest, SteppingOffTheEdgeNeverSnapsAndEndsAgreed)
+{
+    ClientRig &rig = AddClient(Clean());
+    SetUpRide(rig);
+    SettleOnPlatform(rig);
+    bool rode = false;
+    bool leftIt = false;
+    for (std::uint32_t i = 0; i < 330; ++i)
+    {
+        RideTick(&OffAndOn, &PlatformLinear);
+        const bool onIt = rig.Controller()->GetState().ground == platformId.value;
+        if (onIt && !leftIt)
+        {
+            rode = true;
+        }
+        if (!onIt && rode && rig.Controller()->GetState().grounded)
+        {
+            leftIt = true; // standing on the floor, off the edge
+        }
+    }
+    EXPECT_TRUE(rode);
+    EXPECT_TRUE(leftIt);
+    const PredictionStats stats = rig.client->PredictionStatistics();
+    EXPECT_EQ(stats.snaps, 0u) << "a change of ground is corrected like any error, below the snap distance";
+    EXPECT_EQ(stats.windowOverflows, 0u);
+
+    RideTicks(120, &Idle, &PlatformLinear);
+    const CharacterState server = ServerController(rig)->GetState();
+    const CharacterState mine = rig.Controller()->GetState();
+    EXPECT_EQ(server.ground, mine.ground);
+    EXPECT_EQ(server.grounded, mine.grounded);
+    if (server.ground != 0)
+    {
+        EXPECT_LT(Distance(server.groundLocal, mine.groundLocal), 0.02f);
+    }
+    else
+    {
+        EXPECT_LT(Distance(server.position, mine.position), 0.05f);
+    }
+}
+
+TEST_F(RidingSessionTest, ADespawnedPlatformDropsTheRiderToTheWorldFrameWithoutASnap)
+{
+    ClientRig &rig = AddClient(Clean());
+    SetUpRide(rig);
+    SettleOnPlatform(rig);
+    RideTicks(60, &Idle, &PlatformLinear);
+    ASSERT_EQ(rig.Controller()->GetState().ground, platformId.value);
+    ASSERT_TRUE(server->Despawn(platformId));
+    // Destroyed GameObjects leave their scenes (and the physics scene) only when the scene is processed: the server's
+    // platform, and the client's copy that the Despawn message destroys, are flushed every tick of the wait
+    for (std::uint32_t i = 0; i < 180; ++i)
+    {
+        RideTick(&Idle, &PlatformLinear);
+        serverPeer.scene->ProcessDestroyed();
+        rig.peer.scene->ProcessDestroyed();
+        Application::GetInstance().Get3DPhysicsBackend()->ApplyPendingChanges();
+    }
+    const PredictionStats stats = rig.client->PredictionStatistics();
+    EXPECT_EQ(rig.peer.world.Find(platformId), nullptr);
+    EXPECT_EQ(stats.snaps, 0u);
+    EXPECT_EQ(stats.windowOverflows, 0u);
+    const CharacterState server = ServerController(rig)->GetState();
+    const CharacterState mine = rig.Controller()->GetState();
+    EXPECT_EQ(server.ground, 0u);
+    EXPECT_EQ(mine.ground, 0u);
+    EXPECT_TRUE(server.grounded);
+    EXPECT_TRUE(mine.grounded);
+    EXPECT_NEAR(server.position.y, 1.02f, 0.05f) << "it landed on the floor";
+    EXPECT_LT(Distance(server.position, mine.position), 0.02f);
+}
+
+TEST_F(RidingSessionTest, APlatformTheClientDoesNotHaveIsTheWorldFrameAndComesBackWhenItIsSeen)
+{
+    ClientRig &rig = AddClient(Clean());
+    SetUpRide(rig);
+    SettleOnPlatform(rig);
+    RideTicks(60, &Idle, &PlatformLinear);
+    ASSERT_EQ(rig.Controller()->GetState().ground, platformId.value);
+
+    // Interest management takes the platform away from this client (it is the server's: only its owner sees it)
+    ASSERT_TRUE(serverPeer.world.Find(platformId)->SetInterestPolicy({Relevance::OwnerOnly, 100.0f, 1.0f}));
+    for (std::uint32_t i = 0; i < 120; ++i)
+    {
+        RideTick(&Idle, &PlatformLinear);
+    }
+    // Hidden is inactive on this client (visibility deactivates the object, it does not remove it)
+    ASSERT_NE(rig.peer.world.Find(platformId), nullptr);
+    EXPECT_FALSE(rig.peer.world.Find(platformId)->GetGameObject().IsActive()) << "hidden from this client";
+    // The server still says the pawn rides; the client cannot, so it follows the server's world position
+    EXPECT_EQ(ServerController(rig)->GetState().ground, platformId.value);
+    EXPECT_EQ(rig.Controller()->GetState().ground, 0u);
+    const PredictionStats hidden = rig.client->PredictionStatistics();
+    EXPECT_EQ(hidden.windowOverflows, 0u);
+    // (A platform that moves under a pawn that has nothing under it on this client is the old behaviour: corrected)
+    EXPECT_GT(hidden.corrections, 0u);
+
+    // Seen again: the client rides it again and the corrections stop
+    ASSERT_TRUE(serverPeer.world.Find(platformId)->SetInterestPolicy({Relevance::Always, 100.0f, 1.0f}));
+    for (std::uint32_t i = 0; i < 150; ++i)
+    {
+        RideTick(&Idle, &PlatformLinear);
+    }
+    ASSERT_NE(rig.peer.world.Find(platformId), nullptr);
+    rig.peer.scene->ProcessAttachQueue();
+    rig.peer.world.Find(platformId)->GetGameObject().SetLayer(kClientPlatformLayer);
+    RideTicks(60, &Idle, &PlatformLinear);
+    rig.client->ResetPredictionStatistics();
+    RideTicks(120, &Idle, &PlatformLinear);
+    EXPECT_EQ(rig.Controller()->GetState().ground, platformId.value);
+    EXPECT_EQ(rig.client->PredictionStatistics().corrections, 0u);
+    EXPECT_LT(Distance(rig.Controller()->GetState().groundLocal, ServerController(rig)->GetState().groundLocal), 0.02f);
 }
 
 #endif // a physics backend is in this build

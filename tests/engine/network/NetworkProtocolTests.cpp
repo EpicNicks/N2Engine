@@ -290,6 +290,27 @@ TEST(NetworkProtocolTest, UnknownTypesAreRejected)
     EXPECT_EQ(DecodeClientMessage({}).error(), DecodeError::Empty);
 }
 
+TEST(NetworkProtocolTest, AWireVersionSevenPeerIsRefusedByBothEnds)
+{
+    // Version 8 changed the replicated fields of a character (the ground it rides): version 7 hellos and accepts are
+    // refused by version, never read as version 8 messages
+    ASSERT_EQ(kWireVersion, 8);
+    std::vector<std::uint8_t> hello = Encode(SampleHello());
+    hello[1] = 7;
+    hello[2] = 0;
+    EXPECT_EQ(DecodeServerMessage(hello).error(), DecodeError::UnsupportedVersion);
+    EXPECT_EQ(*PeekWireVersion(hello), 7);
+    std::vector<std::uint8_t> accept = Encode(SampleAccept());
+    accept[1] = 7;
+    accept[2] = 0;
+    EXPECT_EQ(DecodeClientMessage(accept).error(), DecodeError::UnsupportedVersion);
+    EXPECT_EQ(*PeekWireVersion(accept), 7);
+    // and the first two bytes of a version 8 hello say 8
+    const std::vector<std::uint8_t> now = Encode(SampleHello());
+    EXPECT_EQ(now[1], 8);
+    EXPECT_EQ(now[2], 0);
+}
+
 TEST(NetworkProtocolTest, ADifferentWireVersionIsNamedNotParsed)
 {
     std::vector<std::uint8_t> hello = Encode(SampleHello());
