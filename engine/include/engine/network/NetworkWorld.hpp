@@ -12,6 +12,7 @@
 
 #include "engine/network/NetworkId.hpp"
 #include "engine/network/NetworkObject.hpp"
+#include "engine/physics/CharacterController.hpp"
 
 namespace N2Engine
 {
@@ -37,7 +38,7 @@ namespace N2Engine::Network
      * world when its GameObject is destroyed (its destroyed handler is told), when the world destroys it (Despawn, no
      * handler call) or when the world is reset or destroyed (no call).
      */
-    class NetworkWorld
+    class NetworkWorld : public Physics::ICharacterGroundMap
     {
     public:
         /// Called when an object registered here is destroyed by anyone but the world's own Despawn: its id, and whether
@@ -65,6 +66,11 @@ namespace N2Engine::Network
         [[nodiscard]] std::uint32_t SceneObjectCount() const noexcept { return _sceneObjectCount; }
 
         [[nodiscard]] NetworkObject *Find(NetworkId id) const;
+
+        /// Netcode stage B6 (riding): a character rides the bodies of this world by net id. The key of an object that
+        /// has no registered NetworkObject is 0; BodyOf gives the object of a registered id (a parked or unknown one: none).
+        [[nodiscard]] std::uint32_t KeyOf(GameObject &body) const override;
+        [[nodiscard]] GameObject *BodyOf(std::uint32_t key) const override;
         /// Objects registered now (scene and spawned)
         [[nodiscard]] std::size_t Count() const noexcept { return _objects.size(); }
         /// Net id to object, ascending by id

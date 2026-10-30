@@ -938,6 +938,22 @@ TEST(NetworkClientTest, AcceptsAMatchingHelloAndAnswersWithItsOwnFingerprint)
     ASSERT_TRUE(rig.RunUntil([&] { return rig.client->IsJoined(); }));
 }
 
+TEST(NetworkClientTest, RefusesAWireVersionSevenServer)
+{
+    // Version 8 added the ground a character rides to the character's replicated fields: a version 7 server's entries
+    // for a character have another layout, so a version 7 peer is refused at the hello, as any other version is
+    RawServerRig rig;
+    std::vector<std::uint8_t> hello = Encode(ServerHelloMessage{kWireVersion, rig.client->LocalFingerprint(), 1});
+    ASSERT_EQ(kWireVersion, 8);
+    hello[1] = 7;
+    hello[2] = 0;
+    rig.Send(hello);
+    ASSERT_TRUE(rig.RunUntil([&] { return rig.client->State() == NetworkClientState::Refused; }));
+    EXPECT_EQ(rig.client->Refusal(), JoinRefusal::WireVersion);
+    EXPECT_NE(rig.client->Error().find("wire version 7 "), std::string::npos);
+    EXPECT_NE(rig.client->Error().find("speaks 8"), std::string::npos);
+}
+
 TEST(NetworkClientTest, RefusesAServerOfAnotherWireVersionBeforeReadingAnythingElse)
 {
     RawServerRig rig;

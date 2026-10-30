@@ -161,6 +161,23 @@ namespace N2Engine::Network
         return found == _objects.end() ? nullptr : found->second;
     }
 
+    std::uint32_t NetworkWorld::KeyOf(GameObject &body) const
+    {
+        const NetworkObject *const object = body.GetComponent<NetworkObject>();
+        if (object == nullptr || !object->IsRegistered() || !object->HasNetworkId())
+        {
+            return 0;
+        }
+        const NetworkId id = object->GetNetworkId();
+        return Find(id) == object ? id.value : 0;
+    }
+
+    GameObject *NetworkWorld::BodyOf(const std::uint32_t key) const
+    {
+        NetworkObject *const object = Find(NetworkId{key});
+        return object != nullptr ? &object->GetGameObject() : nullptr;
+    }
+
     NetworkId NetworkWorld::AllocateId()
     {
         if (_nextId == 0 || _nextId == std::numeric_limits<std::uint32_t>::max())

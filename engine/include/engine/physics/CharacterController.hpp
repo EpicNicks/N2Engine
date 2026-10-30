@@ -12,6 +12,7 @@
 namespace N2Engine::Physics
 {
     class IPhysicsBackend;
+    struct RaycastHit;
 
     /// What the player asks of a character for one fixed tick
     struct CharacterInput
@@ -37,6 +38,26 @@ namespace N2Engine::Physics
         bool grounded = false;
         /// The normal of the ground stood on, (0, 1, 0) when not grounded
         Math::Vector3 groundNormal = Math::Vector3(0.0f, 1.0f, 0.0f);
+        /// Netcode stage B6 (riding): the key (the network id) of the kinematic body the character stands on, 0 for none
+        /// (the world frame). CharacterMotor::Step leaves it 0: CharacterController sets it, because only it knows the
+        /// ICharacterGroundMap that names bodies.
+        std::uint32_t ground = 0;
+        /// With `ground`: the character's position in that body's local space (its pose in the physics scene). Then
+        /// the position the next step starts from is the body's pose applied to this, so the character is carried; and
+        /// two machines whose copies of the body are at different poses still agree on this offset.
+        Math::Vector3 groundLocal = Math::Vector3(0.0f, 0.0f, 0.0f);
+    };
+
+    /// Names the bodies a character can ride, by a key that means the same on every machine (the network layer's net
+    /// id), and finds them again. The controller asks it and nothing else; without one it never rides.
+    class ICharacterGroundMap
+    {
+    public:
+        virtual ~ICharacterGroundMap() = default;
+        /// The key of `body` (the object of a kinematic Rigidbody), 0 when it has none (it cannot be ridden)
+        [[nodiscard]] virtual std::uint32_t KeyOf(GameObject &body) const = 0;
+        /// The object with `key`, nullptr when this machine has none (it is not replicated here, or is gone)
+        [[nodiscard]] virtual GameObject *BodyOf(std::uint32_t key) const = 0;
     };
 
     /// The shape and the tuning of a character
@@ -82,7 +103,10 @@ namespace N2Engine::Physics
         /// One step of `dt` seconds. A state with a non-finite position, a dt that is not above zero and finite, or
         /// settings that are not valid return `state` unchanged.
         [[nodiscard]] static CharacterState Step(IPhysicsBackend &backend, const CharacterSettings &settings,
-                                                 const CharacterState &state, const CharacterInput &input, float dt);
+                                                 const CharacterState &state, const CharacterInput &input, float dt,
+                                                 RaycastHit *groundHit = nullptr);
+        // groundHit, when given, is set to the contact the character stands on when the result is grounded (its object
+        // and rigidbody say what it stands on); untouched otherwise.
 
         /// A 64-bit FNV-1a hash over the bits of every field of the state, for comparing runs
         [[nodiscard]] static std::uint64_t Hash(const CharacterState &state);
@@ -132,6 +156,16 @@ namespace N2Engine::Physics
         /// CharacterMotor::Step).
         [[nodiscard]] CharacterState Simulate(const CharacterState &state, const CharacterInput &input, float dt) const;
 
+        /// Netcode stage B6 (riding): the map that names the bodies this character can ride (not owned; it must outlive
+        /// the controller or be reset to nullptr). Set by the network layer on the objects it steps.
+        void SetGroundMap(const ICharacterGroundMap *map) noexcept { _groundMap = map; }
+        /// Whether this machine has the body `key` names, as a kinematic body in the physics scene
+        [[nodiscard]] bool CanResolveGround(std::uint32_t key) const;
+        /// `state` with its position taken from the ground it rides, in this machine's copy of the body (the pose the
+        /// physics scene has now). A state with no ground, or one that cannot be found here, is returned as it is
+        /// except that an unfound ground is dropped (the world frame, from the position it holds).
+        [[nodiscard]] CharacterState Anchored(const CharacterState &state) const;
+
         /// Netcode stage B6: true when something else steps this controller (the network layer: the server with the
         /// owner's input, the owning client with its predicted input). OnFixedUpdate then does nothing, so the fixed
         /// update cannot step it a second time with a stale held input. Not saved.
@@ -176,6 +210,10 @@ namespace N2Engine::Physics
         Math::Vector3 _netPosition{0.0f, 0.0f, 0.0f};
         float _netVelocityY = 0.0f;
         bool _netGrounded = false;
+        // The riding part (wire version 8): the key of the body stood on (0: none) and the offset in its local space
+        int _netGround = 0;
+        Math::Vector3 _netGroundLocal{0.0f, 0.0f, 0.0f};
+        const ICharacterGroundMap *_groundMap = nullptr;
         bool _externallyDriven = false;
 
         CharacterInput _input;

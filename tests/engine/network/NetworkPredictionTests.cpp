@@ -6,7 +6,12 @@
 #include <string>
 #include <vector>
 
+#include "engine/GameObjectScene.hpp"
 #include "engine/network/InputLayout.hpp"
+#include "engine/network/NetworkWorld.hpp"
+#include "engine/network/ReplicationLayout.hpp"
+#include "engine/network/n2net/ByteIO.hpp"
+#include "engine/physics/CharacterController.hpp"
 #include "engine/network/NetworkInput.hpp"
 #include "engine/network/NetworkPrediction.hpp"
 
@@ -505,4 +510,144 @@ TEST(PredictionHistoryTest, TheReplayIsBoundedByTheCapacity)
     EXPECT_EQ(result.outcome, ReconcileOutcome::Corrected);
     EXPECT_EQ(calls, 7);
     EXPECT_LE(static_cast<std::size_t>(calls), history.Capacity());
+}
+
+
+// ---- Riding (wire version 8): the ground and the offset on it ---------------------------------------------------------------
+
+namespace
+{
+    CharacterState Riding(const std::uint32_t ground, const float lx, const float ly, const float lz, const float wx = 0.0f)
+    {
+        CharacterState state;
+        state.position = Math::Vector3(wx, 1.0f, 0.0f); // the world position follows the body: it differs per machine
+        state.grounded = true;
+        state.ground = ground;
+        state.groundLocal = Math::Vector3(lx, ly, lz);
+        return state;
+    }
+
+    /// A stepper that keeps the ride and moves the offset (the world position is not touched: the machine's body
+    /// puts it)
+    CharacterState RideScripted(const CharacterState &state, const CharacterInput &input, const float dt)
+    {
+        CharacterState next = state;
+        next.groundLocal = state.groundLocal + input.move * dt;
+        return next;
+    }
+}
+
+TEST(PredictionHistoryRidingTest, TheSameRideAgreesByItsOffsetWhateverTheWorldPositionIs)
+{
+    PredictionHistory history;
+    ASSERT_TRUE(history.Record(10, Move(0.0f), kDt, Riding(3, 1.0f, 0.5f, 2.0f, /*wx*/ 10.0f)));
+    // The server's body is 4 units further along than this client's copy: the world positions differ by 4, the offsets
+    // do not, so this is a match, not a correction
+    const ReconcileResult result = history.Reconcile(10, Riding(3, 1.0f, 0.5f, 2.0f, 14.0f), kStepper, Options());
+    EXPECT_EQ(result.outcome, ReconcileOutcome::Match);
+    EXPECT_TRUE(result.compared);
+    EXPECT_FLOAT_EQ(result.error, 0.0f);
+}
+
+TEST(PredictionHistoryRidingTest, ADifferentOffsetOnTheSameBodyIsACorrectionAndTheReplayKeepsTheRide)
+{
+    PredictionHistory history;
+    ASSERT_TRUE(history.Record(10, Move(0.0f), kDt, Riding(3, 1.0f, 0.5f, 2.0f)));
+    ASSERT_TRUE(history.Record(11, Move(6.0f), kDt, Riding(3, 1.1f, 0.5f, 2.0f)));
+    const ReconcileResult result = history.Reconcile(10, Riding(3, 1.5f, 0.5f, 2.0f), &RideScripted, Options());
+    EXPECT_EQ(result.outcome, ReconcileOutcome::Corrected);
+    EXPECT_NEAR(result.error, 0.5f, 1e-5f);
+    EXPECT_EQ(result.replayed, 1u);
+    EXPECT_EQ(result.state.ground, 3u);
+    EXPECT_NEAR(result.state.groundLocal.x, 1.6f, 1e-5f);
+}
+
+TEST(PredictionHistoryRidingTest, AnotherGroundIsNeverAMatch)
+{
+    PredictionHistory history;
+    ASSERT_TRUE(history.Record(10, Move(0.0f), kDt, Riding(3, 1.0f, 0.5f, 2.0f)));
+    EXPECT_EQ(history.Reconcile(10, Riding(4, 1.0f, 0.5f, 2.0f), kStepper, Options()).outcome, ReconcileOutcome::Corrected);
+    PredictionHistory world;
+    CharacterState onWorld = Riding(0, 0.0f, 0.0f, 0.0f);
+    ASSERT_TRUE(world.Record(10, Move(0.0f), kDt, onWorld));
+    // Stepping onto a body the client did not know about: the server says ground 3, the prediction says none
+    EXPECT_EQ(world.Reconcile(10, Riding(3, 0.0f, 0.0f, 0.0f), kStepper, Options()).outcome, ReconcileOutcome::Corrected);
+}
+
+TEST(PredictionHistoryRidingTest, ANonFiniteOffsetIsIgnored)
+{
+    PredictionHistory history;
+    ASSERT_TRUE(history.Record(10, Move(0.0f), kDt, Riding(3, 1.0f, 0.5f, 2.0f)));
+    EXPECT_EQ(history.Reconcile(10, Riding(3, std::nanf(""), 0.5f, 2.0f), kStepper, Options()).outcome,
+              ReconcileOutcome::Ignored);
+}
+
+TEST(CharacterRidingWireTest, TheReplicatedFieldsAreTheStateTheGroundAndTheOffsetInGoldenBytes)
+{
+    // The wire version 8 entry of a character: five fields, in this order, each at its codec (ReplicationCodec.hpp)
+    const GameObject::Ptr object = GameObject::Create("Golden");
+    Physics::CharacterController *const controller = object->AddComponent<Physics::CharacterController>();
+    ASSERT_NE(controller, nullptr);
+    CharacterState state;
+    state.position = Math::Vector3(1.0f, 2.0f, 3.0f);
+    state.velocity = Math::Vector3(0.0f, -1.5f, 0.0f);
+    state.grounded = true;
+    state.ground = 5;
+    state.groundLocal = Math::Vector3(0.5f, -0.25f, 2.0f);
+    ASSERT_TRUE(controller->SetState(state));
+
+    const ObjectLayout layout = BuildObjectLayout(*object);
+    ASSERT_TRUE(layout.usable);
+    std::vector<std::string> names;
+    for (const auto &field : layout.fields)
+    {
+        names.push_back(field.name);
+    }
+    const std::vector<std::string> expected = {"netPosition", "netVelocityY", "netGrounded", "netGround", "netGroundLocal"};
+    EXPECT_EQ(names, expected);
+    EXPECT_EQ(layout.MaskBytes(), 1u);
+
+    const ObjectState encoded = EncodeObjectState(layout, *object, nullptr);
+    ASSERT_EQ(encoded.fields.size(), 5u);
+    using Bytes = std::vector<std::uint8_t>;
+    EXPECT_EQ(encoded.fields[0], (Bytes{0xD0, 0x0F, 0xA0, 0x1F, 0xF0, 0x2E})); // zig-zag varints of 1000, 2000, 3000 mm
+    EXPECT_EQ(encoded.fields[1], (Bytes{0xB7, 0x17}));                         // -1500 mm/s
+    EXPECT_EQ(encoded.fields[2], (Bytes{0x01}));
+    EXPECT_EQ(encoded.fields[3], (Bytes{0x0A}));                               // zig-zag varint of 5
+    EXPECT_EQ(encoded.fields[4], (Bytes{0xE8, 0x07, 0xF3, 0x03, 0xA0, 0x1F})); // 500, -250, 2000 mm
+
+    // ... and the bytes put the same ride into another character
+    Bytes payload{0x1F};
+    for (const Bytes &field : encoded.fields)
+    {
+        payload.insert(payload.end(), field.begin(), field.end());
+    }
+    const GameObject::Ptr other = GameObject::Create("Receiver");
+    Physics::CharacterController *const receiver = other->AddComponent<Physics::CharacterController>();
+    ASSERT_NE(receiver, nullptr);
+    NetworkWorld world;
+    const WorldReferences references(world);
+    N2Net::ByteReader reader(payload);
+    std::size_t refused = 0;
+    ASSERT_EQ(ApplyEntry(BuildObjectLayout(*other), *other, reader, references, refused), EntryResult::Applied);
+    EXPECT_EQ(refused, 0u);
+    const CharacterState got = receiver->GetReplicatedState();
+    EXPECT_EQ(got.ground, 5u);
+    EXPECT_NEAR(got.groundLocal.x, 0.5f, 1e-4f);
+    EXPECT_NEAR(got.groundLocal.y, -0.25f, 1e-4f);
+    EXPECT_NEAR(got.groundLocal.z, 2.0f, 1e-4f);
+    EXPECT_TRUE(got.grounded);
+}
+
+TEST(CharacterRidingWireTest, AStateWithNoGroundSendsNoOffset)
+{
+    const GameObject::Ptr object = GameObject::Create("World");
+    Physics::CharacterController *const controller = object->AddComponent<Physics::CharacterController>();
+    CharacterState state;
+    state.groundLocal = Math::Vector3(9.0f, 9.0f, 9.0f); // (stale: no ground)
+    ASSERT_TRUE(controller->SetState(state));
+    const ObjectState encoded = EncodeObjectState(BuildObjectLayout(*object), *object, nullptr);
+    ASSERT_EQ(encoded.fields.size(), 5u);
+    EXPECT_EQ(encoded.fields[3], (std::vector<std::uint8_t>{0x00}));
+    EXPECT_EQ(encoded.fields[4], (std::vector<std::uint8_t>{0x00, 0x00, 0x00}));
 }
