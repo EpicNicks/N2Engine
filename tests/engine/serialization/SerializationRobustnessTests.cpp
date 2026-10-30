@@ -534,8 +534,12 @@ TEST(SceneDepthTest, JsonScannerCountsNestingOutsideStringsOnly)
     EXPECT_FALSE(JsonLimits::NestsDeeperThan("[[[[1]]]]", 4));
     EXPECT_TRUE(JsonLimits::NestsDeeperThan("[[[[[1]]]]]", 4));
     // brackets, braces and escaped quotes inside strings do not count, and an escaped quote does not end the string
-    EXPECT_FALSE(JsonLimits::NestsDeeperThan(R"({"a":"[[[[[[\"[[{{","b":[1]})", 2));
-    EXPECT_FALSE(JsonLimits::NestsDeeperThan(R"(["\\", "[[[[", {"k":"}}}}"}])", 2));
+    // (named locals, not raw strings inside the macro arguments: MSVC 14.44 mis-lexes a raw string holding \" inside
+    // a macro argument list, error C2017)
+    const std::string escapedQuoteInString = R"({"a":"[[[[[[\"[[{{","b":[1]})";
+    const std::string escapedBackslashThenBrackets = R"(["\\", "[[[[", {"k":"}}}}"}])";
+    EXPECT_FALSE(JsonLimits::NestsDeeperThan(escapedQuoteInString, 2));
+    EXPECT_FALSE(JsonLimits::NestsDeeperThan(escapedBackslashThenBrackets, 2));
     // nesting through component data counts as much as nesting through children
     const std::string inData = R"({"name":"s","rootGameObjects":[{"components":[{"type":"X","data":)" +
                                TestJson::NestedArrays(MaxSceneJsonDepth) + "}]}]}";

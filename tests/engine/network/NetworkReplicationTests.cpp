@@ -4,11 +4,13 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <functional>
 #include <memory>
 #include <map>
+#include <new>
 #include <optional>
 #include <span>
 #include <set>
@@ -707,6 +709,81 @@ TEST(ReplicationLayoutTest, ALayoutIsRebuiltWhenTheComponentsChange)
     EXPECT_EQ(after.fields.size(), 10u);
     cache.Forget(NetworkId{1});
     EXPECT_EQ(cache.Size(), 0u);
+}
+
+namespace
+{
+    /// Components that are always made in the same storage, so a removed one and the next one share an address (what an
+    /// allocator may do at any time; here it always does)
+    class SameAddressComponent : public SerializableComponent
+    {
+    public:
+        using SerializableComponent::SerializableComponent;
+
+        static void *operator new(const std::size_t size)
+        {
+            if (size > sizeof(storage))
+            {
+                throw std::bad_alloc();
+            }
+            return storage;
+        }
+        static void operator delete(void *) noexcept {}
+
+        alignas(std::max_align_t) static inline std::byte storage[4096];
+    };
+
+    class SameAddressFirst final : public SameAddressComponent
+    {
+    public:
+        explicit SameAddressFirst(GameObject &gameObject) : SameAddressComponent(gameObject)
+        {
+            RegisterMember("first", first).Replicated();
+        }
+        [[nodiscard]] std::string GetTypeName() const override { return "SameAddressFirst"; }
+        int first = 0;
+    };
+
+    class SameAddressSecond final : public SameAddressComponent
+    {
+    public:
+        explicit SameAddressSecond(GameObject &gameObject) : SameAddressComponent(gameObject)
+        {
+            RegisterMember("second", second).Replicated();
+            RegisterMember("third", third).Replicated();
+        }
+        [[nodiscard]] std::string GetTypeName() const override { return "SameAddressSecond"; }
+        float second = 0.0f;
+        bool third = false;
+    };
+}
+
+// A component removed and another added at the same address: comparing pointers saw no change and kept the first
+// one's field list for the second (netcode B2 review low); the lifetime tokens see a new component
+TEST(ReplicationLayoutTest, ALayoutIsRebuiltWhenAnotherComponentTakesARemovedOnesAddress)
+{
+    const GameObject::Ptr object = GameObject::Create("SameAddress");
+    LayoutCache cache;
+    Component *const first = object->AddComponent<SameAddressFirst>();
+    ASSERT_NE(first, nullptr);
+    const ObjectLayout &before = cache.Get(NetworkId{7}, *object);
+    ASSERT_EQ(before.fields.size(), 1u);
+    EXPECT_EQ(before.fields[0].name, "first");
+    const std::uint16_t beforeHash = before.hash;
+    EXPECT_TRUE(before.IsCurrentFor(*object));
+
+    ASSERT_TRUE(object->RemoveComponent(first));
+    Component *const second = object->AddComponent<SameAddressSecond>();
+    ASSERT_EQ(second, first) << "the test needs the second component at the first one's address";
+
+    const ObjectLayout &after = cache.Get(NetworkId{7}, *object);
+    ASSERT_EQ(after.fields.size(), 2u) << "the second component's fields, not the first one's";
+    EXPECT_EQ(after.fields[0].name, "second");
+    EXPECT_EQ(after.fields[1].name, "third");
+    EXPECT_NE(after.hash, beforeHash);
+    EXPECT_TRUE(after.IsCurrentFor(*object));
+    EXPECT_EQ(cache.Size(), 1u);
+    ASSERT_TRUE(object->RemoveComponent(second));
 }
 
 TEST(ReplicationFingerprintTest, TheRegistryHashCoversWhichFieldsAreReplicatedAndHow)

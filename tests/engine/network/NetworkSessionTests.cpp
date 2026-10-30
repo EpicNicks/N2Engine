@@ -746,6 +746,38 @@ TEST(NetworkSessionTest, NoMoreClientsThanTheLimit)
     EXPECT_FALSE(third.Hello().has_value());
 }
 
+// A refused peer is never a client, but a transport observer (N2Server's session list) saw it connect, and the server's
+// own Disconnect raises no transport event: the client observer gets a Left for it, so the observer can forget it
+TEST(NetworkSessionTest, ARefusedPeerIsReportedAsLeftWithNoClientId)
+{
+    SessionConfig config;
+    config.maxClients = 1;
+    Session session(config);
+    std::vector<N2Net::PeerId> connected;
+    session.server->SetTransportObserver(
+        [&connected](const N2Net::TransportEvent &event)
+        {
+            if (event.type == N2Net::TransportEventType::PeerConnected)
+            {
+                connected.push_back(event.peer);
+            }
+        });
+    RawPeer &first = session.AddRaw();
+    ASSERT_TRUE(session.RunUntil([&] { return first.Hello().has_value(); }));
+    (void)session.AddRaw();
+    ASSERT_TRUE(session.RunUntil([&] { return session.server->Stats().droppedOverCapacity == 1; }));
+    session.RunFor(50'000);
+    ASSERT_EQ(connected.size(), 2u);
+    EXPECT_EQ(session.server->ClientCount(), 1u);
+    ASSERT_EQ(session.serverEvents.size(), 1u);
+    const NetworkClientEvent &left = session.serverEvents[0];
+    EXPECT_EQ(left.type, NetworkClientEvent::Type::Left);
+    EXPECT_EQ(left.client, kServerClientId);
+    EXPECT_EQ(left.peer, connected[1]);
+    EXPECT_FALSE(left.wasJoined);
+    EXPECT_EQ(left.reason, "refused: the server is full");
+}
+
 TEST(NetworkSessionTest, ADroppedClientDoesNotDisturbTheOthers)
 {
     const ScopedPrefab prefab("SessionTest_Others");

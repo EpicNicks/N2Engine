@@ -7,8 +7,13 @@
 #include <cstring>
 #include <format>
 #include <limits>
+#include <mutex>
+#include <set>
+#include <string>
 
 #include <math/UUID.hpp>
+
+#include "engine/Logger.hpp"
 
 namespace N2Engine::Network
 {
@@ -47,11 +52,39 @@ namespace N2Engine::Network
             return true;
         }
 
+        /// A stepped value whose step count does not fit 32 bits is clamped (the receiver sees the largest count, not the
+        /// value): said once per field (container, name and step), so a game that sends one every tick does not flood
+        /// the log. The set is bounded: past kMaxWarnedFields distinct fields nothing more is remembered or logged.
+        void WarnClampedOnce(const FieldInfo &field, const double value)
+        {
+            constexpr std::size_t kMaxWarnedFields = 256;
+            static std::mutex mutex;
+            static std::set<std::string> warned;
+            const std::string key = std::format("{}/{}/{}", field.container, field.name, field.replicationStep);
+            {
+                const std::lock_guard lock(mutex);
+                if (warned.size() >= kMaxWarnedFields || !warned.insert(key).second)
+                {
+                    return;
+                }
+            }
+            Logger::Warn(std::format("Replicated field '{}{}{}' = {} is {} whole steps of {}: more than a 32-bit step count "
+                                     "holds, so it is sent clamped to +-{} steps (+-{}); give the field a larger "
+                                     "replication step (said once per field)",
+                                     field.container, field.container.empty() ? "" : ".", field.name, value,
+                                     value / field.replicationStep, field.replicationStep, kMaxStepCount,
+                                     static_cast<double>(kMaxStepCount) * field.replicationStep));
+        }
+
         void PutAxis(const FieldInfo &field, const double value, WireWriter &writer)
         {
             if (field.replicationStep > 0.0)
             {
                 double steps = std::round(value / field.replicationStep);
+                if (std::fabs(steps) > static_cast<double>(kMaxStepCount))
+                {
+                    WarnClampedOnce(field, value);
+                }
                 steps = std::clamp(steps, -static_cast<double>(kMaxStepCount), static_cast<double>(kMaxStepCount));
                 writer.ZigZag(static_cast<std::int64_t>(steps));
             }

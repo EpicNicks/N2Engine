@@ -604,7 +604,8 @@ namespace N2Engine::Server
             std::vector<N2Net::PeerId> dropAfterPoll;
             std::uint64_t clientsEverConnected = 0;
             // A client leaves the list when its transport peer goes: remotely (PeerDisconnected) or because the world
-            // dropped it (a local Disconnect raises no event, so the network server's Left event calls this too)
+            // dropped or refused it (a local Disconnect raises no event, so the network server's Left event calls this
+            // too, also for a peer it refused as it connected)
             const auto forgetClient = [&](const N2Net::PeerId peer)
             {
                 const auto found = clients.find(peer);
@@ -700,8 +701,19 @@ namespace N2Engine::Server
                         }
                         else
                         {
-                            LogAdmin(std::format("Network client left the world: client={} peer={} joined={} ({})",
-                                                 event.client, event.peer, event.wasJoined ? "yes" : "no", event.reason));
+                            // A peer the world refused as it connected (full, world lost) has no client id; it was
+                            // listed by onEvent and is disconnected without a transport event, so it is forgotten here too
+                            if (event.client == Network::kServerClientId)
+                            {
+                                LogAdmin(std::format("Network peer refused by the world: peer={} ({})", event.peer,
+                                                     event.reason));
+                            }
+                            else
+                            {
+                                LogAdmin(std::format("Network client left the world: client={} peer={} joined={} ({})",
+                                                     event.client, event.peer, event.wasJoined ? "yes" : "no",
+                                                     event.reason));
+                            }
                             forgetClient(event.peer);
                         }
                     });

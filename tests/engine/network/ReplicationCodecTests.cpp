@@ -12,6 +12,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "engine/Logger.hpp"
 #include "engine/network/NetworkHash.hpp"
 #include "engine/network/ReplicationCodec.hpp"
 #include "engine/network/n2net/ByteIO.hpp"
@@ -221,6 +222,40 @@ TEST(ReplicationCodecTest, FloatsAreExactAsFloat32OrBoundedByTheirQuantisation)
     EXPECT_FALSE(EncodeField(plain, json(std::numeric_limits<double>::infinity()), nullptr, bytes));
     EXPECT_FALSE(EncodeField(plain, json(1.0e300), nullptr, bytes)) << "more than a float holds";
     EXPECT_FALSE(EncodeField(plain, json(true), nullptr, bytes));
+}
+
+TEST(ReplicationCodecTest, AStepCountPastThirtyTwoBitsIsClampedAndWarnedOncePerField)
+{
+    std::vector<std::string> warnings;
+    const std::size_t subscription = Logger::logEvent += [&warnings](const std::string_view text, const Logger::LogLevel level)
+    {
+        if (level == Logger::LogLevel::Warn && text.find("ReplicationCodecTest_clamped") != std::string_view::npos)
+        {
+            warnings.emplace_back(text);
+        }
+    };
+
+    // The review's case: a step of 0.0001 and x = 300000 is 3e9 steps, over 2^31 - 1
+    FieldInfo stepped = MakeField(FieldKind::Float);
+    stepped.name = "ReplicationCodecTest_clamped";
+    stepped.replicationStep = 0.0001;
+    const double clampedValue = 2147483647.0 * 0.0001;
+    EXPECT_NEAR(RoundTrip(stepped, 300000.0).get<double>(), clampedValue, 1e-6);
+    EXPECT_NEAR(RoundTrip(stepped, -300000.0).get<double>(), -clampedValue, 1e-6);
+    EXPECT_NEAR(RoundTrip(stepped, 250000.0).get<double>(), clampedValue, 1e-6);
+    ASSERT_EQ(warnings.size(), 1u) << "one warning for the field, not one per value sent";
+    EXPECT_NE(warnings[0].find("clamped"), std::string::npos) << warnings[0];
+
+    // A value that fits says nothing; a vector axis of another field (another name) is warned once on its own
+    EXPECT_NEAR(RoundTrip(stepped, 1000.0).get<double>(), 1000.0, 0.00005 + 1e-9);
+    FieldInfo vector = MakeField(FieldKind::Vector3);
+    vector.name = "ReplicationCodecTest_clamped_vector";
+    vector.replicationStep = 0.0001;
+    (void)RoundTrip(vector, Vec3(300000.0, 300000.0, 0.0));
+    (void)RoundTrip(vector, Vec3(0.0, -300000.0, 0.0));
+    EXPECT_EQ(warnings.size(), 2u);
+
+    Logger::logEvent -= subscription;
 }
 
 TEST(ReplicationCodecTest, VectorsRoundTripAndHonourTheirStep)

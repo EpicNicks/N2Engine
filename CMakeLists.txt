@@ -42,7 +42,17 @@ option(N2ENGINE_RENDERER_WEBGPU "Build the WebGPU renderer backend on Dawn (CI t
 # operations (no fused multiply-add contraction, no fast-math), which a later deterministic mode checks at startup
 # through Math::IsStrictFp() / N2_STRICT_FP. OFF (the default) changes no flag. It does not make results equal across
 # compilers or architectures by itself (see docs/math.html, "Strict floating-point build").
-option(N2ENGINE_STRICT_FP "Build all targets with the strict floating-point profile (no FP contraction, no fast-math)" OFF)
+# The default is ON for the web size and speed profiles (-DN2ENGINE_WEB_PROFILE=size|speed with an Emscripten toolchain):
+# Jolt declares CrossPlatform determinism only with it, so without it the Deterministic network preset is refused in the
+# web packages people ship (docs/physics.html). WebAssembly has no fused multiply-add, so it changes no instruction there
+# (the measured cost is in docs/web-build.html). Everywhere else the default stays OFF; -DN2ENGINE_STRICT_FP=OFF still
+# turns it off for a web build.
+set(_n2_strict_fp_default OFF)
+if((EMSCRIPTEN OR CMAKE_SYSTEM_NAME STREQUAL "Emscripten") AND DEFINED N2ENGINE_WEB_PROFILE
+        AND N2ENGINE_WEB_PROFILE MATCHES "^(size|speed)$")
+    set(_n2_strict_fp_default ON)
+endif()
+option(N2ENGINE_STRICT_FP "Build all targets with the strict floating-point profile (no FP contraction, no fast-math)" ${_n2_strict_fp_default})
 
 if(N2ENGINE_STRICT_FP)
     # Reject flags that defeat the profile, whether they come from the command line, the environment or a toolchain file

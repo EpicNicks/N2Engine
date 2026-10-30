@@ -978,6 +978,16 @@ jobs:
       - name: Build the image
         run: docker build -f deploy/Dockerfile -t n2editorhost .
 
+      # The image carries Jolt and the strict floating-point profile (N2ENGINE_DETERMINISTIC, the Dockerfile's default):
+      # the host binary's and the image's sizes, in the log and the job summary
+      - name: Report the image size
+        run: |
+          set -eu
+          host=$(docker run --rm --entrypoint stat n2editorhost -c %s /usr/local/bin/N2EditorHost)
+          image=$(docker image inspect -f '{{.Size}}' n2editorhost)
+          echo "N2EditorHost: $host bytes; image: $image bytes"
+          { echo "docker (N2ENGINE_DETERMINISTIC=ON): N2EditorHost $host bytes, image $image bytes"; } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Run the host in the container
         run: |
           set -eu
@@ -1134,10 +1144,12 @@ jobs:
       # package further down
       - name: Configure (size and speed profiles)
         run: |
-          set -e
+          set -e -o pipefail
           . "$HOME/emsdk/emsdk_env.sh"
           for profile in size speed; do
-            emcmake cmake -S . -B "build-web-$profile" -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE="$profile" -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_USE_JOLT=ON
+            emcmake cmake -S . -B "build-web-$profile" -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE="$profile" -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_USE_JOLT=ON 2>&1 | tee "configure-$profile.log"
+            # N2ENGINE_STRICT_FP is ON by default for these two profiles (so Jolt can declare CrossPlatform there)
+            grep -q "Strict floating-point profile enabled" "configure-$profile.log"
           done
 
       - name: Build

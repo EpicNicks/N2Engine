@@ -756,6 +756,93 @@ TEST_F(EditorPrefabTest, APrefabFileWithAnAssetPathOutsideTheProjectIsRefused)
     }
 }
 
+TEST_F(EditorPrefabTest, APrefabReachedThroughASymlinkOutOfTheAssetsFolderIsRefused)
+{
+    (void)Create("Anchor");
+    const uint32_t revision = Revision();
+    // A usable prefab outside the assets folder (beside the project), and links to it and to its folder inside assets/
+    const fs::path outsideFolder = _base / "outside";
+    fs::create_directories(outsideFolder);
+    const std::string text = json{{"name", "Out"}, {"rootObject", json{{"name", "Out"}, {"uuid", Math::UUID::Random().ToString()}}}}.dump();
+    std::ofstream(outsideFolder / "Out.prefab", std::ios::binary) << text;
+    fs::create_directories(Assets() / "links");
+
+    std::error_code fileError;
+    fs::create_symlink(outsideFolder / "Out.prefab", Assets() / "links" / "Out.prefab", fileError);
+    std::error_code folderError;
+    fs::create_directory_symlink(outsideFolder, Assets() / "outdir", folderError);
+    if (fileError && folderError)
+    {
+        // Windows without the privilege or developer mode, or a file system without links
+        GTEST_SKIP() << "symbolic links cannot be made here: " << fileError.message();
+    }
+
+    if (!fileError)
+    {
+        const Frame frame = InstantiateFrame("res://links/Out.prefab");
+        EXPECT_EQ(frame.type, ErrorType) << "a file link out of assets/";
+        EXPECT_NE(frame.Text().find("inside the project's assets folder"), std::string::npos) << frame.Text();
+        EXPECT_EQ(frame.Text().find(outsideFolder.string()), std::string::npos) << "the target is not named: " << frame.Text();
+    }
+    if (!folderError)
+    {
+        const Frame frame = InstantiateFrame("res://outdir/Out.prefab");
+        EXPECT_EQ(frame.type, ErrorType) << "a folder link out of assets/";
+        EXPECT_NE(frame.Text().find("inside the project's assets folder"), std::string::npos) << frame.Text();
+    }
+    EXPECT_EQ(Revision(), revision);
+    EXPECT_EQ(Names(), (std::vector<std::string>{"Anchor"}));
+}
+
+TEST_F(EditorPrefabTest, APrefabFileEditedOutsideTheHostIsReadAgainFromDisk)
+{
+    const std::string root = Create("Root");
+    const std::string uuid = CreatePrefab(root, "res://prefabs/Root.prefab");
+    (void)Instantiate(uuid);
+    EXPECT_EQ(Names(), (std::vector<std::string>{"Root", "Root (1)"}));
+
+    // Another program rewrites the file while the host runs: a second root child, and the root renamed
+    json file = PrefabFileJson("prefabs/Root.prefab");
+    file["rootObject"]["name"] = "Edited";
+    file["rootObject"]["children"] = json::array({json{{"name", "AddedOutside"}, {"uuid", Math::UUID::Random().ToString()}}});
+    WriteAsset("prefabs/Root.prefab", file.dump(2));
+
+    // By UUID and by path, with no rescan: the instance is made from what is on disk now
+    const std::string byUuid = Instantiate(uuid);
+    EXPECT_EQ(Node(byUuid).at("name"), "Edited");
+    const std::string byPath = Instantiate("res://prefabs/Root.prefab");
+    EXPECT_EQ(Node(byPath).at("name"), "Edited (1)");
+    EXPECT_EQ(Names(), (std::vector<std::string>{"Root", "Root (1)", "Edited", "AddedOutside", "Edited (1)", "AddedOutside"}));
+
+    // ...and a file broken outside is refused, not served from a cache
+    WriteAsset("prefabs/Root.prefab", "not json any more");
+    const uint32_t revision = Revision();
+    EXPECT_EQ(InstantiateFrame(uuid).type, ErrorType);
+    EXPECT_EQ(Revision(), revision);
+}
+
+TEST_F(EditorPrefabTest, APrefabFileOverTheSizeLimitIsRefusedAndOneAtTheLimitIsRead)
+{
+    (void)Create("Anchor");
+    // The limit is 16 MiB (the clipboard's): a usable prefab padded with JSON whitespace to exactly the limit...
+    constexpr std::size_t limit = 16u * 1024u * 1024u;
+    const std::string body = json{{"name", "Big"}, {"rootObject", json{{"name", "Big"}, {"uuid", Math::UUID::Random().ToString()}}}}.dump();
+    ASSERT_LT(body.size(), limit);
+    WriteAsset("big/AtLimit.prefab", body + std::string(limit - body.size(), ' '));
+    ASSERT_EQ(fs::file_size(Assets() / "big" / "AtLimit.prefab"), limit);
+    EXPECT_EQ(InstantiateFrame("res://big/AtLimit.prefab").type, EntityCreatedType);
+    EXPECT_EQ(Names(), (std::vector<std::string>{"Anchor", "Big"}));
+
+    // ...and one byte more is refused before it is read
+    WriteAsset("big/OverLimit.prefab", body + std::string(limit - body.size() + 1, ' '));
+    const uint32_t revision = Revision();
+    const Frame over = InstantiateFrame("res://big/OverLimit.prefab");
+    EXPECT_EQ(over.type, ErrorType);
+    EXPECT_NE(over.Text().find("larger than 16 MiB"), std::string::npos) << over.Text();
+    EXPECT_EQ(Revision(), revision);
+    EXPECT_EQ(Names(), (std::vector<std::string>{"Anchor", "Big"}));
+}
+
 // ==================== ApplyPrefab and UnpackPrefab ====================
 
 TEST_F(EditorPrefabTest, ApplyOverwritesThePrefabFileFromTheLinkedObjectAndKeepsItsNames)

@@ -28,11 +28,18 @@ RUN apt-get update \
 WORKDIR /src
 COPY . .
 
+# The Deterministic network preset needs a backend that declares CrossPlatform determinism: Jolt, built with the strict
+# floating-point profile (docs/physics.html#network-refusal). So the image has both (N2ENGINE_DETERMINISTIC=ON, the
+# default): PhysX stays the default backend, a project picks Jolt with physics.backend. On x86_64 (no -march, so no FMA
+# instruction) the strict profile changes no instruction of the engine; Jolt adds its library to the host (the measured
+# cost is in docs/editor.html#linux-host). --build-arg N2ENGINE_DETERMINISTIC=OFF builds the image without either.
+ARG N2ENGINE_DETERMINISTIC=ON
 # uname -m is x86_64 or aarch64, the directory name GCC's libstdc++ 14 lives under on each
 ENV CC=clang-20 CXX=clang++-20
 RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/$(uname -m)-linux-gnu/14" \
         -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_USE_PHYSX=ON \
+        -DN2ENGINE_USE_JOLT=${N2ENGINE_DETERMINISTIC} -DN2ENGINE_STRICT_FP=${N2ENGINE_DETERMINISTIC} \
         -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON \
  && cmake --build build --parallel --target N2EditorHost \
  && mkdir /openal-libs && cp -a build/lib/libopenal.so* /openal-libs/
