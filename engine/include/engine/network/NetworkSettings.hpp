@@ -60,7 +60,9 @@ namespace N2Engine::Network
 
     /// network.authoritative.timeDilation (netcode B6 follow-up): the client runs its fixed-step clock a little fast or
     /// slow to keep its input stamps at SuggestedInputTick. Opt-in (off by default). Not a numeric setting of the preset
-    /// table: the editor's Network panel neither shows nor edits it (SetProjectSettings does).
+    /// table (no NumericSettingSpec, no row): since editor protocol 1.23.0 the editor's Network panel shows it
+    /// (GetNetworkSettings values.authoritative.timeDilation) and edits it (SetNetworkSettings accepts
+    /// authoritative.timeDilation with enabled, minScale and maxScale); SetProjectSettings edits it too.
     struct TimeDilationSettings
     {
         bool enabled = false;

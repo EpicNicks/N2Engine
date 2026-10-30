@@ -214,6 +214,28 @@ TEST(ProtocolVectorTest, ShortPayloadsOfOlderPeersDecodeWithTheDefaults)
     EXPECT_FALSE(yieldReader.HasData());
 }
 
+// A 1.23 client's SetNetworkSettings with the newly accepted authoritative.timeDilation object: the frame layout did not
+// change (preset string, settings json), so this pins the bytes such a request is and what the server reads from them
+TEST(ProtocolVectorTest, ASetNetworkSettingsWithTimeDilationReadsAsItsMergePatch)
+{
+    const json settings = {{"authoritative", {{"timeDilation", {{"enabled", true}, {"minScale", 0.9}, {"maxScale", 1.1}}}}}};
+    const std::string expectedHex =
+        "00000000510000007b22617574686f7269746174697665223a7b2274696d6544696c6174696f6e223a7b22656e61626c6564223a7472"
+        "75652c226d61785363616c65223a312e312c226d696e5363616c65223a302e397d7d7d";
+
+    BufferWriter w;
+    w.WriteString("");
+    WriteJson(w, settings);
+    EXPECT_EQ(ProtocolVectors::ToHex(w.Release()), expectedHex);
+
+    const std::vector<uint8_t> payload = ProtocolVectors::FromHex(expectedHex);
+    BufferReader reader(payload);
+    const SetNetworkSettingsCmd cmd = SetNetworkSettingsCmd::Deserialize(reader);
+    EXPECT_EQ(cmd.preset, "");
+    EXPECT_EQ(cmd.settings, settings);
+    EXPECT_FALSE(reader.HasData());
+}
+
 // Each response vector's fields, written by the server's builder, give the vector's frame: byte for byte, except that
 // json fields are compared as parsed values (how JSON text is written, its key order or spacing, is free)
 TEST(ProtocolVectorTest, ServerBuildersWriteTheVectorResponses)

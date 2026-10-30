@@ -868,7 +868,127 @@ TEST(NetworkPanelChangeTest, RefusalsNameTheProblem)
     EXPECT_TRUE(Panel::BuildChangePatch(json::object(), "none", json::object(), host));
 }
 
+// ==================== Time dilation (protocol 1.23.0) ====================
+
+TEST(NetworkPanelTimeDilationTest, TheValuesShowTheDefaultsWhenTheProjectSaysNothing)
+{
+    const json info = Panel::BuildSettingsInfo(json::object(), PlainBuild(), {});
+    EXPECT_EQ(info.at("values").at("authoritative").at("timeDilation"),
+              (json{{"enabled", false}, {"minScale", 0.9}, {"maxScale", 1.1}}));
+    // Not a numeric setting of the preset table: no range entry, no row
+    for (const json &range : info.at("ranges"))
+        EXPECT_EQ(range.at("key").get<std::string>().find("timeDilation"), std::string::npos) << range.dump();
+}
+
+TEST(NetworkPanelTimeDilationTest, TheValuesAreTheEnginesReadClampedWithTheProblemsReported)
+{
+    json info = Panel::BuildSettingsInfo(
+        json{{"network", {{"authoritative", {{"timeDilation", {{"enabled", true}, {"minScale", 0.95}, {"maxScale", 1.25}}}}}}}},
+        PlainBuild(), {});
+    EXPECT_EQ(info.at("values").at("authoritative").at("timeDilation"),
+              (json{{"enabled", true}, {"minScale", 0.95}, {"maxScale", 1.25}}));
+    EXPECT_TRUE(info.at("problems").empty()) << info.at("problems").dump();
+
+    info = Panel::BuildSettingsInfo(
+        json{{"network", {{"authoritative", {{"timeDilation", {{"minScale", 0.1}, {"maxScale", 3.0}}}}}}}}, PlainBuild(), {});
+    const json &dilation = info.at("values").at("authoritative").at("timeDilation");
+    EXPECT_EQ(dilation.at("enabled"), false);
+    EXPECT_DOUBLE_EQ(dilation.at("minScale").get<double>(), 0.5) << "clamped to 0.5..1";
+    EXPECT_DOUBLE_EQ(dilation.at("maxScale").get<double>(), 2.0) << "clamped to 1..2";
+    EXPECT_EQ(info.at("problems").size(), 2u) << info.at("problems").dump();
+}
+
+TEST(NetworkPanelTimeDilationTest, AChangeAcceptsTheThreeKeysEachOfItsTypeOrNull)
+{
+    const json dilation = {{"enabled", true}, {"minScale", 0.8}, {"maxScale", 1.2}};
+    auto patch = Panel::BuildChangePatch(json::object(), "", json{{"authoritative", {{"timeDilation", dilation}}}},
+                                         PlainBuild());
+    ASSERT_TRUE(patch) << patch.error();
+    EXPECT_EQ(*patch, (json{{"network", {{"authoritative", {{"timeDilation", dilation}}}}}}));
+
+    // Alongside the other authoritative settings, one key at a time, and null for a key or the whole object
+    for (const json &settings :
+         {json{{"authoritative", {{"snapshotRate", 20}, {"timeDilation", {{"enabled", false}}}}}},
+          json{{"authoritative", {{"timeDilation", {{"minScale", nullptr}, {"maxScale", 2}}}}}},
+          json{{"authoritative", {{"timeDilation", nullptr}}}},
+          json{{"authoritative", {{"timeDilation", json::object()}}}}})
+    {
+        patch = Panel::BuildChangePatch(json::object(), "", settings, PlainBuild());
+        ASSERT_TRUE(patch) << settings.dump() << ": " << patch.error();
+        EXPECT_EQ(patch->at("network"), settings);
+    }
+
+    // The scale ranges are the engine's read (the host refuses them when it applies the patch), not this check's
+    EXPECT_TRUE(Panel::BuildChangePatch(json::object(), "",
+                                        json{{"authoritative", {{"timeDilation", {{"minScale", 0.1}}}}}}, PlainBuild()));
+}
+
+TEST(NetworkPanelTimeDilationTest, AChangeRefusesOtherKeysAndTheWrongTypes)
+{
+    const auto error = [](const json &dilation)
+    {
+        const auto patch = Panel::BuildChangePatch(json::object(), "", json{{"authoritative", {{"timeDilation", dilation}}}},
+                                                   PlainBuild());
+        EXPECT_FALSE(patch) << dilation.dump();
+        return patch ? std::string{} : patch.error();
+    };
+
+    for (const char *key : {"scale", "Enabled", "minscale", "rate"})
+    {
+        const std::string message = error(json{{key, 1}});
+        EXPECT_NE(message.find(std::string("authoritative.timeDilation.") + key), std::string::npos) << message;
+        EXPECT_NE(message.find("not a tunable network setting"), std::string::npos) << message;
+    }
+    EXPECT_NE(error(json{{"enabled", true}, {"extra", true}}).find("authoritative.timeDilation.extra"), std::string::npos);
+
+    EXPECT_NE(error(true).find("authoritative.timeDilation must be an object"), std::string::npos);
+    EXPECT_NE(error(json::array({0.9, 1.1})).find("authoritative.timeDilation must be an object"), std::string::npos);
+    for (const json &bad : {json(1), json("true"), json(0.0)})
+        EXPECT_NE(error(json{{"enabled", bad}}).find("authoritative.timeDilation.enabled must be true, false or null"),
+                  std::string::npos)
+            << bad.dump();
+    for (const char *key : {"minScale", "maxScale"})
+        for (const json &bad : {json("0.9"), json(true), json::object()})
+            EXPECT_NE(error(json{{key, bad}}).find(std::string("authoritative.timeDilation.") + key + " must be a number"),
+                      std::string::npos)
+                << key << " " << bad.dump();
+}
+
 // ==================== Through the host ====================
+
+TEST_F(EditorNetworkPanelTest, SetNetworkSettingsSavesTimeDilationAndAnOutOfRangeScaleSavesNothing)
+{
+    const json info = JsonOf(Set("authoritative", json{{"authoritative", {{"timeDilation", {{"enabled", true}, {"maxScale", 1.3}}}}}}),
+                             SettingsType);
+    EXPECT_EQ(info.at("values").at("authoritative").at("timeDilation"),
+              (json{{"enabled", true}, {"minScale", 0.9}, {"maxScale", 1.3}}));
+    EXPECT_EQ(SavedSettings().at("network").at("authoritative").at("timeDilation"),
+              (json{{"enabled", true}, {"maxScale", 1.3}}));
+
+    // A later change merges into the object, and a null member returns to its default
+    const json again = JsonOf(Set("", json{{"authoritative", {{"timeDilation", {{"minScale", 0.7}, {"maxScale", nullptr}}}}}}),
+                              SettingsType);
+    EXPECT_EQ(again.at("values").at("authoritative").at("timeDilation"),
+              (json{{"enabled", true}, {"minScale", 0.7}, {"maxScale", 1.1}}));
+    EXPECT_EQ(Get(), again);
+
+    // A scale outside its range is the engine's problem, so the host refuses the change and saves nothing
+    const std::string before = ProjectText();
+    const std::size_t events = ProjectChangedEvents(server);
+    for (const json &dilation : {json{{"minScale", 0.2}}, json{{"maxScale", 2.5}}, json{{"enabled", "yes"}}, json{{"slow", 1}}})
+    {
+        const Frame refused = Set("", json{{"authoritative", {{"timeDilation", dilation}}}});
+        EXPECT_EQ(refused.type, ErrorType) << dilation.dump();
+        EXPECT_FALSE(refused.Text().empty());
+        EXPECT_EQ(ProjectText(), before) << dilation.dump();
+    }
+    EXPECT_EQ(ProjectChangedEvents(server), events);
+
+    // null for the whole object removes it
+    const json cleared = JsonOf(Set("", json{{"authoritative", {{"timeDilation", nullptr}}}}), SettingsType);
+    EXPECT_EQ(cleared.at("values").at("authoritative").at("timeDilation").at("enabled"), false);
+    EXPECT_FALSE(SavedSettings().at("network").at("authoritative").contains("timeDilation"));
+}
 
 TEST_F(EditorNetworkPanelTest, GetNetworkSettingsAnswersForAFreshProject)
 {

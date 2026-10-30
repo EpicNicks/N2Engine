@@ -71,7 +71,9 @@ namespace N2Engine::Editor::NetworkPanel
     /// The merge patch ({"network": {...}}) a SetNetworkSettings request means, or the Error to answer. `presetText`
     /// is empty for no change of preset. `tunable` must be an object whose keys are tunable settings of the network
     /// block (not the preset, the stored overrides or the customised flag, which the command or the preset table own);
-    /// a null value removes a key. Choosing Deterministic is refused when UnavailableReason says so.
+    /// a null value removes a key. Since 1.23.0 authoritative.timeDilation is accepted as an object of enabled (a bool),
+    /// minScale and maxScale (numbers), each also null; any other key of it is refused, and its scale ranges are left
+    /// to the engine's read like the other settings. Choosing Deterministic is refused when UnavailableReason says so.
     [[nodiscard]] std::expected<nlohmann::json, std::string> BuildChangePatch(const nlohmann::json &settings,
                                                                               std::string_view presetText,
                                                                               const nlohmann::json &tunable,

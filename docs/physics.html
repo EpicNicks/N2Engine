@@ -257,7 +257,7 @@
 <tr><td><code>authoritative.smoothingMs</code></td><td>Visual smoothing of a correction</td><td>100</td><td>0 to 1000</td></tr>
 <tr><td><code>authoritative.snapThreshold</code></td><td>Metres above which a correction snaps</td><td>1.0</td><td>0.01 to 100</td></tr>
 <tr><td><code>authoritative.lagCompMaxMs</code></td><td>How far back the server rewinds a hit query</td><td>200</td><td>0 to 1000</td></tr>
-<tr><td><code>authoritative.timeDilation</code></td><td>Opt-in client time dilation: <code>{ enabled, minScale, maxScale }</code> (<a href="netcode.html#prediction-dilation">netcode</a>); not shown in the editor's Network panel</td><td>off, 0.9, 1.1</td><td>booleans; scales 0.5 to 1 and 1 to 2</td></tr>
+<tr><td><code>authoritative.timeDilation</code></td><td>Opt-in client time dilation: <code>{ enabled, minScale, maxScale }</code> (<a href="netcode.html#prediction-dilation">netcode</a>); not a preset-table row, but shown and edited by the editor's Network panel since protocol 1.23.0 (<code>GetNetworkSettings</code> <code>values.authoritative.timeDilation</code>, <code>SetNetworkSettings</code> <code>authoritative.timeDilation</code>)</td><td>off, 0.9, 1.1</td><td>booleans; scales 0.5 to 1 and 1 to 2</td></tr>
 <tr><td><code>deterministic.mode</code></td><td><code>"lockstep"</code> or <code>"rollback"</code></td><td><code>lockstep</code></td><td>those two</td></tr>
 <tr><td><code>deterministic.inputDelay</code></td><td>Ticks of input delay</td><td>2</td><td>0 to 6</td></tr>
 <tr><td><code>deterministic.rollbackWindow</code></td><td>Maximum rollback in ticks (0 is pure lockstep)</td><td>8</td><td>0 to 15</td></tr>
