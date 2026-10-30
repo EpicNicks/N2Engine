@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -49,8 +50,14 @@ namespace N2Engine::Network
         /// For each entry of `fields`, the index in `components` it belongs to
         std::vector<std::size_t> fieldComponent;
         std::uint16_t hash = 0;
-        /// The object's components when the layout was built; the layout is stale when they are not these
-        std::vector<const Component *> snapshot;
+        /// The object's components when the layout was built, by identity: each one's lifetime token
+        /// (Component::GetLifetimeToken), whose control block no later component can share, so a component removed and
+        /// another made at the same address is seen as a change (comparing pointers would not). The layout is stale when
+        /// the object's components are not these, in this order.
+        std::vector<std::weak_ptr<const bool>> snapshot;
+
+        /// Whether `object`'s components are still the ones the layout was built from
+        [[nodiscard]] bool IsCurrentFor(const GameObject &object) const;
         /// False for an object with no replicated fields, or whose fields could take more than kMaxReplicatedEntryBytes
         bool usable = false;
 

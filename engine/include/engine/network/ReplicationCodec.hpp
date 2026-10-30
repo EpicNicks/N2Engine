@@ -24,7 +24,7 @@ namespace N2Engine::Network
     //   Bool           1 byte, 0 or 1
     //   Int            zig-zag varint of the 64-bit value
     //   Float          replicationStep > 0: zig-zag varint of round(value / step), the whole-step count clamped to 32
-    //                  bits; else with a finite Range: u16 = round((value - low) / (high - low) * 65535), value clamped
+    //                  bits (the sender logs a warning once per field when it clamps); else with a finite Range: u16 = round((value - low) / (high - low) * 65535), value clamped
     //                  to the range; else the IEEE-754 float32 bits (u32)
     //   Vector2/3/4    each axis (x, y, z; Vector4: w, x, y, z) as a Float with a step, or float32 bits
     //   Quaternion     smallest-three: u32 = largest component index (2 bits) then the other three, each 10 bits across

@@ -18,15 +18,21 @@ namespace N2Engine::Network
 {
     namespace
     {
-        std::vector<const Component *> SnapshotOf(const GameObject &object)
+        std::vector<std::weak_ptr<const bool>> SnapshotOf(const GameObject &object)
         {
-            std::vector<const Component *> snapshot;
+            std::vector<std::weak_ptr<const bool>> snapshot;
             snapshot.reserve(object.GetAllComponents().size());
             for (const std::unique_ptr<Component> &component : object.GetAllComponents())
             {
-                snapshot.push_back(component.get());
+                snapshot.push_back(component ? component->GetLifetimeToken() : std::weak_ptr<const bool>());
             }
             return snapshot;
+        }
+
+        /// The same owner (control block): two empty ones are the same too
+        bool SameOwner(const std::weak_ptr<const bool> &a, const std::weak_ptr<const bool> &b) noexcept
+        {
+            return !a.owner_before(b) && !b.owner_before(a);
         }
 
         std::uint16_t Fold(const std::uint64_t value) noexcept
@@ -139,10 +145,31 @@ namespace N2Engine::Network
         return layout;
     }
 
+    bool ObjectLayout::IsCurrentFor(const GameObject &object) const
+    {
+        const auto &components = object.GetAllComponents();
+        if (components.size() != snapshot.size())
+        {
+            return false;
+        }
+        for (std::size_t i = 0; i < components.size(); ++i)
+        {
+            // (an empty slot matches an empty token; a component that is gone has an expired token whose control block
+            // the new one at its address cannot share)
+            const std::weak_ptr<const bool> current =
+                components[i] ? components[i]->GetLifetimeToken() : std::weak_ptr<const bool>();
+            if (!SameOwner(snapshot[i], current))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     const ObjectLayout &LayoutCache::Get(const NetworkId id, GameObject &object)
     {
         const auto found = _layouts.find(id.value);
-        if (found != _layouts.end() && found->second.snapshot == SnapshotOf(object))
+        if (found != _layouts.end() && found->second.IsCurrentFor(object))
         {
             return found->second;
         }
