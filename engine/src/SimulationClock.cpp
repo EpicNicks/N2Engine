@@ -82,6 +82,15 @@ void SimulationClock::BeginFrame(const double unscaledDelta)
     _accumulator += std::min(unscaledDelta, MaxFrameTime);
 }
 
+void SimulationClock::AddOwedSeconds(const double seconds)
+{
+    if (!IsNetworked() || !std::isfinite(seconds))
+    {
+        return;
+    }
+    _accumulator = std::max(_accumulator + seconds, -MaxOwedSeconds);
+}
+
 bool SimulationClock::TickDue(const double step) const
 {
     if (_accumulator < step)

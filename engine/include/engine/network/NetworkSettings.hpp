@@ -58,6 +58,17 @@ namespace N2Engine::Network
         int port = 7777;
     };
 
+    /// network.authoritative.timeDilation (netcode B6 follow-up): the client runs its fixed-step clock a little fast or
+    /// slow to keep its input stamps at SuggestedInputTick. Opt-in (off by default). Not a numeric setting of the preset
+    /// table: the editor's Network panel neither shows nor edits it (SetProjectSettings does).
+    struct TimeDilationSettings
+    {
+        bool enabled = false;
+        /// Clamped to 0.5..1 and 1..2 when read
+        double minScale = 0.9;
+        double maxScale = 1.1;
+    };
+
     struct AuthoritativeSettings
     {
         int snapshotRate = 30;
@@ -67,6 +78,7 @@ namespace N2Engine::Network
         int smoothingMs = 100;
         double snapThreshold = 1.0;
         int lagCompMaxMs = 200;
+        TimeDilationSettings timeDilation;
     };
 
     struct DeterministicSettings

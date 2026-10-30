@@ -23,6 +23,7 @@
 #include "engine/network/NetworkProtocol.hpp"
 #include "engine/network/NetworkReplication.hpp"
 #include "engine/network/NetworkRpc.hpp"
+#include "engine/network/NetworkTimeDilation.hpp"
 #include "engine/network/NetworkWorld.hpp"
 #include "engine/network/PrefabTable.hpp"
 #include "engine/network/n2net/Connection.hpp"
@@ -91,6 +92,14 @@ namespace N2Engine::Network
         /// default. Needs an input layout with the controls the mapping names, or the client logs the error and does not
         /// predict (PredictionError).
         PredictionOptions prediction;
+        /// The server's input delay in ticks (ServerInputOptions::delayTicks: a frame stamped T is applied on tick
+        /// T + delay), which SuggestedInputTick needs: the hello does not carry it, so a host copies the value the server
+        /// runs with. Clamped to 0..kMaxInputDelayTicks.
+        std::uint32_t serverInputDelayTicks = 2;
+        /// SuggestedInputTick allows this many times the measured jitter on top of half the round trip (0 to 8, clamped)
+        double jitterAllowance = 1.0;
+        /// Time dilation of the fixed-step clock (opt-in, off by default; see NetworkTimeDilation.hpp)
+        TimeDilationOptions timeDilation;
     };
 
     /// What the clock sync did on the client (the estimator's own counters are ClockSync::Stats)
@@ -261,6 +270,33 @@ namespace N2Engine::Network
         [[nodiscard]] double RenderTick() const noexcept { return _renderTick; }
         [[nodiscard]] const SnapshotInterpolator &Interpolator() const noexcept { return _interpolator; }
 
+        // ---- Input lead and time dilation (netcode stage B6 follow-up) ----------------------------------------------------
+
+        /// The tick the game should stamp its input with now so that it reaches the server just in time, none until
+        /// ClockSynced. The server applies a frame stamped T on tick T + delay (ServerInputOptions::delayTicks), so a frame
+        /// is in time when it arrives by tick T + delay; with the one-way trip of RTT / 2 and a jitter allowance:
+        ///   floor(ServerTick()) + ceil((RTT / 2 + jitterAllowance * jitter) * tickRate) - serverInputDelayTicks
+        /// (at least 0; the 32-bit wire tick, wrapping). The server's delay is SUBTRACTED: it is the slack the server adds
+        /// after the stamp, so the stamp can be that much earlier. Uses the clock as of the last Update.
+        [[nodiscard]] std::optional<std::uint32_t> SuggestedInputTick();
+        /// The same without rounding (ServerTick() + (RTT / 2 + allowance) * tickRate - delay, at least 0), in ticks; none
+        /// until ClockSynced
+        [[nodiscard]] std::optional<double> SuggestedInputTickExact();
+        /// How far ahead of the target the game is stamping, in ticks (positive: too far ahead): the tick of the newest
+        /// QueueInput plus half a tick, less SuggestedInputTickExact. None until a frame was queued and the clock synced.
+        [[nodiscard]] std::optional<double> InputLeadTicks();
+
+        /// The time dilation in force (clamped). Changing it takes effect at the next Update; turning it on or off, or
+        /// changing it while off, restarts the controller. Always allowed; it only acts when enabled.
+        [[nodiscard]] const TimeDilationOptions &GetTimeDilation() const noexcept { return _dilation.Options(); }
+        void SetTimeDilation(const TimeDilationOptions &options) noexcept { _dilation.SetOptions(options); }
+        [[nodiscard]] const TimeDilationStats &TimeDilationStatistics() const noexcept { return _dilation.Stats(); }
+        /// The factor for the client's fixed-step clock this frame: 1 unless dilation is enabled and the client is joined.
+        /// Application::Tick applies it in the Authoritative simulation mode.
+        [[nodiscard]] double FixedStepScale() const noexcept;
+        /// The whole ticks the fixed-step clock should hold (negative) or run extra (positive), once; 0 usually
+        [[nodiscard]] std::int32_t TakeFixedStepAdjustTicks() noexcept;
+
         // ---- Prediction (netcode stage B6) -------------------------------------------------------------------------------
 
         /// True when prediction is on and set up (the mapping resolved against the layout)
@@ -310,6 +346,7 @@ namespace N2Engine::Network
         void OnStateMessage(std::uint32_t tick);
         void OnEntryApplied(NetworkObject &object, std::uint32_t tick);
         void ApplyInterpolation();
+        void UpdateDilation();
         struct PredictedObject;
         void Predict(const std::vector<float> &values, std::uint32_t tick);
         void ScanPredicted();
@@ -348,6 +385,10 @@ namespace N2Engine::Network
         std::uint32_t _nextPingSequence = 1;
         std::uint64_t _nextPingAt = 0;
         double _renderTick = 0.0;
+        TimeDilationController _dilation;
+        bool _hasInputTick = false;
+        std::uint32_t _lastInputTick = 0;
+        std::uint64_t _lastInputAt = 0;
         struct PredictedObject
         {
             explicit PredictedObject(std::size_t capacity) : history(capacity) {}

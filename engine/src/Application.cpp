@@ -18,6 +18,7 @@
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/ProjectSettings.hpp"
 #include "engine/io/ProjectFile.hpp"
+#include "engine/network/NetworkClient.hpp"
 #include "engine/network/NetworkValidation.hpp"
 #include "engine/particles/ParticleBackendSelection.hpp"
 #include "engine/physics/GpuStatus.hpp"
@@ -644,7 +645,27 @@ void Application::Tick(const TickOptions &options)
     // The fixed dt follows the clock mode every frame, so GetSimulationClock().SetMode() cannot leave the mode and
     // Time::GetFixedDeltaTime() disagreeing
     Time::SetFixedIgnoresTimeScale(_simulationClock.IsNetworked());
-    _simulationClock.BeginFrame(static_cast<double>(Time::GetUnscaledDeltaTime()));
+    // Client time dilation (netcode B6 follow-up, opt-in): an authoritative client that joined and has it enabled runs its
+    // fixed ticks a little fast or slow to keep its input stamps at the suggested tick, and may be told to hold or run
+    // whole ticks once (a resync). Anything else (dilation off, no client, a fixed-tick driver, another mode) leaves the
+    // frame delta as it is. The fixed dt itself (Time::GetFixedDeltaTime) is never scaled.
+    double frameDelta = static_cast<double>(Time::GetUnscaledDeltaTime());
+    double resyncSeconds = 0.0;
+    if (!_fixedTickDriver && _simulationClock.GetMode() == SimulationMode::Authoritative)
+    {
+        if (Network::NetworkClient *const client = Network::NetworkClient::Active();
+            client != nullptr && client->GetTimeDilation().enabled)
+        {
+            frameDelta *= client->FixedStepScale();
+            resyncSeconds = static_cast<double>(client->TakeFixedStepAdjustTicks()) *
+                            static_cast<double>(Time::GetFixedUnscaledDeltaTime());
+        }
+    }
+    _simulationClock.BeginFrame(frameDelta);
+    if (resyncSeconds != 0.0)
+    {
+        _simulationClock.AddOwedSeconds(resyncSeconds);
+    }
     if (SceneManager::GetCurSceneIndex() != -1)
     {
         Scene &curScene = SceneManager::GetCurSceneRef();
