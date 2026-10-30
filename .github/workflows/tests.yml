@@ -988,18 +988,6 @@ jobs:
           echo "N2EditorHost: $host bytes; image: $image bytes"
           { echo "docker (N2ENGINE_DETERMINISTIC=ON): N2EditorHost $host bytes, image $image bytes"; } >> "$GITHUB_STEP_SUMMARY"
 
-      # TEMPORARY (removed before merge): the same image without Jolt and strict floating point, for the cost comparison
-      - name: Build the image without the deterministic profile (cost baseline)
-        run: |
-          set -eu
-          start=$(date +%s)
-          docker build -f deploy/Dockerfile --build-arg N2ENGINE_DETERMINISTIC=OFF -t n2editorhost-plain .
-          echo "baseline build took $(( $(date +%s) - start )) s"
-          host=$(docker run --rm --entrypoint stat n2editorhost-plain -c %s /usr/local/bin/N2EditorHost)
-          image=$(docker image inspect -f '{{.Size}}' n2editorhost-plain)
-          echo "BASELINE N2EditorHost: $host bytes; image: $image bytes"
-          { echo "docker (N2ENGINE_DETERMINISTIC=OFF): N2EditorHost $host bytes, image $image bytes"; } >> "$GITHUB_STEP_SUMMARY"
-
       - name: Run the host in the container
         run: |
           set -eu
