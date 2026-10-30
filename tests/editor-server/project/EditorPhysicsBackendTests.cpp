@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -25,6 +26,12 @@
 #include <engine/physics/PhysicsBackendInfo.hpp>
 #include <engine/physics/PhysicsBackendKind.hpp>
 #include <engine/physics/PhysicsFeatures.hpp>
+#ifdef N2ENGINE_PHYSX_ENABLED
+#include <engine/physics/physx/PhysXBackend.hpp>
+#endif
+#ifdef N2ENGINE_JOLT_ENABLED
+#include <engine/physics/jolt/JoltBackend.hpp>
+#endif
 
 using namespace N2Engine;
 using namespace N2Engine::Editor;
@@ -382,6 +389,58 @@ TEST_F(EditorPhysicsBackendTest, TheDeterministicPresetRefusesABackendThatDoesNo
             EXPECT_EQ(ProjectText(), before) << "a refused change saves nothing";
         }
     }
+}
+
+// ==================== Against a running backend ====================
+
+namespace
+{
+    /// A backend of the build, initialised, as Application::Init would make it; null in a build with none
+    std::unique_ptr<Physics::IPhysicsBackend> MakeRunningBackend()
+    {
+        std::unique_ptr<Physics::IPhysicsBackend> backend;
+#if defined(N2ENGINE_PHYSX_ENABLED)
+        backend = std::make_unique<Physics::PhysXBackend>();
+#elif defined(N2ENGINE_JOLT_ENABLED)
+        backend = std::make_unique<Physics::JoltBackend>();
+#endif
+        if (backend && !backend->Initialize())
+            backend.reset();
+        return backend;
+    }
+
+    /// Takes the backend out of the Application whatever the test does
+    struct RunningBackendGuard
+    {
+        ~RunningBackendGuard() { Application::GetInstance().Set3DPhysicsBackend(nullptr); }
+    };
+}
+
+TEST_F(EditorPhysicsBackendTest, RestartRequiredWhenTheProjectNamesAnotherBackendThanTheRunningOne)
+{
+    std::unique_ptr<Physics::IPhysicsBackend> backend = MakeRunningBackend();
+    if (!backend)
+        GTEST_SKIP() << "this build contains no physics backend (or it did not initialise)";
+    const std::string running(backend->BackendId());
+    const std::string other = running == "physx" ? "jolt" : "physx";
+    const RunningBackendGuard guard;
+    Application::GetInstance().Set3DPhysicsBackend(std::move(backend));
+
+    // The project names the other backend (SetProjectSettings writes any known id, compiled in or not)
+    ASSERT_EQ(Execute(server, CommandType::SetProjectSettings, JsonPayload({{"physics", {{"backend", other}}}})).type,
+              static_cast<uint8_t>(ResponseType::ProjectInfo));
+    json info = Get();
+    EXPECT_EQ(info.at("active"), running);
+    EXPECT_EQ(info.at("current"), other);
+    EXPECT_TRUE(info.at("restartRequired")) << "the running backend is not the one the project names";
+
+    // ...and back to the running one: nothing to restart for
+    ASSERT_EQ(Execute(server, CommandType::SetProjectSettings, JsonPayload({{"physics", {{"backend", running}}}})).type,
+              static_cast<uint8_t>(ResponseType::ProjectInfo));
+    info = Get();
+    EXPECT_EQ(info.at("active"), running);
+    EXPECT_EQ(info.at("current"), running);
+    EXPECT_FALSE(info.at("restartRequired"));
 }
 
 // ==================== Who may send them ====================
