@@ -257,7 +257,10 @@ namespace N2Engine::Editor::NetworkPanel
                                            {"predictionMaxMs", n.authoritative.predictionMaxMs},
                                            {"smoothingMs", n.authoritative.smoothingMs},
                                            {"snapThreshold", n.authoritative.snapThreshold},
-                                           {"lagCompMaxMs", n.authoritative.lagCompMaxMs}}},
+                                           {"lagCompMaxMs", n.authoritative.lagCompMaxMs},
+                                           {"timeDilation", {{"enabled", n.authoritative.timeDilation.enabled},
+                                                             {"minScale", n.authoritative.timeDilation.minScale},
+                                                             {"maxScale", n.authoritative.timeDilation.maxScale}}}}},
                         {"deterministic", {{"mode", std::string(Network::ToString(n.deterministic.mode))},
                                            {"inputDelay", n.deterministic.inputDelay},
                                            {"rollbackWindow", n.deterministic.rollbackWindow},
@@ -615,6 +618,7 @@ namespace N2Engine::Editor::NetworkPanel
             return keys;
         }();
         static const std::set<std::string, std::less<>> blocks = {"transport", "authoritative", "deterministic"};
+        static const std::set<std::string, std::less<>> dilationKeys = {"enabled", "minScale", "maxScale"};
 
         json network = json::object();
         if (!presetText.empty())
@@ -660,6 +664,41 @@ namespace N2Engine::Editor::NetworkPanel
                 }
                 for (const auto &[subKey, subValue] : value.items())
                 {
+                    // authoritative.timeDilation (since 1.23.0) is an object of its own: its three keys, each of its
+                    // type or null (the default). The scale ranges are the engine's read, as for the other settings
+                    if (key == "authoritative" && subKey == "timeDilation")
+                    {
+                        if (subValue.is_null())
+                        {
+                            continue;
+                        }
+                        if (!subValue.is_object())
+                        {
+                            return std::unexpected("authoritative.timeDilation must be an object (enabled, minScale, "
+                                                   "maxScale) or null");
+                        }
+                        for (const auto &[dilationKey, dilationValue] : subValue.items())
+                        {
+                            const std::string path = "authoritative.timeDilation." + dilationKey;
+                            if (!dilationKeys.contains(dilationKey))
+                            {
+                                return refuse(path);
+                            }
+                            if (dilationValue.is_null())
+                            {
+                                continue;
+                            }
+                            if (dilationKey == "enabled" && !dilationValue.is_boolean())
+                            {
+                                return std::unexpected(path + " must be true, false or null");
+                            }
+                            if (dilationKey != "enabled" && !dilationValue.is_number())
+                            {
+                                return std::unexpected(path + " must be a number or null");
+                            }
+                        }
+                        continue;
+                    }
                     if (!allowed.contains(key + "." + subKey))
                     {
                         return refuse(key + "." + subKey);
