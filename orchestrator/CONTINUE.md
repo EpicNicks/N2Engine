@@ -22,7 +22,7 @@ Read the memory index first, then these memory files: no-claude-coauthor, merge-
 - Merge: `cd C:/Method Notes Obsidian/orchestrator && node lib/ratify.mjs <item> --merge` (prints `{decision, reasons, relaxed?, merged}`), or, after the user accepted the deviations, `node tools/accept.js <item> <engine|frontend> <pr>` (needs `ledger/<item>/pr-body.md`; if missing: `api repos/EpicNicks/N2Engine/pulls/<n> --jq .body > that file`; it records the deviations as user-accepted in the PR body, clears them in dev.json, then runs ratify --merge; if ratify holds on allowedPaths, add the regex to the item's allowedPaths with a script file). `node tools/sethead.js <item> <sha>` updates dev.json's head after a push.
 - Keep <=3 workflows running; one gentle poller per head; GitHub's secondary rate limit was hit once (back off; no log downloads unless a leg failed).
 
-## State (2026-10-30; engine master includes #271; editor protocol 1.22.0 (1.23.0 is next free), n2net wire version 8, lockstep wire version 2; frontend master includes #65)
+## State (2026-10-30; engine master includes #276; editor protocol 1.23.0 (1.24.0 is next free), n2net wire version 8, lockstep wire version 2; frontend master includes #65)
 This file's State, Queue and Needs-the-user sections were rewritten on 2026-10-25 and replace the 2026-10-16 and 2026-10-22 versions (CONTINUE-2026-10-22.md is history). The progress log `orchestrator/project-memory/pending-minor-defects.md` (last entries dated 2026-10-25) is the source of truth for what merged and why; update it after every step (user instruction, 2026-10-25) through a docs-only PR.
 
 How the work has been run since 2026-10-24: the main Claude session (not the orchestrator workflow) dispatches background agents (one per item, each in its own git worktree) and merges PRs itself after the user says so. Nothing is merged without the user's go-ahead except docs-only ledger PRs. The old paths in this file (C:\Method Notes Obsidian, gh-epicnicks.sh) do not exist on the current machine: the repos are E:\Code\Projects\N2Engine and E:\Code\Projects\N2EngineWebFrontend, `gh` uses the default account, and commits/PRs carry no Claude attribution.
@@ -32,7 +32,7 @@ Rules learned in the 2026-10-24/25 session:
 - The bash tool breaks on apostrophes inside heredocs: write files with the Write tool (tell subagents).
 - Tell every developer agent to work ONLY in its own worktree: the C5 agent once left a stray draft of a test file in the main checkout, which blocked a git pull. Developer agents can die on the usage limit mid-task; check their PR and CI state yourself and resume them with SendMessage after the limit resets.
 - Subagents that are waiting on their own CI watchers can re-send the same hand-back report many times: ignore duplicates and check `gh pr checks` yourself.
-- Protocol minors are strictly serial. Taken so far: 1.17.0 EN1, 1.18.0 EN2, 1.19.0 EN3, 1.20.0 J9, 1.21.0 B11, 1.22.0 MCP5. Next free: 1.23.0.
+- Protocol minors are strictly serial. Taken so far: 1.17.0 EN1, 1.18.0 EN2, 1.19.0 EN3, 1.20.0 J9, 1.21.0 B11, 1.22.0 MCP5, 1.23.0 the Network panel timeDilation setting (#273). Next free: 1.24.0.
 - A local MSVC 14.44 build of tests/engine/serialization/SerializationRobustnessTests.cpp fails at line 537 (raw string, C2017) on master here while CI is fine: patch locally for a test run, never commit the patch.
 - Decisions D1-D7 (determinism presets) were made by the user on 2026-10-20 and are NOT open (see the 2026-10-25 correction in the progress log).
 
