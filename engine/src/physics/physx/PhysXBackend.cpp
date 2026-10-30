@@ -3,6 +3,7 @@
 #include "engine/physics/physx/PhysXGpuSupport.hpp" // N2ENGINE_PHYSX_GPU_PROBE
 #include "engine/physics/physx/PhysXPbdDriver.hpp"
 #include "engine/physics/physx/PhysXDeformableDriver.hpp"
+#include "engine/physics/physx/PhysXLayerFilter.hpp"
 #include "engine/softbody/DeformableSoftBodyBackend.hpp"
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/ICollider.hpp"
@@ -45,56 +46,12 @@ namespace N2Engine::Physics
 
     namespace
     {
-        // A shape's layer as PhysX filter data. Query word0 is its layer bit, which PhysX's fixed-function
-        // query filter ANDs with a query's layer mask. Simulation word0 is the same bit and word1 the
-        // layers it collides with (its row of the Layers collision matrix).
-        PxFilterData LayerQueryData(const int layer)
-        {
-            return PxFilterData(Layers::MaskOf(layer), 0, 0, 0);
-        }
-
-        PxFilterData LayerSimulationData(const int layer)
-        {
-            return PxFilterData(Layers::MaskOf(layer), Layers::CollisionMaskFor(layer), 0, 0);
-        }
-
-        // Each side has to accept the other's layer
-        bool LayersCollide(const PxFilterData &a, const PxFilterData &b)
-        {
-            return (a.word0 & b.word1) != 0 && (b.word0 & a.word1) != 0;
-        }
+        // LayerQueryData, LayerSimulationData, LayersCollide and CollisionEventFilterShader are in
+        // PhysXLayerFilter.hpp (shared with the soft-body driver and the tests)
 
         int LayerOf(const ICollider *collider)
         {
             return collider ? collider->GetGameObject().GetLayer() : Layers::Default;
-        }
-
-        // PxDefaultSimulationFilterShader only asks for touch notifications on trigger pairs, so
-        // onContact never ran for solid contacts and OnCollisionEnter/Stay/Exit never fired.
-        // Reads nothing but its arguments: PhysX may call it from worker threads.
-        PxFilterFlags CollisionEventFilterShader(
-            PxFilterObjectAttributes attributes0, PxFilterData filterData0,
-            PxFilterObjectAttributes attributes1, PxFilterData filterData1,
-            PxPairFlags &pairFlags, const void *, PxU32)
-        {
-            // Before the trigger branch, so the matrix applies to triggers too (as in Unity). Suppressed
-            // rather than killed: a change of filter data or resetFiltering asks again.
-            if (!LayersCollide(filterData0, filterData1))
-            {
-                return PxFilterFlag::eSUPPRESS;
-            }
-
-            if (PxFilterObjectIsTrigger(attributes0) || PxFilterObjectIsTrigger(attributes1))
-            {
-                pairFlags = PxPairFlag::eTRIGGER_DEFAULT;
-                return PxFilterFlag::eDEFAULT;
-            }
-
-            pairFlags = PxPairFlag::eCONTACT_DEFAULT
-                        | PxPairFlag::eNOTIFY_TOUCH_FOUND
-                        | PxPairFlag::eNOTIFY_TOUCH_LOST
-                        | PxPairFlag::eNOTIFY_CONTACT_POINTS;
-            return PxFilterFlag::eDEFAULT;
         }
 
         // Without a filter callback every raycast hit is blocking, so RaycastAll returned one hit

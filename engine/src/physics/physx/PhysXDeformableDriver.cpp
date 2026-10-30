@@ -12,6 +12,8 @@
 #include <extensions/PxCudaHelpersExt.h>
 #include <extensions/PxDeformableVolumeExt.h>
 
+#include "engine/physics/physx/PhysXLayerFilter.hpp"
+
 using namespace physx;
 
 // Every PhysX deformable-volume call in the engine, and every CUDA call made for soft bodies, is in this file. None
@@ -177,6 +179,9 @@ namespace N2Engine::Physics
         {
             return fail("PhysX could not create the deformable volume's shape");
         }
+        // The scene's filter shader runs for a deformable volume against a collider too, and rejects all-zero filter
+        // data (the default of a new shape) against every layer: without this the body fell through every floor
+        volume.shape->setSimulationFilterData(UnlayeredSimulationData());
         if (!volume.volume->attachShape(*volume.shape))
         {
             return fail("PhysX could not attach the shape to the deformable volume");
