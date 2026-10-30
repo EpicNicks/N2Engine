@@ -68,7 +68,8 @@ namespace N2Engine::Network
                 Cell(T, {}, nullptr, "any; PhysX is fine"),
                 Cell(L | S, "physics.backend", "jolt",
                      "jolt: the SELECTED backend must declare DeterminismLevel CrossPlatform "
-                     "(IPhysicsBackend::GetDeterminism); only Jolt can, once it is built (today none does)",
+                     "(IPhysicsBackend::GetDeterminism); only Jolt does, and only in a build with "
+                     "N2ENGINE_STRICT_FP with physics.deterministic on (PhysX declares SameBinary at best)",
                      "The physics backend is not bit-identical across platforms: peers desync")));
             rows.push_back(Row(
                 "physics.gpu", "GPU physics",
