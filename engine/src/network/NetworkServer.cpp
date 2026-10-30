@@ -191,7 +191,9 @@ namespace N2Engine::Network
         if (_worldLost || _clients.size() >= _options.maxClients || _nextClientId == kServerClientId)
         {
             ++_stats.droppedOverCapacity;
-            _refusedPeers.push_back(peer);
+            _refusedPeers.emplace_back(peer, _worldLost ? "refused: the world is lost"
+                                             : _nextClientId == kServerClientId ? "refused: no client id is left"
+                                                                                 : "refused: the server is full");
             return;
         }
 
@@ -1127,11 +1129,24 @@ namespace N2Engine::Network
 
     void NetworkServer::ApplyDrops()
     {
-        for (const N2Net::PeerId peer : _refusedPeers)
+        // A refused peer was never a client, but whoever watches the transport saw it connect (N2Server lists every
+        // session), and the local Disconnect below raises no event: the client observer is told it left
+        std::vector<std::pair<N2Net::PeerId, std::string>> refused;
+        refused.swap(_refusedPeers);
+        for (const auto &[peer, reason] : refused)
         {
+            if (_clientObserver)
+            {
+                NetworkClientEvent event;
+                event.type = NetworkClientEvent::Type::Left;
+                event.client = kServerClientId;
+                event.peer = peer;
+                event.wasJoined = false;
+                event.reason = reason;
+                _clientObserver(event);
+            }
             _transport.Disconnect(peer);
         }
-        _refusedPeers.clear();
 
         for (auto it = _clients.begin(); it != _clients.end();)
         {

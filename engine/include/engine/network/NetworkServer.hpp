@@ -142,11 +142,14 @@ namespace N2Engine::Network
         {
             /// The client accepted the world and has been sent the join state
             Joined,
-            /// The client is gone: it disconnected, or the server dropped it (`reason` says why)
+            /// The client is gone: it disconnected, or the server dropped it (`reason` says why). Also raised for a peer
+            /// the server refused as it connected (full, world lost, client ids used up): that one never had a client id
+            /// (`client` is kServerClientId) and is disconnected right after, without a transport event
             Left,
         };
 
         Type type = Type::Joined;
+        /// kServerClientId for a peer refused as it connected
         ClientId client = kServerClientId;
         N2Net::PeerId peer = N2Net::kInvalidPeer;
         /// Left only: whether the client had joined before it left
@@ -381,8 +384,10 @@ namespace N2Engine::Network
         bool _worldLost = false;
         ClientId _nextClientId = 1;
         std::map<N2Net::PeerId, Client> _clients;
-        /// Peers to disconnect once the poll has returned (a transport's Disconnect does nothing inside its Poll)
-        std::vector<N2Net::PeerId> _refusedPeers;
+        /// Peers refused in OnPeerConnected, to disconnect once the poll has returned (a transport's Disconnect does
+        /// nothing inside its Poll), with why; the client observer is told about each (a Left event with no client id),
+        /// since the transport observer saw it connect and a local Disconnect raises no event
+        std::vector<std::pair<N2Net::PeerId, std::string>> _refusedPeers;
         /// Ids of scene objects destroyed since the start, for a client that joins later
         std::set<std::uint32_t> _destroyedSceneIds;
         /// Objects the game destroyed that clients have not been told about yet
