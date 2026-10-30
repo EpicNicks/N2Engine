@@ -101,6 +101,10 @@ namespace N2Engine
 
         /// Starts a frame of `unscaledDelta` seconds of real time (None mode keeps at most MaxFrameTime of it)
         void BeginFrame(double unscaledDelta);
+        /// Network modes: moves the carried time by `seconds` once (netcode time dilation's resync). Positive makes that
+        /// much more owed (ticks run sooner, within the catch-up limit); negative holds ticks back, down to at most
+        /// MaxOwedSeconds of debt. Not finite or in None mode: ignored.
+        void AddOwedSeconds(double seconds);
         /// Whether a tick of `step` seconds is due: the accumulator holds one and, in network modes, the frame has not
         /// run the catch-up limit yet
         [[nodiscard]] bool TickDue(double step) const;

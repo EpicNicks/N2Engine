@@ -110,6 +110,33 @@ namespace N2Engine
             return &*it;
         }
 
+        /// A scale member of network.authoritative.timeDilation: absent or null is the default, a non-number is refused
+        /// (default used), a number outside low..high is clamped
+        double ReadDilationScale(const nlohmann::json &block, const char *name, const double low, const double high,
+                                 const double defaultValue, std::vector<std::string> *problems)
+        {
+            const auto it = block.find(name);
+            if (it == block.end() || it->is_null())
+            {
+                return defaultValue;
+            }
+            if (!it->is_number() || !std::isfinite(it->get<double>()))
+            {
+                AddProblem(problems, std::format("network.authoritative.timeDilation.{}: {} is not a number; using {}",
+                                                 name, it->dump(), defaultValue));
+                return defaultValue;
+            }
+            const double value = it->get<double>();
+            if (value < low || value > high)
+            {
+                const double clamped = value < low ? low : high;
+                AddProblem(problems, std::format("network.authoritative.timeDilation.{}: {} is outside {} to {}; using {}",
+                                                 name, it->dump(), low, high, clamped));
+                return clamped;
+            }
+            return value;
+        }
+
         void ApplyPhysics(const nlohmann::json &physics, std::vector<std::string> &problems)
         {
             if (!physics.is_object())
@@ -507,6 +534,13 @@ namespace N2Engine
                                                   "authoritative.snapThreshold", problems);
             out.lagCompMaxMs = ReadNetworkInt(*authoritative, "lagCompMaxMs", where, "authoritative.lagCompMaxMs",
                                               problems);
+            if (const auto *dilation = ReadNetworkSubBlock(*authoritative, "timeDilation", where, problems))
+            {
+                const std::string dilationWhere = where + ".timeDilation";
+                out.timeDilation.enabled = ReadNetworkBool(*dilation, "enabled", dilationWhere, false, problems);
+                out.timeDilation.minScale = ReadDilationScale(*dilation, "minScale", 0.5, 1.0, 0.9, problems);
+                out.timeDilation.maxScale = ReadDilationScale(*dilation, "maxScale", 1.0, 2.0, 1.1, problems);
+            }
         }
         if (const auto *deterministic = ReadNetworkSubBlock(block, "deterministic", path, problems))
         {
