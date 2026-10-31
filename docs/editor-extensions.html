@@ -531,7 +531,7 @@ return Editor.Extension {
 <p><strong>Not verified here:</strong> nothing was built or run locally (CI is the test), including <code>AlignTools.lua</code> itself, which runs in the engine only in <code>AlignToolsTest</code> (while this PR was written it was run once, outside the build, against the host's own prelude text under another Lua implementation, fengari with Lua 5.3, with a stand-in for the host, and gave the numbers the test expects); LuaLS was not run on <code>editor-api.lua</code>, so its annotations are checked by the test for names and parameters only; what the Electron editor looks like, and its trust flow, are read from the source of its master and were not run; the symbolic-link and role tests of the host skip where links or TLS are not available.</p>
 
 <div class="page-footer">
-<span>Describes master through PR #34.</span>
+<span>Describes master through PR #278.</span>
 <a href="index.html">Back to overview</a>
 </div>
 
