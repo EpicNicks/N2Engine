@@ -157,6 +157,7 @@ namespace N2Engine::Editor
             {CommandType::GetAssetInfo, false},
             {CommandType::SetImportSettings, false},
             {CommandType::CreateScriptAsset, false},
+            {CommandType::MoveAsset, false},
             {CommandType::GetEngineHealth, false},
         };
     }

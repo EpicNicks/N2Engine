@@ -39,9 +39,12 @@ namespace N2Engine::IO
         static std::string NormalizeProjectDir(const std::filesystem::path& projectDir);
 
         /**
-         * Generate deterministic UUID from resource path
+         * Generate deterministic UUID from resource path. This MINTS an asset's UUID (a new file's, or one whose
+         * .meta is lost); an existing asset's UUID is the one its .meta stores, which stays when the file moves. variant
+         * 1 is the plain path hash; variant n > 1 hashes "path#n", for a new file at a path whose hash a moved asset
+         * still holds.
          */
-        static Math::UUID FromPath(const ResourcePath& path);
+        static Math::UUID FromPath(const ResourcePath& path, unsigned variant = 1);
 
         /**
          * The deterministic UUID of the sub-asset `key` ("mesh/Body") inside the file `parentPath` (a model's mesh,

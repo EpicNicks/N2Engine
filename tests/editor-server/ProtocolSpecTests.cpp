@@ -89,6 +89,7 @@ namespace
             {"UnpackPrefab", CommandType::UnpackPrefab},
             {"GetPhysicsBackends", CommandType::GetPhysicsBackends},
             {"SetPhysicsBackend", CommandType::SetPhysicsBackend},
+            {"MoveAsset", CommandType::MoveAsset},
             {"GetNetworkSettings", CommandType::GetNetworkSettings},
             {"SetNetworkSettings", CommandType::SetNetworkSettings},
             {"GetNetworkValidation", CommandType::GetNetworkValidation},
@@ -165,6 +166,7 @@ namespace
             {"SerializedEntities", ResponseType::SerializedEntities},
             {"EntitiesCreated", ResponseType::EntitiesCreated},
             {"PhysicsBackends", ResponseType::PhysicsBackends},
+            {"AssetsMoved", ResponseType::AssetsMoved},
             {"NetworkSettings", ResponseType::NetworkSettings},
             {"NetworkValidation", ResponseType::NetworkValidation},
             {"AssetPreview",ResponseType::AssetPreview},
@@ -230,6 +232,7 @@ namespace
             {"ApplyPrefab", [](BufferReader &r) { (void)ApplyPrefabCmd::Deserialize(r); }},
             {"UnpackPrefab", [](BufferReader &r) { (void)UnpackPrefabCmd::Deserialize(r); }},
             {"SetPhysicsBackend", [](BufferReader &r) { (void)SetPhysicsBackendCmd::Deserialize(r); }},
+            {"MoveAsset", [](BufferReader &r) { (void)MoveAssetCmd::Deserialize(r); }},
             {"SetNetworkSettings", [](BufferReader &r) { (void)SetNetworkSettingsCmd::Deserialize(r); }},
             {"GetNetworkValidation", [](BufferReader &r) { (void)GetNetworkValidationCmd::Deserialize(r); }},
             {"GetEntity", [](BufferReader &r) { (void)GetEntityCmd::Deserialize(r); }},
@@ -656,6 +659,8 @@ TEST(ProtocolSpecTest, EveryCommandIsClassifiedForAPlayHost)
         {"CreatePrefab", true}, {"ApplyPrefab", true},
         // J9: SetPhysicsBackend saves project.n2proj (GetPhysicsBackends only reads, below)
         {"SetPhysicsBackend", true},
+        // 1.24.0: MoveAsset moves files under assets/ and .import/
+        {"MoveAsset", true},
         // B11: SetNetworkSettings saves project.n2proj (the two Get commands only read, below)
         {"SetNetworkSettings", true},
         // Allowed: they read, or change only the running game, the in-memory scene store or the connection

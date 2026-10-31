@@ -179,6 +179,12 @@ namespace N2Engine::Scripting
         /// that a version that fails to load leaves the running instance in place
         void ReloadScript();
 
+        /// The script file moved to `path` (the editor's MoveAsset; the asset, its UUID and the loaded LuaScript are the
+        /// same): only the path and the reload subscription follow it. The running instance, its fields and _scriptData
+        /// are kept; no OnDestroy, OnCreate or reload runs. A component with no script, or already at `path`, is left as
+        /// it is.
+        void RetargetScript(const IO::ResourcePath& path);
+
         // Component interface
         [[nodiscard]] std::string GetTypeName() const override { return "LuaComponent"; }
 

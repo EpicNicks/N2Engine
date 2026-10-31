@@ -19,6 +19,7 @@
 #include <exception>
 #include <format>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -150,6 +151,11 @@ namespace N2Engine::IO
         _fingerprint = ComputeFingerprint();
         _hasFingerprint = true;
 
+        // Who held each UUID before this scan: when two files turn out to hold one (a file copied with its .meta), the
+        // one that had it keeps it
+        const std::unordered_map<Math::UUID, ResourcePath, UUIDHash> heldBefore = _uuidToPath;
+        _mintedThisScan.clear();
+
         std::unordered_set<ResourcePath, ResourcePath::Hash> seen;
         try
         {
@@ -160,6 +166,7 @@ namespace N2Engine::IO
             // A scan cut short saw only some of the files, and took none of them for gone. Nothing now matches the
             // fingerprint, so the next AssetsChangedOnDisk says yes and the watcher scans again.
             _fingerprint = DirectoryFingerprint{~std::uint64_t{0}, ~std::uint64_t{0}};
+            _mintedThisScan.clear();
             throw;
         }
 
@@ -197,6 +204,11 @@ namespace N2Engine::IO
             }
             it = _metadata.erase(it);
         }
+        // Only files that are still there can clash: a file moved outside the editor together with its .meta is gone
+        // from its old path by now, so it keeps its UUID
+        ResolveDuplicateUuids(heldBefore);
+        _mintedThisScan.clear();
+
         // State of files that are gone (deleted before this session, or never indexed) is no use
         for (auto it = _assetState.begin(); it != _assetState.end();)
         {
@@ -297,8 +309,10 @@ namespace N2Engine::IO
         AssetMetadata meta;
 
         bool haveMeta = false;
+        bool metaFileFound = false;
         if (std::filesystem::exists(metaPath))
         {
+            metaFileFound = true;
             try
             {
                 meta = AssetMetadata::FromFile(metaPath);
@@ -306,9 +320,11 @@ namespace N2Engine::IO
             }
             catch (const std::exception &e)
             {
-                // A corrupt .meta used to throw out of Initialize; regenerate it instead (the UUID is
-                // derived from the path, so references to the asset keep resolving)
-                Logger::Warn(std::format("Corrupt metadata {} ({}); regenerating", PathToUtf8(metaPath), e.what()));
+                // A corrupt .meta used to throw out of Initialize; regenerate it instead. The new UUID is minted from
+                // the path: the same as before for a file that never moved, a new one for a file that did.
+                Logger::Warn(std::format("Corrupt metadata {} ({}); regenerating: references to the UUID it held before "
+                                         "will not resolve if the file was moved",
+                                         PathToUtf8(metaPath), e.what()));
             }
         }
 
@@ -326,13 +342,38 @@ namespace N2Engine::IO
             bool saveMeta = meta.hadStateFields;
             meta.hadStateFields = false;
 
-            // Verify UUID is deterministic
-            Math::UUID expectedUUID = ResourceUUID::FromPath(resourcePath);
-            if (meta.uuid != expectedUUID)
+            // The .meta's UUID is the asset's identity, kept as it is: a moved file's differs from the hash of its path
+            // (ResourceUUID::FromPath only mints a UUID). An all-zero one was written by an engine whose ResourceUUID
+            // was not initialised (every asset got the same): it is minted again.
+            if (meta.uuid == Math::UUID::ZERO)
             {
-                Logger::Warn(std::format("UUID mismatch for {}. Regenerating.",
-                                         resourcePath.ToString()));
-                meta.uuid = expectedUUID;
+                if (const Math::UUID minted = MintUuid(resourcePath); minted != Math::UUID::ZERO)
+                {
+                    Logger::Warn(std::format("{}: its .meta held no UUID (all zeros); gave it {}",
+                                             resourcePath.ToString(), minted.ToString()));
+                    meta.uuid = minted;
+                    _mintedThisScan.insert(resourcePath);
+                    saveMeta = true;
+                }
+            }
+
+            // The file decides where it is: a .meta moved or copied here with its file (outside the editor, by git or
+            // by hand) still names the old path. Its sub-asset UUIDs were hashed from that path, so it becomes the
+            // seed, unless the .meta already has one.
+            if (meta.resourcePath != resourcePath)
+            {
+                Logger::Info(std::format("{}: its .meta named {}; the file's own path is used",
+                                         resourcePath.ToString(), meta.resourcePath.ToString()));
+                if (meta.uuidSeed.empty() && meta.resourcePath.GetType() == PathType::Resource &&
+                    meta.resourcePath.IsValid())
+                {
+                    meta.uuidSeed = meta.resourcePath.ToString();
+                }
+                meta.resourcePath = resourcePath;
+                if (ResourcePath(meta.uuidSeed) == resourcePath)
+                {
+                    meta.uuidSeed.clear(); // moved back where its sub-asset UUIDs came from
+                }
                 saveMeta = true;
             }
 
@@ -360,14 +401,28 @@ namespace N2Engine::IO
         }
         else
         {
-            meta.uuid = ResourceUUID::FromPath(resourcePath);
+            // Minted from the path the file has now, then stored: the same UUID every earlier engine gave it, unless
+            // an asset moved away from this path still holds that one (then "path#2", ...)
+            meta.uuid = MintUuid(resourcePath);
+            _mintedThisScan.insert(resourcePath);
             meta.resourcePath = resourcePath;
             meta.lastModified = timestamp;
             meta.fileSize = fileSize;
 
             meta.resourceType = ResourceTypeFor(sourcePath);
             PersistMeta(meta, metaPath);
-            Logger::Info(std::format("New asset: {}", resourcePath.ToString()));
+            if (lastSeen && !metaFileFound && !_readOnly)
+            {
+                // Seen by an earlier scan (.n2/asset-state.json), so it had a .meta: deleted, or never committed (a
+                // read-only loader writes none, so it can't tell)
+                Logger::Warn(std::format("{} lost its .meta; it gets the UUID of its path again, and references to a "
+                                         "UUID it held before a move will not resolve",
+                                         resourcePath.ToString()));
+            }
+            else
+            {
+                Logger::Info(std::format("New asset: {}", resourcePath.ToString()));
+            }
         }
 
         if (!lastSeen || lastSeen->lastModified != timestamp || lastSeen->fileSize != fileSize)
@@ -462,6 +517,15 @@ namespace N2Engine::IO
         return meta ? meta->uuid : Math::UUID::ZERO;
     }
 
+    Math::UUID ResourceLoader::GetOrMintUUID(const ResourcePath &resourcePath) const
+    {
+        if (const AssetMetadata *meta = GetMetadata(resourcePath))
+        {
+            return meta->uuid;
+        }
+        return MintUuid(resourcePath);
+    }
+
     bool ResourceLoader::Exists(const ResourcePath &resourcePath) const
     {
         return _metadata.find(resourcePath) != _metadata.end();
@@ -500,9 +564,7 @@ namespace N2Engine::IO
 
         // Keep the refreshed metadata: discarding it left HasSourceChanged comparing against the old
         // timestamp, so it reported the asset as changed forever
-        AssetMetadata refreshed = CreateOrUpdateMetadata(sourcePath);
-        _metadata[resourcePath] = refreshed;
-        _uuidToPath[refreshed.uuid] = resourcePath;
+        IndexOne(CreateOrUpdateMetadata(sourcePath));
 
         Logger::Info(std::format("Reloaded: {}", resourcePath.ToString()));
         return true;
@@ -679,13 +741,16 @@ namespace N2Engine::IO
         }
         std::vector<SubAssetIndexEntry> entries;
         entries.reserve(subAssets.size());
+        // Hashed from the .meta's seed: the path the file had before it was first moved, so its parts keep their UUIDs
+        const auto metaIt = _metadata.find(parent);
+        const ResourcePath seed = metaIt != _metadata.end() ? SubAssetSeed(metaIt->second) : parent;
         for (Base::SubAssetRef &sub : subAssets)
         {
             if (!sub.asset)
             {
                 continue;
             }
-            const Math::UUID uuid = ResourceUUID::FromSubAsset(parent, sub.key);
+            const Math::UUID uuid = ResourceUUID::FromSubAsset(seed, sub.key);
             sub.asset->SetUUID(uuid);
             sub.asset->SetResourcePath(parent);
             sub.asset->MarkAsSubAsset(sub.key);
@@ -735,8 +800,8 @@ namespace N2Engine::IO
         }
         for (const auto &item : meta.customData.at("subAssets").items())
         {
-            // Re-derived, not trusted from the file: a moved file's index names its old path's UUIDs
-            _subAssets[ResourceUUID::FromSubAsset(meta.resourcePath, item.key())] =
+            // Re-derived from the seed, not trusted from the file (a hand-edited index could name any UUID)
+            _subAssets[ResourceUUID::FromSubAsset(SubAssetSeed(meta), item.key())] =
                 SubAssetLocation{meta.resourcePath, item.key()};
         }
     }
@@ -823,19 +888,18 @@ namespace N2Engine::IO
         const uint64_t previousModified = wasIndexed ? previous->second.lastModified : 0;
         const std::size_t previousSize = wasIndexed ? previous->second.fileSize : 0;
 
-        const AssetMetadata meta = CreateOrUpdateMetadata(sourcePath);
-        _metadata[meta.resourcePath] = meta;
-        _uuidToPath[meta.uuid] = meta.resourcePath;
+        const AssetMetadata fresh = CreateOrUpdateMetadata(sourcePath);
+        IndexOne(fresh);
         // As the scan does: a model changed since its index was written loses the index's entries
-        ReadSubAssetIndex(meta);
+        ReadSubAssetIndex(_metadata.at(fresh.resourcePath));
         SaveAssetState();
 
         if (!wasIndexed)
         {
             return RefreshResult::Added;
         }
-        return previousModified != meta.lastModified || previousSize != meta.fileSize ? RefreshResult::Modified
-                                                                                      : RefreshResult::Unchanged;
+        return previousModified != fresh.lastModified || previousSize != fresh.fileSize ? RefreshResult::Modified
+                                                                                        : RefreshResult::Unchanged;
     }
 
     std::filesystem::path ResourceLoader::GetAssetStatePath() const
@@ -1033,10 +1097,534 @@ namespace N2Engine::IO
                                        item.value().at("type").is_string()
                                    ? item.value().at("type").get<std::string>()
                                    : std::string{};
-            // Re-derived, as the scan does: a moved file's index names its old path's UUIDs
-            entries.push_back(
-                SubAssetIndexEntry{item.key(), std::move(type), ResourceUUID::FromSubAsset(parent, item.key())});
+            // Re-derived from the seed, as the scan does
+            entries.push_back(SubAssetIndexEntry{item.key(), std::move(type),
+                                                 ResourceUUID::FromSubAsset(SubAssetSeed(found->second), item.key())});
         }
         return entries;
+    }
+
+    // ===== Stable UUIDs: minting, clashes and moves =====
+
+    namespace
+    {
+        /// ASCII letters folded, for an order of paths that is the same on every file system
+        std::string FoldAscii(std::string text)
+        {
+            std::ranges::transform(text, text.begin(),
+                                   [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return text;
+        }
+
+        /// A file's bytes, or nothing when it can't be read
+        std::optional<std::string> ReadWholeFile(const std::filesystem::path &path)
+        {
+            std::ifstream file(path, std::ios::binary);
+            if (!file)
+            {
+                return std::nullopt;
+            }
+            return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+        }
+
+        /// Renames `from` to `to`, two spellings of one entry on a case-insensitive file system, through a temporary
+        /// name beside it (a direct rename may be refused as a rename onto itself). False when either step failed.
+        bool RenameCaseOnly(const std::filesystem::path &from, const std::filesystem::path &to)
+        {
+            std::filesystem::path temporary = from;
+            temporary += ".n2move-tmp";
+            std::error_code error;
+            std::filesystem::rename(from, temporary, error);
+            if (error)
+            {
+                return false;
+            }
+            std::filesystem::rename(temporary, to, error);
+            if (error)
+            {
+                std::error_code ignored;
+                std::filesystem::rename(temporary, from, ignored);
+                return false;
+            }
+            return true;
+        }
+    }
+
+    std::filesystem::path ResourceLoader::MetaPathOf(const ResourcePath &resourcePath) const
+    {
+        std::filesystem::path path = _metadataRoot / PathFromUtf8(resourcePath.GetPath());
+        path += ".meta";
+        return path;
+    }
+
+    ResourcePath ResourceLoader::SubAssetSeed(const AssetMetadata &meta)
+    {
+        if (!meta.uuidSeed.empty())
+        {
+            if (ResourcePath seed(meta.uuidSeed); seed.GetType() == PathType::Resource && seed.IsValid())
+            {
+                return seed;
+            }
+        }
+        return meta.resourcePath;
+    }
+
+    bool ResourceLoader::UuidHeldByOther(const Math::UUID &uuid, const ResourcePath &self) const
+    {
+        const auto holder = _uuidToPath.find(uuid);
+        if (holder == _uuidToPath.end() || holder->second == self)
+        {
+            return false;
+        }
+        const auto meta = _metadata.find(holder->second);
+        return meta != _metadata.end() && meta->second.uuid == uuid;
+    }
+
+    Math::UUID ResourceLoader::MintUuid(const ResourcePath &path) const
+    {
+        for (unsigned variant = 1; variant <= 1000; ++variant)
+        {
+            const Math::UUID uuid = ResourceUUID::FromPath(path, variant);
+            if (uuid == Math::UUID::ZERO || !UuidHeldByOther(uuid, path))
+            {
+                return uuid; // ZERO: ResourceUUID isn't initialised, and every asset gets ZERO as before
+            }
+        }
+        return Math::UUID::Random(); // a thousand moved assets came from this one path
+    }
+
+    void ResourceLoader::IndexOne(const AssetMetadata &meta)
+    {
+        const ResourcePath path = meta.resourcePath;
+        if (const auto previous = _metadata.find(path); previous != _metadata.end() && previous->second.uuid != meta.uuid)
+        {
+            if (const auto byUUID = _uuidToPath.find(previous->second.uuid);
+                byUUID != _uuidToPath.end() && byUUID->second == path)
+            {
+                _uuidToPath.erase(byUUID);
+            }
+        }
+        _metadata[path] = meta;
+        if (meta.uuid != Math::UUID::ZERO && UuidHeldByOther(meta.uuid, path))
+        {
+            // The file indexed before keeps the UUID: this one is the copy
+            const ResourcePath keeper = _uuidToPath.at(meta.uuid);
+            RegenerateUuid(path, keeper);
+            return;
+        }
+        _uuidToPath[meta.uuid] = path;
+    }
+
+    void ResourceLoader::RegenerateUuid(const ResourcePath &path, const ResourcePath &keeper)
+    {
+        const auto found = _metadata.find(path);
+        if (found == _metadata.end())
+        {
+            return;
+        }
+        AssetMetadata &meta = found->second;
+        const Math::UUID previous = meta.uuid;
+        meta.uuid = MintUuid(path);
+        // Its parts are its own now too: hashed from its own path
+        meta.uuidSeed.clear();
+
+        // Whatever was cached or indexed of this file under the keeper's UUIDs goes
+        if (const auto cached = _cache.find(path); cached != _cache.end())
+        {
+            if (const auto byUUID = _cacheByUUID.find(previous);
+                byUUID != _cacheByUUID.end() && byUUID->second == cached->second)
+            {
+                _cacheByUUID.erase(byUUID);
+            }
+            _cache.erase(cached);
+        }
+        std::erase_if(_subAssets, [&path](const auto &item) { return item.second.parent == path; });
+        _subAssetParentsTried.erase(path);
+        _uuidToPath[meta.uuid] = path;
+
+        if (const std::filesystem::path sourcePath = Resolve(path);
+            path.GetType() == PathType::Resource && !sourcePath.empty())
+        {
+            try
+            {
+                PersistMeta(meta, GetMetadataPath(sourcePath));
+            }
+            catch (const std::exception &e)
+            {
+                Logger::Warn(std::format("Can't save the .meta of {}: {}", path.ToString(), e.what()));
+            }
+        }
+        ReadSubAssetIndex(meta);
+
+        if (_mintedThisScan.contains(path))
+        {
+            // A new file at a path a moved asset came from: that asset still holds the path's UUID
+            Logger::Info(std::format("{}: {} holds the UUID of this path, so it gets {}", path.ToString(),
+                                     keeper.ToString(), meta.uuid.ToString()));
+        }
+        else
+        {
+            Logger::Warn(std::format("{} had the same UUID as {} (a file copied with its .meta?): it gets a new one, {}; "
+                                     "references to {} go to {}",
+                                     path.ToString(), keeper.ToString(), meta.uuid.ToString(), previous.ToString(),
+                                     keeper.ToString()));
+        }
+    }
+
+    void ResourceLoader::ResolveDuplicateUuids(const std::unordered_map<Math::UUID, ResourcePath, UUIDHash> &heldBefore)
+    {
+        // Rebuilt from the index: the scan's map kept whichever file it saw last
+        _uuidToPath.clear();
+        std::unordered_map<Math::UUID, std::vector<ResourcePath>, UUIDHash> holders;
+        for (const auto &[path, meta] : _metadata)
+        {
+            _uuidToPath[meta.uuid] = path;
+            if (meta.uuid != Math::UUID::ZERO)
+            {
+                holders[meta.uuid].push_back(path);
+            }
+        }
+
+        for (auto &[uuid, paths] : holders)
+        {
+            if (paths.size() < 2)
+            {
+                continue;
+            }
+            // Never the directory order, which differs between file systems: two machines must agree
+            std::ranges::sort(paths, [](const ResourcePath &a, const ResourcePath &b)
+            {
+                const std::string foldedA = FoldAscii(a.ToString());
+                const std::string foldedB = FoldAscii(b.ToString());
+                return foldedA != foldedB ? foldedA < foldedB : a < b;
+            });
+            ResourcePath keeper = paths.front();
+            if (const auto before = heldBefore.find(uuid);
+                before != heldBefore.end() && std::ranges::find(paths, before->second) != paths.end())
+            {
+                keeper = before->second;
+            }
+            else if (const auto stored = std::ranges::find_if(paths, [this](const ResourcePath &path)
+                                                              { return !_mintedThisScan.contains(path); });
+                     stored != paths.end())
+            {
+                keeper = *stored;
+            }
+            _uuidToPath[uuid] = keeper;
+            for (const ResourcePath &path : paths)
+            {
+                if (path != keeper)
+                {
+                    RegenerateUuid(path, keeper);
+                }
+            }
+            // The copies' indexes, read by the scan, named the keeper's parts: read the keeper's again
+            ReadSubAssetIndex(_metadata.at(keeper));
+        }
+    }
+
+    std::vector<ResourcePath> ResourceLoader::AssetsUnder(const ResourcePath &prefix) const
+    {
+        std::vector<ResourcePath> found;
+        if (prefix.GetType() != PathType::Resource || !prefix.IsValid())
+        {
+            return found;
+        }
+        const std::string folder = prefix.GetPath() + "/";
+        for (const auto &[path, meta] : _metadata)
+        {
+            if (path.GetType() == PathType::Resource && (path == prefix || path.GetPath().starts_with(folder)))
+            {
+                found.push_back(path);
+            }
+        }
+        std::sort(found.begin(), found.end());
+        return found;
+    }
+
+    std::expected<std::vector<ResourceLoader::MovedAsset>, std::string> ResourceLoader::MovePath(
+        const ResourcePath &from, const ResourcePath &to,
+        const std::function<std::expected<void, std::string>()> &renameOnDisk)
+    {
+        if (_readOnly)
+        {
+            return std::unexpected("the project is open read-only: nothing was moved");
+        }
+        if (from.GetType() != PathType::Resource || to.GetType() != PathType::Resource || !from.IsValid() ||
+            !to.IsValid() || _assetsRoot.empty())
+        {
+            return std::unexpected("only project (res://) files and folders can be moved");
+        }
+        if (from == to)
+        {
+            return std::unexpected(from.ToString() + " is already there");
+        }
+
+        const std::size_t fromLength = from.GetPath().size();
+        const auto rebase = [&](const ResourcePath &path)
+        {
+            return path == from ? to : ResourcePath(PathType::Resource, to.GetPath() + path.GetPath().substr(fromLength));
+        };
+
+        struct Step
+        {
+            ResourcePath oldPath;
+            ResourcePath newPath;
+            AssetMetadata moved;
+            std::filesystem::path oldMeta;
+            std::filesystem::path newMeta;
+            std::optional<std::string> oldText;  ///< the old .meta as it was
+            std::optional<std::string> replaced; ///< a stale .meta that was at the destination
+            bool sameFile = false;               ///< a case-only rename: the two .meta paths are one file
+        };
+        std::vector<Step> steps;
+        for (const ResourcePath &path : AssetsUnder(from))
+        {
+            Step step;
+            step.oldPath = path;
+            step.newPath = rebase(path);
+            if (_metadata.contains(step.newPath))
+            {
+                return std::unexpected(step.newPath.ToString() + " is already an asset");
+            }
+            step.moved = _metadata.at(path);
+            step.moved.resourcePath = step.newPath;
+            step.oldMeta = MetaPathOf(path);
+            step.newMeta = MetaPathOf(step.newPath);
+            steps.push_back(std::move(step));
+        }
+
+        // 1. The new .meta files, written first: a crash after this leaves the file where it was with its .meta
+        const auto undoMetas = [&steps](const std::size_t count)
+        {
+            for (std::size_t i = count; i-- > 0;)
+            {
+                const Step &step = steps[i];
+                std::error_code ignored;
+                if (step.sameFile)
+                {
+                    if (step.oldText)
+                    {
+                        (void)WriteTextFileAtomically(step.oldMeta, *step.oldText);
+                    }
+                }
+                else if (step.replaced)
+                {
+                    (void)WriteTextFileAtomically(step.newMeta, *step.replaced);
+                }
+                else
+                {
+                    std::filesystem::remove(step.newMeta, ignored);
+                }
+            }
+        };
+        for (std::size_t i = 0; i < steps.size(); ++i)
+        {
+            Step &step = steps[i];
+            std::error_code error;
+            if (std::filesystem::exists(step.oldMeta, error))
+            {
+                step.oldText = ReadWholeFile(step.oldMeta);
+                try
+                {
+                    // The import settings as the file has them (edited by hand since the scan, perhaps)
+                    step.moved.customData = AssetMetadata::FromFile(step.oldMeta).customData;
+                }
+                catch (const std::exception &)
+                {
+                    // A corrupt .meta: the index's copy is written instead
+                }
+            }
+            if (std::filesystem::exists(step.newMeta, error))
+            {
+                std::error_code sameError;
+                step.sameFile = std::filesystem::equivalent(step.oldMeta, step.newMeta, sameError) && !sameError;
+                if (!step.sameFile)
+                {
+                    step.replaced = ReadWholeFile(step.newMeta);
+                }
+            }
+            // The parts of a file with sub-assets keep the UUIDs hashed from the path it had when they were made
+            const bool hasParts = _subAssetParentTypes.contains(step.moved.resourceType) ||
+                                  (step.moved.customData.is_object() && step.moved.customData.contains("subAssets"));
+            if (hasParts && step.moved.uuidSeed.empty())
+            {
+                step.moved.uuidSeed = step.oldPath.ToString();
+            }
+            if (!step.moved.uuidSeed.empty() && ResourcePath(step.moved.uuidSeed) == step.newPath)
+            {
+                step.moved.uuidSeed.clear(); // back where its seed came from
+            }
+            bool saved = false;
+            std::string reason;
+            try
+            {
+                saved = step.moved.SaveToFile(step.newMeta);
+            }
+            catch (const std::exception &e)
+            {
+                reason = e.what();
+            }
+            if (!saved)
+            {
+                undoMetas(i);
+                return std::unexpected(std::format("can't write the .meta of {}{}", step.newPath.ToString(),
+                                                   reason.empty() ? std::string{} : ": " + reason));
+            }
+        }
+
+        // 2. The file or folder itself
+        std::expected<void, std::string> renamed;
+        try
+        {
+            if (renameOnDisk)
+            {
+                renamed = renameOnDisk();
+            }
+        }
+        catch (const std::exception &e)
+        {
+            renamed = std::unexpected(std::string(e.what()));
+        }
+        if (!renamed)
+        {
+            undoMetas(steps.size());
+            return std::unexpected(renamed.error());
+        }
+
+        // 3. The index, the caches, the parts and the state, re-keyed; the UUIDs are the same
+        std::unordered_map<ResourcePath, ResourcePath, ResourcePath::Hash> newPathOf;
+        std::vector<MovedAsset> moved;
+        moved.reserve(steps.size());
+        for (Step &step : steps)
+        {
+            newPathOf[step.oldPath] = step.newPath;
+            _metadata.erase(step.oldPath);
+            _uuidToPath[step.moved.uuid] = step.newPath;
+            if (const auto state = _assetState.find(step.oldPath); state != _assetState.end())
+            {
+                const AssetState kept = state->second;
+                _assetState.erase(state);
+                _assetState[step.newPath] = kept;
+                _assetStateDirty = true;
+            }
+            if (const auto cached = _cache.find(step.oldPath); cached != _cache.end())
+            {
+                std::shared_ptr<Base::Asset> asset = cached->second;
+                _cache.erase(cached);
+                asset->SetResourcePath(step.newPath);
+                for (const Base::SubAssetRef &sub : asset->GetSubAssets())
+                {
+                    if (sub.asset)
+                    {
+                        sub.asset->SetResourcePath(step.newPath);
+                    }
+                }
+                _cache[step.newPath] = std::move(asset);
+            }
+            if (_subAssetParentsTried.erase(step.oldPath) > 0)
+            {
+                _subAssetParentsTried.insert(step.newPath);
+            }
+            moved.push_back(MovedAsset{step.oldPath, step.newPath, step.moved.uuid, step.moved.resourceType});
+            _metadata[step.newPath] = step.moved;
+        }
+        for (auto &[uuid, location] : _subAssets)
+        {
+            if (const auto renamedParent = newPathOf.find(location.parent); renamedParent != newPathOf.end())
+            {
+                location.parent = renamedParent->second;
+            }
+        }
+
+        // 4. The old .meta files go, so a new file at an old path starts afresh
+        for (const Step &step : steps)
+        {
+            if (step.sameFile)
+            {
+                // One file under two spellings (a case-only rename): its name takes the new spelling, so a
+                // case-sensitive checkout finds it beside its file
+                if (step.oldMeta.filename() != step.newMeta.filename() && !RenameCaseOnly(step.oldMeta, step.newMeta))
+                {
+                    Logger::Warn(std::format("Can't rename the .meta of {} to the new spelling", step.newPath.ToString()));
+                }
+                continue;
+            }
+            std::error_code ignored;
+            std::filesystem::remove(step.oldMeta, ignored);
+        }
+
+        // A folder's .import folder: renamed itself for a case-only rename; otherwise the .meta files left in it (of
+        // files the scan does not index, such as a model format this build can't read) follow their files, and the
+        // folders left empty go
+        const std::filesystem::path oldMetaFolder = _metadataRoot / PathFromUtf8(from.GetPath());
+        const std::filesystem::path newMetaFolder = _metadataRoot / PathFromUtf8(to.GetPath());
+        std::error_code folderError;
+        if (std::filesystem::is_directory(oldMetaFolder, folderError))
+        {
+            std::error_code sameError;
+            if (std::filesystem::exists(newMetaFolder, folderError) &&
+                std::filesystem::equivalent(oldMetaFolder, newMetaFolder, sameError) && !sameError)
+            {
+                if (oldMetaFolder.filename() != newMetaFolder.filename() && !RenameCaseOnly(oldMetaFolder, newMetaFolder))
+                {
+                    Logger::Warn(std::format("Can't rename the .import folder of {} to the new spelling", to.ToString()));
+                }
+            }
+            else
+            {
+                const std::filesystem::path newSourceFolder = Resolve(to);
+                std::vector<std::filesystem::path> folders{oldMetaFolder};
+                std::vector<std::pair<std::filesystem::path, std::filesystem::path>> follow;
+                std::error_code walkError;
+                for (std::filesystem::recursive_directory_iterator walk(oldMetaFolder, walkError), end;
+                     !walkError && walk != end; walk.increment(walkError))
+                {
+                    std::error_code entryError;
+                    if (walk->is_directory(entryError))
+                    {
+                        folders.push_back(walk->path());
+                        continue;
+                    }
+                    if (!walk->is_regular_file(entryError) || walk->path().extension() != ".meta")
+                    {
+                        continue;
+                    }
+                    const std::filesystem::path relative = walk->path().lexically_relative(oldMetaFolder);
+                    std::filesystem::path source = newSourceFolder / relative;
+                    source.replace_extension(); // drops ".meta"
+                    std::error_code existsError;
+                    if (!newSourceFolder.empty() && std::filesystem::exists(source, existsError) &&
+                        !std::filesystem::exists(newMetaFolder / relative, existsError))
+                    {
+                        follow.emplace_back(walk->path(), newMetaFolder / relative);
+                    }
+                }
+                for (const auto &[oldFile, newFile] : follow)
+                {
+                    std::error_code moveError;
+                    std::filesystem::create_directories(newFile.parent_path(), moveError);
+                    std::filesystem::rename(oldFile, newFile, moveError);
+                }
+                // Deepest first; a folder that still holds something stays
+                std::ranges::sort(folders, [](const std::filesystem::path &a, const std::filesystem::path &b)
+                {
+                    return std::distance(a.begin(), a.end()) > std::distance(b.begin(), b.end());
+                });
+                for (const std::filesystem::path &folder : folders)
+                {
+                    std::error_code ignored;
+                    if (std::filesystem::is_empty(folder, ignored) && !ignored)
+                    {
+                        std::filesystem::remove(folder, ignored);
+                    }
+                }
+            }
+        }
+
+        SaveAssetState();
+        Logger::Info(std::format("Moved {} to {} ({} asset{})", from.ToString(), to.ToString(), moved.size(),
+                                 moved.size() == 1 ? "" : "s"));
+        return moved;
     }
 }

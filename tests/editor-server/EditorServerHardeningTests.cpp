@@ -381,7 +381,8 @@ TEST(EditorServerLoggingTest, PolledCommandsAreTheOnesClientsPoll)
                                         CommandType::SetLocalTransform, CommandType::AddComponent,
                                         CommandType::RemoveComponent, CommandType::SetComponentFields,
                                         CommandType::SetImportSettings, CommandType::WriteTextAsset,
-                                        CommandType::CreateScriptAsset, CommandType::CreateFolder})
+                                        CommandType::CreateScriptAsset, CommandType::CreateFolder,
+                                        CommandType::MoveAsset})
     {
         EXPECT_FALSE(EditorServer::IsPolledCommand(static_cast<uint8_t>(notPolled))) << static_cast<int>(notPolled);
     }
