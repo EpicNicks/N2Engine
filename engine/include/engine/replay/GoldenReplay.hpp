@@ -76,6 +76,29 @@ namespace N2Engine::Replay
         /// The 64-bit state hash after TicksRun() ticks: the value RunReplay records at a checkpoint
         [[nodiscard]] std::uint64_t Hash();
 
+        /**
+         * The whole state of the scene after TicksRun() ticks as a byte blob ("N2RS", format, scene name, seed, a
+         * scene-definition id, the tick count, the state hash, the scene's payload, an FNV-1a 64-bit checksum), the unit
+         * a rollback snapshot of this scene is. Little-endian, no pointers, no platform-dependent text: floats and doubles
+         * as their IEEE bits, Lua tables in a canonical key order (never pairs order). The scene's payload holds its C++
+         * transforms, its DeterministicRandom stream position and, for the Lua scenes, every global the script defined
+         * that is not a function (numbers with their integer or float subtype, strings, booleans, tables of those). Not
+         * held: Lua functions, closures, upvalues, coroutines, userdata, metatables, table identity (a table reachable
+         * twice, or a cycle, is refused at Save) or anything the script keeps in a local; the scenes keep none.
+         * Empty with `error` set when the scene's Lua state holds something it cannot save.
+         */
+        [[nodiscard]] std::vector<std::uint8_t> Save(std::string &error);
+
+        /**
+         * Puts a blob made by Save back. All or nothing: the blob is checked (checksum, format, scene name, seed, scene
+         * definition id, exact length, canonical Lua tables, and the state hash recomputed from the restored state must be
+         * the one the blob carries) and built into a fresh scene before the simulation is touched, so a refused blob leaves
+         * this simulation exactly as it was. A truncated, bit-flipped or foreign blob (another scene, another seed, a scene
+         * whose script changed) is refused with `error`, never a crash. The blob does not depend on the build that made it
+         * beyond the scene definition id (it holds raw IEEE bits), so a Linux player's blob restores on Windows.
+         */
+        [[nodiscard]] bool Restore(std::span<const std::uint8_t> blob, std::string &error);
+
     private:
         struct Impl;
         explicit ReplaySimulation(std::unique_ptr<Impl> impl);

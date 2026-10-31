@@ -90,6 +90,23 @@ else()
 endif()
 add_dependencies(n2server_lockstep_client N2Server)
 
+# The rollback test client (netcode C5): the same LockstepRuntime in rollback mode over the snapshot-capable replay scene, or a
+# late spectator that starts from a player's snapshot; started as real processes on loopback by tests/smoke/n2server_rollback.py.
+# A test tool: not installed, not packaged.
+add_executable(n2server_rollback_client RollbackClient.cpp)
+target_link_libraries(n2server_rollback_client PRIVATE N2ServerCore)
+set_target_properties(n2server_rollback_client PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+)
+if (MSVC)
+    target_compile_options(n2server_rollback_client PRIVATE /W4)
+else()
+    target_compile_options(n2server_rollback_client PRIVATE -Wall -Wextra)
+endif()
+add_dependencies(n2server_rollback_client N2Server)
+
 # The smoke tests: Python 3 standard library only. Without an interpreter they are not registered (the unit tests above are).
 find_package(Python3 COMPONENTS Interpreter)
 if (Python3_FOUND)
@@ -115,6 +132,12 @@ if (Python3_FOUND)
             --server $<TARGET_FILE:N2Server> --client $<TARGET_FILE:n2server_lockstep_client>
             --replay $<TARGET_FILE:n2_replay> ${N2_LOCKSTEP_TEST_EXTRA_ARGS})
     set_tests_properties(n2server_lockstep PROPERTIES TIMEOUT 600)
+
+    add_test(NAME n2server_rollback
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/smoke/n2server_rollback.py
+            --server $<TARGET_FILE:N2Server> --client $<TARGET_FILE:n2server_rollback_client>
+            --replay $<TARGET_FILE:n2_replay> ${N2_LOCKSTEP_TEST_EXTRA_ARGS})
+    set_tests_properties(n2server_rollback PROPERTIES TIMEOUT 600)
 else()
     message(STATUS "N2Server smoke tests not registered: no Python 3 interpreter found")
 endif()
