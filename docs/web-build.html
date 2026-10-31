@@ -634,7 +634,7 @@ RewriteRule ^(.*\.(js|wasm|data|html))$ $1.gz [L]
 <h2 id="network-websocket">Gameplay networking over WebSocket</h2><p>The Emscripten build includes <code>WebSocketTransport::Connect</code>. It reaches a native N2Server through wss (or localhost ws for development), authenticates with a join token and preserves n2net message boundaries. Static hosting serves the client; a separate native server and TLS proxy host the session. See <a href="netcode.html#websocket">the listener, Origin policy and deployment contract</a>.</p>
 
 <div class="page-footer">
-<span>Describes master through PR #278.</span>
+<span>Describes master through PR #34.</span>
 <a href="index.html">Back to overview</a>
 </div>
 
