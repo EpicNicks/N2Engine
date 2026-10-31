@@ -384,7 +384,10 @@ python3 tests/smoke/editor_host_smoke.py --scenario mcp --exe build/bin/N2Editor
 <li><strong>The smoke scenario against that bridge</strong> (<code>editor_host_smoke.py --scenario mcp --bridge &lt;dist/n2-mcp.mjs&gt;</code>): every assertion passed, <code>--launch</code> included. So the pinned commit is not the only bridge the scenario passes with.</li>
 <li><strong>Claude Code 2.1.314, headless</strong> (<code>claude -p</code> with an MCP config for <code>--launch</code> and <code>--allowedTools mcp__n2engine</code>): it listed the hierarchy, created an entity, saw it, undid it, created another and called <code>n2_save_scene</code>, undid that and called <code>n2_end_session</code>. The launched host had ended afterwards and the scene file was unchanged. For the irreversible tool the client declared elicitation and the bridge asked: <code>n2_save_scene</code> returned <code>confirmation_declined</code> (a headless client answers no, since nobody is there to say yes). This is the first of the two outcomes in the first checklist item; what the question looks like to a person, and Claude Code's own approval prompt for write tools (<code>--allowedTools</code> skips it here), are still unseen.</li>
 </ul>
-<p>Not run: Claude Desktop, <code>--connect</code> against the Docker image, a real editor taking the host, <code>--electron</code>.</p>
+<ul>
+<li><strong>Claude Code 2.1.314, headless, over <code>--connect</code></strong> (a TLS host with a tokens file, the fingerprint from its ready line, an editor token for the agent and another editor token for a stand-in person): it reported role <code>editor</code>, created an entity and undid it, and had no play tools. While the stand-in held the host, <code>n2_status</code> returned <code>busy</code> (the bridge yields to humans and does not take the host); Claude Code made that one call, told the user it would not call again until told the host is free, and the stand-in's session was not disturbed. After the stand-in left, a new session worked again.</li>
+</ul>
+<p>Not run: Claude Desktop, <code>--connect</code> against the Docker image (the host above was a local build), a real editor taking the host, <code>--electron</code> against a live editor.</p>
 
 <h2 id="verification">What this page is based on</h2>
 <div class="callout open-question">
