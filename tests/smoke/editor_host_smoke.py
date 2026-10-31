@@ -918,6 +918,41 @@ def scenario_mcp(hosts, work, version, bridge_path, node, with_launch):
             check("Launched Cube" not in names_now and made["entityId"], "Undo left the launched cube: %s" % names_now)
             stop_bridge(launcher)
 
+        # ---- --electron: only what needs no Electron. The editor's agent endpoint is Electron's main process (a named pipe
+        # or Unix socket the editor listens on); nothing here stands in for it, so a call that gets through to a live
+        # endpoint is not run. What is run: the bridge finding (or not finding) the editor's discovery file in a user data
+        # folder of ours, and what it says when the file says there is no endpoint or the endpoint is gone. ----
+        mcp.step("--electron: no discovery file, a read-only editor, an endpoint left by a crashed editor")
+        user_data = work / "electron user data"
+        agent_dir = user_data / "agent"
+        agent_dir.mkdir(parents=True)
+        electron_secret = "ab" * 32
+        mcp.secrets.append(electron_secret)
+        discovery = agent_dir / ("project-%s.json" % ("0" * 16))
+        dead = subprocess.Popen([sys.executable, "-c", "pass"])
+        dead.wait()
+        electron = McpClient(node, bundle, ["--electron", "--user-data", str(user_data)], bridge_env(), work, "electron")
+        mcp.bridges.append(electron)
+        electron.initialize()
+        names = electron.list_tools()
+        check(sorted(names) == sorted(read_names),
+              "--electron tools/list: %s, expected the read tools only (no editor endpoint is connected yet)" % sorted(names))
+        said = mcp.tool(electron, "n2_status", expect_error="host_unavailable")
+        check("Allow AI agent for this project" in said.text, "No-endpoint advice doesn't name the switch: %s" % said.text[:300])
+        record = {"version": 1, "projectPath": str(project), "pid": dead.pid, "startedAt": "2026-01-01T00:00:00.000Z"}
+        discovery.write_text(json.dumps(dict(record, reason="the editor is read-only")), encoding="utf-8")
+        if os.name != "nt":
+            discovery.chmod(0o600)
+        mcp.tool(electron, "n2_status", expect_error="read_only")
+        endpoint = r"\\.\pipe\n2engine-agent-smoke-absent" if os.name == "nt" else str(user_data / "absent.sock")
+        discovery.write_text(json.dumps(dict(record, endpoint=endpoint, secret=electron_secret)), encoding="utf-8")
+        gone = mcp.tool(electron, "n2_status", expect_error="host_unavailable")
+        check("left over from a crash" in gone.text, "A dead editor's endpoint file isn't called one: %s" % gone.text[:300])
+        stop_bridge(electron)
+        refused = subprocess.run([node, str(bundle), "--electron", "--connect", "127.0.0.1:1"], capture_output=True, timeout=30,
+                                 env=bridge_env(), stdin=subprocess.DEVNULL)
+        check(refused.returncode == 2, "--electron with --connect exited with %d, expected 2" % refused.returncode)
+
         # ---- No token reaches a bridge's log or a tool result ----
         mcp.step("no token in a bridge's stderr or in any tool result")
         for bridge in mcp.bridges:
