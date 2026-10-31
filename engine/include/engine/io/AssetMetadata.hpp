@@ -17,6 +17,10 @@ namespace N2Engine::IO
         /// file, and a .meta is committed to version control
         std::uint64_t lastModified = 0;
         std::size_t fileSize = 0;
+        /// The res:// path the file's sub-asset UUIDs are hashed from (ResourceUUID::FromSubAsset), empty when it is
+        /// the file's own resourcePath (every .meta written before assets could move). A move sets it to the path the
+        /// file had, so a model's meshes, materials and textures keep their UUIDs. Saved as the .meta key uuidSeed.
+        std::string uuidSeed;
         /// Import settings (and the sub-asset index): what a .meta keeps besides the UUID and the type
         nlohmann::json customData;
         /// Set by FromFile when the .meta still had lastModified and fileSize (written before they moved to the

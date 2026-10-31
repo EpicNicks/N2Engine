@@ -53,7 +53,7 @@ namespace N2Engine::IO
                                 projectNamespace.ToString()));
     }
 
-    Math::UUID ResourceUUID::FromPath(const ResourcePath& path)
+    Math::UUID ResourceUUID::FromPath(const ResourcePath& path, const unsigned variant)
     {
         if (!s_initialized)
         {
@@ -61,6 +61,10 @@ namespace N2Engine::IO
             return Math::UUID::ZERO;
         }
 
+        if (variant > 1)
+        {
+            return Math::UUID::GenerateNameBased(s_projectNamespace, path.ToString() + "#" + std::to_string(variant));
+        }
         return Math::UUID::GenerateNameBased(s_projectNamespace, path.ToString());
     }
 

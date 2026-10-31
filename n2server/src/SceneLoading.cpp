@@ -73,13 +73,13 @@ namespace N2Engine::Server
             return std::unexpected("not a valid scene (see the log): " + resourcePath);
         }
 
-        // The file's asset UUID, the same every run: a scene's UUID is its file's
+        // The file's asset UUID, the one its .meta stores (kept when the file moves): a scene's UUID is its file's
         auto &loader = IO::ResourceLoader::Instance();
         if (!loader.Exists(resolved->resourcePath))
         {
             (void)loader.Reload(resolved->resourcePath);
         }
-        scene->SetUUID(IO::ResourceUUID::FromPath(resolved->resourcePath));
+        scene->SetUUID(loader.GetOrMintUUID(resolved->resourcePath));
         scene->SetResourcePath(resolved->resourcePath);
 
         Scene *const loaded = scene.get();

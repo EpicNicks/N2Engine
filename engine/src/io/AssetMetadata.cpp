@@ -28,6 +28,11 @@ namespace N2Engine::IO
             meta.hadStateFields = j.value("lastModified", std::uint64_t{0}) != 0 || j.value("fileSize", std::size_t{0}) != 0;
         }
         
+        if (j.contains("uuidSeed") && j["uuidSeed"].is_string())
+        {
+            meta.uuidSeed = j["uuidSeed"].get<std::string>();
+        }
+
         if (j.contains("customData"))
         {
             meta.customData = j["customData"];
@@ -50,6 +55,10 @@ namespace N2Engine::IO
         j["lastModified"] = 0;
         j["fileSize"] = 0;
 
+        if (!uuidSeed.empty())
+        {
+            j["uuidSeed"] = uuidSeed;
+        }
         if (!customData.empty())
         {
             j["customData"] = customData;

@@ -179,6 +179,71 @@ TEST_F(ModelAssetTest, SubAssetUuidsAreStableAcrossRescansAndRestarts)
     EXPECT_EQ(reloaded->GetVertices().size(), 6u) << "the quad (flat normals: 6 vertices)";
 }
 
+TEST_F(ModelAssetTest, AMovedModelKeepsItsUuidAndItsPartsUuidsAcrossARestart)
+{
+    // Stable UUIDs (editor protocol 1.24.0): the .meta moves with the file and gets uuidSeed, the path the parts' UUIDs
+    // were hashed from
+    const auto model = Loader().Load<Model>(kRobot);
+    ASSERT_NE(model, nullptr);
+    const Math::UUID modelUuid = model->GetUUID();
+    const Math::UUID body = IO::ResourceUUID::FromSubAsset(kRobot, "mesh/Body");
+    const IO::ResourcePath moved("res://props/robot.glb");
+
+    const auto result = Loader().MovePath(kRobot, moved, []() -> std::expected<void, std::string>
+    {
+        std::error_code error;
+        fs::create_directories(s_root / "assets" / "props", error);
+        fs::rename(s_root / "assets" / "models" / "robot.glb", s_root / "assets" / "props" / "robot.glb", error);
+        if (error)
+        {
+            return std::unexpected(error.message());
+        }
+        return {};
+    });
+    ASSERT_TRUE(result.has_value()) << result.error();
+    EXPECT_EQ(Loader().GetUUID(moved), modelUuid);
+    EXPECT_EQ(Loader().GetCached<Model>(moved), model) << "the cached model follows its file";
+    EXPECT_EQ(model->GetMeshes()[0]->GetResourcePath(), moved);
+    EXPECT_EQ(Loader().LoadByUUID<Mesh>(body), model->GetMeshes()[0]);
+    EXPECT_EQ(IO::AssetMetadata::FromFile(MetaPath("props/robot.glb")).uuidSeed, kRobot.ToString());
+    EXPECT_FALSE(fs::exists(MetaPath("models/robot.glb")));
+    const auto parts = Loader().GetSubAssets(moved);
+    ASSERT_FALSE(parts.empty());
+    for (const auto &part : parts)
+    {
+        EXPECT_EQ(part.uuid, IO::ResourceUUID::FromSubAsset(kRobot, part.key)) << part.key;
+    }
+
+    // A restart: the index, the UUID and the seed come back from the .meta, and so does every part
+    Loader().ClearCache();
+    Loader().Initialize(s_root);
+    EXPECT_EQ(Loader().GetUUID(moved), modelUuid);
+    ASSERT_NE(Loader().FindSubAssetLocation(body), nullptr);
+    EXPECT_EQ(Loader().FindSubAssetLocation(body)->parent, moved);
+    const auto reloaded = Loader().LoadByUUID<Mesh>(body);
+    ASSERT_NE(reloaded, nullptr);
+    EXPECT_EQ(reloaded->GetSubAssetKey(), "mesh/Body");
+    EXPECT_EQ(reloaded->GetUUID(), body);
+
+    // Moved back: the seed is the path again, so the .meta drops it
+    Loader().ClearCache();
+    ASSERT_TRUE(Loader()
+                    .MovePath(moved, kRobot, []() -> std::expected<void, std::string>
+                    {
+                        std::error_code error;
+                        fs::rename(s_root / "assets" / "props" / "robot.glb", s_root / "assets" / "models" / "robot.glb",
+                                   error);
+                        if (error)
+                        {
+                            return std::unexpected(error.message());
+                        }
+                        return {};
+                    })
+                    .has_value());
+    EXPECT_TRUE(IO::AssetMetadata::FromFile(MetaPath("models/robot.glb")).uuidSeed.empty());
+    EXPECT_EQ(Loader().GetUUID(kRobot), modelUuid);
+}
+
 TEST_F(ModelAssetTest, LoadByUuidOfASubAssetLoadsItsParent)
 {
     ASSERT_NE(Loader().Load<Model>(kRobot), nullptr); // writes the index

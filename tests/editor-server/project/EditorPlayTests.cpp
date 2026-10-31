@@ -648,7 +648,8 @@ TEST_F(EditorPlayTest, APlayHostRefusesTheCommandsThatWriteTheProjectOrSwapTheSc
                                    CommandType::SetImportSettings, CommandType::WriteTextAsset,
                                    CommandType::CreateScriptAsset, CommandType::CreateFolder,
                                    CommandType::CreatePrefab, CommandType::ApplyPrefab,
-                                   CommandType::SetPhysicsBackend, CommandType::SetNetworkSettings})
+                                   CommandType::SetPhysicsBackend, CommandType::SetNetworkSettings,
+                                   CommandType::MoveAsset})
     {
         EXPECT_TRUE(EditorServer::IsEditOnlyCommand(static_cast<uint8_t>(type))) << static_cast<int>(type);
         const Frame response = Execute(*play, type);

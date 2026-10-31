@@ -1974,6 +1974,36 @@ namespace N2Engine::Scripting
         Logger::Info(std::format("Reloaded script: {}", _scriptPath.ToString()));
     }
 
+    void LuaComponent::RetargetScript(const IO::ResourcePath &path)
+    {
+        if (!_scriptPath.IsValid() || _scriptPath == path)
+        {
+            return;
+        }
+        _scriptPath = path;
+        // The loader moved its cached LuaScript to the new path: normally the object this component holds already
+        if (auto current = IO::ResourceLoader::Instance().GetCached<LuaScript>(path))
+        {
+            _script = std::move(current);
+        }
+        if (!_script)
+        {
+            return; // a missing script subscribed to nothing; ReloadScript's SetScript now tries the new path
+        }
+        // Reloads are announced by module name, which is the path's: follow it
+        const std::string moduleName = LuaRuntime::PathToModuleName(path);
+        UnsubscribeReload();
+        if (!LuaRuntime::RunsScripts())
+        {
+            ScriptDeclarationCache::Instance().Subscribe(moduleName, [this]() { ReloadScript(); }, this);
+            return;
+        }
+        LuaRuntime::Instance().RegisterReloadCallback(moduleName, [this]()
+        {
+            ReloadScript();
+        }, this);
+    }
+
     // Add getter for missing script status
     bool LuaComponent::HasMissingScript() const
     {

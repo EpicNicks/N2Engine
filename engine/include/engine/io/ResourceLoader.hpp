@@ -111,7 +111,10 @@ namespace N2Engine::IO
         const AssetMetadata* GetMetadata(const ResourcePath& resourcePath) const;
         const AssetMetadata* GetMetadata(const Math::UUID& uuid) const;
         Math::UUID GetUUID(const IO::ResourcePath& resourcePath) const;
-        
+        /// GetUUID, or for a file not indexed (yet) the UUID a scan would mint for it: the hash of its path, or "path#2",
+        /// ... when an asset moved away from that path still holds it. ZERO only when ResourceUUID isn't initialised.
+        [[nodiscard]] Math::UUID GetOrMintUUID(const IO::ResourcePath& resourcePath) const;
+
         // === Path Conversion ===
         std::filesystem::path Resolve(const ResourcePath& resourcePath) const;
         IO::ResourcePath MakeResourcePath(const std::filesystem::path& physicalPath) const;
@@ -138,6 +141,36 @@ namespace N2Engine::IO
         [[nodiscard]] std::expected<void, std::string> SetImportSettings(const ResourcePath &resourcePath,
                                                                          const nlohmann::json &customData);
 
+        // === Moving ===
+
+        /// One asset a move carried: the UUID is the same before and after
+        struct MovedAsset
+        {
+            ResourcePath from;
+            ResourcePath to;
+            Math::UUID uuid;
+            std::string type;
+        };
+
+        /// The indexed assets at `prefix` (a file) or under it (a folder), sorted by path
+        [[nodiscard]] std::vector<ResourcePath> AssetsUnder(const ResourcePath &prefix) const;
+
+        /**
+         * Moves the project file or folder `from` to `to` (res:// paths, `to` the new full path) keeping every indexed
+         * asset's UUID. In order: writes each asset's new .meta (new resourcePath, the same uuid, customData kept, and for
+         * a file with sub-assets uuidSeed, so a model's parts keep their UUIDs), calls `renameOnDisk` (which renames the
+         * file or folder: the caller owns the file operation), then re-keys the index, the caches, the sub-asset map and
+         * the asset state, and removes the old .meta files (a folder's other .meta files, of files the scan does not
+         * index, follow their files). When `renameOnDisk` fails, the .meta files are put back and nothing has changed.
+         * A case-only rename (`from` and `to` the same file on a case-insensitive file system) renames the .meta too. Error
+         * text, with nothing changed, for a read-only loader, a path that is not res://, an indexed asset already at a
+         * destination, a .meta that cannot be written, or the rename's own error. A folder holding no asset is fine.
+         * Returns the assets moved, in path order. Moving back (`to`, `from`) undoes a move.
+         */
+        [[nodiscard]] std::expected<std::vector<MovedAsset>, std::string> MovePath(
+            const ResourcePath &from, const ResourcePath &to,
+            const std::function<std::expected<void, std::string>()> &renameOnDisk);
+
         // === Sub-assets (a model's meshes, materials and textures) ===
 
         /// One entry of a file's sub-asset index
@@ -145,7 +178,7 @@ namespace N2Engine::IO
         {
             std::string key;  ///< "mesh/Body"
             std::string type; ///< its resource type, "Mesh"
-            Math::UUID uuid;  ///< ResourceUUID::FromSubAsset(parent, key)
+            Math::UUID uuid;  ///< ResourceUUID::FromSubAsset(seed, key): seed is the parent's .meta uuidSeed, else its path
         };
 
         /// Where a sub-asset UUID points: the file holding it and its key there
@@ -200,6 +233,11 @@ namespace N2Engine::IO
                            std::unordered_set<ResourcePath, ResourcePath::Hash>& seen);
         AssetMetadata CreateOrUpdateMetadata(const std::filesystem::path& sourcePath);
         std::filesystem::path GetMetadataPath(const std::filesystem::path& sourcePath) const;
+        /// <project>/.import/<path>.meta for a res:// path, worked out lexically (the file need not exist)
+        [[nodiscard]] std::filesystem::path MetaPathOf(const ResourcePath &resourcePath) const;
+        /// Puts one file's fresh metadata in the index (RefreshAsset, Reload): when another indexed file already holds its
+        /// UUID, that one keeps it and this one gets a new UUID, with a warning
+        void IndexOne(const AssetMetadata &meta);
         /// The files with a loader under the assets folder, as a fingerprint of (path, size, modification time): the
         /// sum of one hash per file, so the walk's order doesn't matter, and the file count
         struct DirectoryFingerprint
@@ -213,12 +251,25 @@ namespace N2Engine::IO
         void LoadAssetState();
         /// Writes .n2/asset-state.json when _assetStateDirty
         void SaveAssetState();
+        /// The path a file's sub-asset UUIDs are hashed from: its .meta uuidSeed, else its own path
+        [[nodiscard]] static ResourcePath SubAssetSeed(const AssetMetadata &meta);
+        /// Whether `uuid` is held by an indexed asset other than `self`
+        [[nodiscard]] bool UuidHeldByOther(const Math::UUID &uuid, const ResourcePath &self) const;
+        /// A UUID for a file with none: FromPath(path), or the first variant of it no other asset holds
+        [[nodiscard]] Math::UUID MintUuid(const ResourcePath &path) const;
+        /// After a scan: when two indexed files hold one UUID, one keeps it (the one that held it before the scan, else
+        /// one whose .meta stored it rather than one this scan minted it for, else the smallest path, compared with ASCII
+        /// letters folded) and the others get new ones, with a warning. Then rebuilds the UUID map from the index.
+        void ResolveDuplicateUuids(const std::unordered_map<Math::UUID, ResourcePath, UUIDHash> &heldBefore);
+        /// Gives `path` a new UUID (MintUuid; its .meta rewritten, uuidSeed dropped, its cached copy and sub-asset entries
+        /// dropped), because `keeper` holds the one it had
+        void RegenerateUuid(const ResourcePath &path, const ResourcePath &keeper);
         /// Gives a just-loaded asset's sub-assets their UUIDs and resource path, and records the index
         void RegisterSubAssets(const ResourcePath& parent, const Base::Asset& asset);
         /// Whether a .meta's sub-asset index was written for the file as it is now (its customData.subAssetsSource
         /// size and time match the metadata's)
         static bool HasCurrentSubAssetIndex(const AssetMetadata& meta);
-        /// Reads a scanned file's .meta sub-asset index into _subAssets (UUIDs re-derived from the path and key); a
+        /// Reads a scanned file's .meta sub-asset index into _subAssets (UUIDs re-derived from the seed and key); a
         /// stale index (the file changed) drops the old entries and the cached parent instead
         void ReadSubAssetIndex(const AssetMetadata& meta);
         /// The sub-asset a UUID names, loading its parent; nullptr if it isn't one
@@ -248,6 +299,8 @@ namespace N2Engine::IO
         bool PersistMeta(const AssetMetadata &meta, const std::filesystem::path &path) const;
 
         std::unordered_map<ResourcePath, AssetMetadata, ResourcePath::Hash> _metadata;
+        /// Files that got their UUID by this scan (no .meta before): they lose a UUID clash with an older asset
+        std::unordered_set<ResourcePath, ResourcePath::Hash> _mintedThisScan;
         std::unordered_map<Math::UUID, ResourcePath, UUIDHash> _uuidToPath;
         
         std::unordered_map<ResourcePath, std::shared_ptr<Base::Asset>, ResourcePath::Hash> _cache;
