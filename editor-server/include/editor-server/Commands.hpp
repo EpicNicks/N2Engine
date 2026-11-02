@@ -717,6 +717,19 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    struct MoveAssetCmd
+    {
+        /// A JSON array of AssetMove objects {from, to} (the handler checks its shape and size)
+        nlohmann::json moves;
+
+        static MoveAssetCmd Deserialize(BufferReader &r)
+        {
+            MoveAssetCmd cmd;
+            cmd.moves = ReadBoundedJson(r);
+            return cmd;
+        }
+    };
+
     struct SetPhysicsBackendCmd
     {
         /// "physx" or "jolt" (any case; the host saves it in lower case)
@@ -1196,6 +1209,16 @@ namespace N2Engine::Editor::Protocol
         BufferWriter payload;
         WriteJson(payload, ids);
         w.WriteU8(static_cast<uint8_t>(ResponseType::EntitiesCreated));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// MoveAsset's response: the AssetsMovedResult {moved, warnings} as one JSON value
+    inline void WriteAssetsMoved(BufferWriter &w, const nlohmann::json &result)
+    {
+        BufferWriter payload;
+        WriteJson(payload, result);
+        w.WriteU8(static_cast<uint8_t>(ResponseType::AssetsMoved));
         w.WriteU32(static_cast<uint32_t>(payload.Size()));
         w.WriteBytes(payload.Data());
     }

@@ -630,14 +630,14 @@ return function(returned)
     return snapshot, registered
 end, function(kind, id, ctx, params)
     if kind == "hook" then
-        -- A hook: OnAssetsChanged gets its three lists, the others their info table. What it returns is dropped, except
-        -- OnBeforePlay's, whose warnings the host reads
+        -- A hook: OnAssetsChanged gets its three lists (and, after a MoveAsset, a fourth: the moves), the others their info
+        -- table. What it returns is dropped, except OnBeforePlay's, whose warnings the host reads
         local hook = hookRuns[id]
         if hook == nil then
             error("the extension has no hook " .. tostring(id), 0)
         end
         if id == "OnAssetsChanged" then
-            hook(ctx.added, ctx.removed, ctx.modified)
+            hook(ctx.added, ctx.removed, ctx.modified, ctx.moved)
             return nil
         end
         local returned = hook(ctx)

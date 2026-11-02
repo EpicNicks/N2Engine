@@ -70,7 +70,7 @@ namespace N2Engine::Editor
         /// Its file, as a res:// path; empty when it has none (a new scene not saved yet, or one LoadScene sent)
         std::string path;
         std::string name;
-        /// The scene's UUID: its file's asset UUID (ResourceUUID::FromPath) when it has a file
+        /// The scene's UUID: its file's asset UUID (the one its .meta stores) when it has a file
         std::string uuid;
         /// The scene revision (see EditorServer::GetSceneRevision)
         uint32_t revision = 0;
@@ -621,6 +621,26 @@ namespace N2Engine::Editor
         /// How often the watcher looks for changed asset files while a client is connected: once a second
         static constexpr std::chrono::milliseconds DefaultAssetPollInterval{1000};
 
+        // ==================== Moving assets (protocol 1.24.0) ====================
+
+        /// The most entries one MoveAsset carries
+        static constexpr std::size_t MaxMoveEntries = 256;
+        /// The most indexed assets one MoveAsset moves (a folder's count them all)
+        static constexpr std::size_t MaxMovedAssets = 10000;
+        /// The most items of an assetsChanged event's moved list (a folder move lists its assets one by one)
+        static constexpr std::size_t MaxEventMovedAssets = 1000;
+        /// The most .lua files MoveAsset searches for names a move leaves behind, and the most warnings it answers
+        static constexpr std::size_t MaxMoveScanScripts = 2000;
+        static constexpr std::size_t MaxMoveWarnings = 100;
+        /// The longest absolute destination path a move may make on Windows (MAX_PATH less a margin)
+        static constexpr std::size_t MaxWindowsMovePath = 240;
+
+        /// How MoveAsset renames a file or folder on disk: std::filesystem::rename, or a test's stand-in (to make an
+        /// entry fail and check the others are moved back). Nullptr restores the real one.
+        using MoveRenameFunction =
+            std::function<std::expected<void, std::string>(const std::filesystem::path &, const std::filesystem::path &)>;
+        void SetMoveRenameForTest(MoveRenameFunction rename) { _moveRename = std::move(rename); }
+
         /**
          * A res:// asset path a client sent, checked: "res://" then a path of valid file names (no "..", drive, stream
          * or character a file name can't have) that stays inside assetsRoot, lexically and with symlinks resolved
@@ -1065,10 +1085,19 @@ namespace N2Engine::Editor
         void HandleWriteTextAsset(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleCreateScriptAsset(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleCreateFolder(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleMoveAsset(int clientSocket, const std::vector<uint8_t> &payload);
+        /// MoveAsset's work after the project check: validates every entry, moves them all or none, then the project
+        /// file, the open scene's scripts and the warnings; the AssetsMovedResult, or the Error message
+        [[nodiscard]] std::expected<nlohmann::json, std::string> MoveAssets(const nlohmann::json &moves);
+        /// Renames a file or folder for MoveAsset (through SetMoveRenameForTest's stand-in when one is set); a case-only
+        /// rename goes through a temporary name beside it
+        [[nodiscard]] std::expected<void, std::string> RenameForMove(const std::filesystem::path &from,
+                                                                     const std::filesystem::path &to);
 
         /// A rescan found changes (the RescanAssets command or the watcher): reloads the assets held in memory whose files
-        /// changed, moves the frame revision on and pushes assetsChanged {added, removed, modified}. Nothing for none.
-        void ApplyAssetChanges(const IO::ResourceLoader::RescanResult &changes);
+        /// changed, moves the frame revision on and pushes assetsChanged {added, removed, modified}, and moved when
+        /// `moved` is given (MoveAsset: {from, to, uuid, type} items, capped). Nothing for none.
+        void ApplyAssetChanges(const IO::ResourceLoader::RescanResult &changes, const nlohmann::json *moved = nullptr);
         /// A project file was just written by a command: ResourceLoader::RefreshAsset, then, when it is new or changed
         /// (always, with force: a write may leave the size and the clock's tick as they were), the reload and the
         /// assetsChanged event ApplyAssetChanges gives a rescan's changes
@@ -1479,6 +1508,8 @@ namespace N2Engine::Editor
         std::optional<std::chrono::steady_clock::time_point> _lastAssetPoll;
         AssetPollClock _assetPollClock;
         bool _assetPollFailureLogged{false};
+        /// SetMoveRenameForTest's stand-in for the rename MoveAsset does; empty: the real one
+        MoveRenameFunction _moveRename;
         // The editor/ watcher (--editor-extensions-watch): off by default
         bool _watchExtensions{false};
         std::chrono::milliseconds _extensionPollInterval{DefaultAssetPollInterval};

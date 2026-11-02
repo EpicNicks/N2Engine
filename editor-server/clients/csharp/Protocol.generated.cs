@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.23.0";
+        public const string ProtocolVersion = "1.24.0";
     }
 
     public enum CommandType : byte
@@ -99,6 +99,7 @@ namespace N2Engine.Editor.Protocol
         GetNetworkSettings = 0x51,
         SetNetworkSettings = 0x52,
         GetNetworkValidation = 0x53,
+        MoveAsset = 0xAF,
     }
 
     public enum ResponseType : byte
@@ -148,6 +149,7 @@ namespace N2Engine.Editor.Protocol
         PhysicsBackends = 0x23,
         NetworkSettings = 0x24,
         NetworkValidation = 0x25,
+        AssetsMoved = 0xA5,
     }
 
     public struct Vec3
@@ -206,6 +208,8 @@ namespace N2Engine.Editor.Protocol
         public string[]? Removed { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("modified")]
         public string[]? Modified { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("moved")]
+        public MovedAsset[]? Moved { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("canUndo")]
         public bool? CanUndo { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("canRedo")]
@@ -242,6 +246,34 @@ namespace N2Engine.Editor.Protocol
         public double? X { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("y")]
         public double? Y { get; set; }
+    }
+
+    public class AssetMove
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("from")]
+        public string From { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("to")]
+        public string To { get; set; }
+    }
+
+    public class MovedAsset
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("from")]
+        public string From { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("to")]
+        public string To { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("uuid")]
+        public string? Uuid { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("type")]
+        public string? Type { get; set; }
+    }
+
+    public class AssetsMovedResult
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("moved")]
+        public MovedAsset[] Moved { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("warnings")]
+        public string[] Warnings { get; set; }
     }
 
     public class HistoryEntry
@@ -1208,6 +1240,12 @@ namespace N2Engine.Editor.Protocol
         public string Preset;
     }
 
+    public struct MoveAssetRequest
+    {
+        /// <summary>JSON text: AssetMove[]</summary>
+        public string Moves;
+    }
+
     public struct FrameDataResponse
     {
         public uint Width;
@@ -1505,6 +1543,12 @@ namespace N2Engine.Editor.Protocol
     {
         /// <summary>JSON text: NetworkValidationReport</summary>
         public string Report;
+    }
+
+    public struct AssetsMovedResponse
+    {
+        /// <summary>JSON text: AssetsMovedResult</summary>
+        public string Result;
     }
 
     public struct ErrorCodedResponse

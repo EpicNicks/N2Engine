@@ -62,6 +62,8 @@ namespace
             {"UnpackPrefab", Class::Write},
             // The physics backend picker (since 1.20.0): the list reads, choosing one saves the project file
             {"GetPhysicsBackends", Class::Read}, {"SetPhysicsBackend", Class::Write},
+            // Moving assets (since 1.24.0): files and .meta files move
+            {"MoveAsset", Class::Write},
             // The Network panel (since 1.21.0): the two reads, and the change that saves the project file
             {"GetNetworkSettings", Class::Read}, {"GetNetworkValidation", Class::Read},
             {"SetNetworkSettings", Class::Write},
@@ -223,7 +225,8 @@ TEST(CommandClassificationTest, NothingThatChangesStateOrRunsCodeIsARead)
 {
     for (const char *name : {"SendInput", "WritePlaySnapshot", "SetPaused", "Step", "Shutdown", "RescanAssets", "Undo",
                              "Redo", "SaveScene", "SaveSceneToFile", "SetImportSettings", "WriteTextAsset",
-                             "CreateScriptAsset", "CreateFolder", "LoadScene", "OpenScene", "NewScene", "DeleteScene",
+                             "CreateScriptAsset", "CreateFolder", "MoveAsset", "LoadScene", "OpenScene", "NewScene",
+                             "DeleteScene",
                              "SetProjectSettings", "SetStartupScene", "RestoreAutosave", "DiscardAutosave",
                              "SetCameraPosition", "CreateScript", "BeginEditGroup", "EndEditGroup"})
     {

@@ -224,6 +224,12 @@ def new_entity(conn, name, parent_id, sibling_index, preset):
     return f.Reader(conn.expect(f.CREATE_ENTITY_EX, payload, f.ENTITY_CREATED, "CreateEntityEx " + preset)).string()
 
 
+def asset_info(conn, uuid_or_path):
+    """GetAssetInfo (0xA1): AssetDetail is one JSON field (path, uuid, type, ...)."""
+    payload = conn.expect(f.GET_ASSET_INFO, f.wire_string(uuid_or_path), f.ASSET_DETAIL, "GetAssetInfo " + uuid_or_path)
+    return json.loads(f.Reader(payload).string())
+
+
 def assert_meta(project, name):
     """The asset's .meta: its UUID must be a real one (all zeros means ResourceUUID wasn't initialised)."""
     meta = project / ".import" / (name + ".meta")
@@ -534,6 +540,23 @@ def scenario_host(hosts, work, config, version, expect_physics):
     conn.expect(f.RESCAN_ASSETS, b"", f.OK, "RescanAssets")
     assert_meta(project, "added.mat")
 
+    # MoveAsset (0xAF, since 1.24.0): the asset keeps its UUID, which then names the new path; the host restart below
+    # proves it comes back from .import
+    moved_uuid = asset_info(conn, "res://added.mat")["uuid"]
+    conn.expect(f.CREATE_FOLDER, f.wire_string("res://moved"), f.OK, "CreateFolder")
+    moves = json.dumps([{"from": "res://added.mat", "to": "res://moved/added.mat"}])
+    result = json.loads(f.Reader(conn.expect(f.MOVE_ASSET, f.wire_string(moves), f.ASSETS_MOVED, "MoveAsset")).string())
+    check(result["moved"] == [{"from": "res://added.mat", "to": "res://moved/added.mat", "uuid": moved_uuid,
+                               "type": "Material"}], "MoveAsset answered %r" % result)
+    check(asset_info(conn, moved_uuid)["path"] == "res://moved/added.mat", "GetAssetInfo: the UUID doesn't name the new path")
+    check(not (project / "assets" / "added.mat").exists() and (project / "assets" / "moved" / "added.mat").exists(),
+          "MoveAsset didn't move the file")
+    # The open scene can still be opened, and the moved .meta holds the same UUID
+    scene_info(conn, f.OPEN_SCENE, f.wire_string("res://scenes/Main.scene"), "OpenScene after MoveAsset")
+    check(json.loads(read_text(project / ".import" / "moved" / "added.mat.meta")).get("uuid") == moved_uuid,
+          "The moved .meta doesn't hold the asset's UUID")
+    say("MoveAsset: res://added.mat -> res://moved/added.mat, uuid %s kept" % moved_uuid)
+
     conn.expect(f.SHUTDOWN, b"", f.OK, "Shutdown")
     conn.close()
     check_exit_zero(proc, 30, "Editor host (after Shutdown)")
@@ -542,6 +565,18 @@ def scenario_host(hosts, work, config, version, expect_physics):
     for problem in ("Assets directory not found", "ResourceUUID not initialized", "Couldn't open the startup scene"):
         check(problem not in log, "Host log reports: " + problem)
     check(token not in log, "The host logged its access token")
+
+    # A restart: the moved asset's UUID comes back from its .meta, not from the hash of its new path
+    proc_restart = hosts.start("host-after-move", ["--port", "0", "--project", str(project), "--renderer", "software"])
+    port = int(wait_ready_line(proc_restart).group(1))
+    conn = f.connect(port)
+    conn.expect(f.HELLO, f.hello_payload("CI smoke test", version, ""), f.SERVER_INFO, "Hello after the restart")
+    check(asset_info(conn, moved_uuid)["path"] == "res://moved/added.mat",
+          "After a restart the moved asset's UUID no longer names it")
+    conn.expect(f.SHUTDOWN, b"", f.OK, "Shutdown after the restart")
+    conn.close()
+    check_exit_zero(proc_restart, 30, "Editor host (after the restart)")
+    say("Restarted host: uuid %s still names res://moved/added.mat" % moved_uuid)
 
     scenario_network_presets(hosts, work, version)
 

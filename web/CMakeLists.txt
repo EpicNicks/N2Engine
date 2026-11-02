@@ -43,6 +43,21 @@ if(NOT EXISTS "${N2_WEB_PROJECT_DIR}/assets" OR NOT EXISTS "${N2_WEB_PROJECT_DIR
 endif()
 file(GLOB_RECURSE N2_WEB_PROJECT_FILES CONFIGURE_DEPENDS "${N2_WEB_PROJECT_DIR}/assets/*")
 
+# The project's .import folder too, when it has one: an asset's UUID is the one its .meta stores (an asset moved in the
+# editor keeps its UUID, which then differs from the hash of its path), so a package without the .meta files would give
+# moved assets new UUIDs and break every reference to them; the import settings live there as well. The loader reads it
+# exactly as the editor does. A project without the folder (lua_project in this repository: it never moved anything, and
+# .gitignore leaves its .import out) packs as before, and every UUID is the hash of its path.
+set(N2_WEB_IMPORT_PRELOAD "")
+if(EXISTS "${N2_WEB_PROJECT_DIR}/.import")
+    set(N2_WEB_IMPORT_PRELOAD "SHELL:--preload-file \"${N2_WEB_PROJECT_DIR}/.import@/project/.import\"")
+    file(GLOB_RECURSE N2_WEB_IMPORT_FILES CONFIGURE_DEPENDS "${N2_WEB_PROJECT_DIR}/.import/*")
+    list(APPEND N2_WEB_PROJECT_FILES ${N2_WEB_IMPORT_FILES})
+    message(STATUS "Web package: packing ${N2_WEB_PROJECT_DIR}/.import (the stored asset UUIDs)")
+else()
+    message(STATUS "Web package: ${N2_WEB_PROJECT_DIR} has no .import folder; asset UUIDs are the hashes of their paths")
+endif()
+
 # Single-threaded and without cross-origin isolation: no pthreads, no SharedArrayBuffer (cmake/N2EngineWeb.cmake).
 # MODULARIZE: index.js is a factory (createN2Player), which the page calls when it is ready and node's smoke test calls
 # with its own arguments and hooks; callMain is what the page's Start button runs.
@@ -53,6 +68,7 @@ target_link_options(N2WebPlayer PRIVATE
     "SHELL:--shell-file \"${CMAKE_CURRENT_SOURCE_DIR}/shell.html\""
     "SHELL:--preload-file \"${N2_WEB_PROJECT_DIR}/assets@/project/assets\""
     "SHELL:--preload-file \"${N2_WEB_PROJECT_DIR}/project.n2proj@/project/project.n2proj\""
+    ${N2_WEB_IMPORT_PRELOAD}
 )
 set_property(TARGET N2WebPlayer APPEND PROPERTY LINK_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/shell.html" "${CMAKE_CURRENT_SOURCE_DIR}/webgpu-library.js"

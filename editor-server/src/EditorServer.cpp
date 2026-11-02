@@ -48,6 +48,7 @@
 #include "engine/rendering/Mesh.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
+#include "engine/scripting/LuaComponent.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/scripting/LuaScript.hpp"
 #include "engine/scripting/LuaScriptTemplate.hpp"
@@ -4274,6 +4275,7 @@ namespace N2Engine::Editor
         {CommandType::WriteTextAsset, "WriteTextAsset", EditorServer::CommandClass::Write},
         {CommandType::CreateScriptAsset, "CreateScriptAsset", EditorServer::CommandClass::Write},
         {CommandType::CreateFolder, "CreateFolder", EditorServer::CommandClass::Write},
+        {CommandType::MoveAsset, "MoveAsset", EditorServer::CommandClass::Write},
         {CommandType::AddComponent, "AddComponent", EditorServer::CommandClass::Write},
         {CommandType::RemoveComponent, "RemoveComponent", EditorServer::CommandClass::Write},
         {CommandType::SetComponentFields, "SetComponentFields", EditorServer::CommandClass::Write},
@@ -4685,6 +4687,9 @@ namespace N2Engine::Editor
             break;
         case CommandType::CreateFolder:
             HandleCreateFolder(clientSocket, payload);
+            break;
+        case CommandType::MoveAsset:
+            HandleMoveAsset(clientSocket, payload);
             break;
         case CommandType::GetEngineHealth:
             HandleGetEngineHealth(clientSocket);
@@ -5973,6 +5978,8 @@ namespace N2Engine::Editor
         case CommandType::WriteTextAsset:
         case CommandType::CreateScriptAsset:
         case CommandType::CreateFolder:
+        // 1.24.0's: it moves files under assets/ and their .meta files under .import/
+        case CommandType::MoveAsset:
         // EN3's: they write a .prefab file (InstantiatePrefab only reads one, and UnpackPrefab touches the scene alone)
         case CommandType::CreatePrefab:
         case CommandType::ApplyPrefab:
@@ -7626,7 +7633,7 @@ namespace N2Engine::Editor
         }
     }
 
-    void EditorServer::ApplyAssetChanges(const IO::ResourceLoader::RescanResult &changes)
+    void EditorServer::ApplyAssetChanges(const IO::ResourceLoader::RescanResult &changes, const nlohmann::json *moved)
     {
         if (changes.Empty())
         {
@@ -7638,9 +7645,16 @@ namespace N2Engine::Editor
         }
         // An asset the scene draws (a texture, a mesh) may have changed
         NoteViewChanged();
-        _events.Push("assetsChanged", nlohmann::json{{"added", PathStrings(changes.added)},
-                                                     {"removed", PathStrings(changes.removed)},
-                                                     {"modified", PathStrings(changes.modified)}});
+        nlohmann::json event{{"added", PathStrings(changes.added)},
+                             {"removed", PathStrings(changes.removed)},
+                             {"modified", PathStrings(changes.modified)}};
+        if (moved != nullptr)
+        {
+            // MoveAsset's: the pairs, beside the old paths in removed and the new ones in added (what a client that
+            // doesn't know moved refreshes from)
+            event["moved"] = *moved;
+        }
+        _events.Push("assetsChanged", std::move(event));
         if (_extensions != nullptr)
         {
             // OnAssetsChanged (E-X6): after the reload and the event, as a call of its own; each list is cut to what a hook is
@@ -7653,9 +7667,19 @@ namespace N2Engine::Editor
                 }
                 return paths;
             };
-            (void)RunExtensionHook("OnAssetsChanged", nlohmann::json{{"added", capped(PathStrings(changes.added))},
-                                                                     {"removed", capped(PathStrings(changes.removed))},
-                                                                     {"modified", capped(PathStrings(changes.modified))}});
+            nlohmann::json info{{"added", capped(PathStrings(changes.added))},
+                                {"removed", capped(PathStrings(changes.removed))},
+                                {"modified", capped(PathStrings(changes.modified))}};
+            if (moved != nullptr)
+            {
+                nlohmann::json pairs = *moved;
+                if (pairs.size() > ExtensionHost::MaxHookAssetPaths)
+                {
+                    pairs.erase(pairs.begin() + static_cast<std::ptrdiff_t>(ExtensionHost::MaxHookAssetPaths), pairs.end());
+                }
+                info["moved"] = std::move(pairs);
+            }
+            (void)RunExtensionHook("OnAssetsChanged", info);
         }
     }
 
@@ -8108,10 +8132,9 @@ namespace N2Engine::Editor
         NoteAssetWritten(resolved->resourcePath, false);
         ServerLog::Info("Created script " + shown);
 
-        const Math::UUID uuid = IO::ResourceLoader::Instance().GetUUID(resolved->resourcePath);
+        const Math::UUID uuid = IO::ResourceLoader::Instance().GetOrMintUUID(resolved->resourcePath);
         BufferWriter response;
-        WriteAssetCreated(response, resolved->resourcePath.ToString(),
-                          (uuid == Math::UUID::ZERO ? IO::ResourceUUID::FromPath(resolved->resourcePath) : uuid).ToString());
+        WriteAssetCreated(response, resolved->resourcePath.ToString(), uuid.ToString());
         SendResponse(clientSocket, response.Release());
     }
 
@@ -8154,6 +8177,588 @@ namespace N2Engine::Editor
         BufferWriter response;
         WriteOk(response);
         SendResponse(clientSocket, response.Release());
+    }
+
+    // ==================== Moving assets (protocol 1.24.0) ====================
+
+    std::expected<void, std::string> EditorServer::RenameForMove(const std::filesystem::path &from,
+                                                                 const std::filesystem::path &to)
+    {
+        if (_moveRename)
+        {
+            return _moveRename(from, to);
+        }
+        std::error_code error;
+        std::error_code sameError;
+        if (std::filesystem::exists(to, error) && std::filesystem::equivalent(from, to, sameError) && !sameError)
+        {
+            // One file or folder under two spellings (a case-only rename on a case-insensitive file system): through a
+            // temporary name beside it, as a direct rename onto itself may be refused or do nothing
+            std::filesystem::path temporary = from;
+            temporary += ".n2move-tmp";
+            std::filesystem::rename(from, temporary, error);
+            if (!error)
+            {
+                std::filesystem::rename(temporary, to, error);
+                if (error)
+                {
+                    std::error_code ignored;
+                    std::filesystem::rename(temporary, from, ignored);
+                }
+            }
+        }
+        else
+        {
+            error.clear();
+            std::filesystem::rename(from, to, error);
+        }
+        if (error)
+        {
+            return std::unexpected(ClientText::Failure("", ClientText::Reason(error), error.message()));
+        }
+        return {};
+    }
+
+    namespace
+    {
+        /// Whether `path` is `prefix` or inside it (both res:// relative paths, already case-folded)
+        bool SameOrInside(const std::string &path, const std::string &prefix)
+        {
+            return path == prefix || (path.size() > prefix.size() && path.starts_with(prefix) && path[prefix.size()] == '/');
+        }
+
+        /// The folders above `folder` that don't exist yet, made; the topmost of them (empty when none was missing)
+        std::filesystem::path CreateMissingFolders(const std::filesystem::path &folder, std::error_code &error)
+        {
+            std::filesystem::path topmost;
+            for (std::filesystem::path probe = folder; !probe.empty() && !std::filesystem::exists(probe, error);
+                 probe = probe.parent_path())
+            {
+                topmost = probe;
+                if (probe == probe.parent_path())
+                {
+                    break;
+                }
+            }
+            error.clear();
+            if (!topmost.empty())
+            {
+                std::filesystem::create_directories(folder, error);
+            }
+            return topmost;
+        }
+
+        /// Removes `folder` and the folders above it up to `topmost`, while they are empty (what CreateMissingFolders made)
+        void RemoveCreatedFolders(const std::filesystem::path &folder, const std::filesystem::path &topmost)
+        {
+            if (topmost.empty())
+            {
+                return;
+            }
+            for (std::filesystem::path probe = folder; !probe.empty(); probe = probe.parent_path())
+            {
+                std::error_code ignored;
+                if (!std::filesystem::is_empty(probe, ignored) || ignored)
+                {
+                    return;
+                }
+                std::filesystem::remove(probe, ignored);
+                if (probe == topmost || probe == probe.parent_path())
+                {
+                    return;
+                }
+            }
+        }
+    }
+
+    void EditorServer::HandleMoveAsset(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const MoveAssetCmd cmd = MoveAssetCmd::Deserialize(reader);
+        if (!_project)
+        {
+            SendNoProject(clientSocket);
+            return;
+        }
+        auto result = MoveAssets(cmd.moves);
+        if (!result)
+        {
+            SendError(clientSocket, result.error());
+            return;
+        }
+        BufferWriter response;
+        WriteAssetsMoved(response, *result);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    std::expected<nlohmann::json, std::string> EditorServer::MoveAssets(const nlohmann::json &moves)
+    {
+        if (!moves.is_array() || moves.empty())
+        {
+            return std::unexpected("moves must be a JSON array of {from, to} objects, at least one");
+        }
+        if (moves.size() > MaxMoveEntries)
+        {
+            return std::unexpected(std::format("At most {} moves are accepted in one call; {} were sent", MaxMoveEntries,
+                                               moves.size()));
+        }
+
+        auto &loader = IO::ResourceLoader::Instance();
+        const std::filesystem::path assetsRoot = _project->root / "assets";
+        std::error_code error;
+        const std::filesystem::path canonicalRoot = std::filesystem::weakly_canonical(assetsRoot, error);
+        if (error)
+        {
+            return std::unexpected("The project's assets folder can't be resolved");
+        }
+
+        struct Entry
+        {
+            IO::ResourcePath from;
+            IO::ResourcePath to;
+            std::filesystem::path fromFile;
+            std::filesystem::path toFile;
+            bool folder = false;
+        };
+        std::vector<Entry> entries;
+        entries.reserve(moves.size());
+        std::size_t totalAssets = 0;
+        const std::string openScene = OpenScenePath();
+        const std::string openSceneKey = openScene.empty() ? std::string{} : LowerAscii(IO::ResourcePath(openScene).GetPath());
+
+        // ---- 1. Every entry checked before anything changes ----
+        for (std::size_t index = 0; index < moves.size(); ++index)
+        {
+            const nlohmann::json &move = moves[index];
+            if (!move.is_object() || !move.contains("from") || !move.contains("to") || !move.at("from").is_string() ||
+                !move.at("to").is_string())
+            {
+                return std::unexpected(std::format("moves[{}] must be an object with the strings from and to", index));
+            }
+            const std::string fromText = move.at("from").get<std::string>();
+            const std::string toText = move.at("to").get<std::string>();
+
+            const auto from = ResolveAssetPath(assetsRoot, fromText);
+            if (!from)
+            {
+                return std::unexpected(from.error());
+            }
+            const std::string shownFrom = SanitizeForLog(from->resourcePath.ToString());
+            // A link is refused, as ListAssets leaves links out: looked at before links are resolved
+            if (std::filesystem::is_symlink(canonicalRoot / FromUtf8(IO::ResourcePath(fromText).GetPath()), error) ||
+                std::filesystem::is_symlink(from->file, error))
+            {
+                return std::unexpected(shownFrom + " is a symbolic link: links are not moved");
+            }
+            Entry entry;
+            entry.from = from->resourcePath;
+            entry.fromFile = from->file;
+            if (std::filesystem::is_directory(from->file, error))
+            {
+                entry.folder = true;
+            }
+            else if (std::filesystem::is_regular_file(from->file, error))
+            {
+                if (!loader.Exists(from->resourcePath))
+                {
+                    return std::unexpected("Not an asset: " + shownFrom +
+                                           " (a file the engine does not index only moves with its folder)");
+                }
+            }
+            else
+            {
+                return std::unexpected("Not found: " + shownFrom);
+            }
+
+            const auto to = ResolveAssetPath(assetsRoot, toText);
+            if (!to)
+            {
+                return std::unexpected(to.error());
+            }
+            // The name as the client spelled it: an existing path takes the file system's spelling, which would turn a
+            // case-only rename back into the old name
+            const std::string newName = IO::ResourcePath(toText).GetFilename();
+            std::error_code sameError;
+            const bool sameEntry = std::filesystem::exists(to->file, error) &&
+                                   std::filesystem::equivalent(from->file, to->file, sameError) && !sameError;
+            if (sameEntry)
+            {
+                if (newName == from->resourcePath.GetFilename())
+                {
+                    return std::unexpected(shownFrom + " is already there");
+                }
+                // A case-only rename of the same file or folder
+                const std::string folder = to->resourcePath.GetParent().GetPath();
+                entry.to = IO::ResourcePath(IO::PathType::Resource, folder.empty() ? newName : folder + "/" + newName);
+                entry.toFile = to->file.parent_path() / FromUtf8(newName);
+            }
+            else
+            {
+                entry.to = to->resourcePath;
+                entry.toFile = to->file;
+            }
+            const std::string shownTo = SanitizeForLog(entry.to.ToString());
+            if (entry.to == entry.from)
+            {
+                return std::unexpected(shownFrom + " is already there");
+            }
+            if (!sameEntry && std::filesystem::exists(entry.toFile, error))
+            {
+                return std::unexpected(std::format("{} already exists: a move never replaces anything", shownTo));
+            }
+            // Ignoring ASCII case on every platform, so a project moved between file systems never ends up with two names
+            // that one of them takes for the same
+            const std::string newKey = LowerAscii(entry.to.GetFilename());
+            if (std::filesystem::is_directory(entry.toFile.parent_path(), error))
+            {
+                for (std::filesystem::directory_iterator sibling(entry.toFile.parent_path(), error), end;
+                     !error && sibling != end; sibling.increment(error))
+                {
+                    if (LowerAscii(IO::PathToUtf8(sibling->path().filename())) != newKey)
+                    {
+                        continue;
+                    }
+                    std::error_code siblingError;
+                    if (!std::filesystem::equivalent(sibling->path(), from->file, siblingError) || siblingError)
+                    {
+                        return std::unexpected(std::format("{} would clash with {}, which differs only in letter case",
+                                                           shownTo, SanitizeForLog(IO::PathToUtf8(sibling->path().filename()))));
+                    }
+                }
+                error.clear();
+            }
+            if (!entry.folder && LowerAscii(entry.to.GetExtension()) != LowerAscii(entry.from.GetExtension()))
+            {
+                return std::unexpected(std::format("{} would change its extension (to {}): a move keeps the kind of file",
+                                                   shownFrom, shownTo));
+            }
+            const std::string fromKey = LowerAscii(entry.from.GetPath());
+            const std::string toKey = LowerAscii(entry.to.GetPath());
+            if (entry.folder && toKey != fromKey && SameOrInside(toKey, fromKey))
+            {
+                return std::unexpected(std::format("{} can't be moved into itself ({})", shownFrom, shownTo));
+            }
+            if (!openSceneKey.empty() && SameOrInside(openSceneKey, fromKey))
+            {
+                return std::unexpected(std::format("{} {} the open scene's file: save the scene elsewhere with "
+                                                   "SaveSceneToFile first, or open another scene",
+                                                   shownFrom, entry.folder ? "holds" : "is"));
+            }
+#ifdef _WIN32
+            {
+                // MAX_PATH less a margin, for the deepest file a folder moves too
+                std::size_t longest = entry.toFile.native().size();
+                if (entry.folder)
+                {
+                    for (std::filesystem::recursive_directory_iterator walk(entry.fromFile, error), end;
+                         !error && walk != end; walk.increment(error))
+                    {
+                        const std::size_t length =
+                            entry.toFile.native().size() + walk->path().native().size() - entry.fromFile.native().size();
+                        longest = std::max(longest, length);
+                    }
+                    error.clear();
+                }
+                if (longest > MaxWindowsMovePath)
+                {
+                    return std::unexpected(std::format("Moving {} to {} would make a path of {} characters; Windows "
+                                                       "allows {} here", shownFrom, shownTo, longest, MaxWindowsMovePath));
+                }
+            }
+#endif
+            totalAssets += loader.AssetsUnder(entry.from).size();
+            if (totalAssets > MaxMovedAssets)
+            {
+                return std::unexpected(std::format("At most {} assets are moved in one call", MaxMovedAssets));
+            }
+            entries.push_back(std::move(entry));
+        }
+        // No entry may touch another's paths: the order they run in would decide the result
+        for (std::size_t a = 0; a < entries.size(); ++a)
+        {
+            for (std::size_t b = a + 1; b < entries.size(); ++b)
+            {
+                for (const IO::ResourcePath *pathA : {&entries[a].from, &entries[a].to})
+                {
+                    for (const IO::ResourcePath *pathB : {&entries[b].from, &entries[b].to})
+                    {
+                        const std::string keyA = LowerAscii(pathA->GetPath());
+                        const std::string keyB = LowerAscii(pathB->GetPath());
+                        if (SameOrInside(keyA, keyB) || SameOrInside(keyB, keyA))
+                        {
+                            return std::unexpected(std::format("moves[{}] and moves[{}] overlap ({} and {}): send them "
+                                                               "as separate calls",
+                                                               a, b, SanitizeForLog(pathA->ToString()),
+                                                               SanitizeForLog(pathB->ToString())));
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- 2. The moves, all or nothing ----
+        struct Done
+        {
+            const Entry *entry;
+            std::filesystem::path createdFolder;
+        };
+        std::vector<Done> done;
+        const auto rollback = [&]()
+        {
+            std::vector<std::string> left;
+            for (auto it = done.rbegin(); it != done.rend(); ++it)
+            {
+                const Entry &entry = *it->entry;
+                auto back = loader.MovePath(entry.to, entry.from,
+                                            [&] { return RenameForMove(entry.toFile, entry.fromFile); });
+                if (!back)
+                {
+                    ServerLog::Error(std::format("Couldn't move {} back to {}: {}", SanitizeForLog(entry.to.ToString()),
+                                                 SanitizeForLog(entry.from.ToString()), SanitizeForLog(back.error(), 300)));
+                    left.push_back(entry.from.ToString() + " -> " + entry.to.ToString());
+                    continue;
+                }
+                RemoveCreatedFolders(entry.toFile.parent_path(), it->createdFolder);
+            }
+            done.clear();
+            return left;
+        };
+        // The message for a failure after `done` was moved: those are moved back first
+        const auto undone = [&](std::string message)
+        {
+            const bool hadEarlier = !done.empty();
+            const std::vector<std::string> left = rollback();
+            if (left.empty())
+            {
+                message += hadEarlier ? " (the moves before it were undone: nothing was moved)" : "";
+            }
+            else
+            {
+                message += "; moving the earlier entries back failed too, so these stay moved:";
+                for (const std::string &one : left)
+                {
+                    message += " " + SanitizeForLog(one) + ";";
+                }
+                message.pop_back();
+            }
+            return message;
+        };
+        const auto failed = [&](const Entry &entry, const std::string &why)
+        {
+            return undone(std::format("Couldn't move {} to {}: {}", SanitizeForLog(entry.from.ToString()),
+                                      SanitizeForLog(entry.to.ToString()), why));
+        };
+
+        std::vector<std::pair<const Entry *, std::vector<IO::ResourceLoader::MovedAsset>>> results;
+        for (const Entry &entry : entries)
+        {
+            std::error_code folderError;
+            const std::filesystem::path created = CreateMissingFolders(entry.toFile.parent_path(), folderError);
+            if (folderError)
+            {
+                return std::unexpected(failed(entry, ClientText::Failure("", ClientText::Reason(folderError),
+                                                                         folderError.message())));
+            }
+            auto moved = loader.MovePath(entry.from, entry.to, [&] { return RenameForMove(entry.fromFile, entry.toFile); });
+            if (!moved)
+            {
+                RemoveCreatedFolders(entry.toFile.parent_path(), created);
+                return std::unexpected(failed(entry, moved.error()));
+            }
+            done.push_back(Done{&entry, created});
+            results.emplace_back(&entry, std::move(*moved));
+        }
+
+        // ---- 3. project.n2proj: the scene list and the startup scene follow their files ----
+        {
+            IO::ProjectFile changed = _project->file;
+            bool projectChanged = false;
+            const auto follow = [&](std::string &text)
+            {
+                const IO::ResourcePath path(text);
+                if (text.empty() || path.GetType() != IO::PathType::Resource)
+                {
+                    return;
+                }
+                for (const Entry &entry : entries)
+                {
+                    const std::string &old = entry.from.GetPath();
+                    if (path == entry.from || (entry.folder && path.GetPath().starts_with(old + "/")))
+                    {
+                        text = "res://" + entry.to.GetPath() + path.GetPath().substr(old.size());
+                        projectChanged = true;
+                        return;
+                    }
+                }
+            };
+            follow(changed.startupScene);
+            for (std::string &scene : changed.scenes)
+            {
+                follow(scene);
+            }
+            if (projectChanged)
+            {
+                if (auto saved = SaveProject(std::move(changed)); !saved)
+                {
+                    return std::unexpected(undone("Couldn't rewrite the scene paths of " +
+                                                  std::string(IO::ProjectFile::FileName) + ": " + saved.error()));
+                }
+            }
+        }
+
+        // ---- 4. The open scene's scripts follow their files; nothing runs again ----
+        std::unordered_map<IO::ResourcePath, IO::ResourcePath, IO::ResourcePath::Hash> newPathOf;
+        for (const auto &[entry, moved] : results)
+        {
+            for (const IO::ResourceLoader::MovedAsset &asset : moved)
+            {
+                newPathOf[asset.from] = asset.to;
+                if (asset.type == LuaScript::ResourceTypeName)
+                {
+                    Scripting::ScriptDeclarationCache::Instance().Forget(asset.from);
+                }
+            }
+        }
+        if (Scene *scene = SceneManager::GetCurScene())
+        {
+            for (const auto &object : scene->GetAllGameObjects())
+            {
+                if (!object || object->IsDestroyed())
+                {
+                    continue;
+                }
+                for (Scripting::LuaComponent *lua : object->GetComponents<Scripting::LuaComponent>())
+                {
+                    if (const auto found = newPathOf.find(lua->GetScriptPath()); found != newPathOf.end())
+                    {
+                        lua->RetargetScript(found->second);
+                    }
+                }
+            }
+        }
+
+        // ---- 5. What a move cannot fix: scripts that still name an old module or res:// path ----
+        struct Needle
+        {
+            std::string text;  ///< what is searched for
+            std::string shown; ///< what the warning names
+        };
+        std::vector<Needle> needles;
+        for (const Entry &entry : entries)
+        {
+            const std::string old = entry.from.ToString();
+            if (entry.folder)
+            {
+                needles.push_back({old + "/", old + "/"});
+                std::string module = entry.from.GetPath();
+                std::ranges::replace(module, '/', '.');
+                needles.push_back({"\"" + module + ".", module + "."});
+                needles.push_back({"'" + module + ".", module + "."});
+            }
+            else
+            {
+                needles.push_back({old, old});
+                if (LowerAscii(entry.from.GetExtension()) == ".lua")
+                {
+                    const std::string module = Scripting::LuaRuntime::PathToModuleName(entry.from);
+                    needles.push_back({"\"" + module + "\"", module});
+                    needles.push_back({"'" + module + "'", module});
+                }
+            }
+        }
+        nlohmann::json warnings = nlohmann::json::array();
+        {
+            std::set<std::string> said;
+            std::size_t scripts = 0;
+            for (std::filesystem::recursive_directory_iterator walk(canonicalRoot,
+                                                                    std::filesystem::directory_options::skip_permission_denied,
+                                                                    error),
+                 end;
+                 !error && walk != end && scripts < MaxMoveScanScripts && warnings.size() < MaxMoveWarnings;
+                 walk.increment(error))
+            {
+                std::error_code entryError;
+                if (walk->is_symlink(entryError))
+                {
+                    walk.disable_recursion_pending();
+                    continue;
+                }
+                if (!walk->is_regular_file(entryError) || LowerAscii(IO::PathToUtf8(walk->path().extension())) != ".lua")
+                {
+                    continue;
+                }
+                ++scripts;
+                if (walk->file_size(entryError) > MaxTextAssetBytes || entryError)
+                {
+                    continue;
+                }
+                const auto text = ReadTextFile(walk->path());
+                if (!text)
+                {
+                    continue;
+                }
+                const std::string script =
+                    IO::ResourcePath(IO::PathType::Resource, IO::PathToUtf8(walk->path().lexically_relative(canonicalRoot)))
+                        .ToString();
+                for (const Needle &needle : needles)
+                {
+                    if (warnings.size() >= MaxMoveWarnings)
+                    {
+                        break;
+                    }
+                    if (text->find(needle.text) != std::string::npos)
+                    {
+                        std::string warning = SanitizeForLog(script) + " still names " + SanitizeForLog(needle.shown);
+                        if (said.insert(warning).second)
+                        {
+                            warnings.push_back(std::move(warning));
+                        }
+                    }
+                }
+            }
+            error.clear();
+        }
+
+        // ---- 6. The answer, the event and the log line ----
+        nlohmann::json movedJson = nlohmann::json::array();
+        nlohmann::json eventMoved = nlohmann::json::array();
+        IO::ResourceLoader::RescanResult changes;
+        std::size_t assetCount = 0;
+        for (const auto &[entry, moved] : results)
+        {
+            if (entry->folder)
+            {
+                movedJson.push_back({{"from", entry->from.ToString()}, {"to", entry->to.ToString()}});
+            }
+            for (const IO::ResourceLoader::MovedAsset &asset : moved)
+            {
+                nlohmann::json item{{"from", asset.from.ToString()},
+                                    {"to", asset.to.ToString()},
+                                    {"uuid", asset.uuid.ToString()},
+                                    {"type", asset.type}};
+                if (eventMoved.size() < MaxEventMovedAssets)
+                {
+                    eventMoved.push_back(item);
+                }
+                movedJson.push_back(std::move(item));
+                changes.removed.push_back(asset.from);
+                changes.added.push_back(asset.to);
+                ++assetCount;
+            }
+        }
+        std::sort(changes.added.begin(), changes.added.end());
+        std::sort(changes.removed.begin(), changes.removed.end());
+        ApplyAssetChanges(changes, &eventMoved);
+
+        ServerLog::Info(std::format("Moved {} {} ({} asset{}; first: {} -> {})", entries.size(),
+                                    entries.size() == 1 ? "entry" : "entries", assetCount, assetCount == 1 ? "" : "s",
+                                    SanitizeForLog(entries.front().from.ToString()),
+                                    SanitizeForLog(entries.front().to.ToString())));
+        for (const nlohmann::json &warning : warnings)
+        {
+            ServerLog::Warn("After the move: " + warning.get<std::string>());
+        }
+        return nlohmann::json{{"moved", std::move(movedJson)}, {"warnings", std::move(warnings)}};
     }
 
     // ==================== Prefab assets (EN3, protocol 1.19.0) ====================
@@ -8250,8 +8855,7 @@ namespace N2Engine::Editor
         /// The prefab file's asset UUID: the .meta's, else (not indexed yet) what the file gets when it is first scanned
         Math::UUID PrefabAssetUuid(const IO::ResourcePath &path)
         {
-            const Math::UUID uuid = IO::ResourceLoader::Instance().GetUUID(path);
-            return uuid == Math::UUID::ZERO ? IO::ResourceUUID::FromPath(path) : uuid;
+            return IO::ResourceLoader::Instance().GetOrMintUUID(path);
         }
     }
 
@@ -9281,14 +9885,14 @@ namespace N2Engine::Editor
             return std::unexpected("Not a valid scene (see the log): " + SanitizeForLog(resourcePath));
         }
 
-        // The file's asset UUID, the same every run (and what a .meta records for it): a scene's UUID is its file's.
-        // A file added since the last scan is indexed now.
+        // The file's asset UUID, the one its .meta stores (kept when the file moves): a scene's UUID is its file's. A
+        // file added since the last scan is indexed now.
         auto &loader = IO::ResourceLoader::Instance();
         if (!loader.Exists(resolved->resourcePath))
         {
             (void)loader.Reload(resolved->resourcePath);
         }
-        scene->SetUUID(IO::ResourceUUID::FromPath(resolved->resourcePath));
+        scene->SetUUID(loader.GetOrMintUUID(resolved->resourcePath));
         scene->SetResourcePath(resolved->resourcePath);
 
         LoadOpenedScene(std::move(scene), resourcePath);
@@ -9344,7 +9948,7 @@ namespace N2Engine::Editor
             }
             resourcePath = resolved->resourcePath.ToString();
             (void)IO::ResourceLoader::Instance().Reload(resolved->resourcePath);
-            scene->SetUUID(IO::ResourceUUID::FromPath(resolved->resourcePath));
+            scene->SetUUID(IO::ResourceLoader::Instance().GetOrMintUUID(resolved->resourcePath));
             scene->SetResourcePath(resolved->resourcePath);
         }
 
@@ -9401,7 +10005,7 @@ namespace N2Engine::Editor
         if (resourcePath != OpenScenePath())
         {
             // Saved as another file: that is the scene's file now, and its UUID the scene's
-            scene->SetUUID(IO::ResourceUUID::FromPath(resolved->resourcePath));
+            scene->SetUUID(IO::ResourceLoader::Instance().GetOrMintUUID(resolved->resourcePath));
             scene->SetResourcePath(resolved->resourcePath);
             _openScene = scene;
             _openScenePath = resourcePath;
