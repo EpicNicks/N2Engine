@@ -739,8 +739,8 @@ def docs_tool_lists():
         for cell in re.findall(r"<tr><td>(.*?)</td>", section, re.S):
             names += re.findall(r"<code>(n2_[a-z_]+)</code>", cell)
         lists[key] = names
-    check(len(lists["read-tools"]) == 11 and len(lists["write-tools"]) == 22 and len(lists["play-tools"]) == 6,
-          "docs/mcp.html lists %d read, %d write, %d play tools, expected 11, 22 and 6" % (
+    check(len(lists["read-tools"]) == 11 and len(lists["write-tools"]) == 23 and len(lists["play-tools"]) == 6,
+          "docs/mcp.html lists %d read, %d write, %d play tools, expected 11, 23 and 6" % (
               len(lists["read-tools"]), len(lists["write-tools"]), len(lists["play-tools"])))
     return lists
 
@@ -894,6 +894,25 @@ def scenario_mcp(hosts, work, version, bridge_path, node, with_launch):
         check(scene.get("dirty") is False, "n2_status says the scene is dirty after undoing every step: %s" % scene)
         saved_on_disk = read_text(project / "assets" / "scenes" / "Main.scene")
         check("Bridge" not in saved_on_disk, "The scene file holds an entity the agent made and undid")
+
+        mcp.step("move flow: a script is moved, keeps its UUID, and a refused move changes nothing")
+        script = mcp.tool(agent, "n2_create_script", {"path": "res://scripts/MoveMe.lua"}).data
+        mcp.tool(agent, "n2_create_script", {"path": "res://scripts/Other.lua"})
+        moved = mcp.tool(agent, "n2_move_asset",
+                         {"moves": [{"from": "res://scripts/MoveMe.lua", "to": "res://scenes/Moved.lua"}]}).data
+        check(moved["movedTotal"] == 1 and moved["moved"][0].get("uuid") == script["uuid"],
+              "n2_move_asset didn't report the script moved with its UUID: %s" % json.dumps(moved)[:400])
+        asset = mcp.tool(agent, "n2_get_asset_info", {"pathOrUuid": script["uuid"]}).data["asset"]
+        check(asset["path"] == "res://scenes/Moved.lua",
+              "The script's UUID %s now names %r, expected res://scenes/Moved.lua" % (script["uuid"], asset["path"]))
+        check((project / "assets" / "scenes" / "Moved.lua").is_file() and not (project / "assets" / "scripts" / "MoveMe.lua").exists(),
+              "The moved script is not at its new place on disk, or is still at the old one")
+        # The host compares names without regard to case, on every platform: Other.lua cannot land on Moved.lua's name
+        mcp.tool(agent, "n2_move_asset", {"moves": [{"from": "res://scripts/Other.lua", "to": "res://scenes/moved.lua"}]},
+                 expect_error=True)
+        check((project / "assets" / "scripts" / "Other.lua").is_file(), "A refused move took the file away")
+        mcp.tool(agent, "n2_move_asset", {"moves": [{"from": "res://scripts/Other.lua", "to": "res://scripts/../editor/x.lua"}]},
+                 expect_error="path_refused")
 
         mcp.step("the irreversible tier is refused without --allow-irreversible")
         mcp.tool(agent, "n2_create_entity", {"name": "Unsaved", "preset": "Empty"})
