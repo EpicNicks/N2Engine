@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <iostream>
@@ -236,6 +237,26 @@ namespace Renderer::Common
         virtual void SetWireframe(bool enabled) = 0;
         [[nodiscard]] virtual const char* GetRendererName() const = 0;
 
+        /**
+         * The editor's prefab stage (In Scene mode): every draw recorded from now until the next call is dimmed by at
+         * least `dim` (RenderState::dim; the larger of the draw's own and this), clamped to 0..1. A frame-scoped
+         * modifier that each backend reads when a draw is RECORDED (DrawMesh, DrawObjects) and stores in that draw's
+         * state, so it still travels with the draw when a backend reorders draws (the software renderer does). 0 (the
+         * default) dims nothing; the stage sets it for the scene drawn behind the prefab, then back to 0.
+         */
+        void SetStageDim(const float dim) { m_stageDim = std::clamp(dim, 0.0f, 1.0f); }
+        [[nodiscard]] float GetStageDim() const { return m_stageDim; }
+        /// `state` as a draw recorded now carries it: its dim raised to SetStageDim's value
+        [[nodiscard]] RenderState WithStageDim(const RenderState &state) const
+        {
+            RenderState applied = state;
+            applied.dim = std::max(std::clamp(state.dim, 0.0f, 1.0f), m_stageDim);
+            return applied;
+        }
+        /// Whether this backend's built-in shaders apply RenderState::dim. The four backends do (OpenGL, Vulkan, WebGPU,
+        /// software); the default (a test fake) does not.
+        [[nodiscard]] virtual bool SupportsStageDim() const { return false; }
+
     protected:
         /// Expires every token handed out so far: the renderer's resources are gone (Shutdown). Later calls to
         /// GetLifetimeToken return a fresh token.
@@ -243,5 +264,6 @@ namespace Renderer::Common
 
     private:
         std::shared_ptr<const int> m_lifetime = std::make_shared<const int>(0);
+        float m_stageDim = 0.0f;
     };
 }

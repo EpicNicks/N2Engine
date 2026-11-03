@@ -201,6 +201,8 @@ namespace Renderer
             /// Not in core WebGPU (no polygon mode): ignored, one log line
             void SetWireframe(bool enabled) override;
             [[nodiscard]] const char* GetRendererName() const override { return "WebGPU Renderer"; }
+            /// The per-draw block carries uStageDim (RenderState::dim) to the built-in shaders
+            [[nodiscard]] bool SupportsStageDim() const override { return true; }
             /// The three built-ins; nullptr before Initialize
             [[nodiscard]] Common::IShader* GetStandardUnlitShader() const override;
             [[nodiscard]] Common::IShader* GetStandardLitShader() const override;

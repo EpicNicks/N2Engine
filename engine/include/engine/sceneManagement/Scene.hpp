@@ -157,8 +157,11 @@ namespace N2Engine
          * Each renderable's queue (GetRenderQueue, then DrawsInQueue for each queue) is read once, before
          * anything draws. A renderable that draws in both queues is called once in each (RenderInQueue with
          * that queue): in hierarchy order among the opaque ones, and sorted among the transparent ones.
+         *
+         * `hidden`, when given, is an object of this scene whose whole subtree is left out (the editor's prefab stage
+         * hides the instance it shows the prefab in place of): render only, nothing about the objects changes.
          */
-        void Render(Renderer::Common::IRenderer *renderer, const Camera &camera);
+        void Render(Renderer::Common::IRenderer *renderer, const Camera &camera, const GameObject *hidden = nullptr);
         [[nodiscard]] Scheduling::CoroutineScheduler* GetCoroutineScheduler() const;
         /// Expires when this scene is freed (for references that must not dangle, e.g. from Lua)
         [[nodiscard]] std::weak_ptr<const bool> GetLifetimeToken() const { return _lifetime.Get(); }
@@ -183,7 +186,7 @@ namespace N2Engine
 
     private:
         static void CollectRenderablesRecursive(const std::shared_ptr<GameObject> &gameObject,
-                                                std::vector<IRenderable *> &out);
+                                                std::vector<IRenderable *> &out, const GameObject *hidden = nullptr);
         static void CollectLightsRecursive(const std::shared_ptr<GameObject> &gameObject,
                                            std::vector<Rendering::Light *> &out);
         void TraverseGameObjectRecursive(std::shared_ptr<GameObject> gameObject,

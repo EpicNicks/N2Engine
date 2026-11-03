@@ -88,5 +88,14 @@ namespace N2Engine
         static bool DeleteScene(const std::string &sceneName);
 
         static void ProcessAnyPendingSceneChange();
+
+        /**
+         * Makes `scene` the loaded scene and hands back the one that was loaded (nullptr for none), at once and without
+         * tearing either down: no Clear, no component callbacks, no stored data written or read, and the current index
+         * and any pending load are left as they are. For the editor's prefab stage, which parks the open scene (it keeps
+         * the returned object, untouched) and loads a scene that is never stored, then swaps the open one back. Only for
+         * scenes that are not attached (edit mode), since nothing is torn down or attached here.
+         */
+        static std::unique_ptr<Scene> SwapLoadedScene(std::unique_ptr<Scene> scene);
     };
 }

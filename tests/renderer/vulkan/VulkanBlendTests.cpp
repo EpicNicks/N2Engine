@@ -743,3 +743,38 @@ TEST_F(VulkanBlendTest, UpdatingAndThenDestroyingAMeshInTheFrameThatDrewItStillD
     EXPECT_EQ(R().GetPendingDeletionCountForTest(), 0u);
     EXPECT_EQ(R().GetLiveAllocationCountForTest(), baseline - 2u) << "the mesh's two buffers are gone, nothing else";
 }
+
+// ============================================================================
+// The prefab stage's dim (RenderState::dim, IRenderer::SetStageDim; protocol 1.26.0)
+// ============================================================================
+
+TEST_F(VulkanBlendTest, ADrawRecordedWithTheStageDimSetIsTheSoftwareReferencesDimmedColourAndTheNextIsNot)
+{
+    EXPECT_TRUE(R().SupportsStageDim());
+    IMesh* back = Full(0.5f);
+    IMesh* front = Full(0.0f);
+    IMaterial* red = Colour(1.0f, 0.0f, 0.0f);
+    // RenderState::StageDimmed of pure red at 0.65: the per-draw block carries the value to the fragment stage
+    float r = 1.0f;
+    float g = 0.0f;
+    float b = 0.0f;
+    RenderState::StageDimmed(r, g, b, 0.65f);
+    const auto to8 = [](const float x) { return static_cast<int>(x * 255.0f + 0.5f); };
+    const Frame dimmed = RenderFrame([&]
+    {
+        R().SetStageDim(0.65f);
+        R().DrawMesh(back, Identity, red, RenderState::Opaque());
+        R().SetStageDim(0.0f);
+    });
+    EXPECT_TRUE(AllNear(dimmed, to8(r), to8(g), to8(b), 2));
+
+    // The undimmed draw recorded after it covers it: red again
+    const Frame stage = RenderFrame([&]
+    {
+        R().SetStageDim(0.65f);
+        R().DrawMesh(back, Identity, red, RenderState::Opaque());
+        R().SetStageDim(0.0f);
+        R().DrawMesh(front, Identity, red, RenderState::Opaque());
+    });
+    EXPECT_TRUE(AllNear(stage, 255, 0, 0, 1));
+}

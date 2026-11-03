@@ -1777,6 +1777,47 @@ namespace N2Engine::Editor
         }
     }
 
+    /// The open prefab stage (protocol 1.26.0; see EditorServer::PrefabStageMode): the prefab, its mode, and everything
+    /// of the open scene the stage parks while it is open, to put back at close
+    struct EditorServer::PrefabStage
+    {
+        Math::UUID prefabUuid;
+        /// The prefab file's res:// path (it follows the UUID when the file moves)
+        std::string path;
+        /// The prefab's name, as its file has it (Save keeps it)
+        std::string name;
+        PrefabStageMode mode = PrefabStageMode::Isolated;
+
+        // The parked open scene and what goes with it
+        std::unique_ptr<Scene> parkedScene;
+        EditHistory parkedHistory;
+        uint32_t parkedRevision = 0;
+        uint32_t parkedSavedRevision = 0;
+        EditorCameraState sceneCamera;
+        bool parkedAutosavePending = false;
+        bool parkedAutosaveProtected = false;
+        bool parkedAutosaveWarned = false;
+        bool parkedProtectedAutosaveWarned = false;
+        std::optional<std::chrono::steady_clock::time_point> parkedLastAutosave;
+
+        /// The editor camera each mode had when it was left (none before the mode was first shown)
+        std::array<std::optional<EditorCameraState>, 2> modeCamera;
+        /// Context: the instance of the prefab in the parked scene the stage is shown at (none: at the file's own place)
+        std::optional<Math::UUID> anchor;
+        /// Context: the root's local transform as the file has it (Save writes it), while the root is placed at the anchor
+        std::optional<Transform> rootFileTransform;
+
+        std::vector<std::string> warnings;
+        /// The file as the stage last read or wrote it (size and a hash of the bytes): another change is external
+        std::uintmax_t fileSize = 0;
+        std::size_t fileHash = 0;
+        bool externalChange = false;
+        /// The prefab's asset is gone (deleted): Save is refused
+        bool orphaned = false;
+        /// The dirty state the last prefabStageChanged reported
+        bool reportedDirty = false;
+    };
+
     EditorServer::EditorServer()
     {
         // Every line logged while the server exists becomes a log event. The subscriber runs on the thread that logged,
@@ -2821,7 +2862,8 @@ namespace N2Engine::Editor
 
     std::vector<std::string> EditorServer::Capabilities()
     {
-        return {"editorExtensions","editorTooling","luaSyntax","assetPreviews","entityClipboard","prefabAssets","physicsBackends","networkPanel"};
+        return {"editorExtensions","editorTooling","luaSyntax","assetPreviews","entityClipboard","prefabAssets","physicsBackends","networkPanel",
+                "prefabStage","prefabStageContext"};
     }
 
     bool EditorServer::EnableEditorExtensions(std::filesystem::path projectRoot)
@@ -3623,6 +3665,9 @@ namespace N2Engine::Editor
         // marked ended, so the next session's Hello (replayed through the same queue) runs after it.
         (void)_commands.Enqueue([this]
         {
+            // A prefab stage is the client's: it is closed without saving, and the parked scene comes back (so the
+            // autosave below is the scene's)
+            DiscardPrefabStage("the client disconnected");
             CloseEditGroups();
             // A play host's keys the client held go up with it (a key held when it crashed would stay down)
             _keys.ReleaseAll();
@@ -4083,6 +4128,11 @@ namespace N2Engine::Editor
         try
         {
             FlushAutosave();
+            // A prefab stage that became dirty or clean (an edit, an undo back to what was saved) says so once
+            if (_stage != nullptr && (_sceneRevision != _savedRevision) != _stage->reportedDirty)
+            {
+                PushPrefabStageChanged();
+            }
         }
         catch (...)
         {
@@ -4238,6 +4288,7 @@ namespace N2Engine::Editor
         {CommandType::GetPhysicsBackends, "GetPhysicsBackends", EditorServer::CommandClass::Read},
         {CommandType::GetNetworkSettings, "GetNetworkSettings", EditorServer::CommandClass::Read},
         {CommandType::GetNetworkValidation, "GetNetworkValidation", EditorServer::CommandClass::Read},
+        {CommandType::GetPrefabStage, "GetPrefabStage", EditorServer::CommandClass::Read},
         // The extension lists answer from what was captured at load: they run no Lua. InvokeMenuItem (0x82) and
         // InvokeInspectorAction (0x83) run extension code, so they are Writes below.
         {CommandType::ListEditorExtensions, "ListEditorExtensions", EditorServer::CommandClass::Read},
@@ -4276,6 +4327,11 @@ namespace N2Engine::Editor
         {CommandType::CreateScriptAsset, "CreateScriptAsset", EditorServer::CommandClass::Write},
         {CommandType::CreateFolder, "CreateFolder", EditorServer::CommandClass::Write},
         {CommandType::MoveAsset, "MoveAsset", EditorServer::CommandClass::Write},
+        // The prefab stage (1.26.0): they swap the loaded scene, change the stage or write the .prefab file
+        {CommandType::OpenPrefabStage, "OpenPrefabStage", EditorServer::CommandClass::Write},
+        {CommandType::SetPrefabStageMode, "SetPrefabStageMode", EditorServer::CommandClass::Write},
+        {CommandType::SavePrefabStage, "SavePrefabStage", EditorServer::CommandClass::Write},
+        {CommandType::ClosePrefabStage, "ClosePrefabStage", EditorServer::CommandClass::Write},
         {CommandType::AddComponent, "AddComponent", EditorServer::CommandClass::Write},
         {CommandType::RemoveComponent, "RemoveComponent", EditorServer::CommandClass::Write},
         {CommandType::SetComponentFields, "SetComponentFields", EditorServer::CommandClass::Write},
@@ -4447,6 +4503,28 @@ namespace N2Engine::Editor
             return;
         }
 
+        // A prefab stage is the loaded scene while it is open: what would save, open, swap or play the scene waits for it to
+        // be closed, and an editor extension changes nothing (its writes would edit the prefab behind the user's back)
+        if (_stage != nullptr)
+        {
+            if (IsRefusedWhilePrefabStageOpen(commandType))
+            {
+                SendResponse(clientSocket,
+                             BuildDenial(ErrorCodeStageOpen,
+                                         std::format("A prefab stage is open ({}): close it (ClosePrefabStage) before {}",
+                                                     _stage->path, CommandName(commandType))));
+                return;
+            }
+            if (_invocation != nullptr && !IsReadCommand(commandType))
+            {
+                SendResponse(clientSocket,
+                             BuildDenial(ErrorCodeStageOpen,
+                                         std::format("A prefab stage is open: an editor extension can't run {} on it",
+                                                     CommandName(commandType))));
+                return;
+            }
+        }
+
         // Who changed what: one line per command that writes, naming the user. A polled command stays silent (its handler
         // never logs per call, see IsPolledCommand), and a read is nothing to account for.
         if (hasRoles && !IsPolledCommand(commandType))
@@ -4606,6 +4684,21 @@ namespace N2Engine::Editor
             break;
         case CommandType::UnpackPrefab:
             HandleUnpackPrefab(clientSocket, payload);
+            break;
+        case CommandType::OpenPrefabStage:
+            HandleOpenPrefabStage(clientSocket, payload);
+            break;
+        case CommandType::SetPrefabStageMode:
+            HandleSetPrefabStageMode(clientSocket, payload);
+            break;
+        case CommandType::SavePrefabStage:
+            HandleSavePrefabStage(clientSocket, payload);
+            break;
+        case CommandType::ClosePrefabStage:
+            HandleClosePrefabStage(clientSocket, payload);
+            break;
+        case CommandType::GetPrefabStage:
+            HandleGetPrefabStage(clientSocket, payload);
             break;
         case CommandType::GetPhysicsBackends:
             HandleGetPhysicsBackends(clientSocket);
@@ -5054,7 +5147,26 @@ namespace N2Engine::Editor
             ~RestoreWireframe() { renderer->SetWireframe(false); }
         } restoreWireframe{renderer};
         renderer->SetWireframe(_editorWireframe);
-        app.RenderEditorFrame(camera);
+        if (_stage != nullptr)
+        {
+            // The prefab stage: alone with a default light (Isolated), or in front of the parked scene, dimmed, with the
+            // instance it stands for hidden (In Scene)
+            EditorStageView view;
+            if (_stage->mode == PrefabStageMode::Context)
+            {
+                view.backdrop = _stage->parkedScene.get();
+                view.hiddenBackdropObject = StageAnchor();
+            }
+            else
+            {
+                view.defaultLight = true;
+            }
+            app.RenderEditorFrame(camera, view);
+        }
+        else
+        {
+            app.RenderEditorFrame(camera);
+        }
         ReadFrame(*renderer, _viewportWidth, _viewportHeight, _frameBuffer);
 
         _frames.MarkRendered();
@@ -5723,6 +5835,11 @@ namespace N2Engine::Editor
 
         // Apply transform to entity
         bool applied = false;
+        if (const std::shared_ptr<GameObject> target = FindEntity(*scene, cmd.entityId);
+            target != nullptr && RefuseLockedStageRoot(clientSocket, *target))
+        {
+            return;
+        }
         if (auto uuid = Math::UUID::FromString(cmd.entityId); uuid.has_value())
         {
             auto entity = scene->FindGameObjectByUUID(uuid.value());
@@ -5987,6 +6104,12 @@ namespace N2Engine::Editor
         case CommandType::SetPhysicsBackend:
         // B11's: it saves project.n2proj too (GetNetworkSettings and GetNetworkValidation only read)
         case CommandType::SetNetworkSettings:
+        // 1.26.0's: the prefab stage swaps the loaded scene and writes a .prefab file (a play host plays a snapshot)
+        case CommandType::OpenPrefabStage:
+        case CommandType::SetPrefabStageMode:
+        case CommandType::SavePrefabStage:
+        case CommandType::ClosePrefabStage:
+        case CommandType::GetPrefabStage:
         // Reloading runs the project's extension files again, and invoking runs one's code, which a play host (it plays a
         // snapshot, and runs no extension) never does
         case CommandType::ReloadEditorExtensions:
@@ -6527,6 +6650,10 @@ namespace N2Engine::Editor
             SendError(clientSocket, NotFoundMessage("Entity", cmd.entityId));
             return;
         }
+        if (RefuseLockedStageRoot(clientSocket, *entity))
+        {
+            return;
+        }
         std::shared_ptr<GameObject> newParent;
         if (!cmd.parentId.empty())
         {
@@ -7048,6 +7175,10 @@ namespace N2Engine::Editor
         if (entity == nullptr)
         {
             SendError(clientSocket, NotFoundMessage("Entity", cmd.entityId));
+            return;
+        }
+        if (RefuseLockedStageRoot(clientSocket, *entity))
+        {
             return;
         }
 
@@ -7655,6 +7786,8 @@ namespace N2Engine::Editor
             event["moved"] = *moved;
         }
         _events.Push("assetsChanged", std::move(event));
+        // A prefab stage's file moved, changed or went away
+        CheckPrefabStageFile();
         if (_extensions != nullptr)
         {
             // OnAssetsChanged (E-X6): after the reload and the event, as a call of its own; each list is cut to what a hook is
@@ -8059,7 +8192,7 @@ namespace N2Engine::Editor
             SendError(clientSocket, "The text must be valid UTF-8 without NUL characters");
             return;
         }
-        if (resolved->resourcePath.ToString() == OpenScenePath())
+        if (resolved->resourcePath.ToString() == ProtectedScenePath())
         {
             SendError(clientSocket, shown + " is the open scene's file: save the scene with SaveSceneToFile");
             return;
@@ -8323,7 +8456,8 @@ namespace N2Engine::Editor
         std::vector<Entry> entries;
         entries.reserve(moves.size());
         std::size_t totalAssets = 0;
-        const std::string openScene = OpenScenePath();
+        // While a prefab stage is open, the parked scene's file (still the open scene's)
+        const std::string openScene = ProtectedScenePath();
         const std::string openSceneKey = openScene.empty() ? std::string{} : LowerAscii(IO::ResourcePath(openScene).GetPath());
 
         // ---- 1. Every entry checked before anything changes ----
@@ -9181,12 +9315,753 @@ namespace N2Engine::Editor
         SendResponse(clientSocket, response.Release());
     }
 
+    // ==================== The prefab stage (protocol 1.26.0) ====================
+
+    namespace
+    {
+        constexpr std::string_view StageModeName(const EditorServer::PrefabStageMode mode)
+        {
+            return mode == EditorServer::PrefabStageMode::Context ? "context" : "isolated";
+        }
+
+        std::optional<EditorServer::PrefabStageMode> ParseStageMode(const std::string &text)
+        {
+            if (text.empty() || text == "isolated")
+            {
+                return EditorServer::PrefabStageMode::Isolated;
+            }
+            if (text == "context")
+            {
+                return EditorServer::PrefabStageMode::Context;
+            }
+            return std::nullopt;
+        }
+
+        /// The size and a hash of a file's bytes, what a stage compares to tell its own writes from another program's
+        std::optional<std::pair<std::uintmax_t, std::size_t>> FileStamp(const std::filesystem::path &file)
+        {
+            auto text = ReadTextFile(file);
+            if (!text)
+            {
+                return std::nullopt;
+            }
+            return std::pair<std::uintmax_t, std::size_t>{text->size(), std::hash<std::string>{}(*text)};
+        }
+
+        /// The objects of `scene` linked to the prefab `prefab` (its instances), in hierarchy order
+        std::vector<std::shared_ptr<GameObject>> PrefabInstances(const Scene &scene, const Math::UUID &prefab)
+        {
+            std::vector<std::shared_ptr<GameObject>> found;
+            scene.TraverseAll([&](const std::shared_ptr<GameObject> &object)
+            {
+                if (const std::optional<Math::UUID> &link = object->GetPrefabReference(); link.has_value() && *link == prefab)
+                {
+                    found.push_back(object);
+                }
+            });
+            return found;
+        }
+    }
+
+    bool EditorServer::IsRefusedWhilePrefabStageOpen(const uint8_t commandType)
+    {
+        switch (static_cast<CommandType>(commandType))
+        {
+        // Each saves, opens, swaps or plays "the loaded scene", which is the stage while it is open
+        case CommandType::SaveSceneToFile:
+        case CommandType::SaveScene:
+        case CommandType::OpenScene:
+        case CommandType::NewScene:
+        case CommandType::LoadScene:
+        case CommandType::CreateScene:
+        case CommandType::DeleteScene:
+        case CommandType::RestoreAutosave:
+        case CommandType::DiscardAutosave:
+        case CommandType::WritePlaySnapshot:
+        // Prefab links: no instance inside a stage (a cycle can't be made), and the scene's own prefab commands wait
+        case CommandType::CreatePrefab:
+        case CommandType::InstantiatePrefab:
+        case CommandType::ApplyPrefab:
+        case CommandType::UnpackPrefab:
+        // One stage at a time
+        case CommandType::OpenPrefabStage:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    std::string EditorServer::ProtectedScenePath() const
+    {
+        if (_stage != nullptr)
+        {
+            // The parked scene is still the open scene's file's (OpenScenePath answers for the loaded scene, the stage)
+            return _stage->parkedScene != nullptr && _stage->parkedScene.get() == _openScene ? _openScenePath : std::string{};
+        }
+        return OpenScenePath();
+    }
+
+    std::shared_ptr<GameObject> EditorServer::StageRoot() const
+    {
+        const Scene *scene = SceneManager::GetCurScene();
+        if (_stage == nullptr || scene == nullptr || scene->GetRootGameObjectCount() != 1)
+        {
+            return nullptr;
+        }
+        return scene->GetRootGameObjects().front();
+    }
+
+    GameObject *EditorServer::StageAnchor() const
+    {
+        if (_stage == nullptr || !_stage->anchor.has_value() || _stage->parkedScene == nullptr)
+        {
+            return nullptr;
+        }
+        return _stage->parkedScene->FindGameObjectByUUID(*_stage->anchor).get();
+    }
+
+    nlohmann::json EditorServer::GetPrefabStageInfo() const
+    {
+        if (_stage == nullptr)
+        {
+            return nlohmann::json{{"open", false}};
+        }
+        const Scene *parked = _stage->parkedScene.get();
+        nlohmann::json info{
+            {"open", true},
+            {"prefabUuid", _stage->prefabUuid.ToString()},
+            {"path", _stage->path},
+            {"name", _stage->name},
+            {"mode", StageModeName(_stage->mode)},
+            {"dirty", _sceneRevision != _savedRevision},
+            {"revision", _sceneRevision},
+            {"savedRevision", _savedRevision},
+            {"contextAvailable", parked != nullptr && !PrefabInstances(*parked, _stage->prefabUuid).empty()},
+            {"rootLocked", _stage->mode == PrefabStageMode::Context},
+            {"sceneName", parked != nullptr ? parked->sceneName : std::string{}},
+            {"scenePath", ProtectedScenePath()},
+            {"warnings", _stage->warnings},
+            {"externalChange", _stage->externalChange},
+            {"orphaned", _stage->orphaned},
+        };
+        if (_stage->anchor.has_value())
+        {
+            info["anchorEntityId"] = _stage->anchor->ToString();
+        }
+        return info;
+    }
+
+    void EditorServer::SendPrefabStageInfo(const int clientSocket)
+    {
+        BufferWriter response;
+        WritePrefabStageInfo(response, GetPrefabStageInfo());
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::PushPrefabStageChanged()
+    {
+        if (_stage != nullptr)
+        {
+            _stage->reportedDirty = _sceneRevision != _savedRevision;
+        }
+        _events.Push("prefabStageChanged", nlohmann::json{{"stage", GetPrefabStageInfo()}});
+    }
+
+    bool EditorServer::RefuseLockedStageRoot(const int clientSocket, const GameObject &entity)
+    {
+        if (_stage == nullptr || _stage->mode != PrefabStageMode::Context)
+        {
+            return false;
+        }
+        const std::shared_ptr<GameObject> root = StageRoot();
+        if (root == nullptr || root.get() != &entity)
+        {
+            return false;
+        }
+        SendError(clientSocket, std::format("The root of the prefab '{}' is shown where its instance is (In Scene): its "
+                                            "transform is locked. Switch to Isolated to edit it",
+                                            SanitizeForLog(_stage->name)));
+        return true;
+    }
+
+    void EditorServer::KeepStageRootPlaced()
+    {
+        if (_stage == nullptr || _stage->mode != PrefabStageMode::Context)
+        {
+            return;
+        }
+        const GameObject *anchor = StageAnchor();
+        const std::shared_ptr<GameObject> root = StageRoot();
+        if (anchor == nullptr || anchor->GetPositionable() == nullptr || root == nullptr || root->GetPositionable() == nullptr)
+        {
+            return;
+        }
+        const Transform placed = anchor->GetPositionable()->GetGlobalTransform();
+        const Transform current = root->GetPositionable()->GetLocalTransform();
+        if (!(current == placed))
+        {
+            // Not the anchor's: the file's (an Isolated edit undone or redone, a snapshot taken with the file's transform)
+            _stage->rootFileTransform = current;
+            root->GetPositionable()->SetLocalTransform(placed);
+        }
+    }
+
+    void EditorServer::ApplyPrefabStageMode(const PrefabStageMode mode, const bool opening)
+    {
+        PrefabStage &stage = *_stage;
+        if (!opening)
+        {
+            stage.modeCamera[static_cast<std::size_t>(stage.mode)] = _editorCamera;
+        }
+        const std::shared_ptr<GameObject> root = StageRoot();
+        Positionable *rootPlace = root != nullptr ? root->GetPositionable() : nullptr;
+        bool moved = false;
+        if (mode == PrefabStageMode::Context)
+        {
+            const GameObject *anchor = StageAnchor();
+            if (rootPlace != nullptr && anchor != nullptr && anchor->GetPositionable() != nullptr)
+            {
+                // The root is shown where the instance is: its own transform is what the file keeps
+                if (!stage.rootFileTransform.has_value())
+                {
+                    stage.rootFileTransform = rootPlace->GetLocalTransform();
+                }
+                rootPlace->SetLocalTransform(anchor->GetPositionable()->GetGlobalTransform());
+                moved = true;
+            }
+        }
+        else if (stage.rootFileTransform.has_value())
+        {
+            if (rootPlace != nullptr)
+            {
+                rootPlace->SetLocalTransform(*stage.rootFileTransform);
+                moved = true;
+            }
+            stage.rootFileTransform.reset();
+        }
+        stage.mode = mode;
+
+        // Each mode keeps its own camera; the first In Scene view is the scene's camera, so the prefab appears in place
+        const std::optional<EditorCameraState> &remembered = stage.modeCamera[static_cast<std::size_t>(mode)];
+        if (remembered.has_value())
+        {
+            _editorCamera = *remembered;
+        }
+        else if (mode == PrefabStageMode::Context)
+        {
+            _editorCamera = stage.sceneCamera;
+        }
+        NoteViewChanged();
+
+        if (moved && !opening)
+        {
+            // Not an edit: what was saved stays saved (the revision moves so clients refetch the root's transform)
+            const bool clean = _sceneRevision == _savedRevision;
+            ++_sceneRevision;
+            if (clean)
+            {
+                _savedRevision = _sceneRevision;
+            }
+            NoteSceneChanged();
+            PushSceneChanged(SubtreeIds(*root));
+        }
+    }
+
+    void EditorServer::HandleOpenPrefabStage(const int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const OpenPrefabStageCmd cmd = OpenPrefabStageCmd::Deserialize(reader);
+        if (reader.HasData())
+        {
+            SendError(clientSocket, "Malformed payload: trailing bytes");
+            return;
+        }
+        if (!_project)
+        {
+            SendNoProject(clientSocket);
+            return;
+        }
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            SendError(clientSocket, "No scene loaded: a prefab stage parks the open scene");
+            return;
+        }
+        if (!scene->IsEditMode())
+        {
+            SendError(clientSocket, "A prefab stage opens over a scene opened for editing, not one that runs");
+            return;
+        }
+        const std::optional<PrefabStageMode> mode = ParseStageMode(cmd.mode);
+        if (!mode.has_value())
+        {
+            SendError(clientSocket, "mode must be \"isolated\" or \"context\", not '" + SanitizeForLog(cmd.mode) + "'");
+            return;
+        }
+        if (_history.InGroup())
+        {
+            SendResponse(clientSocket, BuildDenial(ErrorCodeEditGroupOpen,
+                                                   "An edit group is open: end it before opening a prefab stage"));
+            return;
+        }
+
+        // Everything about the file is checked before anything changes, so a refused one leaves the scene as it is
+        const auto resolved = ResolvePrefabAsset(_project->root / "assets", cmd.uuidOrPath);
+        if (!resolved)
+        {
+            SendError(clientSocket, resolved.error());
+            return;
+        }
+        const std::string shown = SanitizeForLog(resolved->resourcePath.ToString());
+        const auto prefab = ReadPrefabFile(*resolved);
+        if (!prefab)
+        {
+            SendError(clientSocket, prefab.error());
+            return;
+        }
+        const nlohmann::json &rootJson = prefab->at("rootObject");
+        const ClipboardScan scan =
+            ScanTree(*prefab, {&rootJson}, [](std::string_view name) { return IsValidAssetName(name); });
+        if (scan.values > MaxClipboardValues)
+        {
+            SendError(clientSocket, std::format("The prefab has more than {} values", MaxClipboardValues));
+            return;
+        }
+        if (scan.objects > MaxClipboardObjects)
+        {
+            SendError(clientSocket, std::format("The prefab has more than {} objects", MaxClipboardObjects));
+            return;
+        }
+        if (scan.badAssetPath)
+        {
+            SendError(clientSocket, "The prefab names an asset path outside the project's assets folder");
+            return;
+        }
+        if (scan.levels > JsonLimits::MaxHierarchyDepth)
+        {
+            SendError(clientSocket, std::format("The prefab nests deeper than the {} levels a scene may have",
+                                                JsonLimits::MaxHierarchyDepth));
+            return;
+        }
+        const Math::UUID prefabUuid = PrefabAssetUuid(resolved->resourcePath);
+        const std::string prefabName = prefab->at("name").get<std::string>();
+
+        // The anchor (Context placement): the instance asked for, or the first one in the scene
+        const std::vector<std::shared_ptr<GameObject>> instances = PrefabInstances(*scene, prefabUuid);
+        std::optional<Math::UUID> anchor;
+        if (!cmd.anchorEntityId.empty())
+        {
+            const std::shared_ptr<GameObject> asked = FindEntity(*scene, cmd.anchorEntityId);
+            if (asked == nullptr)
+            {
+                SendError(clientSocket, NotFoundMessage("Entity", cmd.anchorEntityId));
+                return;
+            }
+            const std::optional<Math::UUID> link = asked->GetPrefabReference();
+            if (!link.has_value() || *link != prefabUuid)
+            {
+                SendError(clientSocket, std::format("'{}' isn't an instance of the prefab {}", SanitizeForLog(asked->GetName()),
+                                                    shown));
+                return;
+            }
+            anchor = asked->GetUUID();
+        }
+        else if (!instances.empty())
+        {
+            anchor = instances.front()->GetUUID();
+        }
+
+        // The stage: exactly the file's tree, with the file's own UUIDs (not InstantiatePrefab, which renumbers). A
+        // reference resolves against the tree only: one to anything outside it is null, and is saved empty.
+        std::unique_ptr<Scene> stageScene = Scene::Create(prefabName);
+        stageScene->SetEditMode(true);
+        ReferenceResolver resolver;
+        std::shared_ptr<GameObject> root;
+        try
+        {
+            root = GameObject::Deserialize(rootJson, &resolver);
+        }
+        catch (const std::exception &e)
+        {
+            SendError(clientSocket, shown + " is not a usable prefab: its objects can't be built (" +
+                                        SanitizeForLog(e.what()) + ")");
+            return;
+        }
+        if (root == nullptr)
+        {
+            SendError(clientSocket, shown + " is not a usable prefab: its root object can't be built");
+            return;
+        }
+        stageScene->AddRootGameObject(root);
+        resolver.ResolveAll();
+        const std::size_t externalReferences = resolver.GetMissedLookupCount();
+        std::size_t linkedObjects = 0;
+        stageScene->TraverseAll([&](const std::shared_ptr<GameObject> &object)
+        {
+            if (object != root && object->GetPrefabReference().has_value())
+            {
+                ++linkedObjects;
+            }
+        });
+
+        auto stage = std::make_unique<PrefabStage>();
+        stage->prefabUuid = prefabUuid;
+        stage->path = resolved->resourcePath.ToString();
+        stage->name = prefabName;
+        stage->anchor = anchor;
+        if (const auto stamp = FileStamp(resolved->file); stamp.has_value())
+        {
+            stage->fileSize = stamp->first;
+            stage->fileHash = stamp->second;
+        }
+        if (externalReferences > 0)
+        {
+            stage->warnings.push_back(std::format(
+                "{} reference{} to objects outside the prefab {} cleared: a prefab can only refer to its own objects, and "
+                "Save writes {} empty", externalReferences, externalReferences == 1 ? "" : "s",
+                externalReferences == 1 ? "was" : "were", externalReferences == 1 ? "it" : "them"));
+        }
+        if (linkedObjects > 0)
+        {
+            stage->warnings.push_back(std::format(
+                "The prefab contains {} linked object{} (nested prefab instance{}): edited as plain objects, the link{} kept "
+                "in the file", linkedObjects, linkedObjects == 1 ? "" : "s", linkedObjects == 1 ? "" : "s",
+                linkedObjects == 1 ? " is" : "s are"));
+        }
+        if (*mode == PrefabStageMode::Context && !anchor.has_value())
+        {
+            stage->warnings.push_back("No instance of the prefab is in the open scene: In Scene shows it at its own position");
+        }
+
+        // Park the open scene with everything that goes with it, and make the stage the loaded scene
+        stage->parkedRevision = _sceneRevision;
+        stage->parkedSavedRevision = _savedRevision;
+        stage->sceneCamera = _editorCamera;
+        stage->parkedAutosavePending = _autosavePending;
+        stage->parkedAutosaveProtected = _autosaveProtected;
+        stage->parkedAutosaveWarned = _autosaveWarned;
+        stage->parkedProtectedAutosaveWarned = _protectedAutosaveWarned;
+        stage->parkedLastAutosave = _lastAutosave;
+        EditHistory stageHistory;
+        stageHistory.SetLimits(_history.GetMaxSteps(), _history.GetMaxBytes());
+        stageHistory.SetCoalesceWindow(_history.GetCoalesceWindow());
+        stage->parkedHistory = std::move(_history);
+        _history = std::move(stageHistory);
+        stage->parkedScene = SceneManager::SwapLoadedScene(std::move(stageScene));
+        _autosavePending = false;
+        _stage = std::move(stage);
+
+        // The stage starts saved, at a new revision (the revision only grows), with an empty history
+        ++_sceneRevision;
+        _savedRevision = _sceneRevision;
+        _history.MarkSaved();
+        NoteSceneChanged();
+        ApplyPrefabStageMode(*mode, true);
+
+        // Another scene for every client: every id it holds is invalid
+        PushSceneChanged({}, true);
+        PushHistoryChanged();
+        PushPrefabStageChanged();
+        ServerLog::PublicInfo(std::format("Opened prefab stage {} ({})", _stage->path, StageModeName(*mode)));
+        SendPrefabStageInfo(clientSocket);
+    }
+
+    void EditorServer::HandleSetPrefabStageMode(const int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const SetPrefabStageModeCmd cmd = SetPrefabStageModeCmd::Deserialize(reader);
+        if (reader.HasData())
+        {
+            SendError(clientSocket, "Malformed payload: trailing bytes");
+            return;
+        }
+        if (_stage == nullptr)
+        {
+            SendError(clientSocket, "No prefab stage is open");
+            return;
+        }
+        const std::optional<PrefabStageMode> mode = ParseStageMode(cmd.mode);
+        if (!mode.has_value() || cmd.mode.empty())
+        {
+            SendError(clientSocket, "mode must be \"isolated\" or \"context\", not '" + SanitizeForLog(cmd.mode) + "'");
+            return;
+        }
+        if (*mode != _stage->mode)
+        {
+            ApplyPrefabStageMode(*mode, false);
+            PushPrefabStageChanged();
+        }
+        SendPrefabStageInfo(clientSocket);
+    }
+
+    void EditorServer::HandleSavePrefabStage(const int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        if (!payload.empty())
+        {
+            SendError(clientSocket, "Malformed payload: trailing bytes");
+            return;
+        }
+        if (_stage == nullptr)
+        {
+            SendError(clientSocket, "No prefab stage is open");
+            return;
+        }
+        if (!_project)
+        {
+            SendNoProject(clientSocket);
+            return;
+        }
+        if (_stage->orphaned)
+        {
+            SendError(clientSocket, std::format("The prefab file of '{}' was deleted: it can't be saved. Close the stage and "
+                                                "discard the changes", SanitizeForLog(_stage->name)));
+            return;
+        }
+        const Scene *scene = SceneManager::GetCurScene();
+        const std::shared_ptr<GameObject> root = StageRoot();
+        if (root == nullptr)
+        {
+            SendError(clientSocket, std::format("A prefab has exactly one root object, and the stage has {}: put every object "
+                                                "under one root", scene != nullptr ? scene->GetRootGameObjectCount() : 0));
+            return;
+        }
+        // A prefab can't contain an instance of itself (the stage refuses InstantiatePrefab; this is for pasted links)
+        bool cycle = false;
+        for (const std::shared_ptr<GameObject> &object : root->GetChildrenRecursive())
+        {
+            if (const std::optional<Math::UUID> &link = object->GetPrefabReference(); link.has_value() && *link == _stage->prefabUuid)
+            {
+                cycle = true;
+                break;
+            }
+        }
+        if (cycle)
+        {
+            SendResponse(clientSocket, BuildDenial(ErrorCodePrefabCycle,
+                                                   std::format("An object under '{}' is linked to the prefab itself: unlink "
+                                                               "it (a prefab can't contain itself)",
+                                                               SanitizeForLog(root->GetName()))));
+            return;
+        }
+        const auto resolved = ResolvePrefabAsset(_project->root / "assets", _stage->prefabUuid.ToString());
+        if (!resolved)
+        {
+            SendError(clientSocket, "The prefab's file can't be found: " + resolved.error());
+            return;
+        }
+        const std::string shown = SanitizeForLog(resolved->resourcePath.ToString());
+
+        // The file's form: the root with the transform the file keeps (In Scene shows it at the anchor), the self link left
+        // out, the prefab's own name kept (the root's is the root object's, which the stage may have renamed)
+        nlohmann::json prefabJson;
+        Positionable *rootPlace = root->GetPositionable();
+        if (_stage->rootFileTransform.has_value() && rootPlace != nullptr)
+        {
+            const Transform placed = rootPlace->GetLocalTransform();
+            rootPlace->SetLocalTransform(*_stage->rootFileTransform);
+            prefabJson = PrefabJsonOf(root, _stage->name, std::nullopt);
+            rootPlace->SetLocalTransform(placed);
+        }
+        else
+        {
+            prefabJson = PrefabJsonOf(root, _stage->name, std::nullopt);
+        }
+        const std::string text = SceneFileText(prefabJson);
+        if (text.size() > MaxClipboardBytes)
+        {
+            SendError(clientSocket, std::format("The prefab would be larger than {} MiB as text and can't be saved",
+                                                MaxClipboardBytes / (1024 * 1024)));
+            return;
+        }
+        if (auto written = IO::WriteTextFileAtomically(resolved->file, text); !written)
+        {
+            SendError(clientSocket, ClientText::Failure("Couldn't write " + shown, "the file could not be written", written.error()));
+            return;
+        }
+        // Our own write: the watcher's check that follows sees the file as the stage has it
+        _stage->path = resolved->resourcePath.ToString();
+        _stage->fileSize = text.size();
+        _stage->fileHash = std::hash<std::string>{}(text);
+        _stage->externalChange = false;
+        _savedRevision = _sceneRevision;
+        _history.MarkSaved();
+        // The asset's cache is refreshed, so the next instantiation sees what was saved; assetsChanged {modified} follows
+        NoteAssetWritten(resolved->resourcePath, true);
+        PushSceneChanged();
+        PushPrefabStageChanged();
+        ServerLog::PublicInfo("Saved prefab " + shown);
+        SendPrefabStageInfo(clientSocket);
+    }
+
+    void EditorServer::ClosePrefabStageNow()
+    {
+        if (_stage == nullptr)
+        {
+            return;
+        }
+        // A group left open on the stage's history goes with it
+        (void)_history.CloseGroups();
+        std::unique_ptr<PrefabStage> stage = std::move(_stage);
+        std::unique_ptr<Scene> stageScene = SceneManager::SwapLoadedScene(std::move(stage->parkedScene));
+        _history = std::move(stage->parkedHistory);
+        _editorCamera = stage->sceneCamera;
+        _autosavePending = stage->parkedAutosavePending;
+        _autosaveProtected = stage->parkedAutosaveProtected;
+        _autosaveWarned = stage->parkedAutosaveWarned;
+        _protectedAutosaveWarned = stage->parkedProtectedAutosaveWarned;
+        _lastAutosave = stage->parkedLastAutosave;
+        // The revision only grows; the scene is as saved as it was when it was parked
+        const bool wasSaved = stage->parkedRevision == stage->parkedSavedRevision;
+        ++_sceneRevision;
+        _savedRevision = wasSaved ? _sceneRevision : stage->parkedSavedRevision;
+        if (stageScene != nullptr)
+        {
+            // Edit mode: nothing is attached, so this only lets the objects go
+            stageScene->Clear();
+            stageScene.reset();
+        }
+        NoteSceneChanged();
+        NoteViewChanged();
+        PushSceneChanged({}, true);
+        PushHistoryChanged();
+        PushPrefabStageChanged();
+    }
+
+    void EditorServer::DiscardPrefabStage(const std::string_view reason)
+    {
+        if (_stage == nullptr)
+        {
+            return;
+        }
+        const std::string path = _stage->path;
+        const bool dirty = _sceneRevision != _savedRevision;
+        ClosePrefabStageNow();
+        ServerLog::Info(std::format("Closed the prefab stage {} without saving{} ({})", path,
+                                    dirty ? ", dropping its unsaved changes" : "", reason));
+    }
+
+    void EditorServer::HandleClosePrefabStage(const int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const ClosePrefabStageCmd cmd = ClosePrefabStageCmd::Deserialize(reader);
+        if (reader.HasData())
+        {
+            SendError(clientSocket, "Malformed payload: trailing bytes");
+            return;
+        }
+        if (_stage == nullptr)
+        {
+            SendError(clientSocket, "No prefab stage is open");
+            return;
+        }
+        if (_sceneRevision != _savedRevision && !cmd.discard)
+        {
+            SendResponse(clientSocket, BuildDenial(ErrorCodeUnsavedChanges,
+                                                   std::format("The prefab '{}' has unsaved changes: save it first, or close "
+                                                               "with discard", SanitizeForLog(_stage->name))));
+            return;
+        }
+        const std::string path = _stage->path;
+        const bool dropped = _sceneRevision != _savedRevision;
+        ClosePrefabStageNow();
+        ServerLog::PublicInfo(std::format("Closed prefab stage {}{}", path, dropped ? " (unsaved changes discarded)" : ""));
+        SendPrefabStageInfo(clientSocket);
+    }
+
+    void EditorServer::HandleGetPrefabStage(const int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        if (!payload.empty())
+        {
+            SendError(clientSocket, "Malformed payload: trailing bytes");
+            return;
+        }
+        SendPrefabStageInfo(clientSocket);
+    }
+
+    void EditorServer::CheckPrefabStageFile()
+    {
+        if (_stage == nullptr || !_project)
+        {
+            return;
+        }
+        bool changed = false;
+        const IO::AssetMetadata *meta = IO::ResourceLoader::Instance().GetMetadata(_stage->prefabUuid);
+        std::filesystem::path file;
+        if (meta != nullptr && meta->resourcePath.GetType() == IO::PathType::Resource)
+        {
+            if (const auto resolved = ResolveAssetPath(_project->root / "assets", meta->resourcePath.ToString()); resolved)
+            {
+                file = resolved->file;
+                // A move keeps the UUID: the stage follows the file
+                if (resolved->resourcePath.ToString() != _stage->path)
+                {
+                    _stage->path = resolved->resourcePath.ToString();
+                    changed = true;
+                }
+            }
+        }
+        std::error_code error;
+        const bool exists = !file.empty() && std::filesystem::is_regular_file(file, error);
+        if (!exists)
+        {
+            if (!_stage->orphaned)
+            {
+                _stage->orphaned = true;
+                changed = true;
+                ServerLog::Warn(std::format("The prefab file of the open prefab stage ({}) was deleted: the stage can't be "
+                                            "saved", _stage->path));
+            }
+        }
+        else
+        {
+            if (_stage->orphaned)
+            {
+                _stage->orphaned = false;
+                changed = true;
+            }
+            if (const auto stamp = FileStamp(file);
+                stamp.has_value() && (stamp->first != _stage->fileSize || stamp->second != _stage->fileHash))
+            {
+                // Not the stage's own write: another program (or a client's other command) changed the file
+                if (!_stage->externalChange)
+                {
+                    _stage->externalChange = true;
+                    changed = true;
+                }
+                _stage->fileSize = stamp->first;
+                _stage->fileHash = stamp->second;
+            }
+        }
+        if (changed)
+        {
+            PushPrefabStageChanged();
+        }
+    }
+
     // ==================== Undo, redo and autosave (#6, E6) ====================
 
-    std::string EditorServer::SnapshotScene(const Scene &scene)
+    std::string EditorServer::SnapshotScene(const Scene &scene) const
     {
+        // A stage shown In Scene holds its root at the anchor: the snapshot has the file's transform, so a restore in
+        // either mode starts from the same data (KeepStageRootPlaced places it again)
+        Positionable *rootPlace = nullptr;
+        std::optional<Transform> placed;
+        if (_stage != nullptr && _stage->rootFileTransform.has_value() && &scene == SceneManager::GetCurScene())
+        {
+            if (const std::shared_ptr<GameObject> root = StageRoot(); root != nullptr && root->GetPositionable() != nullptr)
+            {
+                rootPlace = root->GetPositionable();
+                placed = rootPlace->GetLocalTransform();
+                rootPlace->SetLocalTransform(*_stage->rootFileTransform);
+            }
+        }
         // Without recursion: the scene can nest as deep as its cap
-        return JsonLimits::IterativeDump(scene.Serialize(), -1, ' ', false, nlohmann::json::error_handler_t::replace);
+        std::string text = JsonLimits::IterativeDump(scene.Serialize(), -1, ' ', false, nlohmann::json::error_handler_t::replace);
+        if (rootPlace != nullptr)
+        {
+            rootPlace->SetLocalTransform(*placed);
+        }
+        return text;
     }
 
     EditOutcome EditorServer::RestoreSceneSnapshot(const std::string &snapshot)
@@ -9219,6 +10094,21 @@ namespace N2Engine::Editor
         scene->SetEditMode(true);
         Scene *const restored = scene.get();
         const bool wasOpenScene = current == _openScene;
+
+        if (_stage != nullptr)
+        {
+            // The stage is never a stored scene: it is swapped in place, the old copy let go (edit mode, nothing attached)
+            std::unique_ptr<Scene> replaced = SceneManager::SwapLoadedScene(std::move(scene));
+            if (replaced != nullptr)
+            {
+                replaced->Clear();
+                replaced.reset();
+            }
+            KeepStageRootPlaced();
+            EditEffect stageEffect;
+            stageEffect.full = true;
+            return stageEffect;
+        }
 
         SceneManager::AddScene(std::move(scene), true);
         SceneManager::ProcessAnyPendingSceneChange();
@@ -9330,6 +10220,8 @@ namespace N2Engine::Editor
             return;
         }
 
+        // In Scene: the stage root stays at the anchor (an undone Isolated edit of it changes what the file keeps)
+        KeepStageRootPlaced();
         // A change like any other (the revision only grows), and the scene is saved again when the step led back to
         // the state that was saved
         ++_sceneRevision;
@@ -9484,6 +10376,7 @@ namespace N2Engine::Editor
 
     void EditorServer::PrepareForShutdown()
     {
+        DiscardPrefabStage("the host is shutting down");
         CloseEditGroups();
         DiscardWrittenAutosave();
     }
@@ -9508,6 +10401,11 @@ namespace N2Engine::Editor
         // Nothing is written while an editor extension's call is in progress: its group is not a step yet, and the call
         // ends with the one flush ExecuteCommand makes
         if (!_autosavePending || _playMode || _invocation != nullptr)
+        {
+            return;
+        }
+        // A prefab stage is not the scene: the scene's autosave waits, parked with it, and the stage has none (v1)
+        if (_stage != nullptr)
         {
             return;
         }

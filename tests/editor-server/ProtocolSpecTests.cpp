@@ -90,6 +90,11 @@ namespace
             {"GetPhysicsBackends", CommandType::GetPhysicsBackends},
             {"SetPhysicsBackend", CommandType::SetPhysicsBackend},
             {"MoveAsset", CommandType::MoveAsset},
+            {"OpenPrefabStage", CommandType::OpenPrefabStage},
+            {"SetPrefabStageMode", CommandType::SetPrefabStageMode},
+            {"SavePrefabStage", CommandType::SavePrefabStage},
+            {"ClosePrefabStage", CommandType::ClosePrefabStage},
+            {"GetPrefabStage", CommandType::GetPrefabStage},
             {"GetNetworkSettings", CommandType::GetNetworkSettings},
             {"SetNetworkSettings", CommandType::SetNetworkSettings},
             {"GetNetworkValidation", CommandType::GetNetworkValidation},
@@ -167,6 +172,7 @@ namespace
             {"EntitiesCreated", ResponseType::EntitiesCreated},
             {"PhysicsBackends", ResponseType::PhysicsBackends},
             {"AssetsMoved", ResponseType::AssetsMoved},
+            {"PrefabStageInfo", ResponseType::PrefabStageInfo},
             {"NetworkSettings", ResponseType::NetworkSettings},
             {"NetworkValidation", ResponseType::NetworkValidation},
             {"AssetPreview",ResponseType::AssetPreview},
@@ -233,6 +239,9 @@ namespace
             {"UnpackPrefab", [](BufferReader &r) { (void)UnpackPrefabCmd::Deserialize(r); }},
             {"SetPhysicsBackend", [](BufferReader &r) { (void)SetPhysicsBackendCmd::Deserialize(r); }},
             {"MoveAsset", [](BufferReader &r) { (void)MoveAssetCmd::Deserialize(r); }},
+            {"OpenPrefabStage", [](BufferReader &r) { (void)OpenPrefabStageCmd::Deserialize(r); }},
+            {"SetPrefabStageMode", [](BufferReader &r) { (void)SetPrefabStageModeCmd::Deserialize(r); }},
+            {"ClosePrefabStage", [](BufferReader &r) { (void)ClosePrefabStageCmd::Deserialize(r); }},
             {"SetNetworkSettings", [](BufferReader &r) { (void)SetNetworkSettingsCmd::Deserialize(r); }},
             {"GetNetworkValidation", [](BufferReader &r) { (void)GetNetworkValidationCmd::Deserialize(r); }},
             {"GetEntity", [](BufferReader &r) { (void)GetEntityCmd::Deserialize(r); }},
@@ -661,6 +670,9 @@ TEST(ProtocolSpecTest, EveryCommandIsClassifiedForAPlayHost)
         {"SetPhysicsBackend", true},
         // 1.24.0: MoveAsset moves files under assets/ and .import/
         {"MoveAsset", true},
+        // 1.26.0: the prefab stage swaps the loaded scene and writes a .prefab file; a play host plays a snapshot
+        {"OpenPrefabStage", true}, {"SetPrefabStageMode", true}, {"SavePrefabStage", true},
+        {"ClosePrefabStage", true}, {"GetPrefabStage", true},
         // B11: SetNetworkSettings saves project.n2proj (the two Get commands only read, below)
         {"SetNetworkSettings", true},
         // Allowed: they read, or change only the running game, the in-memory scene store or the connection

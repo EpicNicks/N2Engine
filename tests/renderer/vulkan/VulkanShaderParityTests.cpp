@@ -554,6 +554,14 @@ namespace
                 return true;
             }
         }
+        // uStageDim (the prefab stage's RenderState::dim) is a loose uniform in GL and a per-draw block member here
+        for (const Vk::Uniform& uniform : Vk::kPerDraw)
+        {
+            if (uniform.name == name && uniform.block == Vk::Block::PerDraw && uniform.name == "uStageDim")
+            {
+                return true;
+            }
+        }
         return false;
     }
 

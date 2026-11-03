@@ -9,10 +9,13 @@ layout(set = 0, binding = 0, std140, row_major) uniform PerDraw {
     mat4 uModel;
     mat4 uView;
     mat4 uProjection;
+    // RenderState::dim (the prefab stage's dimmed scene), passed on to the fragment stage
+    float uStageDim;
 };
 
 layout(location = 0) out vec2 fragTexCoord;
 layout(location = 1) out vec4 fragColor;
+layout(location = 2) out float fragStageDim;
 
 void main() {
     gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
@@ -20,4 +23,5 @@ void main() {
     gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;
     fragTexCoord = aTexCoord;
     fragColor = aColor;
+    fragStageDim = uStageDim;
 }

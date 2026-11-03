@@ -253,6 +253,13 @@ namespace ProtocolVectors
             {"UnpackPrefab", [](BufferReader &r) { return json{{"entityId", UnpackPrefabCmd::Deserialize(r).entityId}}; }},
             {"SetPhysicsBackend", [](BufferReader &r) { return json{{"backend", SetPhysicsBackendCmd::Deserialize(r).backend}}; }},
             {"MoveAsset", [](BufferReader &r) { return json{{"moves", MoveAssetCmd::Deserialize(r).moves}}; }},
+            {"OpenPrefabStage", [](BufferReader &r)
+            {
+                const auto cmd = OpenPrefabStageCmd::Deserialize(r);
+                return json{{"uuidOrPath", cmd.uuidOrPath}, {"mode", cmd.mode}, {"anchorEntityId", cmd.anchorEntityId}};
+            }},
+            {"SetPrefabStageMode", [](BufferReader &r) { return json{{"mode", SetPrefabStageModeCmd::Deserialize(r).mode}}; }},
+            {"ClosePrefabStage", [](BufferReader &r) { return json{{"discard", ClosePrefabStageCmd::Deserialize(r).discard}}; }},
             {"SetNetworkSettings", [](BufferReader &r)
             {
                 const auto cmd = SetNetworkSettingsCmd::Deserialize(r);
@@ -383,6 +390,7 @@ namespace ProtocolVectors
             {"EntitiesCreated", [](BufferWriter &w, const json &f) { WriteEntitiesCreated(w, f.at("ids")); }},
             {"PhysicsBackends", [](BufferWriter &w, const json &f) { WritePhysicsBackends(w, f.at("info")); }},
             {"AssetsMoved", [](BufferWriter &w, const json &f) { WriteAssetsMoved(w, f.at("result")); }},
+            {"PrefabStageInfo", [](BufferWriter &w, const json &f) { WritePrefabStageInfo(w, f.at("info")); }},
             {"NetworkSettings", [](BufferWriter &w, const json &f) { WriteNetworkSettings(w, f.at("info")); }},
             {"NetworkValidation", [](BufferWriter &w, const json &f) { WriteNetworkValidation(w, f.at("report")); }},
             {"AssetPreview",[](BufferWriter &w,const json &f){const auto pixels=FromHex(StringField(f,"pixels"));WriteAssetPreview(w,f.at("info"),pixels);}},

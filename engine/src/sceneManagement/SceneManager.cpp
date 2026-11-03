@@ -295,6 +295,12 @@ void SceneManager::UpdateScene(const std::string &sceneName, nlohmann::json &new
     UpdateScene(GetSceneIndex(sceneName), newSceneData);
 }
 
+std::unique_ptr<Scene> SceneManager::SwapLoadedScene(std::unique_ptr<Scene> scene)
+{
+    // Nothing else changes: the stored scenes, the current index (the parked scene's entry) and a pending load
+    return std::exchange(GetInstance()._loadedScene, std::move(scene));
+}
+
 void SceneManager::ProcessAnyPendingSceneChange()
 {
     SceneManager &instance = GetInstance();

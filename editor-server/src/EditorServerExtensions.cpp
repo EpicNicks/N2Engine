@@ -127,6 +127,13 @@ namespace N2Engine::Editor
             {CommandType::InstantiatePrefab, false},
             {CommandType::ApplyPrefab, false},
             {CommandType::UnpackPrefab, false},
+            // The prefab stage (1.26.0): it swaps the scene the user edits, which is the user's to do (and an extension's
+            // writes are refused while a stage is open)
+            {CommandType::OpenPrefabStage, false},
+            {CommandType::SetPrefabStageMode, false},
+            {CommandType::SavePrefabStage, false},
+            {CommandType::ClosePrefabStage, false},
+            {CommandType::GetPrefabStage, false},
             // The physics backend picker (J9): a project setting, which Editor.Scene and Editor.Assets do not reach
             {CommandType::GetPhysicsBackends, false},
             {CommandType::SetPhysicsBackend, false},

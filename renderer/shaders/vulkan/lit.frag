@@ -85,8 +85,14 @@ layout(location = 1) in vec3 fragWorldPos;
 layout(location = 2) in vec2 fragTexCoord;
 layout(location = 3) in vec4 fragColor;
 layout(location = 4) in vec4 fragTangent;
+layout(location = 5) in float fragStageDim;
 
 layout(location = 0) out vec4 FragColor;
+
+// RenderState::dim (RenderState::StageDimmed): the colour mixed towards a darkened grey of its own luminance
+vec3 stageDimmed(vec3 rgb) {
+    return mix(rgb, vec3(dot(rgb, vec3(0.299, 0.587, 0.114)) * 0.45), fragStageDim);
+}
 
 // ---- PBR (the software renderer's LightingMath.hpp, line for line) ----
 const float PI = 3.14159265358979323846;
@@ -328,5 +334,5 @@ void main() {
     if (uEncodeOutput != 0) {
         color = linearToSrgb(color);
     }
-    FragColor = vec4(color, albedo.a);
+    FragColor = vec4(stageDimmed(color), albedo.a);
 }

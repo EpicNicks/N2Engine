@@ -90,7 +90,7 @@ std::unique_ptr<Scene> Scene::Create(const std::string &name)
     return std::unique_ptr<Scene>(new Scene{name});
 }
 
-void Scene::Render(Renderer::Common::IRenderer *renderer, const Camera &camera)
+void Scene::Render(Renderer::Common::IRenderer *renderer, const Camera &camera, const GameObject *hidden)
 {
     if (!renderer)
     {
@@ -104,7 +104,7 @@ void Scene::Render(Renderer::Common::IRenderer *renderer, const Camera &camera)
     std::vector<IRenderable *> renderables;
     for (const auto &rootObject : _rootGameObjects)
     {
-        CollectRenderablesRecursive(rootObject, renderables);
+        CollectRenderablesRecursive(rootObject, renderables, hidden);
     }
 
     struct TransparentEntry
@@ -166,9 +166,10 @@ void Scene::Render(Renderer::Common::IRenderer *renderer, const Camera &camera)
     }
 }
 
-void Scene::CollectRenderablesRecursive(const std::shared_ptr<GameObject> &gameObject, std::vector<IRenderable *> &out)
+void Scene::CollectRenderablesRecursive(const std::shared_ptr<GameObject> &gameObject, std::vector<IRenderable *> &out,
+                                        const GameObject *hidden)
 {
-    if (gameObject == nullptr || !gameObject->IsActiveInHierarchy())
+    if (gameObject == nullptr || !gameObject->IsActiveInHierarchy() || gameObject.get() == hidden)
     {
         return;
     }
@@ -184,7 +185,7 @@ void Scene::CollectRenderablesRecursive(const std::shared_ptr<GameObject> &gameO
 
     for (const auto &child : gameObject->GetChildren())
     {
-        CollectRenderablesRecursive(child, out);
+        CollectRenderablesRecursive(child, out, hidden);
     }
 }
 

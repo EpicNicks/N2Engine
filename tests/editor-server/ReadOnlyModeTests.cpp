@@ -64,6 +64,9 @@ namespace
             {"GetPhysicsBackends", Class::Read}, {"SetPhysicsBackend", Class::Write},
             // Moving assets (since 1.24.0): files and .meta files move
             {"MoveAsset", Class::Write},
+            // The prefab stage (since 1.26.0): the four that swap the scene, switch it or write the file, and the read
+            {"OpenPrefabStage", Class::Write}, {"SetPrefabStageMode", Class::Write}, {"SavePrefabStage", Class::Write},
+            {"ClosePrefabStage", Class::Write}, {"GetPrefabStage", Class::Read},
             // The Network panel (since 1.21.0): the two reads, and the change that saves the project file
             {"GetNetworkSettings", Class::Read}, {"GetNetworkValidation", Class::Read},
             {"SetNetworkSettings", Class::Write},
@@ -225,7 +228,8 @@ TEST(CommandClassificationTest, NothingThatChangesStateOrRunsCodeIsARead)
 {
     for (const char *name : {"SendInput", "WritePlaySnapshot", "SetPaused", "Step", "Shutdown", "RescanAssets", "Undo",
                              "Redo", "SaveScene", "SaveSceneToFile", "SetImportSettings", "WriteTextAsset",
-                             "CreateScriptAsset", "CreateFolder", "MoveAsset", "LoadScene", "OpenScene", "NewScene",
+                             "CreateScriptAsset", "CreateFolder", "MoveAsset", "OpenPrefabStage", "SetPrefabStageMode",
+                             "SavePrefabStage", "ClosePrefabStage", "LoadScene", "OpenScene", "NewScene",
                              "DeleteScene",
                              "SetProjectSettings", "SetStartupScene", "RestoreAutosave", "DiscardAutosave",
                              "SetCameraPosition", "CreateScript", "BeginEditGroup", "EndEditGroup"})

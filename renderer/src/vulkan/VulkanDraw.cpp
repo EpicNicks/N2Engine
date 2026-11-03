@@ -1134,7 +1134,7 @@ void VulkanRenderer::DrawLocked(IMesh* mesh, const float* modelMatrix, IMaterial
     const uint32_t slot = _currentFrame;
     FrameDrawState& frame = draw.frames[slot];
     const bool lit = blockMaterial.kind == BuiltInShader::Lit;
-    const VkDeviceSize perDrawBytes = AlignUp(kPerDrawBlockSize, draw.uniformAlignment);
+    const VkDeviceSize perDrawBytes = AlignUp(kPerDrawBindingSize, draw.uniformAlignment);
     const VkDeviceSize materialBytes = AlignUp(kMaterialBlockRange, draw.uniformAlignment);
     const VkDeviceSize lightingBytes = AlignUp(kLightingBlockSize, draw.uniformAlignment);
     std::size_t chunkIndex = 0;
@@ -1163,6 +1163,11 @@ void VulkanRenderer::DrawLocked(IMesh* mesh, const float* modelMatrix, IMaterial
     std::memcpy(perDraw, modelMatrix, 64);
     std::memcpy(perDraw + 64, draw.view, 64);
     std::memcpy(perDraw + 128, draw.projection, 64);
+    // The prefab stage's dim, as this draw carries it (RenderState::dim raised to SetStageDim's value), then the block's
+    // padding up to its 16-byte alignment
+    const float stageDim = WithStageDim(state).dim;
+    std::memcpy(perDraw + 192, &stageDim, sizeof(float));
+    std::memset(perDraw + 196, 0, kPerDrawBindingSize - 196);
     std::memcpy(chunk.mapped + offset + perDrawBytes, snapshot.block.data(), snapshot.block.size());
     if (copyLighting)
     {
@@ -1180,7 +1185,7 @@ void VulkanRenderer::DrawLocked(IMesh* mesh, const float* modelMatrix, IMaterial
         {
             return;
         }
-        VkDescriptorBufferInfo perDrawInfo{chunk.buffer, 0, kPerDrawBlockSize};
+        VkDescriptorBufferInfo perDrawInfo{chunk.buffer, 0, kPerDrawBindingSize};
         VkDescriptorBufferInfo lightingInfo{chunk.buffer, 0, kLightingBlockSize}; // the range at the draw's dynamic offset
         std::array<VkWriteDescriptorSet, 2> writes{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;

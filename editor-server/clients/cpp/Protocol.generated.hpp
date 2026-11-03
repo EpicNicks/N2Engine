@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.24.0";
+inline constexpr const char *ProtocolVersion = "1.26.0";
 
 enum class CommandType : uint8_t
 {
@@ -101,6 +101,11 @@ enum class CommandType : uint8_t
     SetNetworkSettings = 0x52,
     GetNetworkValidation = 0x53,
     MoveAsset = 0xAF,
+    OpenPrefabStage = 0x2A,
+    SetPrefabStageMode = 0x2B,
+    SavePrefabStage = 0x2C,
+    ClosePrefabStage = 0x2D,
+    GetPrefabStage = 0x2E,
 };
 
 enum class ResponseType : uint8_t
@@ -151,6 +156,7 @@ enum class ResponseType : uint8_t
     NetworkSettings = 0x24,
     NetworkValidation = 0x25,
     AssetsMoved = 0xA5,
+    PrefabStageInfo = 0x26,
 };
 
 // Custom types
@@ -538,6 +544,23 @@ struct MoveAssetCmd
     std::string moves; // JSON: AssetMove[]
 };
 
+struct OpenPrefabStageCmd
+{
+    std::string uuidOrPath;
+    std::string mode;
+    std::string anchorEntityId;
+};
+
+struct SetPrefabStageModeCmd
+{
+    std::string mode;
+};
+
+struct ClosePrefabStageCmd
+{
+    bool discard;
+};
+
 // Response structures
 struct FrameDataData
 {
@@ -813,6 +836,11 @@ struct NetworkValidationData
 struct AssetsMovedData
 {
     std::string result; // JSON: AssetsMovedResult
+};
+
+struct PrefabStageInfoData
+{
+    std::string info; // JSON: PrefabStageInfo
 };
 
 struct ErrorCodedData

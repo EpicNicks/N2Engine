@@ -16,6 +16,8 @@ namespace Renderer::OpenGL
         GLint projectionLoc = -1;
         GLint textureLoc = -1;
         GLint colorLoc = -1;
+        /// uStageDim (RenderState::dim), declared by the built-in fragment shaders
+        GLint stageDimLoc = -1;
     };
 
     class OpenGLShader : public Common::IShader

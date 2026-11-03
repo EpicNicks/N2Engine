@@ -162,6 +162,8 @@ namespace Renderer::Software
         /// Snapshotted per draw, like material and view state; clipping creates polygon edges, never fan diagonals.
         void SetWireframe(bool enabled) override;
         const char* GetRendererName() const override { return "Software Rasterizer"; }
+        /// Every pixel a draw writes is dimmed by its RenderState::dim (the CPU reference of the GPU shaders)
+        [[nodiscard]] bool SupportsStageDim() const override { return true; }
 
     private:
         struct DrawCommand {
