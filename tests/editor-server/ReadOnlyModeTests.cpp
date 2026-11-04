@@ -422,7 +422,8 @@ TEST(ErrorCodedTest, TheCodesAreTheSpecsStableWords)
                                             std::string{ErrorCodeExtensionFailed},
                                             std::string{ErrorCodeExtensionFaulted},
                                             std::string{ErrorCodeStaleUiRevision},
-                                            std::string{ErrorCodeEditGroupOpen}}));
+                                            std::string{ErrorCodeEditGroupOpen}, std::string{ErrorCodeStageOpen},
+                                            std::string{ErrorCodeUnsavedChanges}, std::string{ErrorCodePrefabCycle}}));
     EXPECT_EQ(std::string{ErrorCodeReadOnly}, "readOnly");
     EXPECT_EQ(std::string{ErrorCodeForbidden}, "forbidden");
     EXPECT_EQ(std::string{ErrorCodeBusy}, "busy");

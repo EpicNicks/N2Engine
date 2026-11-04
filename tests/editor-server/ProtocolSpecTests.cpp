@@ -672,7 +672,7 @@ TEST(ProtocolSpecTest, EveryCommandIsClassifiedForAPlayHost)
         {"MoveAsset", true},
         // 1.26.0: the prefab stage swaps the loaded scene and writes a .prefab file; a play host plays a snapshot
         {"OpenPrefabStage", true}, {"SetPrefabStageMode", true}, {"SavePrefabStage", true},
-        {"ClosePrefabStage", true}, {"GetPrefabStage", true},
+        {"ClosePrefabStage", true}, {"GetPrefabStage", false},
         // B11: SetNetworkSettings saves project.n2proj (the two Get commands only read, below)
         {"SetNetworkSettings", true},
         // Allowed: they read, or change only the running game, the in-memory scene store or the connection

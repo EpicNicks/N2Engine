@@ -6104,12 +6104,12 @@ namespace N2Engine::Editor
         case CommandType::SetPhysicsBackend:
         // B11's: it saves project.n2proj too (GetNetworkSettings and GetNetworkValidation only read)
         case CommandType::SetNetworkSettings:
-        // 1.26.0's: the prefab stage swaps the loaded scene and writes a .prefab file (a play host plays a snapshot)
+        // 1.26.0's: the prefab stage swaps the loaded scene and writes a .prefab file (a play host plays a snapshot; it
+        // answers GetPrefabStage, a read, with {open: false})
         case CommandType::OpenPrefabStage:
         case CommandType::SetPrefabStageMode:
         case CommandType::SavePrefabStage:
         case CommandType::ClosePrefabStage:
-        case CommandType::GetPrefabStage:
         // Reloading runs the project's extension files again, and invoking runs one's code, which a play host (it plays a
         // snapshot, and runs no extension) never does
         case CommandType::ReloadEditorExtensions:
