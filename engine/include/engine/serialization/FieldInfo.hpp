@@ -53,7 +53,11 @@ namespace N2Engine
         /// An array of those
         ComponentRefList,
         /// Anything else the member's own to_json writes: shown as a JSON editor, validated by its from_json
-        Json
+        Json,
+        /// A prefab asset: its UUID as a plain string (also inside a container: never {"$ref": ...}), or "" / null for
+        /// none. A Lua script's `type = "Prefab"` field (editor protocol 1.25.0). Last, so the kinds before it keep
+        /// their numbers.
+        PrefabRef
     };
 
     /// The kind's name as it is on the wire ("Bool", "Vector3", "AssetRefList", ...)
@@ -102,6 +106,9 @@ namespace N2Engine
         /// AssetRef and AssetRefList: the resource type the asset must have ("Font", "Texture", ...); empty when the
         /// asset type doesn't say
         std::string assetType;
+        /// PrefabRef, as GetLuaFields reports it: the res:// path of the prefab the component's current value names,
+        /// for display (the UUID stays the value); empty for none or a UUID no indexed asset has
+        std::string assetPath;
         /// Int and Float: a value set through the editor is clamped to it
         std::optional<std::pair<double, double>> range;
         /// What the member's C++ type can hold (Int and Float; for the axes of a vector or colour, a float's): a

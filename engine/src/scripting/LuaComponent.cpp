@@ -1,4 +1,5 @@
 #include "engine/scripting/LuaComponent.hpp"
+#include "engine/scripting/LuaPrefab.hpp"
 #include "engine/scripting/LuaFieldDeclaration.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/scripting/LuaScript.hpp"
@@ -1079,7 +1080,8 @@ namespace N2Engine::Scripting
                 continue;
             std::string fieldName = key.as<std::string>();
 
-            if (!_scriptData.contains(fieldName))
+            // A Prefab field has no default (nil until one is chosen): `default` is ignored
+            if (!_scriptData.contains(fieldName) && !IsPrefabDeclaration(value))
             {
                 // Either { default = 5, ... } or the shorthand `speed = 5`. Casting the shorthand to a
                 // table used to abort the process (sol has no safety checks enabled here).
@@ -1113,6 +1115,32 @@ namespace N2Engine::Scripting
         });
     }
 
+    bool LuaComponent::IsPrefabDeclaration(const sol::object &definition)
+    {
+        // Only a definition table can say `type = "Prefab"` (the shorthand `speed = 5` has no type)
+        return definition.get_type() == sol::type::table &&
+               definition.as<sol::table>().get_or<std::string>("type", "") == PrefabFieldType;
+    }
+
+    void LuaComponent::InjectPrefabField(const std::string &key, const nlohmann::json &value)
+    {
+        // The asset's UUID as a plain string, never a "$ref" and never through a ReferenceResolver: the handle holds the
+        // UUID only and loads nothing until Instantiate. Empty (or anything else) is nil.
+        if (value.is_string() && !value.get_ref<const std::string &>().empty())
+        {
+            const std::string &text = value.get_ref<const std::string &>();
+            if (const auto uuid = text.size() == 36 ? Math::UUID::FromString(text) : std::nullopt)
+            {
+                _scriptInstance[key] = PrefabHandle(*uuid);
+                return;
+            }
+            // Kept as written (a hand edit is not lost), read as nil
+            Logger::Warn(std::format("Field '{}' of {}: '{}' is not a prefab UUID; the field reads as nil", key,
+                                     _scriptPath.ToString(), text.substr(0, 64)));
+        }
+        _scriptInstance[key] = sol::lua_nil;
+    }
+
     void LuaComponent::InjectFieldsIntoScript()
     {
         if (!_scriptInstance.valid())
@@ -1120,9 +1148,12 @@ namespace N2Engine::Scripting
 
         GuardedAccess([&]
         {
+        const sol::optional<sol::table> fieldsTable = _scriptInstance["SerializableFields"];
         for (auto &[key, value] : _scriptData.items())
         {
-            if (value.is_number_float())
+            if (fieldsTable && IsPrefabDeclaration(fieldsTable->get<sol::object>(key)))
+                InjectPrefabField(key, value);
+            else if (value.is_number_float())
                 _scriptInstance[key] = value.get<float>();
             else if (value.is_number_integer())
                 _scriptInstance[key] = value.get<std::int64_t>();
@@ -1755,6 +1786,11 @@ namespace N2Engine::Scripting
                 {
                     return candidate.container == "scriptData" && candidate.name == fieldName;
                 });
+                if (field != fields.end() && field->kind == FieldKind::PrefabRef && fieldValue.is_null())
+                {
+                    _scriptData[fieldName] = ""; // none, saved one way
+                    continue;
+                }
                 _scriptData[fieldName] = field != fields.end() ? ClampFieldValue(*field, fieldValue)
                                                                : JsonLimits::IterativeCopy(fieldValue);
             }
@@ -1777,7 +1813,10 @@ namespace N2Engine::Scripting
 
         GuardedAccess([&]
         {
-            if (value.is_number_float())
+            const sol::optional<sol::table> fieldsTable = _scriptInstance["SerializableFields"];
+            if (fieldsTable && IsPrefabDeclaration(fieldsTable->get<sol::object>(key)))
+                InjectPrefabField(key, value);
+            else if (value.is_number_float())
                 _scriptInstance[key] = value.get<float>();
             else if (value.is_number_integer())
                 _scriptInstance[key] = value.get<std::int64_t>();

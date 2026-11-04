@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 
 #include "engine/serialization/FieldInfo.hpp"
 
@@ -17,6 +18,10 @@ namespace N2Engine::Scripting
         String,
         Vector3
     };
+
+    /// The `type` of a SerializableFields entry that holds a prefab asset (`enemy = { type = "Prefab" }`): stored in
+    /// scriptData as the prefab's UUID string, injected as a Prefab handle (LuaPrefab.hpp), never with a default
+    inline constexpr std::string_view PrefabFieldType = "Prefab";
 
     /// True for a type name a script can declare for a component reference: a component type scripts can add by name
     /// (Rigidbody, BoxCollider, ...), or a name ending in "Component"

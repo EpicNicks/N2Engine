@@ -216,7 +216,7 @@ node dist/n2-mcp.mjs --connect &lt;host:port&gt; --fingerprint &lt;sha256&gt; (-
 <tr><td><code>n2_set_properties</code></td><td>Name (this is the rename), active flag, tag, layer.</td></tr>
 <tr><td><code>n2_add_component</code></td><td>Adds a component of a type from <code>n2_get_component_types</code>, optionally with field values.</td></tr>
 <tr><td><code>n2_remove_component</code></td><td>Removes a component by its UUID.</td></tr>
-<tr><td><code>n2_set_component_fields</code></td><td>Sets fields of a component, all or nothing; the host's clamped values are echoed.</td></tr>
+<tr><td><code>n2_set_component_fields</code></td><td>Sets fields of a component, all or nothing; the host's clamped values are echoed. A Lua script's <code>type = "Prefab"</code> field (protocol 1.25.0) takes a prefab asset's UUID as a plain string, or <code>""</code> or <code>null</code> to clear it; the host refuses any other asset (<a href="editor.html#prefab-fields">Prefab fields</a>).</td></tr>
 <tr><td><code>n2_duplicate_entity</code></td><td>A copy with children and components, next to the original.</td></tr>
 <tr><td><code>n2_apply_batch</code></td><td>Up to 500 ops of the kinds above as one undo step, all or nothing; ops can refer to an earlier op's result.</td></tr>
 <tr><td><code>n2_undo</code>, <code>n2_redo</code></td><td>Move the agent's own steps only (at most 20 per call); they refuse and change nothing if a person edited after the agent or the history was cleared.</td></tr>

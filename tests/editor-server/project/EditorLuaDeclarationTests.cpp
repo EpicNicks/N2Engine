@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -629,4 +630,81 @@ TEST_F(EditorLuaDeclarationTest, ASceneOfManyStallingScriptsAnswersWithinOneComm
     EXPECT_EQ(Cache().Peek(IO::ResourcePath("res://scripts/Stall3.lua"),
                            "local C = {} C.__index = C C.SerializableFields = { n = 3 } return C\n"),
               nullptr);
+}
+
+// ==================== Prefab fields (editor protocol 1.25.0) ====================
+
+TEST_F(EditorLuaDeclarationTest, APrefabFieldTakesOnlyAPrefabAssetAndReportsItsPath)
+{
+    WriteAsset("scripts/Spawner.lua", R"LUA(
+        local S = {}
+        S.__index = S
+        S.SerializableFields = { enemy = { type = "Prefab", default = "res://prefabs/enemy.prefab" }, count = 3 }
+        return S
+    )LUA");
+    WriteAsset("prefabs/enemy.prefab", R"({"name":"Enemy","rootObject":{"name":"Enemy"}})");
+    Rescan();
+    ASSERT_EQ(OpenScene("res://scenes/Main.scene").type, SceneInfoType);
+    const Scripted scripted = ScriptedObject("res://scripts/Spawner.lua");
+
+    EXPECT_EQ(LuaFieldNames(scripted.entity, scripted.component),
+              (std::vector<std::string>{"scriptUUID:AssetRef", "count:Int", "enemy:PrefabRef"}));
+    // No default: nothing is stored until one is chosen
+    EXPECT_EQ(GetComponent(scripted.entity, scripted.component).at("scriptData"), (json{{"count", 3}}));
+
+    const auto enemyField = [&]() -> json
+    {
+        const Frame frame = Execute(server, CommandType::GetLuaFields, Strings({scripted.entity, scripted.component}));
+        EXPECT_EQ(frame.type, LuaFieldsType) << frame.Text();
+        if (frame.type != LuaFieldsType)
+            return json::object();
+        BufferReader r(frame.payload);
+        const json schema = ReadJson(r);
+        for (const json &field : schema.at("fields"))
+        {
+            if (field.at("name") == "enemy")
+                return field;
+        }
+        return json::object();
+    };
+    EXPECT_EQ(enemyField().value("typeName", ""), "Prefab");
+    EXPECT_EQ(enemyField().value("assetType", ""), "Prefab");
+    EXPECT_FALSE(enemyField().contains("assetPath")) << "no value yet";
+
+    const std::string prefabId = ScriptId("res://prefabs/enemy.prefab");
+    const Frame accepted = SetFields(scripted.entity, scripted.component, json{{"scriptData", {{"enemy", prefabId}}}});
+    ASSERT_EQ(accepted.type, ComponentDataType) << accepted.Text();
+    EXPECT_EQ(GetComponent(scripted.entity, scripted.component).at("scriptData").at("enemy"), prefabId)
+        << "a plain UUID string, not a $ref";
+    EXPECT_EQ(enemyField().value("assetPath", ""), "res://prefabs/enemy.prefab");
+
+    // Refused, and nothing changes: another asset type, an unknown UUID, a path, the $ref form
+    const std::string scriptId = ScriptId("res://scripts/Spawner.lua");
+    const Frame wrongType = SetFields(scripted.entity, scripted.component, json{{"scriptData", {{"enemy", scriptId}}}});
+    EXPECT_EQ(wrongType.type, ErrorType);
+    EXPECT_NE(wrongType.Text().find("expects Prefab"), std::string::npos) << wrongType.Text();
+    const Frame unknown = SetFields(scripted.entity, scripted.component,
+                                    json{{"scriptData", {{"enemy", "123e4567-e89b-12d3-a456-4266141740ff"}}}});
+    EXPECT_EQ(unknown.type, ErrorType);
+    EXPECT_NE(unknown.Text().find("no Prefab asset"), std::string::npos) << unknown.Text();
+    EXPECT_EQ(SetFields(scripted.entity, scripted.component,
+                        json{{"scriptData", {{"enemy", "res://prefabs/enemy.prefab"}}}}).type,
+              ErrorType);
+    EXPECT_EQ(SetFields(scripted.entity, scripted.component,
+                        json{{"scriptData", {{"enemy", {{"$ref", prefabId}}}}}}).type,
+              ErrorType);
+    EXPECT_EQ(GetComponent(scripted.entity, scripted.component).at("scriptData").at("enemy"), prefabId);
+
+    // null clears it, saved as ""
+    ASSERT_EQ(SetFields(scripted.entity, scripted.component, json{{"scriptData", {{"enemy", nullptr}}}}).type,
+              ComponentDataType);
+    EXPECT_EQ(GetComponent(scripted.entity, scripted.component).at("scriptData").at("enemy"), "");
+    EXPECT_FALSE(enemyField().contains("assetPath"));
+    ExpectHostIntactAndNothingRan("after editing the prefab field");
+}
+
+TEST_F(EditorLuaDeclarationTest, HelloAdvertisesPrefabFields)
+{
+    const auto capabilities = EditorServer::Capabilities();
+    EXPECT_NE(std::find(capabilities.begin(), capabilities.end(), "prefabFields"), capabilities.end());
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <unordered_map>
 #include <functional>
 #include <vector>
@@ -26,6 +27,8 @@ namespace N2Engine
         std::unordered_map<Math::UUID, Component*, UUIDHash> _componentsByUUID;
         std::vector<ResolveFunc> _pendingReferences;
         const ReferenceResolver *_fallback = nullptr;
+        /// Lookups that found nothing (see GetMissCount); counted by the const Find* calls
+        mutable std::size_t _misses = 0;
 
     public:
         ReferenceResolver() = default;
@@ -58,7 +61,9 @@ namespace N2Engine
             {
                 return it->second;
             }
-            return _fallback != nullptr ? _fallback->FindGameObject(uuid) : nullptr;
+            GameObject *found = _fallback != nullptr ? _fallback->FindGameObject(uuid) : nullptr;
+            _misses += found == nullptr ? 1 : 0;
+            return found;
         }
 
         [[nodiscard]] Component* FindComponent(const Math::UUID &uuid) const
@@ -68,8 +73,14 @@ namespace N2Engine
             {
                 return it->second;
             }
-            return _fallback != nullptr ? _fallback->FindComponent(uuid) : nullptr;
+            Component *found = _fallback != nullptr ? _fallback->FindComponent(uuid) : nullptr;
+            _misses += found == nullptr ? 1 : 0;
+            return found;
         }
+
+        /// How many FindGameObject and FindComponent calls found nothing (here or in the fallback): references that
+        /// resolved to null. PrefabManager reports them, so a script that spawns a prefab learns of cleared references.
+        [[nodiscard]] std::size_t GetMissCount() const { return _misses; }
 
         void AddPendingReference(const ResolveFunc& resolver)
         {
@@ -90,6 +101,7 @@ namespace N2Engine
             _gameObjectsByUUID.clear();
             _componentsByUUID.clear();
             _pendingReferences.clear();
+            _misses = 0;
         }
 
         [[nodiscard]] size_t GetGameObjectCount() const { return _gameObjectsByUUID.size(); }

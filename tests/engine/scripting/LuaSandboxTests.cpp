@@ -342,7 +342,7 @@ TEST_F(LuaSandboxTest, NothingOfTheEngineOrTheHostIsInEitherProfile)
         SCOPED_TRACE(ProfileName(profile));
         auto sandbox = Make(profile);
         for (const char *name : {"io", "os", "debug", "package", "require", "coroutine", "Editor", "Application",
-                                 "GameObject", "Debug", "Input", "Vector3", "Quaternion", "Time", "Scene",
+                                 "GameObject", "Debug", "Input", "Vector3", "Quaternion", "Time", "Scene", "Model", "Prefab",
                                  "__n2_is_budget_error"})
         {
             EXPECT_EQ(Value(*sandbox, std::string("rawget(_G, '") + name + "')"), "nil") << name;
