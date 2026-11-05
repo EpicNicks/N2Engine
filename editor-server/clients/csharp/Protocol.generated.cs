@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.24.0";
+        public const string ProtocolVersion = "1.25.0";
     }
 
     public enum CommandType : byte
@@ -486,6 +486,8 @@ namespace N2Engine.Editor.Protocol
         public string[]? EnumOptions { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("assetType")]
         public string? AssetType { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("assetPath")]
+        public string? AssetPath { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("min")]
         public double? Min { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("max")]

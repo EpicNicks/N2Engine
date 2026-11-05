@@ -715,6 +715,12 @@ end
                                 std::format("its default is a string longer than {} bytes", limits.maxStringBytes);
                         }
                         lua_pop(L, 1); // "a"
+                        if (field.declaredType == PrefabFieldType)
+                        {
+                            // A prefab field has no default (a path would bake a path into the data): nil until set
+                            field.defaultKind = LuaDefaultKind::Other;
+                            field.defaultValue = nullptr;
+                        }
                         result.fields.push_back(std::move(field));
                     }
                     lua_settop(L, list);

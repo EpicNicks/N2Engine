@@ -1,6 +1,7 @@
 #include "engine/scripting/LuaRuntime.hpp"
 #include "LuaGuard.hpp"
 #include "engine/scripting/LuaDeterministic.hpp"
+#include "engine/scripting/LuaPrefab.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -608,6 +609,7 @@ namespace N2Engine::Scripting
         Bindings::BindWindow(*this);
         Bindings::BindCamera(*this);
         Bindings::BindComponents(*this);
+        Bindings::BindPrefab(*this);
         Bindings::BindUI(*this);
 
         SetupModuleSystem();
