@@ -788,6 +788,10 @@ function GameObject:RemoveChild(child) end
 ---@return GameObject|nil
 function GameObject:GetParent() end
 
+---The prefab this object is an instance of (set by Prefab.Instantiate and by the editor's Instantiate), nil for none
+---@return Prefab|nil
+function GameObject:GetPrefab() end
+
 ---Find a child by name
 ---@param name string
 ---@return GameObject|nil
@@ -1221,6 +1225,35 @@ Model = {}
 ---@param parent GameObject|nil
 ---@return GameObject root
 function Model.Instantiate(path, parent) end
+
+---A prefab asset (.prefab): what a `{ type = "Prefab" }` field of SerializableFields holds (nil until one is chosen; it
+---has no default). It holds the asset's UUID only and loads nothing until Instantiate. Equal handles name the same
+---UUID. See docs/scripting-lua.html#prefabs
+---@class Prefab
+---@field valid boolean The asset is indexed and is a prefab
+---@field uuid string The asset's UUID (stable: a moved prefab keeps it)
+---@field path string Its res:// path, "" when no indexed asset has the UUID
+---@field name string The file name without .prefab, "" when no indexed asset has the UUID
+Prefab = {}
+
+---A new instance of the prefab, with fresh UUIDs. Under `parent` when given (keeping the prefab root's local
+---transform), otherwise a root object of the current scene: the parent or the scene owns it (unlike
+---Model.Instantiate, nothing is lost when the returned handle goes out of scope). `position` and `rotation` are WORLD
+---values applied after it is placed; nil skips one. Its components attach at the scene's next attach pass (their
+---OnAttach runs then, not inside this call), so the returned object can be set up first. References to objects outside
+---the prefab come back nil (one warning per prefab). Raises an error for a missing asset, one that is not a prefab, a
+---malformed prefab or one over the limits (10000 objects, 512 levels), and for a prefab with a NetworkObject while a
+---network session runs (a script spawn is local: use Network.Spawn, not available yet). Not available to editor
+---extensions.
+---Called on a handle (`self.enemy:Instantiate(parent, position, rotation)`) or with a res:// path or UUID string
+---(`Prefab.Instantiate("res://prefabs/enemy.prefab", ...)`). Prefer a Prefab field to a path in code: a future
+---exporter that prunes unused assets can see a field.
+---@param pathOrUuid Prefab|string a handle, a res:// path or a UUID string
+---@param parent GameObject|nil
+---@param position Vector3|nil
+---@param rotation Quaternion|nil
+---@return GameObject root
+function Prefab.Instantiate(pathOrUuid, parent, position, rotation) end
 
 ---World-space text on the object's x/y plane, facing +Z, drawn with an SDF font in the Transparent queue.
 ---Sizes are in world units. Changing a setting other than the colour lays the text out again on the next draw.

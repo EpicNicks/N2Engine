@@ -1,6 +1,7 @@
 #pragma once
 
 #include <nlohmann/json.hpp>
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <string>
@@ -35,8 +36,11 @@ namespace N2Engine
         /// ids of every root are renumbered together, so a reference from one root's tree to an object or component of
         /// another root (all copied together; passed by pointer because copying deep JSON recurses) points at the new copy. `outside` (nullable) is as in the overload
         /// above. The roots come back in the order given; an empty vector (logged) when any of them is malformed.
+        /// `clearedReferences` (nullable) is set to how many references to something outside the copy came back null
+        /// (a Lua "$ref" cleared, a GameObject or component member left empty), for a caller that warns about them.
         std::vector<std::shared_ptr<GameObject>> InstantiatePrefabs(const std::vector<const nlohmann::json *> &rootObjects,
-                                                                    const ReferenceResolver *outside = nullptr);
+                                                                    const ReferenceResolver *outside = nullptr,
+                                                                    std::size_t *clearedReferences = nullptr);
 
         /// Stores a snapshot of rootObject (its hierarchy as serialized now) as the prefab prefabName,
         /// replacing (with a warning) a prefab already registered under that name. The object itself is not

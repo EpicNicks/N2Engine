@@ -107,7 +107,7 @@ namespace
     // Other UUID strings (assets, scripts) are not ids of the prefab and are left alone.
     // Walked with a stack on the heap, not recursion, as CollectIds is. Only values are changed in place, so the
     // pointers kept in the stack stay valid.
-    void Renumber(nlohmann::json &root, const UUIDMap &ids, const bool keepOutsideRefs)
+    void Renumber(nlohmann::json &root, const UUIDMap &ids, const bool keepOutsideRefs, std::size_t &cleared)
     {
         std::vector<nlohmann::json *> pending{&root};
         while (!pending.empty())
@@ -133,6 +133,7 @@ namespace
                     if (!canonical || !ids.contains(*canonical))
                     {
                         *ref = nullptr;
+                        ++cleared;
                     }
                 }
                 for (auto &item : value.items())
@@ -210,7 +211,8 @@ const nlohmann::json *UnwrapRoot(const nlohmann::json &prefabJson)
 }
 
 std::vector<std::shared_ptr<GameObject>> InstantiateMany(const std::vector<const nlohmann::json *> &rootJsons,
-                                                         const ReferenceResolver *outside)
+                                                         const ReferenceResolver *outside,
+                                                         std::size_t *clearedReferences = nullptr)
 {
     // Refused before anything walks it: Deserialize recurses once per GameObject level. The text a prefab came from
     // is checked where it is parsed; this covers a value built or kept some other way.
@@ -232,6 +234,7 @@ std::vector<std::shared_ptr<GameObject>> InstantiateMany(const std::vector<const
     ReferenceResolver resolver;
     resolver.SetFallback(outside);
     std::vector<std::shared_ptr<GameObject>> roots;
+    std::size_t cleared = 0;
     try
     {
         // Copied without recursion (nlohmann's copy recurses once per JSON level)
@@ -245,7 +248,7 @@ std::vector<std::shared_ptr<GameObject>> InstantiateMany(const std::vector<const
         }
         for (nlohmann::json &data : copies)
         {
-            Renumber(data, ids, outside != nullptr);
+            Renumber(data, ids, outside != nullptr, cleared);
             roots.push_back(GameObject::Deserialize(data, &resolver));
         }
         resolver.ResolveAll();
@@ -264,6 +267,11 @@ std::vector<std::shared_ptr<GameObject>> InstantiateMany(const std::vector<const
         }
         ReplaceZeroUUIDs(*root);
     }
+    if (clearedReferences != nullptr)
+    {
+        // A Lua "$ref" cleared above, and a reference member the resolver found nothing for
+        *clearedReferences = cleared + resolver.GetMissCount();
+    }
     return roots;
 }
 
@@ -280,7 +288,8 @@ std::shared_ptr<GameObject> Instantiate(const nlohmann::json &prefabJson, const 
 }
 
 std::vector<std::shared_ptr<GameObject>> PrefabManager::InstantiatePrefabs(
-    const std::vector<const nlohmann::json *> &rootObjects, const ReferenceResolver *outside)
+    const std::vector<const nlohmann::json *> &rootObjects, const ReferenceResolver *outside,
+    std::size_t *clearedReferences)
 {
     std::vector<const nlohmann::json *> roots;
     roots.reserve(rootObjects.size());
@@ -293,7 +302,7 @@ std::vector<std::shared_ptr<GameObject>> PrefabManager::InstantiatePrefabs(
         }
         roots.push_back(root);
     }
-    return InstantiateMany(roots, outside);
+    return InstantiateMany(roots, outside, clearedReferences);
 }
 
 bool PrefabManager::RegisterPrefab(std::string prefabName, std::shared_ptr<GameObject> rootObject)

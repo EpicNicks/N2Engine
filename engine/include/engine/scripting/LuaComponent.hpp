@@ -125,6 +125,11 @@ namespace N2Engine::Scripting
         void CopyReferenceFields(const sol::table &from);
         void ExtractSerializableFields();
         void InjectFieldsIntoScript();
+        /// Whether a SerializableFields entry is a `{ type = "Prefab" }` definition (called inside a protected access)
+        static bool IsPrefabDeclaration(const sol::object &definition);
+        /// A Prefab field's stored value (the asset UUID string, or "" for none) onto the instance: a PrefabHandle, or nil
+        /// (with a warning for a string that is not a UUID, which is kept as written)
+        void InjectPrefabField(const std::string &key, const nlohmann::json &value);
         /// InjectFieldsIntoScript for one field: the value of `key` in _scriptData is already set
         void InjectField(const std::string &key, const nlohmann::json &value);
         void CacheLifecycleMethods();

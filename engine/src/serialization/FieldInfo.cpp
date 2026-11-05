@@ -124,6 +124,7 @@ namespace N2Engine
         case FieldKind::ComponentRef: return "ComponentRef";
         case FieldKind::ComponentRefList: return "ComponentRefList";
         case FieldKind::Json: return "Json";
+        case FieldKind::PrefabRef: return "PrefabRef";
         }
         return "Json";
     }
@@ -145,6 +146,10 @@ namespace N2Engine
         if (!assetType.empty())
         {
             j["assetType"] = assetType;
+        }
+        if (!assetPath.empty())
+        {
+            j["assetPath"] = assetPath;
         }
         if (range.has_value())
         {
@@ -302,6 +307,14 @@ namespace N2Engine
             return CheckReferenceList(field, value);
         case FieldKind::Json:
             return std::nullopt;
+        case FieldKind::PrefabRef:
+            // A plain UUID string even inside a container (an asset is not a scene object, so it is no "$ref"); empty
+            // or null is none
+            if (value.is_null() || (value.is_string() && value.get_ref<const std::string &>().empty()))
+            {
+                return std::nullopt;
+            }
+            return CheckReference(field, value);
         }
         return std::nullopt;
     }

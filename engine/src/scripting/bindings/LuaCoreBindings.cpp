@@ -1,4 +1,5 @@
 #include "engine/scripting/bindings/LuaBindings.hpp"
+#include "engine/scripting/LuaPrefab.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/GameObjectScene.hpp"
@@ -131,6 +132,16 @@ namespace N2Engine::Scripting::Bindings
                 }
             },
             "GetParent", [](const GameObjectRef &go) { return RefOrNil(go.Pin()->GetParent()); },
+            // The prefab this object is an instance of (its prefabReference), as a Prefab handle; nil for none
+            "GetPrefab", [](const GameObjectRef &go) -> sol::optional<PrefabHandle>
+            {
+                const std::optional<Math::UUID> &prefab = go.Pin()->GetPrefabReference();
+                if (!prefab.has_value())
+                {
+                    return sol::nullopt;
+                }
+                return PrefabHandle(*prefab);
+            },
             "FindChild", [](const GameObjectRef &go, const std::string &name)
             {
                 return RefOrNil(go.Pin()->FindChild(name));

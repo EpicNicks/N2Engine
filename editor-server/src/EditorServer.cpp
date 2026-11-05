@@ -777,6 +777,13 @@ namespace N2Engine::Editor
                     add(one);
                 }
                 break;
+            case FieldKind::PrefabRef:
+                // A plain UUID string, also inside a script's fields; "" is none
+                if (value.is_string() && !value.get_ref<const std::string &>().empty())
+                {
+                    add(value);
+                }
+                break;
             default:
                 break;
             }
@@ -840,6 +847,22 @@ namespace N2Engine::Editor
                     {
                         return std::format("Field '{}': no {} asset has the UUID {}", field.name,
                                            field.assetType.empty() ? std::string("such") : field.assetType, id);
+                    }
+                    break;
+                }
+                case FieldKind::PrefabRef:
+                {
+                    // Only an indexed .prefab asset: the host's own check of "only .prefab" (a client's picker is a
+                    // convenience)
+                    const IO::AssetMetadata *meta = IO::ResourceLoader::Instance().GetMetadata(uuid.value());
+                    if (meta == nullptr)
+                    {
+                        return std::format("Field '{}': no Prefab asset has the UUID {}", field.name, id);
+                    }
+                    if (meta->resourceType != PrefabFile::ResourceTypeName)
+                    {
+                        return std::format("Asset {} is a {}; field '{}' expects Prefab", id, meta->resourceType,
+                                           field.name);
                     }
                     break;
                 }
@@ -2862,7 +2885,7 @@ namespace N2Engine::Editor
 
     std::vector<std::string> EditorServer::Capabilities()
     {
-        return {"editorExtensions","editorTooling","luaSyntax","assetPreviews","entityClipboard","prefabAssets","physicsBackends","networkPanel",
+        return {"editorExtensions","editorTooling","luaSyntax","assetPreviews","entityClipboard","prefabAssets","physicsBackends","networkPanel","prefabFields",
                 "prefabStage","prefabStageContext"};
     }
 
@@ -7470,6 +7493,23 @@ namespace N2Engine::Editor
         schema.typeName = target->component->GetTypeName();
         schema.fields = target->component->DescribeFields();
         schema.singleton = ComponentRegistry::Instance().IsSingleton(schema.typeName);
+        // Since 1.25.0: a Prefab field also says which prefab its value names now, by path, for display
+        const nlohmann::json saved = target->component->Serialize();
+        const nlohmann::json *scriptData =
+            saved.contains("scriptData") && saved.at("scriptData").is_object() ? &saved.at("scriptData") : nullptr;
+        for (FieldInfo &field : schema.fields)
+        {
+            if (field.kind != FieldKind::PrefabRef || scriptData == nullptr || !scriptData->contains(field.name))
+            {
+                continue;
+            }
+            const nlohmann::json &value = scriptData->at(field.name);
+            const auto uuid = value.is_string() ? Math::UUID::FromString(value.get<std::string>()) : std::nullopt;
+            if (const IO::AssetMetadata *meta = uuid ? IO::ResourceLoader::Instance().GetMetadata(*uuid) : nullptr)
+            {
+                field.assetPath = meta->resourcePath.ToString();
+            }
+        }
 
         BufferWriter response;
         WriteLuaFields(response, schema.ToJson());
@@ -9694,7 +9734,7 @@ namespace N2Engine::Editor
         }
         stageScene->AddRootGameObject(root);
         resolver.ResolveAll();
-        const std::size_t externalReferences = resolver.GetMissedLookupCount();
+        const std::size_t externalReferences = resolver.GetMissCount();
         std::size_t linkedObjects = 0;
         stageScene->TraverseAll([&](const std::shared_ptr<GameObject> &object)
         {

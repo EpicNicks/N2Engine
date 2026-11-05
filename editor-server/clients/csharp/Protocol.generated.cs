@@ -530,6 +530,8 @@ namespace N2Engine.Editor.Protocol
         public string[]? EnumOptions { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("assetType")]
         public string? AssetType { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("assetPath")]
+        public string? AssetPath { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("min")]
         public double? Min { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("max")]

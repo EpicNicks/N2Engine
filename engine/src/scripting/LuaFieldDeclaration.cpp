@@ -30,6 +30,13 @@ namespace N2Engine::Scripting
             info.kind = FieldKind::GameObjectRef;
             info.typeName = "GameObject";
         }
+        else if (declaredType == PrefabFieldType)
+        {
+            // A prefab asset (editor protocol 1.25.0): scriptData holds its UUID as a plain string; no default
+            info.kind = FieldKind::PrefabRef;
+            info.typeName = std::string(PrefabFieldType);
+            info.assetType = std::string(PrefabFieldType);
+        }
         else if (!declaredType.empty() && IsLuaComponentType(declaredType))
         {
             info.kind = FieldKind::ComponentRef;
