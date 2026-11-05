@@ -173,8 +173,8 @@ namespace N2Engine::Scripting
             {
                 throw std::runtime_error("Prefab.Instantiate: the position has a value that isn't a finite number");
             }
-            if (rotation && !(std::isfinite(rotation->w) && std::isfinite(rotation->x) && std::isfinite(rotation->y) &&
-                              std::isfinite(rotation->z)))
+            if (rotation && !(std::isfinite(rotation->GetW()) && std::isfinite(rotation->GetX()) &&
+                              std::isfinite(rotation->GetY()) && std::isfinite(rotation->GetZ())))
             {
                 throw std::runtime_error("Prefab.Instantiate: the rotation has a value that isn't a finite number");
             }
