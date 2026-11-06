@@ -717,6 +717,54 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    /// OpenPrefabStage (since 1.26.0)
+    struct OpenPrefabStageCmd
+    {
+        /// A prefab asset's UUID string or its res:// path
+        std::string uuidOrPath;
+        /// "isolated" or "context"
+        std::string mode;
+        /// Context placement: an instance of the prefab in the open scene; empty for the first one found
+        std::string anchorEntityId;
+
+        static OpenPrefabStageCmd Deserialize(BufferReader &r)
+        {
+            OpenPrefabStageCmd cmd;
+            cmd.uuidOrPath = r.ReadString();
+            cmd.mode = r.ReadString();
+            cmd.anchorEntityId = r.ReadString();
+            return cmd;
+        }
+    };
+
+    /// SetPrefabStageMode (since 1.26.0)
+    struct SetPrefabStageModeCmd
+    {
+        /// "isolated" or "context"
+        std::string mode;
+
+        static SetPrefabStageModeCmd Deserialize(BufferReader &r)
+        {
+            SetPrefabStageModeCmd cmd;
+            cmd.mode = r.ReadString();
+            return cmd;
+        }
+    };
+
+    /// ClosePrefabStage (since 1.26.0)
+    struct ClosePrefabStageCmd
+    {
+        /// Close even with unsaved changes (they are dropped)
+        bool discard = false;
+
+        static ClosePrefabStageCmd Deserialize(BufferReader &r)
+        {
+            ClosePrefabStageCmd cmd;
+            cmd.discard = r.ReadBool();
+            return cmd;
+        }
+    };
+
     struct MoveAssetCmd
     {
         /// A JSON array of AssetMove objects {from, to} (the handler checks its shape and size)
@@ -1031,6 +1079,13 @@ namespace N2Engine::Editor::Protocol
     inline constexpr std::string_view ErrorCodeStaleUiRevision = "staleUiRevision";
     /// Since 1.15.0: InvokeMenuItem (since 1.16.0 also InvokeInspectorAction) while the client has an edit group open
     inline constexpr std::string_view ErrorCodeEditGroupOpen = "editGroupOpen";
+    /// Since 1.26.0: a prefab stage is open, and the command would save, open, swap or play the scene (or is a write sent
+    /// by an editor extension): close the stage first
+    inline constexpr std::string_view ErrorCodeStageOpen = "stageOpen";
+    /// Since 1.26.0: ClosePrefabStage without discard while the stage has unsaved changes
+    inline constexpr std::string_view ErrorCodeUnsavedChanges = "unsavedChanges";
+    /// Since 1.26.0: SavePrefabStage while an object under the stage's root is linked to the prefab being edited
+    inline constexpr std::string_view ErrorCodePrefabCycle = "prefabCycle";
 
     /// ErrorCoded (since 1.11.0), sent only to a client that asked for it with Hello's errorCodes: the message an Error
     /// would carry, then a code. Unlike Error's, its payload is two length-prefixed strings.
@@ -1209,6 +1264,16 @@ namespace N2Engine::Editor::Protocol
         BufferWriter payload;
         WriteJson(payload, ids);
         w.WriteU8(static_cast<uint8_t>(ResponseType::EntitiesCreated));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// The prefab stage commands' response (since 1.26.0): the PrefabStageInfo as one JSON value
+    inline void WritePrefabStageInfo(BufferWriter &w, const nlohmann::json &info)
+    {
+        BufferWriter payload;
+        WriteJson(payload, info);
+        w.WriteU8(static_cast<uint8_t>(ResponseType::PrefabStageInfo));
         w.WriteU32(static_cast<uint32_t>(payload.Size()));
         w.WriteBytes(payload.Data());
     }

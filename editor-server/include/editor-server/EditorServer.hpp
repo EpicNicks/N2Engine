@@ -46,6 +46,7 @@ namespace Renderer::Common
 
 namespace N2Engine
 {
+    class GameObject;
     class Scene;
 }
 
@@ -819,6 +820,37 @@ namespace N2Engine::Editor
         /// outside an invocation there is no extension to name, so the audit line says via=test.
         [[nodiscard]] std::vector<uint8_t> DispatchNestedForTest(uint8_t commandType, const std::vector<uint8_t> &payload);
 
+        // ==================== The prefab stage (protocol 1.26.0) ====================
+
+        /**
+         * A prefab opened for editing (OpenPrefabStage): the open scene is PARKED (kept by the host, untouched: not
+         * serialized, not autosaved, not in undo) and a scene holding exactly the prefab file's tree, with the file's own
+         * UUIDs, becomes the loaded scene, with an undo history, a revision and an editor camera of its own. Every command
+         * that works on "the loaded scene" (hierarchy, inspector, gizmos, picking, undo, copy and paste) works on the stage
+         * unchanged; the commands that save, open, swap or play the scene are refused (stageOpen) until the stage is
+         * closed, when the parked scene comes back with its history, revision state, camera and autosave state as they
+         * were. At most one stage. Modes: Isolated (the prefab alone, a default light when it has none) and Context (In
+         * Scene: the parked scene drawn behind it dimmed and not pickable, the prefab placed at an instance of it, its
+         * root transform locked).
+         */
+        enum class PrefabStageMode : uint8_t
+        {
+            Isolated,
+            Context,
+        };
+        [[nodiscard]] bool IsPrefabStageOpen() const { return _stage != nullptr; }
+        /// The commands answered with stageOpen while a stage is open: the scene-file commands (SaveSceneToFile,
+        /// SaveScene, OpenScene, NewScene, LoadScene, CreateScene, DeleteScene), RestoreAutosave, DiscardAutosave,
+        /// WritePlaySnapshot (play), CreatePrefab, InstantiatePrefab, ApplyPrefab, UnpackPrefab, and OpenPrefabStage
+        /// itself (one stage at a time). Every write an editor extension sends is refused too (NestedStageRefusal).
+        [[nodiscard]] static bool IsRefusedWhilePrefabStageOpen(uint8_t commandType);
+        /// The open stage's PrefabStageInfo, or {open: false}
+        [[nodiscard]] nlohmann::json GetPrefabStageInfo() const;
+        /// Closes the open stage WITHOUT saving it (the parked scene, its history, revision state, camera and autosave
+        /// state come back), as a client that went away and a Shutdown do; logs `reason`. Nothing when none is open.
+        /// Main thread.
+        void DiscardPrefabStage(std::string_view reason);
+
         // ==================== Read-only mode ====================
 
         /// What a command does to the host. Read: answers from what the host holds and changes nothing a client could
@@ -1004,6 +1036,36 @@ namespace N2Engine::Editor
         void HandleInstantiatePrefab(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleApplyPrefab(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleUnpackPrefab(int clientSocket, const std::vector<uint8_t> &payload);
+        // The prefab stage (protocol 1.26.0)
+        void HandleOpenPrefabStage(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleSetPrefabStageMode(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleSavePrefabStage(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleClosePrefabStage(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleGetPrefabStage(int clientSocket, const std::vector<uint8_t> &payload);
+        /// Answers PrefabStageInfo (GetPrefabStageInfo)
+        void SendPrefabStageInfo(int clientSocket);
+        /// Pushes prefabStageChanged {stage: PrefabStageInfo} and notes the dirty state it reported
+        void PushPrefabStageChanged();
+        /// Puts the parked scene back and drops the stage (no save, no question asked): what ClosePrefabStage and
+        /// DiscardPrefabStage share
+        void ClosePrefabStageNow();
+        /// The stage's root object: the stage scene's one root object, or null when it has none or several
+        [[nodiscard]] std::shared_ptr<GameObject> StageRoot() const;
+        /// The parked scene's object the stage is shown in place of (Context), or null
+        [[nodiscard]] GameObject *StageAnchor() const;
+        /// Switches the stage's placement and camera to `mode` (not an edit: the dirty state is kept)
+        void ApplyPrefabStageMode(PrefabStageMode mode, bool opening);
+        /// In Context, after an undo, a redo or a snapshot restore: a root transform that is not the anchor's is the
+        /// file's (an Isolated edit undone, or a snapshot written with the file's), so it is remembered as such and the
+        /// root is placed at the anchor again
+        void KeepStageRootPlaced();
+        /// True (and the client answered) when `entity` is the stage root and Context mode locks its transform
+        bool RefuseLockedStageRoot(int clientSocket, const GameObject &entity);
+        /// After the assets changed: the staged prefab's file moved (its path follows the UUID), changed outside the
+        /// stage (externalChange) or was deleted (orphaned); pushes prefabStageChanged for any of them
+        void CheckPrefabStageFile();
+        /// The scene file the asset writers must leave alone: the open scene's, or, while a stage is open, the parked one's
+        [[nodiscard]] std::string ProtectedScenePath() const;
         void HandleGetPhysicsBackends(int clientSocket);
         void HandleSetPhysicsBackend(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetNetworkSettings(int clientSocket);
@@ -1165,8 +1227,9 @@ namespace N2Engine::Editor
         /// what undoing a destroy or a component removal does, so every reference is resolved again by UUID. The
         /// effect is full.
         EditOutcome RestoreSceneSnapshot(const std::string &snapshot);
-        /// A snapshot of the loaded scene, for RestoreSceneSnapshot
-        [[nodiscard]] static std::string SnapshotScene(const Scene &scene);
+        /// A snapshot of the loaded scene, for RestoreSceneSnapshot. A prefab stage in Context mode is snapshotted with its
+        /// root at the file's transform (not the anchor's), so restoring it in either mode starts from the same data.
+        [[nodiscard]] std::string SnapshotScene(const Scene &scene) const;
 
         // Autosave
         /// An edit step ended (or was undone): the autosave is due, written now unless the interval says to wait
@@ -1479,6 +1542,10 @@ namespace N2Engine::Editor
 
         EditorCameraState _editorCamera;
         bool _editorWireframe = false;
+
+        /// The open prefab stage (EditorServer.cpp), or null
+        struct PrefabStage;
+        std::unique_ptr<PrefabStage> _stage;
         // Starts numbering at the event epoch, a random number (see FrameTracker)
         FrameTracker _frames{_events.Epoch()};
         uint32_t _editorFramesRendered{0};

@@ -995,6 +995,68 @@ void Application::RenderEditorFrame()
     Render();
 }
 
+void Application::RenderEditorFrame(const Camera &camera, const EditorStageView &view)
+{
+    if (!_window.IsValid())
+    {
+        return;
+    }
+    Time::Update();
+    Audio::AudioSystem::Instance().Update();
+
+    auto *renderer = _window.GetRenderer();
+    if (!renderer)
+    {
+        return;
+    }
+    // The dim is a frame-scoped modifier of the renderer: never left on, whatever throws
+    struct ResetStageDim
+    {
+        Renderer::Common::IRenderer *renderer;
+        ~ResetStageDim() { renderer->SetStageDim(0.0f); }
+    } resetStageDim{renderer};
+
+    _window.Clear();
+    renderer->BeginFrame();
+
+    Scene *stage = SceneManager::GetCurScene();
+    renderer->SetViewProjection(camera.GetViewMatrix().Data(), camera.GetProjectionMatrix().Data());
+    Renderer::Common::SceneLightingData lighting;
+    if (view.backdrop != nullptr)
+    {
+        // In Scene: the prefab is lit as it would be in the scene
+        lighting = view.backdrop->CollectLighting();
+    }
+    else if (stage != nullptr)
+    {
+        lighting = stage->CollectLighting();
+        if (view.defaultLight && lighting.directionalLights.empty() && lighting.pointLights.empty() &&
+            lighting.spotLights.empty())
+        {
+            Renderer::Common::DirectionalLightData light;
+            light.direction = Math::Vector3(EditorStageView::DefaultLightDirectionX, EditorStageView::DefaultLightDirectionY,
+                                            EditorStageView::DefaultLightDirectionZ).Normalized();
+            light.intensity = EditorStageView::DefaultLightIntensity;
+            lighting.directionalLights.push_back(light);
+        }
+    }
+    renderer->UpdateSceneLighting(lighting, camera.GetPosition());
+
+    if (view.backdrop != nullptr)
+    {
+        renderer->SetStageDim(view.backdropDim);
+        view.backdrop->Render(renderer, camera, view.hiddenBackdropObject);
+        renderer->SetStageDim(0.0f);
+    }
+    if (stage != nullptr)
+    {
+        stage->Render(renderer, camera);
+    }
+
+    renderer->EndFrame();
+    renderer->Present();
+}
+
 void Application::RenderEditorFrame(const Camera &camera)
 {
     if (!_window.IsValid())

@@ -21,6 +21,8 @@ struct PerDraw {
     uModel: mat4x4<f32>,
     uView: mat4x4<f32>,
     uProjection: mat4x4<f32>,
+    // RenderState::dim (the prefab stage's dimmed scene); WGSL rounds the struct up to 208 bytes
+    uStageDim: f32,
 }
 
 struct Material {
@@ -30,6 +32,11 @@ struct Material {
 }
 
 @group(0) @binding(0) var<uniform> perDraw: PerDraw;
+
+// RenderState::dim (RenderState::StageDimmed): the colour mixed towards a darkened grey of its own luminance
+fn stageDimmed(rgb: vec3<f32>) -> vec3<f32> {
+    return mix(rgb, vec3<f32>(dot(rgb, vec3<f32>(0.299, 0.587, 0.114)) * 0.45), perDraw.uStageDim);
+}
 
 @group(1) @binding(0) var<uniform> material: Material;
 @group(1) @binding(1) var uTexture: texture_2d<f32>;
@@ -75,5 +82,5 @@ fn fs_main(input: FragmentInput) -> @location(0) vec4<f32> {
     if (color.a < material.uAlphaCutoff) {
         discard;
     }
-    return color;
+    return vec4<f32>(stageDimmed(color.rgb), color.a);
 }

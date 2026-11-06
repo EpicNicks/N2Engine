@@ -20,7 +20,13 @@ layout(set = 1, binding = 1) uniform sampler2D uTexture;
 
 layout(location = 0) in vec2 fragTexCoord;
 layout(location = 1) in vec4 fragColor;
+layout(location = 2) in float fragStageDim;
 layout(location = 0) out vec4 FragColor;
+
+// RenderState::dim (RenderState::StageDimmed): the colour mixed towards a darkened grey of its own luminance
+vec3 stageDimmed(vec3 rgb) {
+    return mix(rgb, vec3(dot(rgb, vec3(0.299, 0.587, 0.114)) * 0.45), fragStageDim);
+}
 
 // a over b, neither premultiplied
 vec4 over(vec4 a, vec4 b) {
@@ -62,5 +68,5 @@ void main() {
     if (result.a < 0.01) {
         discard;
     }
-    FragColor = result;
+    FragColor = vec4(stageDimmed(result.rgb), result.a);
 }

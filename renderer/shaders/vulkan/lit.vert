@@ -12,6 +12,8 @@ layout(set = 0, binding = 0, std140, row_major) uniform PerDraw {
     mat4 uModel;
     mat4 uView;
     mat4 uProjection;
+    // RenderState::dim (the prefab stage's dimmed scene), passed on to the fragment stage
+    float uStageDim;
 };
 
 layout(location = 0) out vec3 fragNormal;
@@ -19,6 +21,7 @@ layout(location = 1) out vec3 fragWorldPos;
 layout(location = 2) out vec2 fragTexCoord;
 layout(location = 3) out vec4 fragColor;
 layout(location = 4) out vec4 fragTangent;
+layout(location = 5) out float fragStageDim;
 
 void main() {
     vec4 worldPos = uModel * vec4(aPos, 1.0);
@@ -41,4 +44,5 @@ void main() {
     gl_Position = uProjection * uView * worldPos;
     // OpenGL clip space has z from -w to w, Vulkan's from 0 to w
     gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;
+    fragStageDim = uStageDim;
 }

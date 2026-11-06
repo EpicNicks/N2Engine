@@ -11,7 +11,7 @@ namespace N2Engine::Editor
 {
     /// The version of protocol.json this server implements (ProtocolSpecTest pins the two equal). Hello compares the
     /// client's with it: the same major version is compatible, whatever the minor and patch versions.
-    inline constexpr std::string_view ProtocolVersion = "1.25.0";
+    inline constexpr std::string_view ProtocolVersion = "1.26.0";
 
     struct ProtocolVersionNumber
     {
@@ -77,6 +77,12 @@ namespace N2Engine::Editor
         NewScene = 0x27,
         GetHierarchy = 0x28,
         GetOpenScene = 0x29,
+        // The prefab stage (since 1.26.0)
+        OpenPrefabStage = 0x2A,
+        SetPrefabStageMode = 0x2B,
+        SavePrefabStage = 0x2C,
+        ClosePrefabStage = 0x2D,
+        GetPrefabStage = 0x2E,
         CreateEntity = 0x30,
         DestroyEntity = 0x31,
         SetEntityTransform = 0x32,
@@ -183,6 +189,7 @@ namespace N2Engine::Editor
         PhysicsBackends = 0x23,
         NetworkSettings = 0x24,
         NetworkValidation = 0x25,
+        PrefabStageInfo = 0x26,
         AssetList = 0xA0,
         AssetDetail = 0xA1,
         TextData = 0xA2,

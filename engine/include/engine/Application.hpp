@@ -15,6 +15,32 @@
 
 namespace N2Engine
 {
+    class GameObject;
+
+    /**
+     * What the editor's prefab stage draws with the loaded scene (Application::RenderEditorFrame(camera, view)): the loaded
+     * scene is the stage (the prefab's tree), and the open scene is parked by the editor host.
+     */
+    struct EditorStageView
+    {
+        /// In Scene mode: the parked scene, drawn first and dimmed (RenderState::dim) behind the stage, whose lights light
+        /// both draws. Null in Isolated mode (the stage alone).
+        Scene *backdrop = nullptr;
+        /// An object of the backdrop whose whole subtree is not drawn: the prefab instance the stage is shown in place of
+        const GameObject *hiddenBackdropObject = nullptr;
+        /// How much the backdrop is dimmed (0..1)
+        float backdropDim = DefaultBackdropDim;
+        /// Isolated mode: when the stage has no light of its own, its lighting gets one directional light (DefaultLight*)
+        bool defaultLight = false;
+
+        static constexpr float DefaultBackdropDim = 0.65f;
+        /// The stage's default light: from above, slightly from the front left, neutral white
+        static constexpr float DefaultLightDirectionX = -0.35f;
+        static constexpr float DefaultLightDirectionY = -1.0f;
+        static constexpr float DefaultLightDirectionZ = -0.45f;
+        static constexpr float DefaultLightIntensity = 1.0f;
+    };
+
     /// What one Application::Tick does besides simulating
     struct TickOptions
     {
@@ -152,6 +178,16 @@ namespace N2Engine
          * read input. Does nothing without a window and a renderer.
          */
         void RenderEditorFrame(const Camera &camera);
+        /**
+         * RenderEditorFrame(camera) for the editor's prefab stage: the loaded scene (the stage) as seen by `camera`, with
+         * what `view` adds. In Isolated mode (no backdrop) the stage alone, lit by its own lights, or by one default
+         * directional light when it has none and view.defaultLight is set. In Scene mode, in one frame sharing depth: the
+         * backdrop first with the renderer's stage dim set to view.backdropDim (IRenderer::SetStageDim, so every draw of
+         * it carries the dim) and view.hiddenBackdropObject's subtree left out, then the stage undimmed; the backdrop's
+         * lights light both. The loaded scene is drawn even when SceneManager has no current index (the stage is never a
+         * stored scene). No screen-space UI. Does nothing without a window and a renderer.
+         */
+        void RenderEditorFrame(const Camera &camera, const EditorStageView &view);
 
         /// Requests a quit at the end of the current frame (Run() then calls OnApplicationQuit and
         /// shuts down). Safe to call from components and Lua.

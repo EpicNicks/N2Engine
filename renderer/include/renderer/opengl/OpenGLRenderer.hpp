@@ -87,6 +87,8 @@ namespace Renderer::OpenGL
         // Debug
         void SetWireframe(bool enabled) override;
         [[nodiscard]] const char* GetRendererName() const override;
+        /// The built-in shaders take uStageDim (RenderState::dim)
+        [[nodiscard]] bool SupportsStageDim() const override { return true; }
 
         [[nodiscard]] Common::IShader* GetStandardUnlitShader() const override;
         [[nodiscard]] Common::IShader* GetStandardLitShader() const override;

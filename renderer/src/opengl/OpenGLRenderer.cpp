@@ -688,6 +688,13 @@ void OpenGLRenderer::DrawIndices(Common::IMesh *mesh, const float *modelMatrix, 
         m_framebufferSrgbOn = encodeOutput;
     }
 
+    // The prefab stage's dim (RenderState::dim, raised to SetStageDim's value): a uniform of the built-in shaders; a
+    // custom shader that doesn't declare uStageDim draws undimmed
+    if (uniforms.stageDimLoc != -1)
+    {
+        glUniform1f(uniforms.stageDimLoc, WithStageDim(state).dim);
+    }
+
     // Draw mesh, with this draw's depth/cull/blend state
     ApplyRenderState(state);
     glBindVertexArray(glMesh->GetVAO());
@@ -869,6 +876,12 @@ void OpenGLRenderer::CreateStandardShaders()
         in vec4 fragColor;
         out vec4 FragColor;
 
+        // RenderState::dim (RenderState::StageDimmed): the colour mixed towards a darkened grey of its own luminance
+        uniform float uStageDim;
+        vec3 stageDimmed(vec3 rgb) {
+            return mix(rgb, vec3(dot(rgb, vec3(0.299, 0.587, 0.114)) * 0.45), uStageDim);
+        }
+
         void main() {
             vec4 color = uAlbedo;
             if (uHasTexture) {
@@ -878,7 +891,7 @@ void OpenGLRenderer::CreateStandardShaders()
             if (color.a < uAlphaCutoff) {
                 discard;
             }
-            FragColor = color;
+            FragColor = vec4(stageDimmed(color.rgb), color.a);
         }
     )";
 
@@ -1009,6 +1022,12 @@ void OpenGLRenderer::CreateStandardShaders()
         in vec4 fragTangent;
 
         out vec4 FragColor;
+
+        // RenderState::dim (RenderState::StageDimmed): the colour mixed towards a darkened grey of its own luminance
+        uniform float uStageDim;
+        vec3 stageDimmed(vec3 rgb) {
+            return mix(rgb, vec3(dot(rgb, vec3(0.299, 0.587, 0.114)) * 0.45), uStageDim);
+        }
 
         // ---- PBR (the software renderer's LightingMath.hpp, line for line) ----
         const float PI = 3.14159265358979323846;
@@ -1250,7 +1269,7 @@ void OpenGLRenderer::CreateStandardShaders()
             if (uEncodeOutput != 0) {
                 color = linearToSrgb(color);
             }
-            FragColor = vec4(color, albedo.a);
+            FragColor = vec4(stageDimmed(color), albedo.a);
         }
     )";
 
@@ -1304,6 +1323,12 @@ void OpenGLRenderer::CreateStandardShaders()
         in vec4 fragColor;
         out vec4 FragColor;
 
+        // RenderState::dim (RenderState::StageDimmed): the colour mixed towards a darkened grey of its own luminance
+        uniform float uStageDim;
+        vec3 stageDimmed(vec3 rgb) {
+            return mix(rgb, vec3(dot(rgb, vec3(0.299, 0.587, 0.114)) * 0.45), uStageDim);
+        }
+
         // a over b, neither premultiplied
         vec4 over(vec4 a, vec4 b) {
             float alpha = a.a + b.a * (1.0 - a.a);
@@ -1345,7 +1370,7 @@ void OpenGLRenderer::CreateStandardShaders()
             if (result.a < 0.01) {
                 discard;
             }
-            FragColor = result;
+            FragColor = vec4(stageDimmed(result.rgb), result.a);
         }
     )";
 

@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.25.0";
+        public const string ProtocolVersion = "1.26.0";
     }
 
     public enum CommandType : byte
@@ -100,6 +100,11 @@ namespace N2Engine.Editor.Protocol
         SetNetworkSettings = 0x52,
         GetNetworkValidation = 0x53,
         MoveAsset = 0xAF,
+        OpenPrefabStage = 0x2A,
+        SetPrefabStageMode = 0x2B,
+        SavePrefabStage = 0x2C,
+        ClosePrefabStage = 0x2D,
+        GetPrefabStage = 0x2E,
     }
 
     public enum ResponseType : byte
@@ -150,6 +155,7 @@ namespace N2Engine.Editor.Protocol
         NetworkSettings = 0x24,
         NetworkValidation = 0x25,
         AssetsMoved = 0xA5,
+        PrefabStageInfo = 0x26,
     }
 
     public struct Vec3
@@ -230,6 +236,8 @@ namespace N2Engine.Editor.Protocol
         public double? UiRevision { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("extension")]
         public string? Extension { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("stage")]
+        public PrefabStageInfo? Stage { get; set; }
     }
 
     public class InputEvent
@@ -274,6 +282,42 @@ namespace N2Engine.Editor.Protocol
         public MovedAsset[] Moved { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("warnings")]
         public string[] Warnings { get; set; }
+    }
+
+    public class PrefabStageInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("open")]
+        public bool Open { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("prefabUuid")]
+        public string? PrefabUuid { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("path")]
+        public string? Path { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("name")]
+        public string? Name { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("mode")]
+        public string? Mode { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("dirty")]
+        public bool? Dirty { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("revision")]
+        public double? Revision { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("savedRevision")]
+        public double? SavedRevision { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("anchorEntityId")]
+        public string? AnchorEntityId { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("contextAvailable")]
+        public bool? ContextAvailable { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("rootLocked")]
+        public bool? RootLocked { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("sceneName")]
+        public string? SceneName { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("scenePath")]
+        public string? ScenePath { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("warnings")]
+        public string[]? Warnings { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("externalChange")]
+        public bool? ExternalChange { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("orphaned")]
+        public bool? Orphaned { get; set; }
     }
 
     public class HistoryEntry
@@ -1248,6 +1292,23 @@ namespace N2Engine.Editor.Protocol
         public string Moves;
     }
 
+    public struct OpenPrefabStageRequest
+    {
+        public string UuidOrPath;
+        public string Mode;
+        public string AnchorEntityId;
+    }
+
+    public struct SetPrefabStageModeRequest
+    {
+        public string Mode;
+    }
+
+    public struct ClosePrefabStageRequest
+    {
+        public bool Discard;
+    }
+
     public struct FrameDataResponse
     {
         public uint Width;
@@ -1551,6 +1612,12 @@ namespace N2Engine.Editor.Protocol
     {
         /// <summary>JSON text: AssetsMovedResult</summary>
         public string Result;
+    }
+
+    public struct PrefabStageInfoResponse
+    {
+        /// <summary>JSON text: PrefabStageInfo</summary>
+        public string Info;
     }
 
     public struct ErrorCodedResponse

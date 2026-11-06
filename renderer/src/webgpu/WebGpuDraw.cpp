@@ -73,6 +73,7 @@ namespace Renderer::WebGpu
     using ShaderInterface::kFirstSamplerBinding;
     using ShaderInterface::kLightingBlockSize;
     using ShaderInterface::kMaterialBlockRange;
+    using ShaderInterface::kPerDrawBindingSize;
     using ShaderInterface::kPerDrawBlockSize;
     using ShaderInterface::kSamplerCount;
 
@@ -768,7 +769,7 @@ namespace Renderer::WebGpu
         // This draw's room in the ring: the per-draw block, then the material block, each at an aligned offset; and, for a lit
         // draw whose chunk does not hold the current lighting yet, the lighting block after them
         const bool lit = blockMaterial.kind == BuiltInShader::Lit;
-        const std::uint64_t perDrawBytes = AlignUp64(kPerDrawBlockSize, state.uniformAlignment);
+        const std::uint64_t perDrawBytes = AlignUp64(kPerDrawBindingSize, state.uniformAlignment);
         const std::uint64_t materialBytes = AlignUp64(kMaterialBlockRange, state.uniformAlignment);
         const std::uint64_t lightingBytes = AlignUp64(kLightingBlockSize, state.uniformAlignment);
         std::size_t chunkIndex = 0;
@@ -796,6 +797,11 @@ namespace Renderer::WebGpu
         WriteTransposed(perDraw, modelMatrix);
         WriteTransposed(perDraw + 64, state.view);
         WriteTransposed(perDraw + 128, state.projection);
+        // The prefab stage's dim, as this draw carries it (RenderState::dim raised to SetStageDim's value), then the
+        // struct's padding: WGSL rounds PerDraw up to 208 bytes
+        const float stageDim = WithStageDim(renderState).dim;
+        std::memcpy(perDraw + 192, &stageDim, sizeof(float));
+        std::memset(perDraw + 196, 0, kPerDrawBindingSize - 196);
         std::memcpy(perDraw + perDrawBytes, snapshot.block.data(), snapshot.block.size());
         if (copyLighting)
         {
@@ -816,7 +822,7 @@ namespace Renderer::WebGpu
                 entries[i].buffer = chunk.buffer.Get();
                 entries[i].offset = 0;
             }
-            entries[0].size = kPerDrawBlockSize;
+            entries[0].size = kPerDrawBindingSize;
             entries[1].size = kLightingBlockSize;
             WGPUBindGroupDescriptor descriptor = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
             descriptor.label = ToView("N2Engine frame group");

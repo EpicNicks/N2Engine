@@ -235,6 +235,7 @@ void OpenGLShader::CacheCommonUniforms()
     _commonUniforms.projectionLoc = glGetUniformLocation(_programId, "uProjection");
     _commonUniforms.textureLoc = glGetUniformLocation(_programId, "uTexture");
     _commonUniforms.colorLoc = glGetUniformLocation(_programId, "uColor");
+    _commonUniforms.stageDimLoc = glGetUniformLocation(_programId, "uStageDim");
 
     // Add to cache to avoid duplicate lookups
     if (_commonUniforms.modelLoc != -1)

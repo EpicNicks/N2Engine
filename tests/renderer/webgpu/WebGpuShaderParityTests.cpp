@@ -658,7 +658,7 @@ TEST(WebGpuShaderParityTest, EveryUniformStructDeclaresTheTablesMembersAtTheOffs
         const std::string label = file.label;
 
         const std::uint32_t perDrawEnd = ExpectBlockMatchesTable(module, 0, 0, Gpu::kPerDraw, label + " per-draw block");
-        EXPECT_EQ(perDrawEnd, Gpu::kPerDrawBlockSize) << label << ": the per-draw block is 3 mat4x4";
+        EXPECT_EQ(perDrawEnd, Gpu::kPerDrawBlockSize) << label << ": the per-draw block is 3 mat4x4 and uStageDim";
 
         const std::uint32_t materialEnd =
             ExpectBlockMatchesTable(module, 1, 0, Gpu::MaterialUniforms(file.shader), label + " material block");

@@ -382,7 +382,8 @@ TEST(EditorServerLoggingTest, PolledCommandsAreTheOnesClientsPoll)
                                         CommandType::RemoveComponent, CommandType::SetComponentFields,
                                         CommandType::SetImportSettings, CommandType::WriteTextAsset,
                                         CommandType::CreateScriptAsset, CommandType::CreateFolder,
-                                        CommandType::MoveAsset})
+                                        CommandType::MoveAsset, CommandType::OpenPrefabStage,
+                                        CommandType::SavePrefabStage, CommandType::ClosePrefabStage})
     {
         EXPECT_FALSE(EditorServer::IsPolledCommand(static_cast<uint8_t>(notPolled))) << static_cast<int>(notPolled);
     }

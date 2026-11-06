@@ -61,6 +61,22 @@ namespace
         return (to8(a) << 24) | (to8(b) << 16) | (to8(g) << 8) | to8(r);
     }
 
+    // RenderState::dim applied to a packed pixel (the prefab stage's dimmed scene): the same maths as the GPU shaders
+    // (RenderState::StageDimmed), on the colour the draw would write; alpha unchanged
+    inline uint32_t DimPacked(const uint32_t rgba, const float dim)
+    {
+        float r = float(rgba & 0xFFu) / 255.f;
+        float g = float((rgba >> 8) & 0xFFu) / 255.f;
+        float b = float((rgba >> 16) & 0xFFu) / 255.f;
+        RenderState::StageDimmed(r, g, b, dim);
+        auto to8 = [](float x) -> uint32_t
+        {
+            x = std::clamp(x, 0.f, 1.f);
+            return (uint32_t)(x * 255.f + 0.5f);
+        };
+        return (rgba & 0xFF000000u) | (to8(b) << 16) | (to8(g) << 8) | to8(r);
+    }
+
     // Which pixel path a draw takes, chosen once per draw
     enum class ShadeKind : uint8_t
     {
@@ -96,6 +112,8 @@ namespace
         // so such meshes (every built-in one) shade exactly as they did before vertex colour was read.
         bool vertexColor = false;
         uint32_t flatColor = 0xFFFFFFFF;  // unlit + untextured: constant per draw
+        // RenderState::dim of the draw (0: none), applied to every pixel it writes
+        float dim = 0.f;
 
         // Text effects (text only). Off unless an outline or shadow is drawn, and then the text pixel path
         // is exactly the one without effects.
@@ -977,7 +995,7 @@ namespace
                         if (covered)
                         {
                             if (rs.depthWrite && writesDepth) drow[px] = z;
-                            crow[px] = colOut;
+                            crow[px] = mat.dim > 0.f ? DimPacked(colOut, mat.dim) : colOut;
                         }
                     }
                 }
@@ -1335,7 +1353,8 @@ void SoftwareRenderer::RecordDraw(IMesh* mesh, const float* modelMatrix, IMateri
     // Copied now, on the main thread: a change to the material after this call affects later draws only,
     // as OpenGL applies uniforms when the draw is submitted
     cmd.material = SnapshotMaterial(*swMat);
-    cmd.state = state;
+    // With the frame's stage dim (SetStageDim) as it is now: the draw keeps it however the queue is reordered
+    cmd.state = WithStageDim(state);
     cmd.wireframe = m_wireframe;
     memcpy(cmd.modelMatrix, modelMatrix, 64);
     memcpy(cmd.view, m_view, 64);
@@ -1426,6 +1445,8 @@ void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, con
     // Everything the pixel loop needs, resolved ONCE per draw. The old path
     // paid string-keyed uniform lookups and dynamic_casts per pixel.
     ResolvedMat rm = ResolveMaterial(material);
+    // The prefab stage's dim travels in the draw's own state (recorded at DrawMesh, so a reordered draw keeps it)
+    rm.dim = state.dim;
     // Vertex colour only matters when some vertex isn't white (see ResolvedMat::vertexColor)
     rm.vertexColor = mesh->hasVertexColors; // found once per CreateMesh/UpdateMesh, not per draw
     const ShadeKind kind = rm.Kind();

@@ -20,7 +20,9 @@
 //
 // Blocks (std140):
 //   set 0, binding 0  PerDraw   (dynamic offset per draw)  uModel, uView, uProjection: row-major matrices, copied as the
-//                                                          engine gives them (the GLSL says row_major), 192 bytes
+//                                                          engine gives them (the GLSL says row_major), then uStageDim
+//                                                          (RenderState::dim of the draw), 196 bytes (a binding covers
+//                                                          208, the block rounded up to its 16-byte alignment)
 //   set 0, binding 1  Lighting  (dynamic offset per draw)  scene lighting for the lit shader (stage C: UpdateSceneLighting
 //                                                          keeps a CPU copy; the first lit draw after each update copies
 //                                                          it into the frame's ring, see VulkanDraw.cpp)
@@ -84,7 +86,10 @@ namespace Renderer::Gpu::ShaderInterface
     };
 
     // ---- Fixed sizes -------------------------------------------------------------------------------------------------
-    inline constexpr std::uint32_t kPerDrawBlockSize = 192;   // 3 mat4
+    inline constexpr std::uint32_t kPerDrawBlockSize = 196;   // 3 mat4 and a float
+    /// What a per-draw binding covers: the block rounded up to its 16-byte alignment (a WGSL struct's size, which WebGPU
+    /// requires a binding to cover)
+    inline constexpr std::uint32_t kPerDrawBindingSize = 208;
     /// The range every material descriptor covers: at least the largest material block (the lit one is 72 bytes, the
     /// text one 92), so one descriptor set layout serves every shader
     inline constexpr std::uint32_t kMaterialBlockRange = 128;
@@ -116,10 +121,12 @@ namespace Renderer::Gpu::ShaderInterface
     inline constexpr std::array<Attribute, 3> kTextAttributes{kPosition, kTexCoord, kColor};
 
     // ---- Uniforms ---------------------------------------------------------------------------------------------------
-    inline constexpr std::array<Uniform, 3> kPerDraw{{
+    inline constexpr std::array<Uniform, 4> kPerDraw{{
         {"uModel", Block::PerDraw, 0, UniformType::Mat4, 64, 1},
         {"uView", Block::PerDraw, 64, UniformType::Mat4, 64, 1},
         {"uProjection", Block::PerDraw, 128, UniformType::Mat4, 64, 1},
+        // The prefab stage's dim (RenderState::dim, IRenderer::SetStageDim): 0 for every other draw
+        {"uStageDim", Block::PerDraw, 192, UniformType::Float, 4, 1},
     }};
 
     inline constexpr std::array<Uniform, 3> kUnlitMaterial{{

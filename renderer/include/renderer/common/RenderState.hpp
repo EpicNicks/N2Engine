@@ -32,6 +32,36 @@ namespace Renderer::Common
         /// With blend: add the source (SRC_ALPHA, ONE) instead of mixing it with what is behind (fire, sparks).
         /// The software renderer, which can't blend at all, ignores it too.
         bool additive = false;
+        /**
+         * How much the draw is dimmed, 0 (not at all, the default) to 1: the colour it would write is mixed towards a
+         * darkened grey of its own luminance, rgb = mix(rgb, luma(rgb) * DimGrey, dim), alpha unchanged (StageDimmed).
+         * The editor's prefab stage draws the scene around a prefab with it (In Scene mode), so the scene stays readable
+         * but is clearly not what is being edited. It travels with the draw like the rest of this state; a renderer
+         * applies IRenderer::SetStageDim's value to every draw recorded while it is set (IRenderer::WithStageDim).
+         * Every backend's built-in shaders (unlit, lit, text) apply it; a material with a custom OpenGL shader that does
+         * not declare `uniform float uStageDim` is drawn undimmed.
+         */
+        float dim = 0.0f;
+
+        /// The luminance weights and the grey a fully dimmed colour becomes (times its luminance)
+        static constexpr float DimLumaR = 0.299f;
+        static constexpr float DimLumaG = 0.587f;
+        static constexpr float DimLumaB = 0.114f;
+        static constexpr float DimGrey = 0.45f;
+
+        /// The dim maths every backend's shaders implement, on one colour (0..1 components; alpha is not touched)
+        static constexpr void StageDimmed(float &r, float &g, float &b, const float dim)
+        {
+            if (dim <= 0.0f)
+            {
+                return;
+            }
+            const float amount = dim < 1.0f ? dim : 1.0f;
+            const float grey = (DimLumaR * r + DimLumaG * g + DimLumaB * b) * DimGrey;
+            r += (grey - r) * amount;
+            g += (grey - g) * amount;
+            b += (grey - b) * amount;
+        }
 
         /// The state the Opaque render queue draws with (the defaults): depth-tested and written, not blended.
         /// Opaque and alpha-mask (cutout) materials draw with it.

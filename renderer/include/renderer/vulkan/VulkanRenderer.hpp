@@ -252,6 +252,8 @@ namespace Renderer
             /// fillModeNonSolid; otherwise ignored, with one log line
             void SetWireframe(bool enabled) override;
             [[nodiscard]] const char* GetRendererName() const override { return "Vulkan Renderer"; }
+            /// The per-draw block carries uStageDim (RenderState::dim) to the built-in shaders
+            [[nodiscard]] bool SupportsStageDim() const override { return true; }
 
             // GPU selection: stage F
             std::vector<GPUInfo> GetCompatibleGPUs();
