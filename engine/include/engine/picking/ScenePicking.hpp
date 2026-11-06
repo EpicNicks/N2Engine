@@ -61,6 +61,11 @@ namespace N2Engine::Picking
         Math::Vector3 point{0.0f, 0.0f, 0.0f};
         /// From the ray's origin to the point, in units of the ray's direction (world units for a unit direction)
         float distance = 0.0f;
+        /// The unit normal of the surface at the point, in the world, turned to face the ray's origin (against the
+        /// ray's direction): the flat normal of the triangle hit (a mesh, a text rectangle), the face of the box a
+        /// shape picked by its box was entered through, the outward normal of a pick sphere, a world canvas's plane.
+        /// The ray's direction reversed when the ray starts inside a box or a pick sphere; (0, 0, 0) for a miss.
+        Math::Vector3 normal{0.0f, 0.0f, 0.0f};
     };
 
     /// The nearest object under `ray` in the scene's hierarchy (see above); gameObject is nullptr for none

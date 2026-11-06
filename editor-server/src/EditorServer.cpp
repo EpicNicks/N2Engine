@@ -5410,6 +5410,7 @@ namespace N2Engine::Editor
         std::string entityId;
         Math::Vector3 point{0.0f, 0.0f, 0.0f};
         float distance = 0.0f;
+        Math::Vector3 normal{0.0f, 0.0f, 0.0f}; // since 1.27.0: zero for a miss
         // A point outside the viewport is over nothing (the same rule as the UI's window hit test)
         if (cmd.x >= 0.0f && cmd.y >= 0.0f && cmd.x < static_cast<float>(_viewportWidth) &&
             cmd.y < static_cast<float>(_viewportHeight))
@@ -5431,11 +5432,12 @@ namespace N2Engine::Editor
                 entityId = hit.gameObject->GetUUID().ToString();
                 point = hit.point;
                 distance = hit.distance;
+                normal = hit.normal;
             }
         }
 
         BufferWriter response;
-        WritePickResult(response, entityId, point, distance);
+        WritePickResult(response, entityId, point, distance, normal);
         SendResponse(clientSocket, response.Release());
     }
 
