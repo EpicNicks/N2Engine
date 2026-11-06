@@ -23,6 +23,7 @@
 #include <engine/io/ResourceLoader.hpp>
 #include <engine/io/ResourcePath.hpp>
 #include <engine/io/ResourceUUID.hpp>
+#include <engine/prefabs/Prefab.hpp>
 #include <engine/sceneManagement/Scene.hpp>
 #include <engine/sceneManagement/SceneManager.hpp>
 #include <engine/scripting/LuaComponent.hpp>
@@ -367,6 +368,15 @@ namespace
         return result.get<T>();
     }
 
+    /// A .prefab file as the engine writes one (Prefab::Serialize): a root object, with one child unless child is empty
+    std::string PrefabText(const std::string &root, const std::string &child)
+    {
+        const GameObject::Ptr object = GameObject::Create(root);
+        if (!child.empty())
+            object->AddChild(GameObject::Create(child), false);
+        return Prefab(root, object).Serialize().dump();
+    }
+
     std::size_t RootsNamed(const std::string &name)
     {
         std::size_t count = 0;
@@ -389,7 +399,7 @@ namespace
 TEST_F(EditorAssetMoveTest, AMovedPrefabSpawnsFromLuaByItsNewPathByItsUuidAndThroughAHandle)
 {
     ASSERT_TRUE(LuaRuntime::Instance().Initialize());
-    WriteAsset("prefabs/enemy.prefab", R"({"name":"Enemy","rootObject":{"name":"Enemy","children":[{"name":"Eye"}]}})");
+    WriteAsset("prefabs/enemy.prefab", PrefabText("Enemy", "Eye"));
     Rescan();
     const std::string uuid = Info("res://prefabs/enemy.prefab").at("uuid").get<std::string>();
     CloseSceneFile();
@@ -426,14 +436,14 @@ TEST_F(EditorAssetMoveTest, AMovedPrefabSpawnsFromLuaByItsNewPathByItsUuidAndThr
 TEST_F(EditorAssetMoveTest, APrefabEditedOnDiskSpawnsItsNewContentAfterTheWatcherSeesIt)
 {
     ASSERT_TRUE(LuaRuntime::Instance().Initialize());
-    WriteAsset("prefabs/enemy.prefab", R"({"name":"Enemy","rootObject":{"name":"Enemy"}})");
+    WriteAsset("prefabs/enemy.prefab", PrefabText("Enemy", ""));
     Rescan();
     CloseSceneFile();
     RunLua("movetest_before = Prefab.Instantiate('res://prefabs/enemy.prefab'); movetest_handle = movetest_before:GetPrefab()");
     ASSERT_NE(Loader().GetCached<Base::Asset>(IO::ResourcePath("res://prefabs/enemy.prefab")), nullptr) << "cached";
 
     // Another root name and a child (another size, so the watcher's fingerprint changes whatever the clock's resolution)
-    WriteAsset("prefabs/enemy.prefab", R"({"name":"Enemy","rootObject":{"name":"Boss","children":[{"name":"Crown"}]}})");
+    WriteAsset("prefabs/enemy.prefab", PrefabText("Boss", "Crown"));
     EXPECT_TRUE(server.PollAssets());
 
     RunLua("movetest_after = movetest_handle:Instantiate()");
