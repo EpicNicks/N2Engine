@@ -703,6 +703,45 @@ TEST_F(EditorLuaDeclarationTest, APrefabFieldTakesOnlyAPrefabAssetAndReportsItsP
     ExpectHostIntactAndNothingRan("after editing the prefab field");
 }
 
+// The golden vector of the PrefabRef field kind: test-vectors.json's LuaFields response variant (written by
+// generate_test_vectors.py, checked byte for byte against the TypeScript codecs and the server's builder) is exactly the
+// schema the host answers for a script declaring `enemy = { type = "Prefab" }` whose value names
+// res://prefabs/enemy.prefab. A change to what GetLuaFields says about a prefab field fails here until the vector follows.
+TEST_F(EditorLuaDeclarationTest, TheSchemaOfAPrefabFieldIsTheGoldenVector)
+{
+    std::ifstream vectorsFile(N2_PROTOCOL_TEST_VECTORS);
+    ASSERT_TRUE(vectorsFile.good()) << N2_PROTOCOL_TEST_VECTORS;
+    const json vectors = json::parse(vectorsFile);
+    json golden;
+    for (const json &variant : vectors.at("responseVariants"))
+    {
+        if (variant.at("response") == "LuaFields")
+            golden = variant.at("fields").at("schema");
+    }
+    ASSERT_TRUE(golden.is_object()) << "test-vectors.json has no LuaFields response variant";
+
+    WriteAsset("scripts/Spawner.lua", R"LUA(
+        local S = {}
+        S.__index = S
+        S.SerializableFields = { enemy = { type = "Prefab" } }
+        return S
+    )LUA");
+    WriteAsset("prefabs/enemy.prefab", R"({"name":"Enemy","rootObject":{"name":"Enemy"}})");
+    Rescan();
+    ASSERT_EQ(OpenScene("res://scenes/Main.scene").type, SceneInfoType);
+    const Scripted scripted = ScriptedObject("res://scripts/Spawner.lua");
+    ASSERT_EQ(SetFields(scripted.entity, scripted.component,
+                        json{{"scriptData", {{"enemy", ScriptId("res://prefabs/enemy.prefab")}}}}).type,
+              ComponentDataType);
+
+    const Frame frame = Execute(server, CommandType::GetLuaFields, Strings({scripted.entity, scripted.component}));
+    ASSERT_EQ(frame.type, LuaFieldsType) << frame.Text();
+    BufferReader r(frame.payload);
+    const json schema = ReadJson(r);
+    EXPECT_FALSE(r.HasData());
+    EXPECT_EQ(schema, golden) << "the host answers " << schema.dump() << "\nthe vector is " << golden.dump();
+}
+
 TEST_F(EditorLuaDeclarationTest, HelloAdvertisesPrefabFields)
 {
     const auto capabilities = EditorServer::Capabilities();

@@ -338,6 +338,111 @@ TEST_F(EditorAssetMoveTest, ARunningScriptFollowsItsFileAndKeepsItsState)
     EXPECT_GT(lua["move_runs"].get<int>(), runsBefore + 10);
 }
 
+// ==================== Prefab spawns from Lua (editor protocol 1.25.0) after a move or an edit ====================
+
+namespace
+{
+    void RunLua(const std::string &code)
+    {
+        const sol::protected_function_result result =
+            LuaRuntime::Instance().GetState().safe_script(code, sol::script_pass_on_error);
+        if (!result.valid())
+        {
+            const sol::error error = result;
+            FAIL() << "Lua error: " << error.what() << "\nin: " << code;
+        }
+    }
+
+    template <typename T>
+    T EvalLua(const std::string &expression)
+    {
+        const sol::protected_function_result result =
+            LuaRuntime::Instance().GetState().safe_script("return " + expression, sol::script_pass_on_error);
+        if (!result.valid())
+        {
+            const sol::error error = result;
+            ADD_FAILURE() << "Lua error: " << error.what() << "\nin: " << expression;
+            return T{};
+        }
+        return result.get<T>();
+    }
+
+    std::size_t RootsNamed(const std::string &name)
+    {
+        std::size_t count = 0;
+        for (const GameObject::Ptr &root : SceneManager::GetCurSceneRef().GetRootGameObjects())
+            count += root->GetName() == name ? 1 : 0;
+        return count;
+    }
+
+    void ClearMoveTestGlobals()
+    {
+        RunLua("movetest_before = nil; movetest_handle = nil; movetest_byPath = nil; movetest_byUuid = nil; "
+               "movetest_byHandle = nil; movetest_after = nil");
+        LuaRuntime::Instance().GetState().collect_garbage();
+    }
+}
+
+// A prefab keeps its UUID through MoveAsset (#289), so a script that names it by UUID (what a Prefab field stores) or
+// holds a Prefab handle spawns it from the new place; the new path works and the old one names nothing. The prefab was
+// loaded (cached) before the move, so this also covers the cache entry made under the old path.
+TEST_F(EditorAssetMoveTest, AMovedPrefabSpawnsFromLuaByItsNewPathByItsUuidAndThroughAHandle)
+{
+    ASSERT_TRUE(LuaRuntime::Instance().Initialize());
+    WriteAsset("prefabs/enemy.prefab", R"({"name":"Enemy","rootObject":{"name":"Enemy","children":[{"name":"Eye"}]}})");
+    Rescan();
+    const std::string uuid = Info("res://prefabs/enemy.prefab").at("uuid").get<std::string>();
+    CloseSceneFile();
+
+    RunLua("movetest_before = Prefab.Instantiate('res://prefabs/enemy.prefab'); movetest_handle = movetest_before:GetPrefab()");
+    ASSERT_EQ(RootsNamed("Enemy"), 1u);
+    EXPECT_EQ(EvalLua<std::string>("movetest_handle.uuid"), uuid);
+
+    ASSERT_EQ(Result(MoveOne("res://prefabs/enemy.prefab", "res://enemies/enemy.prefab")).at("moved").size(), 1u);
+
+    EXPECT_EQ(EvalLua<std::string>("movetest_handle.path"), "res://enemies/enemy.prefab") << "a handle follows the file";
+    EXPECT_TRUE(EvalLua<bool>("movetest_handle.valid"));
+    RunLua("movetest_byPath = Prefab.Instantiate('res://enemies/enemy.prefab')");
+    RunLua("movetest_byUuid = Prefab.Instantiate('" + uuid + "')");
+    RunLua("movetest_byHandle = movetest_handle:Instantiate()");
+    EXPECT_EQ(RootsNamed("Enemy"), 4u);
+    for (const char *spawned : {"movetest_byPath", "movetest_byUuid", "movetest_byHandle"})
+    {
+        const std::string name = spawned;
+        EXPECT_EQ(EvalLua<std::string>(name + ":FindChild('Eye'):GetName()"), "Eye") << name;
+        EXPECT_EQ(EvalLua<std::string>(name + ":GetPrefab().uuid"), uuid) << name << ": linked by the same UUID";
+        EXPECT_EQ(EvalLua<std::string>(name + ":GetPrefab().path"), "res://enemies/enemy.prefab") << name;
+    }
+
+    // The old path names nothing now: a catchable error, nothing added
+    EXPECT_FALSE(EvalLua<bool>("pcall(Prefab.Instantiate, 'res://prefabs/enemy.prefab')"));
+    EXPECT_EQ(RootsNamed("Enemy"), 4u);
+    ClearMoveTestGlobals();
+}
+
+// A prefab edited on disk while the host runs: the watcher (PollAssets) reloads what was cached from the old file, so
+// the next spawn, through the same handle, builds the new content. (A running game has no watcher: it keeps the copy
+// it loaded until ResourceLoader::Reload, see docs/scripting-lua.html.)
+TEST_F(EditorAssetMoveTest, APrefabEditedOnDiskSpawnsItsNewContentAfterTheWatcherSeesIt)
+{
+    ASSERT_TRUE(LuaRuntime::Instance().Initialize());
+    WriteAsset("prefabs/enemy.prefab", R"({"name":"Enemy","rootObject":{"name":"Enemy"}})");
+    Rescan();
+    CloseSceneFile();
+    RunLua("movetest_before = Prefab.Instantiate('res://prefabs/enemy.prefab'); movetest_handle = movetest_before:GetPrefab()");
+    ASSERT_NE(Loader().GetCached<Base::Asset>(IO::ResourcePath("res://prefabs/enemy.prefab")), nullptr) << "cached";
+
+    // Another root name and a child (another size, so the watcher's fingerprint changes whatever the clock's resolution)
+    WriteAsset("prefabs/enemy.prefab", R"({"name":"Enemy","rootObject":{"name":"Boss","children":[{"name":"Crown"}]}})");
+    EXPECT_TRUE(server.PollAssets());
+
+    RunLua("movetest_after = movetest_handle:Instantiate()");
+    EXPECT_EQ(EvalLua<std::string>("movetest_after:GetName()"), "Boss");
+    EXPECT_EQ(EvalLua<std::string>("movetest_after:FindChild('Crown'):GetName()"), "Crown");
+    EXPECT_EQ(RootsNamed("Enemy"), 1u) << "the instance made before the edit is left as it was";
+    ClearMoveTestGlobals();
+}
+
 TEST_F(EditorAssetMoveTest, ScriptsThatStillNameTheOldPathsAreWarnedAbout)
 {
     WriteAsset("scripts/util.lua", "return {}\n");

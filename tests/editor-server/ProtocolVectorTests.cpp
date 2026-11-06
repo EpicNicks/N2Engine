@@ -277,28 +277,67 @@ TEST(ProtocolVectorTest, ServerBuildersWriteTheVectorResponses)
     }
 }
 
-// A response with a second shape has a vector of its own (FrameUpdate that isn't modified: 13 bytes, no pixels)
+// A response with a second shape, or a json field whose shape is pinned, has a vector of its own (FrameUpdate that isn't
+// modified: 13 bytes, no pixels; LuaFields with a PrefabRef field). A json field is compared as parsed values, as above.
 TEST(ProtocolVectorTest, ServerBuildersWriteTheResponseVariants)
 {
+    std::ifstream file(N2_PROTOCOL_JSON);
+    const nlohmann::ordered_json spec = nlohmann::ordered_json::parse(file);
     const json variants = ProtocolVectors::Load().value("responseVariants", json::array());
+    bool sawPrefabRef = false;
     for (const json &variant : variants)
     {
         const std::string name = variant.at("response").get<std::string>();
         const std::vector<uint8_t> payload = ProtocolVectors::FromHex(variant.at("payload").get<std::string>());
-        BufferWriter expected;
-        expected.WriteU8(static_cast<uint8_t>(std::stoi(variant.at("id").get<std::string>(), nullptr, 16)));
-        expected.WriteU32(static_cast<uint32_t>(payload.size()));
-        expected.WriteBytes(payload);
-        EXPECT_EQ(ProtocolVectors::ToHex(ProtocolVectors::BuildResponse(name, variant)),
-                  ProtocolVectors::ToHex(expected.Release()))
-            << name;
+        const uint8_t id = static_cast<uint8_t>(std::stoi(variant.at("id").get<std::string>(), nullptr, 16));
+        const std::vector<uint8_t> frame = ProtocolVectors::BuildResponse(name, variant);
+        ASSERT_GE(frame.size(), 5u) << name;
+
+        nlohmann::ordered_json fields = nlohmann::ordered_json::object();
+        for (const auto &[command, declaration] : spec.at("commands").items())
+        {
+            if (declaration.at("response").at("type") == name && declaration.at("response").contains("fields"))
+                fields = declaration.at("response").at("fields");
+        }
+        if (ProtocolVectors::HasJsonField(fields))
+        {
+            EXPECT_EQ(frame[0], id) << name;
+            const std::span<const uint8_t> written = std::span<const uint8_t>(frame).subspan(5);
+            json writtenValues;
+            ASSERT_NO_THROW(writtenValues = ProtocolVectors::DecodeBySpec(spec, fields, written)) << name;
+            EXPECT_EQ(writtenValues, ProtocolVectors::DecodeBySpec(spec, fields, payload)) << name;
+        }
+        else
+        {
+            BufferWriter expected;
+            expected.WriteU8(id);
+            expected.WriteU32(static_cast<uint32_t>(payload.size()));
+            expected.WriteBytes(payload);
+            EXPECT_EQ(ProtocolVectors::ToHex(frame), ProtocolVectors::ToHex(expected.Release())) << name;
+        }
         if (name == "FrameUpdate")
         {
             EXPECT_EQ(payload.size(), 13u) << "revision, modified, width, height: no pixels";
             EXPECT_EQ(variant.at("fields").at("modified"), false);
         }
+        if (name == "LuaFields")
+        {
+            // The PrefabRef field of editor protocol 1.25.0, as GetLuaFields describes it
+            for (const json &field : variant.at("fields").at("schema").at("fields"))
+            {
+                if (field.at("kind") == "PrefabRef")
+                {
+                    sawPrefabRef = true;
+                    EXPECT_EQ(field.at("typeName"), "Prefab");
+                    EXPECT_EQ(field.at("assetType"), "Prefab");
+                    EXPECT_EQ(field.at("container"), "scriptData");
+                    EXPECT_TRUE(field.contains("assetPath"));
+                }
+            }
+        }
     }
     EXPECT_FALSE(variants.empty());
+    EXPECT_TRUE(sawPrefabRef) << "test-vectors.json has no LuaFields vector with a PrefabRef field";
 }
 
 // ==================== quat, mat4 and json ====================

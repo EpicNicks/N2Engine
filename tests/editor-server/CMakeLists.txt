@@ -78,9 +78,11 @@ else()
 endif()
 # tests/common has the deep scene JSON builder (EditorSceneDepthTests)
 target_include_directories(editor_project_tests PRIVATE ${CMAKE_SOURCE_DIR}/tests/common)
-# EditorExtensionAlignToolsTests loads lua_project/editor/AlignTools.lua through the extension host from where it lies
+# EditorExtensionAlignToolsTests loads lua_project/editor/AlignTools.lua through the extension host from where it lies;
+# EditorLuaDeclarationTests compares GetLuaFields of a prefab field with the golden vector of the PrefabRef kind
 target_compile_definitions(editor_project_tests PRIVATE
         N2_LUA_PROJECT_DIR="${CMAKE_SOURCE_DIR}/lua_project"
+        N2_PROTOCOL_TEST_VECTORS="${CMAKE_CURRENT_SOURCE_DIR}/../../editor-server/protocol/test-vectors.json"
 )
 add_test(NAME editor_project_tests COMMAND editor_project_tests)
 

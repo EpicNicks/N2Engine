@@ -2762,6 +2762,39 @@
         "pixels": ""
       },
       "payload": "78563412007a5634127b563412"
+    },
+    {
+      "response": "LuaFields",
+      "id": "0x14",
+      "fields": {
+        "schema": {
+          "typeName": "LuaComponent",
+          "singleton": false,
+          "fields": [
+            {
+              "name": "scriptUUID",
+              "displayName": "Script",
+              "kind": "AssetRef",
+              "typeName": "LuaScript",
+              "hidden": false,
+              "readOnly": false,
+              "assetType": "LuaScript"
+            },
+            {
+              "name": "enemy",
+              "displayName": "Enemy",
+              "kind": "PrefabRef",
+              "typeName": "Prefab",
+              "hidden": false,
+              "readOnly": false,
+              "assetType": "Prefab",
+              "assetPath": "res://prefabs/enemy.prefab",
+              "container": "scriptData"
+            }
+          ]
+        }
+      },
+      "payload": "8b0100007b226669656c6473223a5b7b22617373657454797065223a224c7561536372697074222c22646973706c61794e616d65223a22536372697074222c2268696464656e223a66616c73652c226b696e64223a224173736574526566222c226e616d65223a2273637269707455554944222c22726561644f6e6c79223a66616c73652c22747970654e616d65223a224c7561536372697074227d2c7b22617373657450617468223a227265733a2f2f707265666162732f656e656d792e707265666162222c22617373657454797065223a22507265666162222c22636f6e7461696e6572223a2273637269707444617461222c22646973706c61794e616d65223a22456e656d79222c2268696464656e223a66616c73652c226b696e64223a22507265666162526566222c226e616d65223a22656e656d79222c22726561644f6e6c79223a66616c73652c22747970654e616d65223a22507265666162227d5d2c2273696e676c65746f6e223a66616c73652c22747970654e616d65223a224c7561436f6d706f6e656e74227d"
     }
   ],
   "shortPayloads": [

@@ -30,10 +30,26 @@ OUTPUT_PATH = Path(__file__).parent.parent / "test-vectors.json"
 # The array length of every sample array
 ARRAY_LENGTH = 2
 
-# Extra response vectors for a response whose layout has a second shape: (response, the sample fields to replace).
+# Extra response vectors for a response whose layout has a second shape, or whose json field has a shape worth pinning:
+# (response, the sample fields to replace).
 # FrameUpdate with modified false carries no pixels (the "not modified" answer, 13 bytes of payload).
+# LuaFields with a PrefabRef field (since 1.25.0): the schema GetLuaFields answers for a script that declares
+# `enemy = { type = "Prefab" }` once the field names res://prefabs/enemy.prefab. editor_project_tests checks that the host
+# answers exactly this schema (EditorLuaDeclarationTest.TheSchemaOfAPrefabFieldIsTheGoldenVector).
+LUA_FIELDS_PREFAB_SCHEMA = {
+    "typeName": "LuaComponent",
+    "singleton": False,
+    "fields": [
+        {"name": "scriptUUID", "displayName": "Script", "kind": "AssetRef", "typeName": "LuaScript",
+         "hidden": False, "readOnly": False, "assetType": "LuaScript"},
+        {"name": "enemy", "displayName": "Enemy", "kind": "PrefabRef", "typeName": "Prefab",
+         "hidden": False, "readOnly": False, "assetType": "Prefab", "assetPath": "res://prefabs/enemy.prefab",
+         "container": "scriptData"},
+    ],
+}
 RESPONSE_VARIANTS = [
     ("FrameUpdate", {"modified": False, "pixels": ""}),
+    ("LuaFields", {"schema": LUA_FIELDS_PREFAB_SCHEMA}),
 ]
 
 
