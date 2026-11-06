@@ -1,8 +1,10 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -402,6 +404,59 @@ TEST_F(LuaPrefabSpawnTest, ANetworkObjectPrefabIsRefusedWhileASessionRunsAndSpaw
     }
     Run("prefabtest_other = Prefab.Instantiate('res://prefabs/networked.prefab')");
     EXPECT_EQ(RootCount(), before + 2);
+}
+
+// The cost of a spawn: 1000 instances of the two-object prefab from one Lua loop, through a handle and by path. The
+// prefab is loaded once (the resource cache), so each spawn is the checks plus building two objects. The bound is
+// generous (Debug builds, sanitizers, the web build under node, a busy runner): it catches a spawn that reloads or
+// rescans per call, not a few percent. The time is printed as [PREFAB-SPAWN] for the log.
+TEST_F(LuaPrefabSpawnTest, AThousandSpawnsFromOneLoopStayWellUnderTheBound)
+{
+    Spawner(json{{"enemy", Uuid(EnemyPath)}});
+    const std::size_t before = RootCount();
+    Run("prefabtest_go = prefabtest_enemy:Instantiate()"); // the load, outside the timing
+
+    const auto start = std::chrono::steady_clock::now();
+    Run(std::string(R"(
+        for i = 1, 500 do prefabtest_enemy:Instantiate(nil, Vector3(i, 0, 0)) end
+        for i = 1, 500 do Prefab.Instantiate(')") + EnemyPath + R"(') end
+    )");
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+    std::cout << "[PREFAB-SPAWN] 1000 spawns of a 2-object prefab: " << elapsed.count() << " ms\n";
+
+    EXPECT_EQ(RootCount(), before + 1001);
+    EXPECT_LT(elapsed, std::chrono::seconds(60)) << "1000 spawns took " << elapsed.count() << " ms";
+    // Every instance is whole and linked
+    std::size_t linked = 0;
+    for (const GameObject::Ptr &root : SceneManager::GetCurSceneRef().GetRootGameObjects())
+    {
+        if (root->GetName() == "Enemy")
+        {
+            EXPECT_EQ(root->GetChildCount(), 1u);
+            linked += root->GetPrefabReference().has_value() ? 1 : 0;
+        }
+    }
+    EXPECT_EQ(linked, 1001u);
+}
+
+// A prefab edited on disk: the cached copy is what a spawn builds until ResourceLoader::Reload drops it (the editor
+// host's watcher does that; a running game has no watcher), then the next spawn through the same handle reads the file
+TEST_F(LuaPrefabSpawnTest, AfterAReloadTheNextSpawnBuildsTheEditedPrefab)
+{
+    Spawner(json{{"enemy", Uuid(EnemyPath)}});
+    Run("prefabtest_go = prefabtest_enemy:Instantiate()");
+    ASSERT_EQ(Eval<std::string>("prefabtest_go:GetName()"), "Enemy");
+
+    const GameObject::Ptr boss = GameObject::Create("Boss");
+    boss->AddChild(GameObject::Create("Crown"), false);
+    WritePrefab("prefabs/enemy.prefab", boss);
+    ASSERT_TRUE(IO::ResourceLoader::Instance().Reload(IO::ResourcePath(EnemyPath)));
+
+    Run("prefabtest_other = prefabtest_enemy:Instantiate()");
+    EXPECT_EQ(Eval<std::string>("prefabtest_other:GetName()"), "Boss");
+    EXPECT_EQ(Eval<std::string>("prefabtest_other:FindChild('Crown'):GetName()"), "Crown");
+    EXPECT_EQ(Eval<std::string>("prefabtest_other:GetPrefab().uuid"), Uuid(EnemyPath)) << "the same asset";
+    EXPECT_EQ(Eval<std::string>("prefabtest_go:GetName()"), "Enemy") << "an earlier instance is not touched";
 }
 
 TEST_F(LuaPrefabSpawnTest, APrefabOverTheLimitsIsRefused)
