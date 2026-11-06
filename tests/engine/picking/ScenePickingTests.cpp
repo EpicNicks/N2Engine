@@ -727,3 +727,113 @@ TEST(EntityBoundsTest, AnInactiveUiElementOrCanvasHasNoRect)
     canvas->SetActive(false);
     EXPECT_FALSE(Picking::GetGameObjectBounds(*panel).has_value()) << "nor is one under an inactive canvas";
 }
+
+// ==================== The surface normal at the hit (protocol 1.27.0, PickResult's normal) ====================
+
+namespace
+{
+    void ExpectUnitNormal(const Picking::PickHit &hit, const Vector3 &expected, const char *what)
+    {
+        ASSERT_NE(hit.gameObject, nullptr) << what;
+        ExpectVector(hit.normal, expected, what);
+        EXPECT_NEAR(hit.normal.Length(), 1.0f, Tolerance) << what << ": a unit vector";
+    }
+}
+
+TEST(PickingNormalTest, AMeshHitHasItsTrianglesNormalFacingTheRay)
+{
+    auto scene = EditScene("Normal_Cube");
+    AddCube(*scene, "Cube", Vector3(0.0f, 0.0f, 0.0f));
+
+    ExpectUnitNormal(Picking::PickGameObject(*scene, Down(0.2f, 0.1f)), Vector3(0.0f, 0.0f, 1.0f), "front face");
+    ExpectUnitNormal(Picking::PickGameObject(*scene, Ray(Vector3(0.1f, 0.2f, -10.0f), Vector3(0.0f, 0.0f, 1.0f))),
+                     Vector3(0.0f, 0.0f, -1.0f), "back face, from behind");
+    ExpectUnitNormal(Picking::PickGameObject(*scene, Ray(Vector3(10.0f, 0.1f, 0.2f), Vector3(-1.0f, 0.0f, 0.0f))),
+                     Vector3(1.0f, 0.0f, 0.0f), "the +x side");
+
+    // A ray down at 45 degrees passes over the front face (it is at y 0.9 there) and lands on the top at z 0.1
+    const Picking::PickHit top =
+        Picking::PickGameObject(*scene, Ray(Vector3(0.1f, 5.0f, 4.6f), Vector3(0.0f, -1.0f, -1.0f)));
+    ExpectUnitNormal(top, Vector3(0.0f, 1.0f, 0.0f), "top face");
+    ExpectVector(top.point, Vector3(0.1f, 0.5f, 0.1f), "point on the top face");
+
+    // From inside, the far face is hit and its normal still faces the ray's origin
+    ExpectUnitNormal(Picking::PickGameObject(*scene, Down(0.1f, 0.1f, 0.0f)), Vector3(0.0f, 0.0f, 1.0f),
+                     "the face below, seen from inside");
+
+    const Picking::PickHit miss = Picking::PickGameObject(*scene, Down(0.8f, 0.0f));
+    EXPECT_EQ(miss.gameObject, nullptr);
+    ExpectVector(miss.normal, Vector3(0.0f, 0.0f, 0.0f), "a miss has no normal");
+}
+
+TEST(PickingNormalTest, ARotatedMeshHasTheNormalOfItsTurnedFace)
+{
+    auto scene = EditScene("Normal_Rotated");
+    const auto cube = AddCube(*scene, "Cube", Vector3(0.0f, 0.0f, 0.0f));
+    cube->GetPositionable()->SetRotation(
+        Quaternion::FromAxisAngle(Vector3(0.0f, 1.0f, 0.0f), std::numbers::pi_v<float> / 4.0f));
+    // Two faces now meet in an edge facing the ray: right of it is the face turned towards +x, left the other one
+    const float half = std::sqrt(0.5f);
+    ExpectUnitNormal(Picking::PickGameObject(*scene, Down(0.1f, 0.0f)), Vector3(half, 0.0f, half), "right face");
+    ExpectUnitNormal(Picking::PickGameObject(*scene, Down(-0.1f, 0.0f)), Vector3(-half, 0.0f, half), "left face");
+}
+
+TEST(PickingNormalTest, ADeformedMeshHasTheNormalOfTheTriangleDrawn)
+{
+    auto scene = EditScene("Normal_Deformed");
+    auto object = GameObject::Create("Soft");
+    auto *renderer = object->AddComponent<Rendering::MeshRenderer>();
+    renderer->SetMesh(Rendering::Mesh::GetBuiltin(Rendering::BuiltinMesh::Cube));
+    scene->AddRootGameObject(object);
+    Renderer::Common::MeshData data = Rendering::Mesh::GetBuiltin(Rendering::BuiltinMesh::Cube)->GetMeshData();
+    for (auto &vertex : data.vertices)
+    {
+        vertex.position[0] += 5.0f;
+    }
+    auto deformed = Rendering::Mesh::Create(std::move(data));
+    ASSERT_NE(deformed, nullptr);
+    renderer->SetDeformedMesh(deformed);
+
+    // A deformed mesh takes the plain triangle loop (RaycastMeshLinear's), which gives the normal too
+    ExpectUnitNormal(Picking::PickGameObject(*scene, Ray(Vector3(-10.0f, 0.1f, 0.1f), Vector3(1.0f, 0.0f, 0.0f))),
+                     Vector3(-1.0f, 0.0f, 0.0f), "the -x side of the moved cube");
+}
+
+TEST(PickingNormalTest, APickSphereHasItsOutwardNormal)
+{
+    auto scene = EditScene("Normal_Sphere");
+    const Vector3 centre(3.0f, 0.0f, 0.0f);
+    AddEmpty(*scene, "Empty", centre);
+
+    const Picking::PickHit hit = Picking::PickGameObject(*scene, Down(3.1f, 0.1f));
+    const Vector3 outward = (hit.point - centre) * (1.0f / Picking::PickSphereRadius);
+    ExpectUnitNormal(hit, outward, "outward from the centre");
+    EXPECT_GT(hit.normal.z, 0.0f) << "on the side the ray came from";
+
+    // A ray that starts inside the sphere meets no surface: the normal is the ray's direction reversed
+    const Picking::PickHit inside = Picking::PickGameObject(*scene, Down(3.0f, 0.0f, 0.0f));
+    EXPECT_NEAR(inside.distance, 0.0f, Tolerance);
+    ExpectUnitNormal(inside, Vector3(0.0f, 0.0f, 1.0f), "back along the ray");
+}
+
+TEST(PickingNormalTest, TextAndAWorldCanvasHaveTheNormalOfTheirPlane)
+{
+    auto scene = EditScene("Normal_Planes");
+    auto label = GameObject::Create("Label");
+    auto *text = label->AddComponent<Rendering::TextRenderer>();
+    text->SetText("Label");
+    scene->AddRootGameObject(label);
+    label->GetPositionable()->SetPosition(Vector3(20.0f, 0.0f, 0.0f));
+    const Text::Rect layout = text->GetLayout().bounds;
+    ASSERT_FALSE(layout.IsEmpty());
+    const float centreX = 20.0f + (layout.minX + layout.maxX) * 0.5f;
+    const float centreY = (layout.minY + layout.maxY) * 0.5f;
+    ExpectUnitNormal(Picking::PickGameObject(*scene, Down(centreX, centreY)), Vector3(0.0f, 0.0f, 1.0f), "text");
+    ExpectUnitNormal(
+        Picking::PickGameObject(*scene, Ray(Vector3(centreX, centreY, -10.0f), Vector3(0.0f, 0.0f, 1.0f))),
+        Vector3(0.0f, 0.0f, -1.0f), "text from behind");
+
+    auto canvas = AddWorldCanvas(*scene, Vector3(0.0f, 0.0f, 0.0f));
+    AddPanel(canvas, "Panel", UI::Rect{0.0f, 0.0f, 50.0f, 100.0f});
+    ExpectUnitNormal(Picking::PickGameObject(*scene, Down(-0.4f, 0.0f)), Vector3(0.0f, 0.0f, 1.0f), "canvas graphic");
+}

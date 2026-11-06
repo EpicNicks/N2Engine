@@ -53,6 +53,68 @@ namespace N2Engine::Picking
     {
         using Matrix4 = Math::Matrix<float, 4, 4>;
 
+        bool FiniteRay(const Math::Ray &ray)
+        {
+            return std::isfinite(ray.origin.x) && std::isfinite(ray.origin.y) && std::isfinite(ray.origin.z) &&
+                   std::isfinite(ray.direction.x) && std::isfinite(ray.direction.y) && std::isfinite(ray.direction.z);
+        }
+
+        /// v at unit length, or nullopt when it has no direction (zero, or not finite). Scaled by its largest
+        /// component first, so a long vector (the cross product of a big triangle's edges) doesn't overflow.
+        std::optional<Math::Vector3> UnitOf(const Math::Vector3 &v)
+        {
+            const float largest = std::max(std::abs(v.x), std::max(std::abs(v.y), std::abs(v.z)));
+            if (!(largest > 0.0f) || !std::isfinite(largest))
+            {
+                return std::nullopt;
+            }
+            const Math::Vector3 scaled{v.x / largest, v.y / largest, v.z / largest};
+            const float length = std::sqrt(scaled.x * scaled.x + scaled.y * scaled.y + scaled.z * scaled.z);
+            if (!(length > 0.0f) || !std::isfinite(length))
+            {
+                return std::nullopt;
+            }
+            return Math::Vector3{scaled.x / length, scaled.y / length, scaled.z / length};
+        }
+
+        /// The ray's direction reversed, at unit length: the normal of a hit with no surface (the ray starts inside)
+        Math::Vector3 BackAlong(const Math::Vector3 &direction)
+        {
+            if (const std::optional<Math::Vector3> unit = UnitOf(direction))
+            {
+                return Math::Vector3{-unit->x, -unit->y, -unit->z};
+            }
+            return Math::Vector3{0.0f, 0.0f, 0.0f};
+        }
+
+        /// A surface normal at unit length turned to face the ray's origin (both faces of a triangle are hit)
+        Math::Vector3 FacingRay(const Math::Vector3 &normal, const Math::Vector3 &direction)
+        {
+            const std::optional<Math::Vector3> unit = UnitOf(normal);
+            if (!unit)
+            {
+                return BackAlong(direction);
+            }
+            if (unit->Dot(direction) > 0.0f)
+            {
+                return Math::Vector3{-unit->x, -unit->y, -unit->z};
+            }
+            return *unit;
+        }
+
+        /// A hit on a surface: how far along the ray, and the normal there (see PickHit::normal)
+        struct SurfaceHit
+        {
+            float distance = 0.0f;
+            Math::Vector3 normal{0.0f, 0.0f, 0.0f};
+        };
+
+        // RaycastMesh and RaycastMeshLinear, with the normal of the triangle hit (defined with the BVH below)
+        std::optional<SurfaceHit> MeshSurfaceHit(const Rendering::Mesh &mesh, const Matrix4 &model,
+                                                 const Math::Ray &ray, float maxDistance);
+        std::optional<SurfaceHit> MeshSurfaceHitLinear(const Rendering::Mesh &mesh, const Matrix4 &model,
+                                                       const Math::Ray &ray, float maxDistance);
+
         /// The layout of a world canvas, made on first ask and shared after
         const std::vector<UI::UIDrawItem> &LaidOut(LayoutCache &cache, const UI::Canvas &canvas)
         {
@@ -75,11 +137,14 @@ namespace N2Engine::Picking
             return renderable.GetWorldBounds();
         }
 
+        /// The distance at which the ray enters the box (0 if it starts inside), within [0, maxDistance]. With
+        /// `enteredAxis`, also the axis of the face it enters through (-1 when it starts inside the box).
         std::optional<float> BoxEntry(const Math::Vector3 &origin, const Math::Vector3 &direction,
-                                      const BoundingBox &box, const float maxDistance)
+                                      const BoundingBox &box, const float maxDistance, int *enteredAxis = nullptr)
         {
             float tNear = 0.0f;
             float tFar = maxDistance;
+            int entered = -1;
             for (int axis = 0; axis < 3; ++axis)
             {
                 const float o = origin[axis];
@@ -101,14 +166,61 @@ namespace N2Engine::Picking
                 {
                     std::swap(t0, t1);
                 }
-                tNear = std::max(tNear, t0);
+                if (t0 > tNear)
+                {
+                    tNear = t0;
+                    entered = axis;
+                }
                 tFar = std::min(tFar, t1);
                 if (tNear > tFar)
                 {
                     return std::nullopt;
                 }
             }
+            if (enteredAxis != nullptr)
+            {
+                *enteredAxis = entered;
+            }
             return tNear;
+        }
+
+        /// RaycastBox with the normal of the face the ray enters through
+        std::optional<SurfaceHit> BoxSurfaceHit(const Math::Ray &ray, const BoundingBox &box, const float maxDistance)
+        {
+            if (!FiniteRay(ray))
+            {
+                return std::nullopt;
+            }
+            int axis = -1;
+            const std::optional<float> t = BoxEntry(ray.origin, ray.direction, box, maxDistance, &axis);
+            if (!t)
+            {
+                return std::nullopt;
+            }
+            if (axis < 0)
+            {
+                return SurfaceHit{*t, BackAlong(ray.direction)};
+            }
+            // Entering through the low face while moving up the axis, or the high face while moving down
+            Math::Vector3 normal{0.0f, 0.0f, 0.0f};
+            normal[axis] = ray.direction[axis] > 0.0f ? -1.0f : 1.0f;
+            return SurfaceHit{*t, normal};
+        }
+
+        /// RaycastSphere with the sphere's outward normal at the point
+        std::optional<SurfaceHit> SphereSurfaceHit(const Math::Ray &ray, const Math::Vector3 &center,
+                                                   const float radius, const float maxDistance)
+        {
+            const std::optional<float> t = RaycastSphere(ray, center, radius, maxDistance);
+            if (!t)
+            {
+                return std::nullopt;
+            }
+            if (!(*t > 0.0f))
+            {
+                return SurfaceHit{*t, BackAlong(ray.direction)}; // starts inside
+            }
+            return SurfaceHit{*t, FacingRay(ray.GetPoint(*t) - center, ray.direction)};
         }
 
         /// Moller-Trumbore, both faces. The distance along the ray's direction, or nullopt.
@@ -152,8 +264,8 @@ namespace N2Engine::Picking
 
         /// A rectangle on the object's z = 0 plane (local space), moved by `model`, under the ray: its two triangles
         /// in world space, so a flat or tiny model (a zero or small scale) needs no inverse
-        std::optional<float> RectHit(const Matrix4 &model, const Text::Rect &rect, const Math::Ray &ray,
-                                     const float maxDistance)
+        std::optional<SurfaceHit> RectHit(const Matrix4 &model, const Text::Rect &rect, const Math::Ray &ray,
+                                          const float maxDistance)
         {
             const Math::Vector3 c00 = model.TransformPoint(Math::Vector3{rect.minX, rect.minY, 0.0f});
             const Math::Vector3 c10 = model.TransformPoint(Math::Vector3{rect.maxX, rect.minY, 0.0f});
@@ -168,7 +280,12 @@ namespace N2Engine::Picking
                     best = t;
                 }
             }
-            return best;
+            if (!best)
+            {
+                return std::nullopt;
+            }
+            // Both triangles lie in the rectangle's plane
+            return SurfaceHit{*best, FacingRay((c10 - c00).Cross(c01 - c00), ray.direction)};
         }
 
         BoundingBox Padded(const BoundingBox &box)
@@ -245,7 +362,18 @@ namespace N2Engine::Picking
         {
             GameObject *gameObject = nullptr;
             float distance = 0.0f;
+            Math::Vector3 normal{0.0f, 0.0f, 0.0f};
         };
+
+        /// An exact test's answer for `owner` from a surface hit
+        std::optional<ExactHit> HitOn(GameObject *owner, const std::optional<SurfaceHit> &hit)
+        {
+            if (!hit)
+            {
+                return std::nullopt;
+            }
+            return ExactHit{owner, hit->distance, hit->normal};
+        }
 
         struct Candidate
         {
@@ -270,10 +398,7 @@ namespace N2Engine::Picking
                 if (model && mesh)
                 {
                     return [owner, model = *model, mesh = std::move(mesh), ray](const float limit)
-                    {
-                        const std::optional<float> t = RaycastMesh(*mesh, model, ray, limit);
-                        return t ? std::optional<ExactHit>{ExactHit{owner, *t}} : std::nullopt;
-                    };
+                    { return HitOn(owner, MeshSurfaceHit(*mesh, model, ray, limit)); };
                 }
             }
             if (auto *meshRenderer = dynamic_cast<Rendering::MeshRenderer *>(&renderable))
@@ -291,24 +416,15 @@ namespace N2Engine::Picking
                         if (meshRenderer->GetDeformedMesh()->GetIndices().size() / 3 > DeformedTriangleCap)
                         {
                             return [owner, box, ray](const float limit)
-                            {
-                                const std::optional<float> t = RaycastBox(ray, box, limit);
-                                return t ? std::optional<ExactHit>{ExactHit{owner, *t}} : std::nullopt;
-                            };
+                            { return HitOn(owner, BoxSurfaceHit(ray, box, limit)); };
                         }
                         return [owner, model = positionable->GetLocalToWorldMatrix(),
                                 mesh = meshRenderer->GetDeformedMesh(), ray](const float limit)
-                        {
-                            const std::optional<float> t = RaycastMeshLinear(*mesh, model, ray, limit);
-                            return t ? std::optional<ExactHit>{ExactHit{owner, *t}} : std::nullopt;
-                        };
+                        { return HitOn(owner, MeshSurfaceHitLinear(*mesh, model, ray, limit)); };
                     }
                     return [owner, model = positionable->GetLocalToWorldMatrix(), mesh = meshRenderer->GetMesh(),
                             ray](const float limit)
-                    {
-                        const std::optional<float> t = RaycastMesh(*mesh, model, ray, limit);
-                        return t ? std::optional<ExactHit>{ExactHit{owner, *t}} : std::nullopt;
-                    };
+                    { return HitOn(owner, MeshSurfaceHit(*mesh, model, ray, limit)); };
                 }
             }
             if (auto *text = dynamic_cast<Rendering::TextRenderer *>(&renderable))
@@ -318,18 +434,11 @@ namespace N2Engine::Picking
                 {
                     return [owner, model = positionable->GetLocalToWorldMatrix(), rect = text->GetLayout().bounds,
                             ray](const float limit)
-                    {
-                        const std::optional<float> t = RectHit(model, rect, ray, limit);
-                        return t ? std::optional<ExactHit>{ExactHit{owner, *t}} : std::nullopt;
-                    };
+                    { return HitOn(owner, RectHit(model, rect, ray, limit)); };
                 }
             }
             // Anything else is picked by its box
-            return [owner, box, ray](const float limit)
-            {
-                const std::optional<float> t = RaycastBox(ray, box, limit);
-                return t ? std::optional<ExactHit>{ExactHit{owner, *t}} : std::nullopt;
-            };
+            return [owner, box, ray](const float limit) { return HitOn(owner, BoxSurfaceHit(ray, box, limit)); };
         }
 
         /// A world-space canvas: the topmost graphic under the ray (any graphic, raycast target or not: the editor
@@ -338,9 +447,14 @@ namespace N2Engine::Picking
                                                                  const Math::Ray &ray)
         {
             // `graphics` lives in the pick's LayoutCache, which outlives the candidates
-            return [&items = graphics,
-                    canvasToWorld = canvas.GetCanvasToWorldMatrix(), ray](const float limit)
-                -> std::optional<ExactHit>
+            const Matrix4 canvasToWorld = canvas.GetCanvasToWorldMatrix();
+            // The canvas's plane, in the world: its x and y axes, whatever its z scale
+            const Math::Vector3 origin = canvasToWorld.TransformPoint(Math::Vector3{0.0f, 0.0f, 0.0f});
+            const Math::Vector3 planeNormal =
+                (canvasToWorld.TransformPoint(Math::Vector3{1.0f, 0.0f, 0.0f}) - origin)
+                    .Cross(canvasToWorld.TransformPoint(Math::Vector3{0.0f, 1.0f, 0.0f}) - origin);
+            return [&items = graphics, canvasToWorld, normal = FacingRay(planeNormal, ray.direction),
+                    ray](const float limit) -> std::optional<ExactHit>
             {
                 const std::optional<UI::CanvasRayHit> plane = UI::UISystem::RaycastCanvasPlane(canvasToWorld, ray, limit);
                 if (!plane)
@@ -351,7 +465,7 @@ namespace N2Engine::Picking
                 {
                     if (it->rect.Contains(plane->canvasPoint))
                     {
-                        return ExactHit{&it->graphic->GetGameObject(), plane->distance};
+                        return ExactHit{&it->graphic->GetGameObject(), plane->distance, normal};
                     }
                 }
                 return std::nullopt;
@@ -403,10 +517,7 @@ namespace N2Engine::Picking
                     {
                         GameObject *owner = &gameObject;
                         out.push_back(Candidate{*entry, 0, [owner, center, ray](const float limit)
-                        {
-                            const std::optional<float> t = RaycastSphere(ray, center, PickSphereRadius, limit);
-                            return t ? std::optional<ExactHit>{ExactHit{owner, *t}} : std::nullopt;
-                        }});
+                        { return HitOn(owner, SphereSurfaceHit(ray, center, PickSphereRadius, limit)); }});
                     }
                 }
             }
@@ -502,15 +613,6 @@ namespace N2Engine::Picking
     {
         const Math::Vector3 r{PickSphereRadius, PickSphereRadius, PickSphereRadius};
         return BoundingBox{position - r, position + r};
-    }
-
-    namespace
-    {
-        bool FiniteRay(const Math::Ray &ray)
-        {
-            return std::isfinite(ray.origin.x) && std::isfinite(ray.origin.y) && std::isfinite(ray.origin.z) &&
-                   std::isfinite(ray.direction.x) && std::isfinite(ray.direction.y) && std::isfinite(ray.direction.z);
-        }
     }
 
     std::optional<float> RaycastBox(const Math::Ray &ray, const BoundingBox &box, const float maxDistance)
@@ -723,161 +825,199 @@ namespace N2Engine::Picking
             mesh.SetCpuCache(bvh);
             return bvh;
         }
+
+        std::optional<SurfaceHit> MeshSurfaceHit(const Rendering::Mesh &mesh, const Matrix4 &model,
+                                                 const Math::Ray &ray, const float maxDistance)
+        {
+            if (!FiniteRay(ray))
+            {
+                return std::nullopt;
+            }
+            const std::shared_ptr<const MeshBvh> bvh = BvhOf(mesh);
+            const auto &vertices = mesh.GetVertices();
+
+            std::optional<float> best;
+            Math::Vector3 bestEdge1{0.0f, 0.0f, 0.0f};
+            Math::Vector3 bestEdge2{0.0f, 0.0f, 0.0f};
+            float limit = maxDistance;
+            PickStats &stats = GetPickStats();
+            const auto test = [&](const MeshBvh::Triangle &triangle)
+            {
+                ++stats.bvhTrianglesTested;
+                const Math::Vector3 v0 = model.TransformPoint(VertexPosition(vertices[triangle[0]]));
+                const Math::Vector3 v1 = model.TransformPoint(VertexPosition(vertices[triangle[1]]));
+                const Math::Vector3 v2 = model.TransformPoint(VertexPosition(vertices[triangle[2]]));
+                const std::optional<float> t = TriangleHit(ray.origin, ray.direction, v0, v1, v2);
+                if (t && *t <= limit)
+                {
+                    best = t;
+                    bestEdge1 = v1 - v0;
+                    bestEdge2 = v2 - v0;
+                    limit = *t; // only nearer ones from here
+                }
+            };
+            const auto entryOf = [&](const BoundingBox &box)
+            { return BoxEntry(ray.origin, ray.direction, TransformedPadded(box, model), limit); };
+
+            struct Pending
+            {
+                std::uint32_t node;
+                float entry;
+            };
+            std::array<Pending, BvhStackSize> stack{};
+            for (const MeshBvh::Range &range : bvh->ranges)
+            {
+                // In world space throughout: no inverse of the model, which fails for a flat or tiny one
+                if (!entryOf(range.bounds))
+                {
+                    continue;
+                }
+                for (std::uint32_t i = 0; i < range.looseCount; ++i)
+                {
+                    test(bvh->loose[range.looseFirst + i]);
+                }
+                if (!range.hasRoot)
+                {
+                    continue;
+                }
+                std::size_t top = 0;
+                stack[top++] = Pending{range.root, 0.0f};
+                while (top > 0)
+                {
+                    const Pending pending = stack[--top];
+                    if (pending.entry > limit)
+                    {
+                        continue; // found something nearer since this was pushed
+                    }
+                    const MeshBvh::Node &node = bvh->nodes[pending.node];
+                    ++stats.bvhNodesVisited;
+                    if (node.count > 0)
+                    {
+                        for (std::uint32_t i = 0; i < node.count; ++i)
+                        {
+                            test(bvh->triangles[node.first + i]);
+                        }
+                        continue;
+                    }
+                    const std::uint32_t left = pending.node + 1;
+                    const std::uint32_t right = node.right;
+                    const std::optional<float> leftEntry = entryOf(bvh->nodes[left].box);
+                    const std::optional<float> rightEntry = entryOf(bvh->nodes[right].box);
+                    // The nearer child is popped first
+                    if (leftEntry && rightEntry && *rightEntry < *leftEntry)
+                    {
+                        stack[top++] = Pending{left, *leftEntry};
+                        stack[top++] = Pending{right, *rightEntry};
+                    }
+                    else
+                    {
+                        if (rightEntry)
+                        {
+                            stack[top++] = Pending{right, *rightEntry};
+                        }
+                        if (leftEntry)
+                        {
+                            stack[top++] = Pending{left, *leftEntry};
+                        }
+                    }
+                }
+            }
+            if (!best)
+            {
+                return std::nullopt;
+            }
+            // The flat normal of the triangle in world space (no inverse transpose needed: its vertices are already moved)
+            return SurfaceHit{*best, FacingRay(bestEdge1.Cross(bestEdge2), ray.direction)};
+        }
+
+        std::optional<SurfaceHit> MeshSurfaceHitLinear(const Rendering::Mesh &mesh, const Matrix4 &model,
+                                                       const Math::Ray &ray, const float maxDistance)
+        {
+            if (!FiniteRay(ray))
+            {
+                return std::nullopt;
+            }
+            const auto &vertices = mesh.GetVertices();
+            const auto &indices = mesh.GetIndices();
+
+            // Each submesh's box first, then its triangles
+            struct Range
+            {
+                std::size_t first;
+                std::size_t count;
+                BoundingBox bounds;
+            };
+            std::vector<Range> ranges;
+            for (const Rendering::Submesh &submesh : mesh.GetSubmeshes())
+            {
+                ranges.push_back(Range{submesh.firstIndex, submesh.indexCount, submesh.bounds});
+            }
+            if (ranges.empty())
+            {
+                ranges.push_back(Range{0, indices.size(), mesh.GetBounds()});
+            }
+
+            std::optional<float> best;
+            Math::Vector3 bestEdge1{0.0f, 0.0f, 0.0f};
+            Math::Vector3 bestEdge2{0.0f, 0.0f, 0.0f};
+            float limit = maxDistance;
+            for (const Range &range : ranges)
+            {
+                // In world space throughout: no inverse of the model, which fails for a flat or tiny one
+                if (!BoxEntry(ray.origin, ray.direction, TransformedPadded(range.bounds, model), limit))
+                {
+                    continue;
+                }
+                const std::size_t end = std::min(range.first + range.count, indices.size());
+                for (std::size_t i = range.first; i + 3 <= end; i += 3)
+                {
+                    const std::uint32_t a = indices[i];
+                    const std::uint32_t b = indices[i + 1];
+                    const std::uint32_t c = indices[i + 2];
+                    if (a >= vertices.size() || b >= vertices.size() || c >= vertices.size())
+                    {
+                        continue;
+                    }
+                    const Math::Vector3 v0 = model.TransformPoint(VertexPosition(vertices[a]));
+                    const Math::Vector3 v1 = model.TransformPoint(VertexPosition(vertices[b]));
+                    const Math::Vector3 v2 = model.TransformPoint(VertexPosition(vertices[c]));
+                    const std::optional<float> t = TriangleHit(ray.origin, ray.direction, v0, v1, v2);
+                    if (t && *t <= limit)
+                    {
+                        best = t;
+                        bestEdge1 = v1 - v0;
+                        bestEdge2 = v2 - v0;
+                        limit = *t; // only nearer ones from here
+                    }
+                }
+            }
+            if (!best)
+            {
+                return std::nullopt;
+            }
+            // The flat normal of the triangle in world space (no inverse transpose needed: its vertices are already moved)
+            return SurfaceHit{*best, FacingRay(bestEdge1.Cross(bestEdge2), ray.direction)};
+        }
     }
 
     std::optional<float> RaycastMesh(const Rendering::Mesh &mesh, const Math::Matrix<float, 4, 4> &model,
                                      const Math::Ray &ray, const float maxDistance)
     {
-        if (!FiniteRay(ray))
+        if (const std::optional<SurfaceHit> hit = MeshSurfaceHit(mesh, model, ray, maxDistance))
         {
-            return std::nullopt;
+            return hit->distance;
         }
-        const std::shared_ptr<const MeshBvh> bvh = BvhOf(mesh);
-        const auto &vertices = mesh.GetVertices();
-
-        std::optional<float> best;
-        float limit = maxDistance;
-        PickStats &stats = GetPickStats();
-        const auto test = [&](const MeshBvh::Triangle &triangle)
-        {
-            ++stats.bvhTrianglesTested;
-            const std::optional<float> t =
-                TriangleHit(ray.origin, ray.direction, model.TransformPoint(VertexPosition(vertices[triangle[0]])),
-                            model.TransformPoint(VertexPosition(vertices[triangle[1]])),
-                            model.TransformPoint(VertexPosition(vertices[triangle[2]])));
-            if (t && *t <= limit)
-            {
-                best = t;
-                limit = *t; // only nearer ones from here
-            }
-        };
-        const auto entryOf = [&](const BoundingBox &box)
-        { return BoxEntry(ray.origin, ray.direction, TransformedPadded(box, model), limit); };
-
-        struct Pending
-        {
-            std::uint32_t node;
-            float entry;
-        };
-        std::array<Pending, BvhStackSize> stack{};
-        for (const MeshBvh::Range &range : bvh->ranges)
-        {
-            // In world space throughout: no inverse of the model, which fails for a flat or tiny one
-            if (!entryOf(range.bounds))
-            {
-                continue;
-            }
-            for (std::uint32_t i = 0; i < range.looseCount; ++i)
-            {
-                test(bvh->loose[range.looseFirst + i]);
-            }
-            if (!range.hasRoot)
-            {
-                continue;
-            }
-            std::size_t top = 0;
-            stack[top++] = Pending{range.root, 0.0f};
-            while (top > 0)
-            {
-                const Pending pending = stack[--top];
-                if (pending.entry > limit)
-                {
-                    continue; // found something nearer since this was pushed
-                }
-                const MeshBvh::Node &node = bvh->nodes[pending.node];
-                ++stats.bvhNodesVisited;
-                if (node.count > 0)
-                {
-                    for (std::uint32_t i = 0; i < node.count; ++i)
-                    {
-                        test(bvh->triangles[node.first + i]);
-                    }
-                    continue;
-                }
-                const std::uint32_t left = pending.node + 1;
-                const std::uint32_t right = node.right;
-                const std::optional<float> leftEntry = entryOf(bvh->nodes[left].box);
-                const std::optional<float> rightEntry = entryOf(bvh->nodes[right].box);
-                // The nearer child is popped first
-                if (leftEntry && rightEntry && *rightEntry < *leftEntry)
-                {
-                    stack[top++] = Pending{left, *leftEntry};
-                    stack[top++] = Pending{right, *rightEntry};
-                }
-                else
-                {
-                    if (rightEntry)
-                    {
-                        stack[top++] = Pending{right, *rightEntry};
-                    }
-                    if (leftEntry)
-                    {
-                        stack[top++] = Pending{left, *leftEntry};
-                    }
-                }
-            }
-        }
-        return best;
+        return std::nullopt;
     }
 
     std::optional<float> RaycastMeshLinear(const Rendering::Mesh &mesh, const Math::Matrix<float, 4, 4> &model,
                                            const Math::Ray &ray, const float maxDistance)
     {
-        if (!FiniteRay(ray))
+        if (const std::optional<SurfaceHit> hit = MeshSurfaceHitLinear(mesh, model, ray, maxDistance))
         {
-            return std::nullopt;
+            return hit->distance;
         }
-        const auto &vertices = mesh.GetVertices();
-        const auto &indices = mesh.GetIndices();
-
-        // Each submesh's box first, then its triangles
-        struct Range
-        {
-            std::size_t first;
-            std::size_t count;
-            BoundingBox bounds;
-        };
-        std::vector<Range> ranges;
-        for (const Rendering::Submesh &submesh : mesh.GetSubmeshes())
-        {
-            ranges.push_back(Range{submesh.firstIndex, submesh.indexCount, submesh.bounds});
-        }
-        if (ranges.empty())
-        {
-            ranges.push_back(Range{0, indices.size(), mesh.GetBounds()});
-        }
-
-        std::optional<float> best;
-        float limit = maxDistance;
-        for (const Range &range : ranges)
-        {
-            // In world space throughout: no inverse of the model, which fails for a flat or tiny one
-            if (!BoxEntry(ray.origin, ray.direction, TransformedPadded(range.bounds, model), limit))
-            {
-                continue;
-            }
-            const std::size_t end = std::min(range.first + range.count, indices.size());
-            for (std::size_t i = range.first; i + 3 <= end; i += 3)
-            {
-                const std::uint32_t a = indices[i];
-                const std::uint32_t b = indices[i + 1];
-                const std::uint32_t c = indices[i + 2];
-                if (a >= vertices.size() || b >= vertices.size() || c >= vertices.size())
-                {
-                    continue;
-                }
-                const std::optional<float> t =
-                    TriangleHit(ray.origin, ray.direction, model.TransformPoint(VertexPosition(vertices[a])),
-                                model.TransformPoint(VertexPosition(vertices[b])),
-                                model.TransformPoint(VertexPosition(vertices[c])));
-                if (t && *t <= limit)
-                {
-                    best = t;
-                    limit = *t; // only nearer ones from here
-                }
-            }
-        }
-        return best;
+        return std::nullopt;
     }
 
     PickHit PickGameObject(const Scene &scene, const Math::Ray &ray, const PickOptions &options)
@@ -916,6 +1056,7 @@ namespace N2Engine::Picking
             {
                 best.gameObject = hit->gameObject;
                 best.distance = hit->distance;
+                best.normal = hit->normal;
                 bestOrder = candidate.order;
                 limit = hit->distance;
             }

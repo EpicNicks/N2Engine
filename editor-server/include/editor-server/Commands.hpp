@@ -1146,14 +1146,16 @@ namespace N2Engine::Editor::Protocol
         w.WriteBytes(payload.Data());
     }
 
-    /// PickEntity's response: the object's UUID string (empty for none), where the ray met it, and how far along the ray
+    /// PickEntity's response: the object's UUID string (empty for none), where the ray met it, how far along the ray,
+    /// and (since 1.27.0, an optional trailing field) the unit surface normal there facing the camera, zero for a miss
     inline void WritePickResult(BufferWriter &w, const std::string &entityId, const Math::Vector3 &point,
-                                const float distance)
+                                const float distance, const Math::Vector3 &normal)
     {
         BufferWriter payload;
         payload.WriteString(entityId);
         WriteVec3(payload, point);
         payload.WriteF32(distance);
+        WriteVec3(payload, normal);
 
         w.WriteU8(static_cast<uint8_t>(ResponseType::PickResult));
         w.WriteU32(static_cast<uint32_t>(payload.Size()));

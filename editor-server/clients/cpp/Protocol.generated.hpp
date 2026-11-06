@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.26.0";
+inline constexpr const char *ProtocolVersion = "1.27.0";
 
 enum class CommandType : uint8_t
 {
@@ -200,9 +200,9 @@ struct HelloCmd
     std::string clientName;
     std::string protocolVersion;
     std::string token;
-    bool errorCodes; // optional trailing: the default (false, 0 or empty) when the payload ends before it
-    std::string user; // optional trailing: the default (false, 0 or empty) when the payload ends before it
-    bool yield; // optional trailing: the default (false, 0 or empty) when the payload ends before it
+    bool errorCodes; // optional trailing: the default (false, 0, empty or a zero vector) when the payload ends before it
+    std::string user; // optional trailing: the default (false, 0, empty or a zero vector) when the payload ends before it
+    bool yield; // optional trailing: the default (false, 0, empty or a zero vector) when the payload ends before it
 };
 
 struct PollEventsCmd
@@ -585,9 +585,9 @@ struct ServerInfoData
     std::string engineVersion;
     std::string capabilities; // JSON: string[]
     bool projectLoaded;
-    bool readOnly; // optional trailing: the default (false, 0 or empty) when the payload ends before it
-    std::string user; // optional trailing: the default (false, 0 or empty) when the payload ends before it
-    std::string role; // optional trailing: the default (false, 0 or empty) when the payload ends before it
+    bool readOnly; // optional trailing: the default (false, 0, empty or a zero vector) when the payload ends before it
+    std::string user; // optional trailing: the default (false, 0, empty or a zero vector) when the payload ends before it
+    std::string role; // optional trailing: the default (false, 0, empty or a zero vector) when the payload ends before it
 };
 
 struct EventsData
@@ -632,6 +632,7 @@ struct PickResultData
     std::string entityId;
     Vec3 point;
     float distance;
+    Vec3 normal; // optional trailing: the default (false, 0, empty or a zero vector) when the payload ends before it
 };
 
 struct BoundsData

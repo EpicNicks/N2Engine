@@ -180,7 +180,7 @@ def build(protocol: dict) -> dict:
         })
 
     # The payload of a peer from before the optional trailing fields (protocol.json's optionalTrailing): it ends before
-    # them, and a reader decodes them as the zero default (false, 0 or the empty string)
+    # them, and a reader decodes them as the zero default (false, 0, the empty string or a zero vec3)
     short_payloads = []
     messages = [("request", name, request, f"{name}Request")
                 for name, request in protocol_spec.commands_with_requests(protocol)]
@@ -214,7 +214,8 @@ def build(protocol: dict) -> dict:
                        "fields as parsed values, never as bytes); Error's payload is its message's raw UTF-8 bytes. "
                        "shortPayloads are what a peer from before a message's optional trailing fields sends: the "
                        "payload ends before the omitted fields (the last one to all of the message's optional ones) and "
-                       "fields holds what a reader decodes (the omitted ones at their zero defaults: false, 0 or the empty string).",
+                       "fields holds what a reader decodes (the omitted ones at their zero defaults: false, 0, the "
+                       "empty string or a vec3 of zeros).",
         "protocolVersion": protocol["version"],
         "requests": requests,
         "responses": responses,

@@ -140,12 +140,24 @@ TEST(ProtocolVectorTest, ShortPayloadsOfOlderPeersDecodeWithTheDefaults)
             sawResponse = true;
             const std::string name = vector.at("response").get<std::string>();
             // The vector's fields hold the defaults of the omitted fields: the builder writes the short payload, then
-            // those fields at their defaults (a bool is one zero byte, a string a zero length)
+            // those fields at their defaults (a bool is one zero byte, a string a zero length, a vec3 (since 1.27.0,
+            // PickResult's normal) three zero floats)
             std::vector<uint8_t> expected = payload;
             ASSERT_TRUE(vector.contains("omitted") && !vector.at("omitted").empty()) << name;
             for (const json &field : vector.at("omitted"))
             {
                 const json &value = vector.at("fields").at(field.get<std::string>());
+                if (value.is_object())
+                {
+                    ASSERT_EQ(value.size(), 3u) << name << "." << field << ": a vec3";
+                    for (const char *axis : {"x", "y", "z"})
+                    {
+                        ASSERT_TRUE(value.contains(axis) && value.at(axis).is_number()) << name << "." << field;
+                        EXPECT_EQ(value.at(axis).get<float>(), 0.0f) << name << "." << field << ": a default";
+                    }
+                    expected.insert(expected.end(), 12u, uint8_t{0});
+                    continue;
+                }
                 ASSERT_TRUE(value.is_boolean() || value.is_string()) << name << "." << field;
                 EXPECT_TRUE(value.is_boolean() ? !value.get<bool>() : value.get<std::string>().empty())
                     << name << "." << field << ": a default";

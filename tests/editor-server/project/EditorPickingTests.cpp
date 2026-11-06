@@ -79,6 +79,10 @@ namespace
         std::string entityId;
         std::array<float, 3> point{};
         float distance = 0.0f;
+        /// Since 1.27.0 (a trailing field): the surface normal at the point, facing the camera; zero for a miss
+        std::array<float, 3> normal{};
+        /// Bytes after the fields this test knows (none from this host)
+        std::size_t extraBytes = 0;
         std::string error;
 
         [[nodiscard]] bool Hit() const { return !entityId.empty(); }
@@ -209,6 +213,9 @@ namespace
             for (float &v : pick.point)
                 v = r.ReadF32();
             pick.distance = r.ReadF32();
+            for (float &v : pick.normal)
+                v = r.ReadF32();
+            pick.extraBytes = r.Remaining();
             return pick;
         }
 
@@ -290,6 +297,8 @@ TEST_F(EditorPickingTest, ACubeIsHitAtTheMiddleOfTheViewAndMissedAtTheCorners)
     // The camera is at z = 3 with its near plane at 0.1: the ray starts at z = 2.9 and meets the face at z = 0.5
     ExpectPoint(hit.point, {0.0f, 0.0f, 0.5f}, "point");
     EXPECT_NEAR(hit.distance, 2.4f, Tolerance);
+    ExpectPoint(hit.normal, {0.0f, 0.0f, 1.0f}, "the front face's normal, towards the camera");
+    EXPECT_EQ(hit.extraBytes, 0u) << "PickResult ends with normal";
 
     for (const auto &[x, y] : {std::pair{2.0f, 2.0f}, std::pair{61.0f, 2.0f}, std::pair{2.0f, 45.0f},
                                std::pair{61.0f, 45.0f}})
@@ -299,6 +308,7 @@ TEST_F(EditorPickingTest, ACubeIsHitAtTheMiddleOfTheViewAndMissedAtTheCorners)
         EXPECT_FALSE(miss.Hit()) << x << "," << y;
         EXPECT_NEAR(miss.distance, 0.0f, Tolerance);
         ExpectPoint(miss.point, {0.0f, 0.0f, 0.0f}, "a miss's point");
+        ExpectPoint(miss.normal, {0.0f, 0.0f, 0.0f}, "a miss's normal");
     }
 }
 
@@ -329,6 +339,7 @@ TEST_F(EditorPickingTest, AnEmptyObjectIsPickedByItsSphere)
     // The sphere's radius is 0.25 world units: the ray from z = 2.9 meets its front at z = 0.25
     ExpectPoint(hit.point, {0.0f, 0.0f, 0.25f}, "point");
     EXPECT_NEAR(hit.distance, 2.65f, Tolerance);
+    ExpectPoint(hit.normal, {0.0f, 0.0f, 1.0f}, "the sphere's front, outward");
 
     // A light is picked the same way
     const std::string light = Create("PointLight");
@@ -347,6 +358,22 @@ TEST_F(EditorPickingTest, TheNearestObjectWins)
     const Pick hit = PickMiddle();
     EXPECT_EQ(hit.entityId, front);
     ExpectPoint(hit.point, {0.0f, 0.0f, 1.5f}, "point");
+}
+
+// Since 1.27.0 PickResult ends with the normal of the face that was hit, facing the camera, so a client can drop a
+// prefab onto the surface clicked
+TEST_F(EditorPickingTest, TheNormalIsThatOfTheFaceHit)
+{
+    const std::string cube = Create("Cube");
+    SetLocal(cube, {0.0f, -1.5f, 0.0f});
+    // Row 38 looks down by 0.34 per unit of depth: the ray passes over the front face's top edge (it is at y -0.84 at
+    // z 0.5) and lands on the top face (y -1) at z 0.03
+    const Pick top = PickAt(32.0f, 38.0f);
+    ASSERT_EQ(top.type, PickResultType) << top.error;
+    ASSERT_EQ(top.entityId, cube);
+    ExpectPoint(top.normal, {0.0f, 1.0f, 0.0f}, "the top face's normal");
+    EXPECT_NEAR(top.point[1], -1.0f, Tolerance);
+    EXPECT_NEAR(top.point[2], 0.03f, 0.01f);
 }
 
 TEST_F(EditorPickingTest, InactiveObjectsArePickedOnlyWhenAsked)

@@ -376,7 +376,8 @@ namespace ProtocolVectors
             }},
             {"PickResult", [](BufferWriter &w, const json &f)
             {
-                WritePickResult(w, StringField(f, "entityId"), ToVec3(f.at("point")), f.at("distance").get<float>());
+                WritePickResult(w, StringField(f, "entityId"), ToVec3(f.at("point")), f.at("distance").get<float>(),
+                                ToVec3(f.at("normal")));
             }},
             {"Bounds", [](BufferWriter &w, const json &f) { WriteBounds(w, f.at("bounds")); }},
             {"PlaySnapshot", [](BufferWriter &w, const json &f) { WritePlaySnapshot(w, StringField(f, "file")); }},
