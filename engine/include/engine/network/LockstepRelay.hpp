@@ -7,12 +7,14 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "engine/network/InputLayout.hpp"
 #include "engine/network/LockstepProtocol.hpp"
 #include "engine/network/n2net/Connection.hpp"
+#include "engine/network/n2net/JoinTokens.hpp"
 #include "engine/network/n2net/Lockstep.hpp"
 #include "engine/network/n2net/Transport.hpp"
 
@@ -29,6 +31,13 @@ namespace N2Engine::Network
     };
 
     [[nodiscard]] std::string_view ToString(StallPolicy policy) noexcept;
+
+    /// Who a connection is: the user and role of the join token its handshake proved (LockstepRelayOptions::identify)
+    struct RelayIdentity
+    {
+        std::string user;
+        N2Net::JoinRole role = N2Net::JoinRole::Player;
+    };
 
     struct LockstepRelayOptions
     {
@@ -74,8 +83,20 @@ namespace N2Engine::Network
         /// twice that long after, is refused (NoSnapshot)
         std::uint64_t snapshotTimeoutMicros = 10'000'000;
         /// Spectator-to-player promotion (lockstep wire version 3, Promote): a spectator that runs in step may take a
-        /// dropped slot. Off by default: the relay does not see a join token's role, so any spectator could take a slot.
+        /// dropped slot. Off by default here, since without `identify` the relay knows no token roles and any spectator
+        /// could take a slot (N2Server sets identify and allows it by default).
         bool allowPromotion = false;
+        /// Who a connection is (the user and role of its join token, as the transport's handshake proved them), asked when
+        /// the peer joins or spectates; nullopt for a peer the transport cannot name. Unset: the relay knows no identities.
+        /// Set, it changes promotion: a peer it cannot name, or whose role is spectator, is refused (NotAllowed), a user
+        /// who already plays a live slot is refused NotReady (it may be a connection that is going away); a slot dropped
+        /// from a known user is kept for that user for
+        /// rejoinReserveMicros (another user is refused NotReady), and a Promote for any slot (255) gives a user its own
+        /// dropped slot first. That is how a dropped player comes back to its own slot (LockstepRuntimeOptions::rejoin).
+        std::function<std::optional<RelayIdentity>(N2Net::PeerId)> identify;
+        /// How long after its drop a slot is kept for the user who played it (identify), before another player may be
+        /// promoted into it. The user itself may take it back at any time while it is dropped.
+        std::uint64_t rejoinReserveMicros = 30'000'000;
         /// How far ahead of what the relay knows of every player the join tick of a promotion is placed, so that every
         /// player hears the SlotRejoin before it reaches that tick (a player that is already past it fails). Turned into
         /// ticks at the session's tick rate, at least 1 tick.
@@ -204,6 +225,13 @@ namespace N2Engine::Network
      * player, its frames from T on are waited for, and a stall or a leave drops the slot again (a drop at T itself
      * undoes the rejoin).
      *
+     * Identities (identify set, as N2Server does from the secure and WebSocket handshakes). The relay then knows each
+     * peer's token user and role: a promotion is refused (NotAllowed) to a peer it cannot name and to a spectator-role
+     * token, and (NotReady) to a user who already plays a live slot. Each slot remembers its user; a dropped slot is kept for that user for
+     * rejoinReserveMicros (a promotion of another user into it is refused NotReady), and a Promote for any slot (255)
+     * gives a user its own dropped slot first. A dropped player comes back by spectating with its token and asking for any
+     * slot (LockstepRuntimeOptions::rejoin): no message beyond wire version 3.
+     *
      * Single-threaded; call Update every pass with a monotonic microsecond clock. After a session ends (every client
      * gone, or the linger over) the relay is back in the Lobby for the next one.
      */
@@ -283,6 +311,8 @@ namespace N2Engine::Network
             /// A promoted spectator: its spectator acks (slot 0, no frames) that were still in flight, or arrive late,
             /// are taken as acks, not as a bundle for another slot
             bool promoted = false;
+            /// Who it is (options.identify), asked at its Join or Spectate
+            std::optional<RelayIdentity> identity;
         };
 
         struct HistoryTick
@@ -314,6 +344,8 @@ namespace N2Engine::Network
         void OnSpectate(Peer &peer, std::span<const std::uint8_t> message);
         void OnSnapshotData(Peer &peer, std::span<const std::uint8_t> message);
         void OnPromote(Peer &peer, std::span<const std::uint8_t> message);
+        /// The slot a promotion takes (kMaxRelaySlots for none, with the refusal set); see LockstepRelayOptions::identify
+        std::uint32_t PickPromotionSlot(const Peer &peer, std::uint8_t wanted, RefuseReason &reason, std::string &why) const;
         void RefusePromotion(Peer &peer, RefuseReason reason, const std::string &why);
         void RefusePeer(Peer &peer, RefuseReason reason, const std::string &why);
         /// Asks for snapshots, times them out, passes their parts on
@@ -351,6 +383,10 @@ namespace N2Engine::Network
         std::array<bool, kMaxRelaySlots> slotTaken_{};
         std::array<bool, kMaxRelaySlots> slotDropped_{};
         std::array<std::uint32_t, kMaxRelaySlots> dropTick_{};
+        /// When each slot was dropped (the relay's clock)
+        std::array<std::uint64_t, kMaxRelaySlots> dropAt_{};
+        /// The user who plays (or played, for a dropped slot) each slot, when identify named it
+        std::array<std::optional<std::string>, kMaxRelaySlots> slotUser_{};
         std::array<RootRecord, 16> roots_{};
         std::uint64_t rootOrder_ = 0;
         std::uint64_t now_ = 0;

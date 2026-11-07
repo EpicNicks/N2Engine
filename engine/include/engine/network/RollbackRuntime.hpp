@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <expected>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -36,6 +37,12 @@ namespace N2Engine::Network
         /// The microsecond clock Update is called with when the Application drives it (steady_clock by default; a test
         /// gives the simulator's virtual clock)
         std::function<std::uint64_t()> clock;
+        /// A spectator whose backend refuses the snapshot's physics part even after RestoreForJoin made its bodies the
+        /// snapshot's (exactPhysics false: the bodies were set from per-object body states, which is not the same
+        /// simulation, and a spectator reports no roots, so a drift would go unnoticed) ends its session as Failed. True
+        /// runs it anyway, with a warning (a view that may drift; a spectator promoted later reports roots, so the relay
+        /// would then catch a drift as a desync).
+        bool allowInexactPhysics = false;
     };
 
     /**
@@ -52,7 +59,8 @@ namespace N2Engine::Network
      *     needs (ReleaseConfirmed), the resimulated hook the unclaimed pool (ReleasePool);
      *   - the state-hash tree is BuildStateHashTree of the NetworkWorld WITH the physics leaf (HashSimulatedState, which
      *     skips parked bodies), so a rollback peer and a lockstep peer of this runtime hash a confirmed tick alike;
-     *   - a spectator (session.spectate) starts from a player's snapshot through RollbackWorld::RestoreForJoin;
+     *   - a spectator (session.spectate) starts from a player's snapshot through RollbackWorld::RestoreForJoin; a restore
+     *     whose physics part the backend refused ends the session unless allowInexactPhysics (CheckJoinPhysics);
      *   - with driveApplication, Application::Tick calls Update with the frame's delta in place of its fixed steps.
      *
      * Rollback needs a backend that can snapshot: with a physics backend whose SupportsSnapshot is false the runtime
@@ -81,6 +89,13 @@ namespace N2Engine::Network
         [[nodiscard]] const std::optional<JoinRestoreResult> &JoinResult() const noexcept { return _join; }
         /// Ticks the Application ran for the session (resimulated ones included)
         [[nodiscard]] std::uint64_t TicksStepped() const noexcept { return _ticksStepped; }
+
+        /// What a spectator's join does with RestoreForJoin's result (the session's join hook): nothing to say for an
+        /// exact restore or a snapshot without a physics part; an error (which fails the session) for an inexact one,
+        /// unless `allowInexactPhysics`, which logs a warning instead
+        [[nodiscard]] static std::expected<void, std::string> CheckJoinPhysics(const JoinRestoreResult &joined,
+                                                                               bool snapshotHasPhysics,
+                                                                               bool allowInexactPhysics);
 
     private:
         bool RunTick(const N2Net::TickInputs &inputs, std::uint32_t slotCount);

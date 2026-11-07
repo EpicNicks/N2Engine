@@ -42,7 +42,8 @@ namespace N2Engine::Server
             "                          the largest snapshot the relay passes to a spectator, in MiB, 1 to 64 (default 16)\n"
             "  --relay-snapshot-timeout-ms <n>\n"
             "                          how long a spectator waits for its snapshot to begin, 1000 to 120000 (default 10000)\n"
-            "  --relay-promotion <p>   allow or deny (default): whether a spectator may take a dropped player slot\n"
+            "  --relay-promotion <p>   allow (default) or deny: whether a spectator with a player or admin token may take\n"
+            "                          a dropped player slot (a spectator token never may)\n"
             "  --exit-on-stdin-eof     stop when stdin closes (a launcher that has gone away)\n"
             "  --log-level <level>     info (default), warn or error\n"
             "  --log-file <path>       also append the log lines to this file (created 0600 on POSIX)\n"
@@ -239,6 +240,7 @@ namespace N2Engine::Server
                     return std::unexpected("Invalid --relay-promotion: " + Shown(value) + " (expected allow or deny)");
                 }
                 options.relayPromotion = value == "allow";
+                options.relayPromotionGiven = true;
                 continue;
             }
             if (arg == "--relay-layout")
@@ -363,7 +365,7 @@ namespace N2Engine::Server
         if (!options.relay && (options.relayPlayers != 2 || options.relayStallStops || options.relayStallMs != 5000 ||
                                !options.relayLayoutFile.empty() || options.relaySpectators != 4 ||
                                options.relaySnapshotMaxMb != 16 || options.relaySnapshotTimeoutMs != 10000 ||
-                               options.relayPromotion))
+                               options.relayPromotionGiven))
         {
             return std::unexpected("--relay-players, --relay-stall, --relay-stall-ms, --relay-layout, --relay-spectators, "
                                    "--relay-snapshot-max-mb, --relay-snapshot-timeout-ms and --relay-promotion only apply "

@@ -9,6 +9,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -122,6 +123,8 @@ namespace
             options.sampleInput = [index](const std::uint32_t tick) { return ScriptedValues(index, tick); };
             options.rollbackWindow = window;
             options.spectate = spectate;
+            options.rejoin = rejoinNext;
+            rejoinNext = false;
             Peer *const raw = &peer;
             options.applyTick = [raw, window](const TickInputs &inputs, std::uint32_t)
             {
@@ -201,6 +204,8 @@ namespace
         SimTransport *relayTransport = nullptr;
         std::unique_ptr<LockstepRelay> relay;
         std::vector<std::unique_ptr<Peer>> peers;
+        /// The next peer attached is a dropped player coming back (LockstepRuntimeOptions::rejoin)
+        bool rejoinNext = false;
     };
 
     SimLinkConfig LateLink()
@@ -382,6 +387,22 @@ TEST(RollbackRuntimeSettingsTest, OnlyTheDeterministicPresetInRollbackModeGetsAW
 
 // ===== The serialised snapshot and RestoreForJoin =====
 
+TEST(RollbackRuntimeSnapshotTest, AnInexactPhysicsJoinFailsTheSpectatorUnlessTheHostAllowsIt)
+{
+    JoinRestoreResult exact;
+    exact.exactPhysics = true;
+    JoinRestoreResult inexact;
+    inexact.exactPhysics = false;
+    EXPECT_TRUE(RollbackRuntime::CheckJoinPhysics(exact, true, false).has_value());
+    EXPECT_TRUE(RollbackRuntime::CheckJoinPhysics(inexact, false, false).has_value()) << "no physics part to refuse";
+    const auto refused = RollbackRuntime::CheckJoinPhysics(inexact, true, false);
+    ASSERT_FALSE(refused.has_value());
+    EXPECT_NE(refused.error().find("allowInexactPhysics"), std::string::npos) << refused.error();
+    EXPECT_TRUE(RollbackRuntime::CheckJoinPhysics(inexact, true, true).has_value()) << "the host allowed it";
+    RollbackRuntimeOptions options;
+    EXPECT_FALSE(options.allowInexactPhysics) << "refused by default";
+}
+
 TEST(RollbackRuntimeSnapshotTest, ASerialisedSnapshotRoundTripsExactlyAndCorruptionIsRefused)
 {
     ShotPrefab prefab;
@@ -402,6 +423,8 @@ TEST(RollbackRuntimeSnapshotTest, ASerialisedSnapshotRoundTripsExactlyAndCorrupt
     WorldSnapshot snapshot;
     ASSERT_TRUE(arena.rollback.Save(at, snapshot));
     ASSERT_GT(snapshot.objects.size(), 2u) << "some shots are alive";
+    // Body handles (format 2; this world has no physics, so they are set by hand) travel too
+    snapshot.objects[0].bodyHandles = {{0, Physics::PhysicsBodyHandle{7, 3}}, {2, Physics::PhysicsBodyHandle{9, 0x10203}}};
     const std::vector<std::uint8_t> bytes = SerializeWorldSnapshot(snapshot);
     const auto back = DeserializeWorldSnapshot(bytes);
     ASSERT_TRUE(back.has_value()) << back.error();
@@ -417,6 +440,7 @@ TEST(RollbackRuntimeSnapshotTest, ASerialisedSnapshotRoundTripsExactlyAndCorrupt
         EXPECT_EQ(back->objects[i].owner, snapshot.objects[i].owner);
         EXPECT_EQ(back->objects[i].spawned, snapshot.objects[i].spawned);
         EXPECT_EQ(back->objects[i].values.layoutHash, snapshot.objects[i].values.layoutHash);
+        EXPECT_EQ(back->objects[i].bodyHandles, snapshot.objects[i].bodyHandles);
         ASSERT_EQ(back->objects[i].values.fields.size(), snapshot.objects[i].values.fields.size());
         for (std::size_t f = 0; f < snapshot.objects[i].values.fields.size(); ++f)
         {
@@ -755,6 +779,110 @@ TEST(RollbackRuntimePromotionTest, APromotionIsRefusedWhenTheRelayDoesNotAllowIt
     ASSERT_TRUE(session.RunUntil([&] { return spectator.runtime->TicksRun() >= at + 100; }));
     EXPECT_EQ(spectator.runtime->State(), LockstepState::Running) << spectator.runtime->Error();
     EXPECT_EQ(first.runtime->State(), LockstepState::Running) << first.runtime->Error();
+}
+
+// A relay that knows who every peer is (LockstepRelayOptions::identify, as N2Server): a spectator token is never
+// promoted, a dropped slot is kept for the user who played it, and that user comes back to it with rejoin
+TEST(RollbackRuntimePromotionTest, ARelayThatKnowsTokensRefusesASpectatorTokenAndGivesADroppedPlayerItsOwnSlotBack)
+{
+    ShotPrefab prefab;
+    std::map<PeerId, RelayIdentity> identities;
+    RelaySession session(83, 2, LateLink(),
+                         [&identities](LockstepRelayOptions &options)
+                         {
+                             options.allowPromotion = true;
+                             options.promotionLeadMicros = 200'000; // 100 ticks at 500 Hz
+                             options.rejoinReserveMicros = 600'000'000;
+                             options.identify = [&identities](const PeerId peer) -> std::optional<RelayIdentity>
+                             {
+                                 const auto found = identities.find(peer);
+                                 return found != identities.end() ? std::optional<RelayIdentity>(found->second) : std::nullopt;
+                             };
+                         });
+    // A peer whose token is `user` with `role` (the relay's identify sees it by the peer's endpoint id)
+    const auto addAs = [&](const std::uint32_t index, const std::string &user, const JoinRole role, const bool spectate) -> Peer &
+    {
+        SimTransport &transport = session.network.AddEndpoint();
+        EXPECT_TRUE(session.network.Link(session.relayTransport->Id(), transport.Id(), session.link));
+        identities[transport.Id()] = RelayIdentity{user, role};
+        return session.AttachPeer(transport, index, 0, spectate);
+    };
+    Peer &alice = addAs(0, "alice", JoinRole::Player, false);
+    ASSERT_TRUE(session.RunUntil([&] { return alice.runtime->State() == LockstepState::Lobby; }, 20000));
+    Peer &bob = addAs(1, "bob", JoinRole::Player, false);
+    ASSERT_TRUE(session.RunUntil([&] { return bob.runtime->ConfirmedTick() >= 120; }));
+    ASSERT_EQ(bob.runtime->Slot(), 1u);
+
+    Peer &carol = addAs(2, "carol", JoinRole::Spectator, true); // a spectator token
+    Peer &dave = addAs(3, "dave", JoinRole::Player, true);      // another player's token, watching
+    ASSERT_TRUE(session.RunUntil([&] { return carol.runtime->TicksRun() >= 250 && dave.runtime->TicksRun() >= 250; }));
+
+    ASSERT_TRUE(carol.runtime->RequestPromotion());
+    ASSERT_TRUE(session.RunUntil([&] { return !carol.runtime->PromotionPending(); }, 20000));
+    EXPECT_EQ(carol.runtime->PromotionRefusal(), RefuseReason::NotAllowed) << "a spectator token never takes a slot";
+
+    bob.runtime->Leave();
+    bob.frozen = true;
+    ASSERT_TRUE(session.RunUntil([&] { return session.relay->IsSlotDropped(1); }));
+    // Dave may not take bob's slot while it is kept for bob, named or not
+    ASSERT_TRUE(dave.runtime->RequestPromotion(1));
+    ASSERT_TRUE(session.RunUntil([&] { return !dave.runtime->PromotionPending(); }, 20000));
+    EXPECT_EQ(dave.runtime->PromotionRefusal(), RefuseReason::NotReady);
+    ASSERT_TRUE(dave.runtime->RequestPromotion());
+    ASSERT_TRUE(session.RunUntil([&] { return !dave.runtime->PromotionPending(); }, 20000));
+    EXPECT_EQ(dave.runtime->PromotionRefusal(), RefuseReason::NotReady);
+    EXPECT_TRUE(dave.runtime->IsSpectator());
+
+    // Bob comes back with his token: a rejoin spectates and asks by itself until the relay seats him in his own slot
+    SimTransport &back = session.network.AddEndpoint();
+    ASSERT_TRUE(session.network.Link(session.relayTransport->Id(), back.Id(), session.link));
+    identities[back.Id()] = RelayIdentity{"bob", JoinRole::Player};
+    session.rejoinNext = true;
+    Peer &bobAgain = session.AttachPeer(back, 1, 0, false);
+    ASSERT_TRUE(session.RunUntil([&] { return !bobAgain.runtime->IsSpectator() || bobAgain.runtime->Finished(); }))
+        << bobAgain.runtime->Error();
+    ASSERT_EQ(bobAgain.runtime->State(), LockstepState::Running) << bobAgain.runtime->Error();
+    EXPECT_EQ(bobAgain.runtime->Slot(), 1u) << "his own slot";
+    EXPECT_FALSE(session.relay->IsSlotDropped(1));
+    EXPECT_EQ(session.relay->Stats().promotions, 1u);
+    EXPECT_TRUE(dave.runtime->IsSpectator());
+    EXPECT_TRUE(carol.runtime->IsSpectator());
+
+    std::uint32_t joinTick = 0;
+    for (const LockstepEvent &event : bobAgain.events)
+    {
+        if (event.type == LockstepEvent::Type::Promoted)
+        {
+            joinTick = event.tick;
+        }
+    }
+    ASSERT_GT(joinTick, 0u);
+    ASSERT_TRUE(session.RunUntil(
+        [&] { return bobAgain.runtime->ConfirmedTick() >= joinTick + 200 && alice.runtime->ConfirmedTick() >= joinTick + 200; }))
+        << bobAgain.runtime->Error() << " / " << alice.runtime->Error();
+    EXPECT_EQ(alice.runtime->State(), LockstepState::Running) << alice.runtime->Error();
+    EXPECT_EQ(session.relay->Stats().desyncs, 0u);
+    bool heard = false;
+    for (const LockstepEvent &event : alice.events)
+    {
+        if (event.type == LockstepEvent::Type::SlotRejoined)
+        {
+            heard = true;
+            EXPECT_EQ(event.slot, 1u);
+            EXPECT_EQ(event.tick, joinTick);
+        }
+    }
+    EXPECT_TRUE(heard);
+    std::size_t compared = 0;
+    for (const auto &[tick, root] : bobAgain.confirmedRoots)
+    {
+        if (const auto found = alice.confirmedRoots.find(tick); found != alice.confirmedRoots.end())
+        {
+            EXPECT_EQ(found->second, root) << "tick " << tick;
+            compared += tick > joinTick ? 1 : 0;
+        }
+    }
+    EXPECT_GE(compared, 5u);
 }
 
 // ===== C5 follow-up coverage: more peers, a leaving snapshot source, long sessions, real sockets =====

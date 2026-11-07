@@ -18,6 +18,10 @@ is wrong (--mispredict 1), so every guessed tick is rolled back. Scenarios:
     transfer takes many parts): wherever in the request or the transfer the source dies, the relay asks the next player,
     the spectator still starts, runs and agrees with the survivor. (Where exactly the kill falls, before the request was
     answered or between two parts, is up to timing; the assertions hold for every case.)
+  - a spectator is promoted into a killed player's slot (lockstep wire 3);
+  - with promotion on by default: a killed player comes back with its own token (--rejoin 1) and takes its own slot back,
+    in step with the survivor; meanwhile a spectator-role token is refused (not allowed) and another player's spectator is
+    refused while the slot is kept for its own player (not ready).
 
   python tests/smoke/n2server_rollback.py --server build/bin/N2Server --client build/bin/n2server_rollback_client \\
       [--replay build/bin/n2_replay] [--require-deterministic]
@@ -41,7 +45,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from n2server_lockstep import (  # noqa: E402
     LAYOUT, REPLAY_LINE, Harness, Skip, hashes_of, make_project)
-from n2server_net import Failure, check, make_tokens, say, text_of, wait_for, wait_line  # noqa: E402
+from n2server_net import TOKEN_LINE, Failure, check, make_tokens, say, text_of, wait_for, wait_line  # noqa: E402
 
 STATS_LINE = re.compile(r"^rollback-stats (.*)$", re.MULTILINE)
 WELCOME_LINE = re.compile(r"^welcome .*slot=(\d+)$", re.MULTILINE)
@@ -218,6 +222,58 @@ def scenario_promotion(h, project, tokens, tokens_file):
     start_relay_end(h, server)
 
 
+def make_spectator_token(server, tokens_file):
+    result = subprocess.run([str(server), "--new-token", "watcher", "spectator", "--tokens-file", str(tokens_file)],
+                            stdin=subprocess.DEVNULL, capture_output=True, timeout=120)
+    check(result.returncode == 0, "--new-token failed: " + text_of(result.stderr))
+    match = TOKEN_LINE.search(text_of(result.stdout))
+    check(match is not None, "--new-token printed no token line")
+    return match.group(1)
+
+
+def scenario_own_slot_rejoin(h, project, tokens, tokens_file, watcher_token):
+    say("a killed player comes back with its own token and takes its own slot; the slot is kept from another player, and "
+        "a spectator token is never promoted (promotion on by default)")
+    server, port = h.start_relay(project, tokens_file, "relay-rejoin", ["--relay-stall-ms", "1500"])
+    a = h.start_client(port, tokens[0], "rj-a", PLAYER + ["--ticks", "1200", "--hitch-every", "40", "--hitch-ms", "80"])
+    b = h.start_client(port, tokens[1], "rj-b", PLAYER + ["--ticks", "1200"])
+    wait_line(a, r"^hash tick=150 ", 90, "checkpoint 150", a, b)
+    # A spectator token, and another player's token, both asking for a slot from their start
+    watcher = h.start_client(port, watcher_token, "rj-watcher", ["--spectate", "1", "--promote-at-tick", "0", "--ticks", "900"])
+    other = h.start_client(port, tokens[2], "rj-other", ["--spectate", "1", "--promote-at-tick", "0", "--ticks", "900"])
+    wait_line(watcher, r"^spectator-joined tick=\d+ ", 60, "the watcher's snapshot", watcher)
+    wait_line(other, r"^spectator-joined tick=\d+ ", 60, "the other spectator's snapshot", other)
+    b.end()
+    wait_line(a, r"^dropped slot=\d ", 30, "the drop of the killed player's slot", a)
+    back = h.start_client(port, tokens[1], "rj-b-back", ["--rejoin", "1", "--ticks", "1200"])
+    for client, what in ((a, "playing on after the rejoin"), (back, "playing its own slot again"),
+                         (watcher, "watching"), (other, "watching")):
+        finished_ok(client, what)
+
+    promoted = re.search(r"^promoted slot=(\d) from=(\d+)$", back.out(), re.MULTILINE)
+    check(promoted is not None, "the player that came back was never promoted:\n" + back.out())
+    check(int(promoted.group(1)) == slot_of(b), "it came back to slot %s, not its own slot %d" % (promoted.group(1), slot_of(b)))
+    join_tick = int(promoted.group(2))
+    rejoined = re.search(r"^rejoined slot=(\d) from=(\d+)$", a.out(), re.MULTILINE)
+    check(rejoined is not None, "the survivor saw no SlotRejoin:\n" + a.out())
+    check(int(rejoined.group(1)) == int(promoted.group(1)) and int(rejoined.group(2)) == join_tick,
+          "the survivor's rejoin (%s) is not the comeback's promotion (%s)" % (rejoined.group(0), promoted.group(0)))
+    common = agree(a, back, "own-slot rejoin", 5)
+    check(len([t for t in common if t > join_tick]) >= 5, "fewer than 5 shared checkpoints after the join tick %d" % join_tick)
+    check(not re.search(r"^stopped |^failed ", back.out(), re.MULTILINE), "the player that came back stopped:\n" + back.out())
+
+    check(not re.search(r"^promoted ", watcher.out(), re.MULTILINE), "a spectator token was promoted:\n" + watcher.out())
+    check(re.search(r"^promotion-refused .*not-allowed", watcher.out(), re.MULTILINE),
+          "the spectator token was not refused as not allowed:\n" + watcher.out())
+    check(not re.search(r"^promoted ", other.out(), re.MULTILINE),
+          "another player took the slot kept for its own player:\n" + other.out())
+    check(re.search(r"^promotion-refused .*not-ready", other.out(), re.MULTILINE),
+          "the other player was never told the dropped slot is kept:\n" + other.out())
+    check(re.search(r"has a spectator token", server.err()), "the relay did not log the spectator token's refusal:\n" + server.err())
+    check_rolled_back(a)
+    start_relay_end(h, server)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--server", required=True)
@@ -232,6 +288,7 @@ def main():
         (work / "layout.json").write_text(json.dumps(LAYOUT), encoding="utf-8")
         tokens_file = work / "tokens.json"
         tokens = make_tokens(SimpleNamespace(server=args.server), tokens_file, 3)
+        watcher_token = make_spectator_token(args.server, tokens_file)
         project = work / "project-deterministic"
         project.mkdir()
         make_project(project, True)
@@ -239,6 +296,7 @@ def main():
         scenario_player_killed(h, project, tokens, tokens_file)
         scenario_source_killed(h, project, tokens, tokens_file)
         scenario_promotion(h, project, tokens, tokens_file)
+        scenario_own_slot_rejoin(h, project, tokens, tokens_file, watcher_token)
         say("n2server_rollback: all scenarios passed")
         return 0
     except Skip as skipped:

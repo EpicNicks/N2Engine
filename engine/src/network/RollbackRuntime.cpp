@@ -67,7 +67,8 @@ namespace N2Engine::Network
                 hook();
             }
         };
-        session.join = [this](const WorldSnapshot &snapshot) -> std::expected<void, std::string>
+        session.join = [this, allowInexact = options.allowInexactPhysics](
+                           const WorldSnapshot &snapshot) -> std::expected<void, std::string>
         {
             auto joined = _rollback.RestoreForJoin(snapshot);
             if (!joined)
@@ -75,13 +76,7 @@ namespace N2Engine::Network
                 return std::unexpected(joined.error());
             }
             _join = *joined;
-            if (!joined->exactPhysics && snapshot.hasPhysics)
-            {
-                Logger::Warn("Spectating: the physics backend refused the snapshot's physics part (its bodies are not the "
-                             "ones of the snapshot); the bodies were set from the objects' body states, so this view may "
-                             "drift from the players' simulation");
-            }
-            return {};
+            return CheckJoinPhysics(*joined, snapshot.hasPhysics, allowInexact);
         };
         session.buildTree = [this](const std::uint32_t tick)
         { return BuildStateHashTree(_world, _rollback.Layouts(), tick, _physics); };
@@ -103,6 +98,27 @@ namespace N2Engine::Network
         {
             Application::GetInstance().SetFixedTickDriver(nullptr);
         }
+    }
+
+    std::expected<void, std::string> RollbackRuntime::CheckJoinPhysics(const JoinRestoreResult &joined,
+                                                                       const bool snapshotHasPhysics,
+                                                                       const bool allowInexactPhysics)
+    {
+        if (joined.exactPhysics || !snapshotHasPhysics)
+        {
+            return {};
+        }
+        if (allowInexactPhysics)
+        {
+            Logger::Warn("Spectating: the physics backend refused the snapshot's physics part (its bodies are not the "
+                         "ones of the snapshot); the bodies were set from the objects' body states, so this view may "
+                         "drift from the players' simulation (allowInexactPhysics)");
+            return {};
+        }
+        return std::unexpected(std::string(
+            "the physics backend refused the snapshot's physics part (its bodies are not the ones of the snapshot, see "
+            "the log), so this spectator would run a simulation that may drift from the players' without anything "
+            "noticing; set RollbackRuntimeOptions::allowInexactPhysics to run such a view anyway"));
     }
 
     void RollbackRuntime::Update(const std::uint64_t nowMicros, const double unscaledDeltaSeconds)

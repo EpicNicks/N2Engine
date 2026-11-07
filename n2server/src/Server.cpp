@@ -735,6 +735,34 @@ namespace N2Engine::Server
                 relayOptions.snapshotTimeoutMicros = static_cast<std::uint64_t>(options.relaySnapshotTimeoutMs) * 1000;
                 relayOptions.maxConnections = static_cast<std::uint32_t>(std::min(options.maxClients, 64));
                 relayOptions.allowPromotion = options.relayPromotion;
+                // Every session came from a token entry: the relay checks the role of a spectator that asks for a slot,
+                // and keeps a dropped slot for the user who played it (a player coming back with its token takes it)
+                relayOptions.identify = [&transport, &secure, &webSocket](const N2Net::PeerId peer)
+                    -> std::optional<Network::RelayIdentity>
+                {
+                    N2Net::ITransport *source = nullptr;
+                    N2Net::PeerId sourcePeer = 0;
+                    if (!transport.Source(peer, source, sourcePeer))
+                    {
+                        return std::nullopt;
+                    }
+                    if (source == &secure)
+                    {
+                        N2Net::SecurePeerIdentity identity;
+                        if (secure.GetPeerIdentity(sourcePeer, identity))
+                        {
+                            return Network::RelayIdentity{identity.user, identity.role};
+                        }
+                    }
+                    else if (webSocket && source == webSocket.get())
+                    {
+                        if (const auto who = webSocket->Identity(sourcePeer))
+                        {
+                            return Network::RelayIdentity{who->user, who->role};
+                        }
+                    }
+                    return std::nullopt;
+                };
                 relay = std::make_unique<Network::LockstepRelay>(transport, std::move(relayOptions));
                 if (!relay->Valid())
                 {

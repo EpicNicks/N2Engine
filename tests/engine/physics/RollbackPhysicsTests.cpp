@@ -220,6 +220,35 @@ namespace N2PhysicsTests
             NetworkWorld world;
             RollbackWorld rollback{world, backend};
         };
+
+        /// A run whose despawned ball 2 is released (its body destroyed, its slot freed) before the ball of tick 12 is
+        /// spawned, so that ball's body is created in a freed slot under a new generation: a fresh joiner that simply
+        /// instantiated the spawned balls would give their bodies other slots or generations. Returns the serialised
+        /// snapshot at tick 14; `at14` and `at20` are this run's outcomes.
+        std::vector<std::uint8_t> SnapshotAfterABodyWasRecreated(Outcome &at14, Outcome &at20)
+        {
+            Game game;
+            game.Run(0, 10);
+            EXPECT_GE(game.rollback.ReleaseConfirmed(9), 1u);
+            game.scene->ProcessDestroyed();
+            game.Run(10, 14);
+            WorldSnapshot snapshot;
+            EXPECT_TRUE(game.rollback.Save(14, snapshot));
+            EXPECT_TRUE(snapshot.hasPhysics);
+            std::size_t handles = 0;
+            for (const WorldSnapshot::Object &object : snapshot.objects)
+            {
+                if (object.spawned)
+                {
+                    handles += object.bodyHandles.size();
+                }
+            }
+            EXPECT_EQ(handles, 2u) << "each spawned ball carries its body's handle";
+            at14 = game.Capture(14);
+            game.Run(14, 20);
+            at20 = game.Capture(20);
+            return SerializeWorldSnapshot(snapshot);
+        }
     }
 
     TEST(RollbackPhysicsTest, ARollbackAcrossSpawnsDespawnsAndImpulsesEndsWithTheStraightRunsPhysicsHash)
@@ -551,6 +580,76 @@ namespace N2PhysicsTests
         EXPECT_EQ(at14.root, first14.root);
         EXPECT_EQ(at14.fields, first14.fields);
         EXPECT_EQ(at14.simulated, first14.simulated);
+    }
+
+    // The C5 follow-up "make the bodies match": the joiner creates each spawned object's body under the handle the
+    // snapshot names (IPhysicsBackend::ClaimBodyHandles), so the Jolt bytes apply even after the player destroyed a body and
+    // reused its slot
+    TEST(RollbackPhysicsTest, AJoinerTakesTheJoltBytesExactlyAfterThePlayerRecreatedABodyInAFreedSlot)
+    {
+        Outcome first14;
+        Outcome first20;
+        const std::vector<std::uint8_t> bytes = SnapshotAfterABodyWasRecreated(first14, first20);
+
+        Game joiner; // the scene as loaded: balls 1 and 2, nothing spawned
+        const auto decoded = DeserializeWorldSnapshot(bytes);
+        ASSERT_TRUE(decoded.has_value()) << decoded.error();
+        const auto joined = joiner.rollback.RestoreForJoin(*decoded);
+        ASSERT_TRUE(joined.has_value()) << joined.error();
+        EXPECT_EQ(joined->spawned, 2u);
+        EXPECT_EQ(joined->removed, 1u) << "ball 2 is gone on the other peer";
+        EXPECT_EQ(joined->bodiesClaimed, 2u);
+        EXPECT_TRUE(joined->exactPhysics) << "the joiner's bodies were made the snapshot's: the Jolt bytes were taken";
+        for (const WorldSnapshot::Object &saved : decoded->objects)
+        {
+            if (!saved.spawned)
+            {
+                continue;
+            }
+            ASSERT_EQ(saved.bodyHandles.size(), 1u);
+            NetworkObject *const object = joiner.world.Find(NetworkId{saved.id});
+            ASSERT_NE(object, nullptr);
+            const Rigidbody *const body = object->GetGameObject().GetComponent<Rigidbody>();
+            ASSERT_NE(body, nullptr);
+            EXPECT_EQ(body->GetHandle(), saved.bodyHandles[0].handle) << "net object " << saved.id;
+        }
+        const Outcome at14 = joiner.Capture(14);
+        EXPECT_EQ(at14.root, first14.root);
+        EXPECT_EQ(at14.fields, first14.fields);
+        EXPECT_EQ(at14.simulated, first14.simulated);
+        joiner.Run(14, 20);
+        const Outcome at20 = joiner.Capture(20);
+        EXPECT_EQ(at20.root, first20.root);
+        EXPECT_EQ(at20.fields, first20.fields);
+        EXPECT_EQ(at20.simulated, first20.simulated);
+    }
+
+    // When the bodies still cannot be made to match (here a body the players do not have takes the slot a spawned ball
+    // needs), the restore is inexact, and RollbackRuntime's join refuses it unless the host allowed it
+    TEST(RollbackPhysicsTest, AJoinerWithABodyThePlayersLackRestoresInexactlyAndTheRuntimeRefusesThatUnlessAllowed)
+    {
+        Outcome first14;
+        Outcome first20;
+        const std::vector<std::uint8_t> bytes = SnapshotAfterABodyWasRecreated(first14, first20);
+
+        Game joiner;
+        const GameObject::Ptr extra = GameObject::Create("NotNetworked");
+        extra->CreatePositionable();
+        extra->GetPositionable()->SetPosition(Vector3(20.0f, 0.5f, 20.0f));
+        extra->AddComponent<BoxCollider>()->SetSize(Vector3(1.0f, 1.0f, 1.0f));
+        joiner.scene->AddRootGameObject(extra);
+        joiner.scene->ProcessAttachQueue();
+
+        const auto decoded = DeserializeWorldSnapshot(bytes);
+        ASSERT_TRUE(decoded.has_value()) << decoded.error();
+        const auto joined = joiner.rollback.RestoreForJoin(*decoded);
+        ASSERT_TRUE(joined.has_value()) << joined.error();
+        EXPECT_FALSE(joined->exactPhysics) << "the backend refused the bytes: the bodies are not the snapshot's";
+        EXPECT_EQ(joined->spawned, 2u);
+        EXPECT_FALSE(RollbackRuntime::CheckJoinPhysics(*joined, true, false).has_value())
+            << "a spectator does not run an inexact view unless the host allows it";
+        EXPECT_TRUE(RollbackRuntime::CheckJoinPhysics(*joined, true, true).has_value());
+        EXPECT_TRUE(RollbackRuntime::CheckJoinPhysics(*joined, false, false).has_value()) << "no physics part, nothing to refuse";
     }
 }
 

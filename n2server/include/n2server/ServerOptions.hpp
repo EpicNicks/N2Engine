@@ -69,8 +69,12 @@ namespace N2Engine::Server
         /// (LockstepRelayOptions::snapshotTimeoutMicros; the whole transfer gets twice that)
         int relaySnapshotTimeoutMs = 10000;
         /// --relay-promotion allow|deny: whether a spectator may take a dropped slot (LockstepRelayOptions::allowPromotion,
-        /// lockstep wire version 3). Default deny.
-        bool relayPromotion = false;
+        /// lockstep wire version 3). Default allow: N2Server gives the relay every peer's token identity
+        /// (LockstepRelayOptions::identify), so a spectator-role token is refused and a dropped slot is kept for its own
+        /// user for a while.
+        bool relayPromotion = true;
+        /// --relay-promotion was given (it only applies with --relay)
+        bool relayPromotionGiven = false;
         /// --websocket-port: -1 disabled, 0 chooses a free loopback TCP port. Put a TLS proxy in front for wss.
         int webSocketPort = -1;
         /// --websocket-origin: exact allowed browser Origin; empty accepts requests with no Origin only.
