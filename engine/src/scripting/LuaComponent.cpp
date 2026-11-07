@@ -3,6 +3,7 @@
 #include "engine/scripting/LuaFieldDeclaration.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/scripting/LuaScript.hpp"
+#include "engine/scripting/LuaTickStateLint.hpp"
 #include "engine/scripting/ScriptCallback.hpp"
 #include "engine/scripting/DeclarationEvaluator.hpp"
 #include "engine/scripting/ScriptDeclarationCache.hpp"
@@ -24,6 +25,7 @@
 #include <iterator>
 #include <limits>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -1943,6 +1945,45 @@ namespace N2Engine::Scripting
             _scriptData[entry.key()] = entry.value();
             InjectField(entry.key(), entry.value());
         }
+    }
+
+    std::vector<std::string> LuaComponent::FindTickStateOutsideSnapshot(const bool networked) const
+    {
+        if (!_scriptInstance.valid() || !LuaRuntime::RunsScripts())
+        {
+            return {};
+        }
+        std::set<std::string, std::less<>> replicated;
+        if (networked)
+        {
+            for (const FieldInfo &field : DescribeFields())
+            {
+                if (field.replicated)
+                {
+                    replicated.insert(field.name);
+                }
+            }
+        }
+        // DescribeFields can run the script's metamethods, which may retire the instance
+        if (!_scriptInstance.valid())
+        {
+            return {};
+        }
+        lua_State *const state = _scriptInstance.lua_state();
+        if (state == nullptr || !lua_checkstack(state, 4))
+        {
+            return {};
+        }
+        const int base = lua_gettop(state);
+        _scriptInstance.push(state);
+        std::vector<std::string> findings;
+        // The instance's metatable is the class the script returned (CreateScriptInstance); a raw read, no metamethod
+        if (lua_getmetatable(state, -1) != 0 && lua_type(state, -1) == LUA_TTABLE)
+        {
+            findings = LintTickState(state, -1, replicated);
+        }
+        lua_settop(state, base);
+        return findings;
     }
 
     void LuaComponent::SetScriptData(const nlohmann::json &data)

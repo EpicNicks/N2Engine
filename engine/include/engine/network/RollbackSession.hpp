@@ -34,6 +34,10 @@ namespace N2Engine::Network
         RollbackEventPolicy eventPolicy = RollbackEventPolicy::Immediate;
         /// The payload size and neutral input every peer agreed on (the same LockstepLayoutInfo lockstep uses)
         N2Net::LockstepLayoutInfo layout;
+        /// The first tick the session runs: 0 for a session from the start; a peer that takes over a running session
+        /// (a promoted spectator, LockstepRuntime) starts at its join tick with the world already at that tick. The
+        /// inputDelay ticks from it get every slot's neutral input, as ticks 0 to inputDelay - 1 do from 0.
+        std::uint32_t startTick = 0;
     };
 
     /// What the session needs from the simulation it drives
@@ -109,7 +113,7 @@ namespace N2Engine::Network
      * inputs, and save/restore must capture all of it (RollbackWorld). With rollbackWindow 0 the session is lockstep: it
      * never predicts and never saves.
      *
-     * The ticks are plain 32-bit counters from 0; a session does not run across 2^32 ticks (the lockstep scheduler's
+     * The ticks are plain 32-bit counters from startTick (0 by default); a session does not run across 2^32 ticks (the lockstep scheduler's
      * wrap handling is not duplicated here). Single-threaded.
      */
     class RollbackSession

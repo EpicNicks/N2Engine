@@ -160,6 +160,12 @@ namespace N2Engine::Replay
 
         // The replay file, inline: the same object ParseReplayLog reads
         root["inputLog"] = nlohmann::json::parse(SerializeReplayLog(report.inputLog));
+        // The session tick of the log's tick 0 (a promoted spectator's log starts at its snapshot), and that snapshot
+        root["inputLogStartTick"] = report.inputLogStartTick;
+        if (!report.startSnapshotPath.empty())
+        {
+            root["startSnapshot"] = report.startSnapshotPath;
+        }
 
         nlohmann::json trees = nlohmann::json::array();
         if (report.trees != nullptr)

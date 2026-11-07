@@ -2,12 +2,16 @@
 
 #include <chrono>
 #include <format>
+#include <memory>
+#include <set>
 #include <utility>
 
 #include "engine/Application.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/Logger.hpp"
+#include "engine/network/NetworkObject.hpp"
 #include "engine/network/NetworkWorld.hpp"
+#include "engine/scripting/LuaComponent.hpp"
 #include "engine/network/StateHash.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
 
@@ -85,6 +89,22 @@ namespace N2Engine::Network
 
         _runtime = std::make_unique<LockstepRuntime>(transport, std::move(session));
 
+        // Design 9.2 option A: the contract is kept (only replicated fields are in a snapshot), and a script that keeps
+        // tick state elsewhere is named once per session
+        if (const Scene *const scene = _world.GetScene(); scene != nullptr)
+        {
+            for (const std::string &line : LuaStateWarnings(*scene))
+            {
+                Logger::Warn(std::format(
+                    "network.deterministic.mode {}: a script keeps tick state a snapshot does not hold, so a {} starts "
+                    "without it and the desync detector stops the session once it shows in the hash: {}. Keep such "
+                    "state in a field declared `replicated = true` (docs/netcode.html, Lua state)",
+                    _window > 0 ? "rollback" : "lockstep",
+                    _window > 0 ? "rollback, a late joiner or a promoted spectator" : "late joiner or a promoted spectator",
+                    line));
+            }
+        }
+
         if (options.driveApplication)
         {
             _drives = true;
@@ -119,6 +139,46 @@ namespace N2Engine::Network
             "the physics backend refused the snapshot's physics part (its bodies are not the ones of the snapshot, see "
             "the log), so this spectator would run a simulation that may drift from the players' without anything "
             "noticing; set RollbackRuntimeOptions::allowInexactPhysics to run such a view anyway"));
+    }
+
+    std::vector<std::string> RollbackRuntime::LuaStateWarnings(const Scene &scene)
+    {
+        std::vector<std::string> lines;
+        // A script file's class is the same on every object; whether its replicated fields are in a snapshot is not
+        std::set<std::pair<std::string, bool>> done;
+        for (const std::shared_ptr<GameObject> &object : scene.GetAllGameObjects())
+        {
+            if (!object)
+            {
+                continue;
+            }
+            const bool networked = !object->GetComponents<NetworkObject>().empty();
+            for (const Scripting::LuaComponent *script : object->GetComponents<Scripting::LuaComponent>())
+            {
+                const std::string path = script->GetScriptPath().ToString();
+                if (path.empty() || !done.emplace(path, networked).second)
+                {
+                    continue;
+                }
+                const std::vector<std::string> findings = script->FindTickStateOutsideSnapshot(networked);
+                if (findings.empty())
+                {
+                    continue;
+                }
+                std::string line = path;
+                if (!networked)
+                {
+                    line += " (on an object without a NetworkObject, so none of its fields is in a snapshot)";
+                }
+                line += ": ";
+                for (std::size_t i = 0; i < findings.size(); ++i)
+                {
+                    line += (i == 0 ? "" : "; ") + findings[i];
+                }
+                lines.push_back(std::move(line));
+            }
+        }
+        return lines;
     }
 
     void RollbackRuntime::Update(const std::uint64_t nowMicros, const double unscaledDeltaSeconds)

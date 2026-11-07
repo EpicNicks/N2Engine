@@ -383,6 +383,8 @@ Today a snapshot holds a Lua script's `replicated = true` fields only; locals, u
 
 Recommendation: A now (a warning plus the documented scope), B only if games ask for it, as an opt-in `rollbackState = true` on a script field table so nothing is copied that the author did not name. C is rejected.
 
+Implemented 2026-11-07 (option A): `RollbackRuntime` lints the scene's scripts once at construction, in rollback and lockstep mode, by reading the bytecode of the tick callbacks (`Scripting::LintTickState`): a captured local assigned, a field of a captured table or a global written, a non-replicated `self` field written in a method, following inner functions, captured local functions and `self:` method calls. What it cannot see is listed in docs/netcode.html (Lua state). B is not built.
+
 ### 9.3 The spectator fallback when the joiner backend refuses the physics bytes
 
 Today `RestoreForJoin` falls back to per-object body states (`exactPhysics` false), the spectator reports no roots and may drift undetected.

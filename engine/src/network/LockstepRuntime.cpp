@@ -4,6 +4,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <format>
+#include <fstream>
 #include <mutex>
 #include <thread>
 #include <utility>
@@ -512,6 +513,13 @@ namespace N2Engine::Network
         step_ = 1.0 / static_cast<double>(std::max<std::uint32_t>(tickRate_, 1));
         dropFill_ = welcome.dropFill == 1 ? N2Net::DropFill::HoldLast : N2Net::DropFill::Neutral;
         inputDelay_ = welcome.inputDelay;
+        // A spectator runs lockstep, but a promoted one rolls back with these, so they are checked now as a player's
+        if (options_.rollbackWindow > 0 &&
+            (options_.rollbackWindow > kMaxRollbackWindow || !options_.save || !options_.restore))
+        {
+            Fail(std::format("rollback needs a window of 1 to {} and the save and restore hooks", kMaxRollbackWindow));
+            return;
+        }
         if (options_.spectate)
         {
             // The scheduler starts at the snapshot's tick (ApplySnapshot)
@@ -521,11 +529,6 @@ namespace N2Engine::Network
         }
         if (options_.rollbackWindow > 0)
         {
-            if (options_.rollbackWindow > kMaxRollbackWindow || !options_.save || !options_.restore)
-            {
-                Fail(std::format("rollback needs a window of 1 to {} and the save and restore hooks", kMaxRollbackWindow));
-                return;
-            }
             RollbackConfig rollback;
             rollback.slotCount = slotCount_;
             rollback.localSlot = slot_;
@@ -533,14 +536,7 @@ namespace N2Engine::Network
             rollback.rollbackWindow = options_.rollbackWindow;
             rollback.eventPolicy = options_.eventPolicy;
             rollback.layout = *info;
-            RollbackHost host;
-            host.save = options_.save;
-            host.restore = options_.restore;
-            host.step = [this](const N2Net::TickInputs &inputs) { return StepRollback(inputs); };
-            host.confirmed = [this](const std::uint32_t first) { OnConfirmed(first); };
-            host.resimulated = options_.resimulated;
-            host.predict = options_.predict;
-            session_ = std::make_unique<RollbackSession>(rollback, std::move(host));
+            session_ = std::make_unique<RollbackSession>(rollback, MakeRollbackHost());
             if (!session_->Valid())
             {
                 Fail("the rollback session refused its configuration: " + session_->Error());
@@ -772,10 +768,81 @@ namespace N2Engine::Network
         }
     }
 
+    RollbackHost LockstepRuntime::MakeRollbackHost()
+    {
+        RollbackHost host;
+        host.save = options_.save;
+        host.restore = options_.restore;
+        host.step = [this](const N2Net::TickInputs &inputs) { return StepRollback(inputs); };
+        host.confirmed = [this](const std::uint32_t first) { OnConfirmed(first); };
+        host.resimulated = options_.resimulated;
+        host.predict = options_.predict;
+        return host;
+    }
+
+    bool LockstepRuntime::StartPromotedRollback()
+    {
+        const std::uint32_t from = *rollbackFrom_;
+        rollbackFrom_.reset();
+        const std::optional<N2Net::LockstepLayoutInfo> info = MakeLockstepLayoutInfo(options_.layout);
+        if (!info || scheduler_->CurrentTick() != from)
+        {
+            Fail(std::format("the rollback session of slot {} cannot start at tick {}", slot_, from));
+            return false;
+        }
+        RollbackConfig rollback;
+        rollback.slotCount = slotCount_;
+        rollback.localSlot = slot_;
+        // Nothing is pre-filled: every input from the join tick on is a player's (this one's own sampled already)
+        rollback.inputDelay = 0;
+        rollback.rollbackWindow = options_.rollbackWindow;
+        rollback.eventPolicy = options_.eventPolicy;
+        rollback.layout = *info;
+        rollback.startTick = from;
+        session_ = std::make_unique<RollbackSession>(rollback, MakeRollbackHost());
+        if (!session_->Valid())
+        {
+            Fail("the rollback session refused its configuration: " + session_->Error());
+            return false;
+        }
+        // This slot's inputs sampled ahead of the join tick (the input delay): the session's local ticks follow on
+        const std::uint32_t nextLocal = scheduler_->NextNeeded(slot_);
+        for (std::uint32_t tick = from; tick != nextLocal; ++tick)
+        {
+            const std::optional<N2Net::LockstepInput> input = scheduler_->Get(slot_, tick);
+            std::uint32_t assigned = 0;
+            if (!input || session_->SubmitLocal(*input, assigned) != N2Net::SubmitResult::Accepted || assigned != tick)
+            {
+                Fail(std::format("the rollback session of slot {} could not take its input of tick {}", slot_, tick));
+                return false;
+            }
+        }
+        // The other slots' inputs that came already (a guess is used for the rest, as for any rollback player; a
+        // dropped slot's synthesised input reaches the session as it is confirmed, DrainConfirmed)
+        for (std::uint32_t slot = 0; slot < slotCount_; ++slot)
+        {
+            if (slot == slot_)
+            {
+                continue;
+            }
+            for (std::uint32_t offset = 0; offset < N2Net::kLockstepWindow; ++offset)
+            {
+                const std::uint32_t tick = from + offset;
+                if (const std::optional<N2Net::LockstepInput> input = scheduler_->Get(slot, tick);
+                    input && !scheduler_->IsDropped(slot, tick))
+                {
+                    (void)session_->SubmitRemote(slot, tick, *input);
+                }
+            }
+        }
+        return true;
+    }
+
     void LockstepRuntime::RunRollbackTicks(const double unscaledDelta)
     {
         clock_.BeginFrame(unscaledDelta);
-        const std::uint32_t delay = scheduler_->Config().inputDelay;
+        // The welcome's delay (a promoted spectator's scheduler, which began as a spectator's, has none of its own)
+        const std::uint32_t delay = inputDelay_;
         while (state_ == LockstepState::Running && clock_.TickDue(step_))
         {
             if (static_cast<std::int32_t>(scheduler_->NextNeeded(slot_) - session_->CurrentTick()) <=
@@ -951,6 +1018,11 @@ namespace N2Engine::Network
         slot_ = promoted->slot;
         spectating_ = false;
         promotionPending_ = false;
+        if (options_.rollbackWindow > 0)
+        {
+            // Lockstep up to the join tick (every input before it is known), a rollback session from it (RunTicks)
+            rollbackFrom_ = promoted->fromTick;
+        }
         lastSendAt_ = 0;
         lastAckAt_ = 0;
         Notify(LockstepEvent::Type::Promoted, slot_, promoted->fromTick, "");
@@ -960,7 +1032,8 @@ namespace N2Engine::Network
     {
         snapshotReady_ = false;
         auto snapshot = DeserializeWorldSnapshot(incoming_);
-        std::vector<std::uint8_t>().swap(incoming_);
+        std::vector<std::uint8_t> bytes;
+        bytes.swap(incoming_);
         if (!snapshot)
         {
             Fail("the spectator's snapshot does not decode: " + snapshot.error());
@@ -990,6 +1063,15 @@ namespace N2Engine::Network
         config.layout = *info;
         scheduler_ = std::make_unique<N2Net::LockstepScheduler>(config);
         responder_ = std::make_unique<N2Net::BisectResponder>(history_, options_.responder, now_);
+        // The confirmed inputs from the snapshot's tick on: the replay log of a spectator that is promoted later
+        recorder_ = std::make_unique<Replay::LockstepRecorder>(options_.scene, options_.seed,
+                                                              static_cast<int>(hashInterval_), static_cast<int>(slotCount_),
+                                                              options_.layout);
+        logStartTick_ = incomingTick_;
+        if (!options_.reportPath.empty())
+        {
+            startSnapshot_ = std::move(bytes);
+        }
         state_ = LockstepState::Running;
         Notify(LockstepEvent::Type::Started, slot_, incomingTick_, "spectating");
     }
@@ -1101,6 +1183,10 @@ namespace N2Engine::Network
             RunSpectatorTicks(unscaledDelta);
             return;
         }
+        if (!session_ && rollbackFrom_ && scheduler_->CurrentTick() == *rollbackFrom_ && !StartPromotedRollback())
+        {
+            return;
+        }
         if (session_)
         {
             RunRollbackTicks(unscaledDelta);
@@ -1146,6 +1232,12 @@ namespace N2Engine::Network
             {
                 return;
             }
+            if (rollbackFrom_ && scheduler_->CurrentTick() == *rollbackFrom_)
+            {
+                // A promoted spectator reached its join tick: the ticks from here are the rollback session's (the next
+                // pass starts it; the time owed stays in the accumulator)
+                break;
+            }
         }
         clock_.EndFrame(step_);
     }
@@ -1181,11 +1273,26 @@ namespace N2Engine::Network
 
     void LockstepRuntime::WriteReport(LockstepStopInfo &info, const N2Net::HashTree *local)
     {
-        if (options_.reportPath.empty() || !recorder_)
+        // A spectator reports no roots and has no report to write; a promoted one does
+        if (options_.reportPath.empty() || !recorder_ || spectating_)
         {
             return;
         }
         Replay::DesyncReport report;
+        report.inputLogStartTick = logStartTick_;
+        if (!startSnapshot_.empty())
+        {
+            // The state the log starts from: with it, the report holds what a replay of this peer's part needs
+            const std::string path = options_.reportPath + ".snapshot";
+            std::ofstream out(path, std::ios::binary | std::ios::trunc);
+            out.write(reinterpret_cast<const char *>(startSnapshot_.data()),
+                      static_cast<std::streamsize>(startSnapshot_.size()));
+            out.close();
+            if (out)
+            {
+                report.startSnapshotPath = path;
+            }
+        }
         report.peerName = options_.peerName;
         report.tick = info.tick;
         report.localRoot = local != nullptr ? local->Root() : (slot_ == info.slotA ? info.rootA : info.rootB);

@@ -23,17 +23,19 @@ namespace N2Engine::Network
             ring_.resize(config_.rollbackWindow + 2);
             ringValid_.assign(ring_.size(), false);
         }
+        current_ = config_.startTick;
+        first_ = config_.startTick;
         // The first inputDelay ticks have no sender: every slot's input is neutral, as in lockstep
-        for (std::uint32_t tick = 0; tick < config_.inputDelay; ++tick)
+        for (std::uint32_t offset = 0; offset < config_.inputDelay; ++offset)
         {
             for (std::uint32_t slot = 0; slot < config_.slotCount; ++slot)
             {
-                Entry &entry = Touch(slot, tick);
+                Entry &entry = Touch(slot, config_.startTick + offset);
                 entry.confirmed = true;
                 entry.input = config_.layout.neutral;
             }
         }
-        nextLocal_ = config_.inputDelay;
+        nextLocal_ = config_.startTick + config_.inputDelay;
         AdvanceConfirmed();
     }
 
