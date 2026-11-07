@@ -211,6 +211,11 @@ namespace N2Engine::Network
     LockstepRuntime::LockstepRuntime(N2Net::ITransport &transport, LockstepRuntimeOptions options)
         : transport_(transport), options_(std::move(options)), history_(options_.historyDepth)
     {
+        if (options_.rejoin)
+        {
+            // A dropped player comes back as a spectator first (the snapshot), then takes its slot (StepRejoin)
+            options_.spectate = true;
+        }
         spectating_ = options_.spectate;
         clock_.SetMode(SimulationMode::Deterministic);
         // Lockstep paces itself: a tick that waits for an input resets the accumulator, so a "behind" report is not an
@@ -427,6 +432,11 @@ namespace N2Engine::Network
                 {
                     promotionPending_ = false;
                     promotionRefusal_ = *reason;
+                    if (*reason == RefuseReason::NotAllowed)
+                    {
+                        // A rejoin stops asking: the relay will not seat this token
+                        rejoinOver_ = true;
+                    }
                     Notify(LockstepEvent::Type::PromotionRefused, slot_, TicksRun(),
                            std::format("the relay refused the promotion ({})", ToString(*reason)));
                 }
@@ -1295,6 +1305,33 @@ namespace N2Engine::Network
         }
     }
 
+    void LockstepRuntime::StepRejoin(const std::uint64_t now)
+    {
+        if (!options_.rejoin || rejoinOver_ || !spectating_ || promotionPending_ || state_ != LockstepState::Running ||
+            !scheduler_ || stop_)
+        {
+            return;
+        }
+        if (!rejoinStarted_)
+        {
+            rejoinStarted_ = true;
+            rejoinSince_ = now;
+            rejoinNextAt_ = now;
+        }
+        if (now - rejoinSince_ >= options_.rejoinTimeoutMicros)
+        {
+            // Gave up: it stays a spectator (the last PromotionRefused said why)
+            rejoinOver_ = true;
+            return;
+        }
+        if (now >= rejoinNextAt_)
+        {
+            rejoinNextAt_ = now + std::max<std::uint64_t>(options_.rejoinRetryMicros, 1'000);
+            // Any dropped slot: a relay that knows identities hands this token's user its own slot first
+            (void)RequestPromotion(kSpectatorSlot);
+        }
+    }
+
     void LockstepRuntime::Update(const std::uint64_t nowMicros, const double unscaledDeltaSeconds)
     {
         if (!haveStartedAt_)
@@ -1330,6 +1367,7 @@ namespace N2Engine::Network
             if (spectating_)
             {
                 SendSpectatorAck(nowMicros);
+                StepRejoin(nowMicros);
             }
             else
             {

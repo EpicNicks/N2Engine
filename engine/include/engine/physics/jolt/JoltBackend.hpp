@@ -230,6 +230,11 @@ namespace N2Engine::Physics
         /// bring the poses of the dynamic bodies' objects back.
         bool SaveState(std::vector<std::byte> &out) const override;
         bool RestoreState(std::span<const std::byte> in) override;
+        /// A late joiner's claims (IPhysicsBackend::ClaimBodyHandles): a body created for a claimed Rigidbody takes the
+        /// claimed index and generation when that slot is free (a slot past the end of the table is made, and the slots
+        /// between go to the free list); while claims are pending, any other body skips the claimed slots. The handle
+        /// allocator stays the backend's own otherwise.
+        void ClaimBodyHandles(std::span<const BodyHandleClaim> claims) override;
         /// FNV-1a over the bodies in handle order (index, generation, enabled flag, kind, and for a body in the
         /// simulation its pose, its velocities and whether it is awake), with every float canonicalised: any NaN is one
         /// value and -0 is +0. It does not read Jolt's byte layout. nullopt before Initialize.

@@ -27,6 +27,14 @@ namespace N2Engine::Physics
     struct OverlapHit;
     enum class QueryTriggers : std::uint8_t; // Raycast.hpp
 
+    /// A late joiner's wish for one body (IPhysicsBackend::ClaimBodyHandles): the body the backend next creates for this
+    /// Rigidbody takes this handle
+    struct BodyHandleClaim
+    {
+        const Rigidbody *rigidbody = nullptr;
+        PhysicsBodyHandle handle;
+    };
+
     /// How many bodies a backend's world holds (EN5, the editor's Profiler): what IPhysicsBackend::GetStats answers
     struct PhysicsStats
     {
@@ -91,6 +99,13 @@ namespace N2Engine::Physics
         /// that has the same bodies as at save time. Both return false for "unsupported" (the default).
         virtual bool SaveState(std::vector<std::byte> & /*out*/) const { return false; }
         virtual bool RestoreState(std::span<const std::byte> /*in*/) { return false; }
+        /// For a late joiner (netcode C5, RollbackWorld::RestoreForJoin): the body the backend next creates for each
+        /// claim's Rigidbody takes the claim's handle (its slot and generation, and so its Jolt id) when that slot is free,
+        /// so the joiner's bodies are the ones of the snapshot it restores and RestoreState can take the snapshot's bytes.
+        /// While claims are pending, other bodies are given other slots. A claim is used once; a claim whose slot is taken
+        /// is dropped and that body gets a handle as usual. An empty span clears the claims. Main thread. The default
+        /// does nothing (a backend that cannot snapshot has nothing to match).
+        virtual void ClaimBodyHandles(std::span<const BodyHandleClaim> /*claims*/) {}
         /// A canonical hash of the simulation state (bodies in handle order), for desync detection; nullopt for
         /// "unsupported" (the default). Not 0 for unsupported: 0 is a legal hash.
         [[nodiscard]] virtual std::optional<std::uint64_t> HashState() const { return std::nullopt; }

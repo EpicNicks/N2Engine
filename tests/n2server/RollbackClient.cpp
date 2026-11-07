@@ -29,11 +29,13 @@
 //   n2server_rollback_client --port <n> --layout-file <json> [--host <ip>] [--protocol-id <n>] [--scene <name>] [--seed <n>]
 //       [--ticks <n>] [--rollback-window <0..15>] [--spectate <0|1>] [--mispredict <0|1>] [--hitch-every <ticks>]
 //       [--hitch-ms <n>] [--snapshot-pad-kb <n>] [--stall-at-tick <t>] [--report <path>] [--replay-out <path>]
-//       [--max-ms <n>] [--peer-name <text>] [--promote-at-tick <t>]
+//       [--max-ms <n>] [--peer-name <text>] [--promote-at-tick <t>] [--rejoin <0|1>]
 //
 // --promote-at-tick <t> (a spectator): once it has run to tick t it asks the relay to play a dropped slot (lockstep wire
 // version 3, Promote; the relay must allow it). Promoted, it plays that slot as a LOCKSTEP player and prints every
-// checkpoint hash it runs, as a spectator does (every tick it runs is confirmed).
+// checkpoint hash it runs, as a spectator does (every tick it runs is confirmed). --rejoin 1: a dropped player coming
+// back (LockstepRuntimeOptions::rejoin): it spectates and asks for any dropped slot by itself until it is promoted;
+// N2Server's relay gives it the slot its token's user played.
 //
 // The join token is the first line of stdin. The injected misprediction has two parts, because on loopback every remote
 // input normally arrives before its tick, so nothing would ever be guessed: --hitch-every <t> with --hitch-ms <m> makes the
@@ -95,6 +97,7 @@ namespace
         int maxMs = 90000;
         std::string peerName = "client";
         long long promoteAtTick = -1;
+        bool rejoin = false;
     };
 
     void Say(const std::string &line)
@@ -134,11 +137,18 @@ namespace
             else if (key == "--max-ms") a.maxMs = std::atoi(value.c_str());
             else if (key == "--peer-name") a.peerName = value;
             else if (key == "--promote-at-tick") a.promoteAtTick = std::atoll(value.c_str());
+            else if (key == "--rejoin") a.rejoin = value != "0";
             else return std::nullopt;
+        }
+        if (a.rejoin)
+        {
+            // A dropped player coming back starts as a spectator (LockstepRuntimeOptions::rejoin does the asking)
+            a.spectate = true;
         }
         if (a.port <= 0 || a.port > 65535 || a.layoutFile.empty() || a.rollbackWindow < 0 ||
             a.rollbackWindow > static_cast<int>(Network::kMaxRollbackWindow) || a.hitchEvery < 0 || a.hitchMs < 0 ||
-            a.snapshotPadKb < 0 || a.snapshotPadKb > 8192 || (a.promoteAtTick >= 0 && !a.spectate))
+            a.snapshotPadKb < 0 || a.snapshotPadKb > 8192 || (a.promoteAtTick >= 0 && !a.spectate) ||
+            (a.promoteAtTick >= 0 && a.rejoin))
         {
             return std::nullopt;
         }
@@ -255,6 +265,7 @@ namespace
         options.reportPath = args.report;
         options.desyncLingerMicros = 3'000'000;
         options.spectate = args.spectate;
+        options.rejoin = args.rejoin;
         const Network::InputLayout layoutCopy = *layout;
         std::uint32_t slotForSampling = 0;
         options.sampleInput = [&slotForSampling, &layoutCopy](const std::uint32_t tick)
@@ -541,8 +552,8 @@ int main(int argc, char *argv[])
         std::fprintf(stderr, "usage: n2server_rollback_client --port <n> --layout-file <json> [--host ip] [--protocol-id n] "
                              "[--scene name] [--seed n] [--ticks n] [--rollback-window 0..15] [--spectate 0|1] [--mispredict 0|1] "
                              "[--hitch-every ticks] [--hitch-ms n] [--snapshot-pad-kb n] [--stall-at-tick t] [--report path] "
-                             "[--replay-out path] [--max-ms n] [--peer-name text] [--promote-at-tick t]   (the token is the "
-                             "first line of stdin)\n");
+                             "[--replay-out path] [--max-ms n] [--peer-name text] [--promote-at-tick t] [--rejoin 0|1]   "
+                             "(the token is the first line of stdin)\n");
         return 2;
     }
     std::string token;
