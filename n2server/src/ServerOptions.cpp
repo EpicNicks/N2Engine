@@ -44,6 +44,8 @@ namespace N2Engine::Server
             "                          how long a spectator waits for its snapshot to begin, 1000 to 120000 (default 10000)\n"
             "  --relay-promotion <p>   allow (default) or deny: whether a spectator with a player or admin token may take\n"
             "                          a dropped player slot (a spectator token never may)\n"
+            "  --relay-rejoin-reserve-ms <n>\n"
+            "                          how long a dropped slot is kept for the user who played it, 0 to 600000 (default 30000)\n"
             "  --exit-on-stdin-eof     stop when stdin closes (a launcher that has gone away)\n"
             "  --log-level <level>     info (default), warn or error\n"
             "  --log-file <path>       also append the log lines to this file (created 0600 on POSIX)\n"
@@ -161,7 +163,7 @@ namespace N2Engine::Server
                                     arg == "--websocket-port" || arg == "--websocket-origin" || arg == "--protocol-id" || arg == "--log-level" || arg == "--log-file" ||
                                     arg == "--relay-players" || arg == "--relay-stall" || arg == "--relay-stall-ms" || arg == "--relay-layout" ||
                                     arg == "--relay-spectators" || arg == "--relay-snapshot-max-mb" || arg == "--relay-snapshot-timeout-ms" ||
-                                    arg == "--relay-promotion";
+                                    arg == "--relay-promotion" || arg == "--relay-rejoin-reserve-ms";
             if (!takesValue)
             {
                 return std::unexpected(std::format("Unknown option: {} (see --help)", Shown(arg)));
@@ -231,6 +233,17 @@ namespace N2Engine::Server
                                            " (expected a whole number from 1000 to 120000)");
                 }
                 options.relaySnapshotTimeoutMs = *ms;
+                continue;
+            }
+            if (arg == "--relay-rejoin-reserve-ms")
+            {
+                const std::optional<int> ms = Editor::ParseWholeNumber(value, 0, 600000);
+                if (!ms)
+                {
+                    return std::unexpected("Invalid --relay-rejoin-reserve-ms: " + Shown(value) +
+                                           " (expected a whole number from 0 to 600000)");
+                }
+                options.relayRejoinReserveMs = *ms;
                 continue;
             }
             if (arg == "--relay-promotion")
@@ -365,10 +378,10 @@ namespace N2Engine::Server
         if (!options.relay && (options.relayPlayers != 2 || options.relayStallStops || options.relayStallMs != 5000 ||
                                !options.relayLayoutFile.empty() || options.relaySpectators != 4 ||
                                options.relaySnapshotMaxMb != 16 || options.relaySnapshotTimeoutMs != 10000 ||
-                               options.relayPromotionGiven))
+                               options.relayPromotionGiven || options.relayRejoinReserveMs != 30000))
         {
             return std::unexpected("--relay-players, --relay-stall, --relay-stall-ms, --relay-layout, --relay-spectators, "
-                                   "--relay-snapshot-max-mb, --relay-snapshot-timeout-ms and --relay-promotion only apply "
+                                   "--relay-snapshot-max-mb, --relay-snapshot-timeout-ms, --relay-promotion and --relay-rejoin-reserve-ms only apply "
                                    "with --relay");
         }
         // Fail closed: a server on a non-loopback address must have a tokens file (every session is encrypted, but a

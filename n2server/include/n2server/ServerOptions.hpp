@@ -75,6 +75,9 @@ namespace N2Engine::Server
         bool relayPromotion = true;
         /// --relay-promotion was given (it only applies with --relay)
         bool relayPromotionGiven = false;
+        /// --relay-rejoin-reserve-ms: how long a dropped slot is kept for the user who played it before another player
+        /// may be promoted into it, 0 to 600000 (LockstepRelayOptions::rejoinReserveMicros)
+        int relayRejoinReserveMs = 30000;
         /// --websocket-port: -1 disabled, 0 chooses a free loopback TCP port. Put a TLS proxy in front for wss.
         int webSocketPort = -1;
         /// --websocket-origin: exact allowed browser Origin; empty accepts requests with no Origin only.

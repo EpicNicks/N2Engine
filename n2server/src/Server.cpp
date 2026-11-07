@@ -735,6 +735,7 @@ namespace N2Engine::Server
                 relayOptions.snapshotTimeoutMicros = static_cast<std::uint64_t>(options.relaySnapshotTimeoutMs) * 1000;
                 relayOptions.maxConnections = static_cast<std::uint32_t>(std::min(options.maxClients, 64));
                 relayOptions.allowPromotion = options.relayPromotion;
+                relayOptions.rejoinReserveMicros = static_cast<std::uint64_t>(options.relayRejoinReserveMs) * 1000;
                 // Every session came from a token entry: the relay checks the role of a spectator that asks for a slot,
                 // and keeps a dropped slot for the user who played it (a player coming back with its token takes it)
                 relayOptions.identify = [&transport, &secure, &webSocket](const N2Net::PeerId peer)

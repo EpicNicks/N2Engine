@@ -193,7 +193,9 @@ def scenario_source_killed(h, project, tokens, tokens_file):
 
 def scenario_promotion(h, project, tokens, tokens_file):
     say("a player is killed; a spectator is promoted into its slot (lockstep wire 3) and plays on in step")
-    server, port = h.start_relay(project, tokens_file, "relay-promote", ["--relay-stall-ms", "1500", "--relay-promotion", "allow"])
+    # Another user's spectator takes the slot: nothing keeps it for the killed player (--relay-rejoin-reserve-ms 0)
+    server, port = h.start_relay(project, tokens_file, "relay-promote",
+                                 ["--relay-stall-ms", "1500", "--relay-promotion", "allow", "--relay-rejoin-reserve-ms", "0"])
     a = h.start_client(port, tokens[0], "pro-a", PLAYER + ["--ticks", "1200", "--hitch-every", "40", "--hitch-ms", "80"])
     b = h.start_client(port, tokens[1], "pro-b", PLAYER + ["--ticks", "1200"])
     wait_line(a, r"^hash tick=150 ", 90, "checkpoint 150", a, b)
