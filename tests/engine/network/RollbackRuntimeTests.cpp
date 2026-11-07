@@ -815,7 +815,10 @@ TEST(RollbackRuntimePromotionTest, ARelayThatKnowsTokensRefusesASpectatorTokenAn
 
     Peer &carol = addAs(2, "carol", JoinRole::Spectator, true); // a spectator token
     Peer &dave = addAs(3, "dave", JoinRole::Player, true);      // another player's token, watching
-    ASSERT_TRUE(session.RunUntil([&] { return carol.runtime->TicksRun() >= 250 && dave.runtime->TicksRun() >= 250; }));
+    // Both spectators joined in the same pass: the relay asks the one source for their snapshots one after the other
+    ASSERT_TRUE(session.RunUntil([&] { return carol.runtime->TicksRun() >= 250 && dave.runtime->TicksRun() >= 250; }))
+        << carol.runtime->Error() << " / " << dave.runtime->Error();
+    EXPECT_EQ(session.relay->Stats().snapshotsRelayed, 2u);
 
     ASSERT_TRUE(carol.runtime->RequestPromotion());
     ASSERT_TRUE(session.RunUntil([&] { return !carol.runtime->PromotionPending(); }, 20000));

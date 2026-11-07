@@ -736,7 +736,10 @@ namespace N2Engine::Network
                         source = PeerOfSlot(slot);
                     }
                 }
-                if (source == nullptr)
+                // One request per source at a time: a player answers only its latest request, so a second spectator's
+                // request would take the first one's snapshot away (found by two spectators joining at once). The
+                // second waits until the first one's parts have all arrived; its timeout starts when it is asked for.
+                if (source == nullptr || AwaitsSnapshotFrom(source->id))
                 {
                     continue;
                 }

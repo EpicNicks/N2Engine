@@ -211,7 +211,8 @@ namespace N2Engine::Network
      * SnapshotPart, paced by the spectator's reliable backlog. From the snapshot's tick on, the spectator is sent every
      * slot's confirmed input out of a history of kSpectatorHistoryTicks ticks (a dropped slot's synthesised input
      * included, so a spectator needs no DropSlot), and its ack-only bundles move it on. If the source leaves before the
-     * snapshot is whole the request goes to another player. Bounded by maxSpectators, maxSnapshotBytes and
+     * snapshot is whole the request goes to another player. A source has one request outstanding at a time (a player
+     * answers only its latest one): a second spectator is asked for once the first one's parts have all arrived. Bounded by maxSpectators, maxSnapshotBytes and
      * snapshotTimeoutMicros; a spectator gets the Stop too.
      *
      * Promotion (wire version 3, allowPromotion). A spectator whose snapshot was passed whole may send Promote to take a
