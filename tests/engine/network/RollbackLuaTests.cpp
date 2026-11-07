@@ -19,6 +19,7 @@
 #include "engine/network/NetworkObject.hpp"
 #include "engine/network/NetworkWorld.hpp"
 #include "engine/network/ReplicationLayout.hpp"
+#include "engine/network/RollbackRuntime.hpp"
 #include "engine/network/RollbackWorld.hpp"
 #include "engine/scripting/LuaComponent.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
@@ -73,6 +74,72 @@ namespace
                 end
 
                 return Counter
+            )";
+            // For the session lint (design 9.2): every way of keeping tick state outside the replicated fields that the
+            // lint follows, and the same in callbacks a tick does not run (not reported)
+            std::ofstream(path.parent_path() / "Leaky.lua") << R"(
+                local state = { n = 0 }
+                local total = 0
+                local Leaky = {}
+                Leaky.__index = Leaky
+                Leaky.SerializableFields = {
+                    hp = { type = "int", default = 0, replicated = true },
+                }
+
+                local function bump()
+                    total = total + 1
+                end
+
+                function Leaky:Advance()
+                    self.timer = (self.timer or 0) + 1
+                end
+
+                function Leaky:OnFixedUpdate()
+                    state.n = state.n + 1
+                    bump()
+                    self:Advance()
+                    leakyGlobal = 1
+                    local twice = function() total = total + 2 end
+                    twice()
+                    self.hp = self.hp + 1
+                end
+
+                function Leaky:OnCollisionEnter(collision)
+                    Leaky.hits = (Leaky.hits or 0) + 1
+                end
+
+                function Leaky:OnUpdate()
+                    total = 0
+                    self.frame = 1
+                end
+
+                return Leaky
+            )";
+            // Reads a module-level constant, writes a table of its own and only its replicated field in a tick, and keeps
+            // a non-replicated field set once at attach: nothing to report on a networked object
+            std::ofstream(path.parent_path() / "Clean.lua") << R"(
+                local SPEED = 3
+                local Clean = {}
+                Clean.__index = Clean
+                Clean.SerializableFields = {
+                    pos = { type = "int", default = 0, replicated = true },
+                }
+
+                local function step(value)
+                    return value + SPEED
+                end
+
+                function Clean:OnAttach()
+                    self.cache = 1
+                end
+
+                function Clean:OnFixedUpdate()
+                    local scratch = {}
+                    scratch.x = 1
+                    self.pos = step(self.pos)
+                end
+
+                return Clean
             )";
             IO::ResourceUUID::Initialize(Math::UUID::Random());
             IO::ResourceLoader::Instance().Initialize(s_projectRoot);
@@ -194,4 +261,78 @@ TEST_F(RollbackLuaTest, ARollbackThroughAScriptThatKeepsStateInALocalEndsOffTheS
     Step(5);
     EXPECT_EQ(Counter(), straightCounter) << "what the script declared replicated is the straight run's";
     EXPECT_NE(Shown(), straightShown) << "what it kept in a local is not: the hash tree would disagree with a peer that did not roll back";
+}
+
+// ===== The session lint (design 9.2, option A: the contract is kept and a script that breaks it is named) =====
+
+namespace
+{
+    std::string Joined(const std::vector<std::string> &lines)
+    {
+        std::string text;
+        for (const std::string &line : lines)
+        {
+            text += line + "\n";
+        }
+        return text;
+    }
+}
+
+TEST_F(RollbackLuaTest, TheSessionLintNamesTheModuleLocalAndTheNonReplicatedFieldATickWrites)
+{
+    const std::vector<std::string> warnings = RollbackRuntime::LuaStateWarnings(*scene);
+    ASSERT_EQ(warnings.size(), 1u) << Joined(warnings);
+    const std::string &line = warnings[0];
+    EXPECT_NE(line.find("res://rb/Counter.lua"), std::string::npos) << line;
+    EXPECT_NE(line.find("OnFixedUpdate assigns 'hidden'"), std::string::npos) << line;
+    EXPECT_NE(line.find("OnFixedUpdate writes self.notes, which is not a replicated field"), std::string::npos) << line;
+    EXPECT_EQ(line.find("self.counter"), std::string::npos) << "counter is replicated: " << line;
+    EXPECT_EQ(line.find("self.shown"), std::string::npos) << "shown is replicated: " << line;
+    EXPECT_EQ(line.find("NetworkObject"), std::string::npos) << line;
+}
+
+TEST_F(RollbackLuaTest, TheSessionLintFollowsHelpersAndNamesGlobalsAndModuleTablesButNotOtherCallbacks)
+{
+    std::unique_ptr<Scene> lintScene = Scene::Create("RbLint");
+    std::uint32_t next = 20;
+    const auto add = [&](const char *name, const char *path, const bool networked)
+    {
+        GameObject::Ptr gameObject = GameObject::Create(name);
+        gameObject->SetUUID(TestUuid(next++));
+        if (networked)
+        {
+            gameObject->AddComponent<NetworkObject>();
+        }
+        gameObject->AddComponent<LuaComponent>()->SetScript(IO::ResourcePath(path));
+        lintScene->AddRootGameObject(gameObject);
+        lintScene->ProcessAttachQueue();
+    };
+    add("Leaky", "res://rb/Leaky.lua", true);
+    add("Clean", "res://rb/Clean.lua", true);
+    add("CleanAgain", "res://rb/Clean.lua", true);
+
+    std::vector<std::string> warnings = RollbackRuntime::LuaStateWarnings(*lintScene);
+    ASSERT_EQ(warnings.size(), 1u) << "the clean script says nothing: " << Joined(warnings);
+    const std::string &leaky = warnings[0];
+    EXPECT_NE(leaky.find("res://rb/Leaky.lua"), std::string::npos) << leaky;
+    EXPECT_NE(leaky.find("OnFixedUpdate writes the field 'n' of 'state'"), std::string::npos) << leaky;
+    EXPECT_NE(leaky.find("OnFixedUpdate (through the local function 'bump') assigns 'total'"), std::string::npos) << leaky;
+    EXPECT_NE(leaky.find("OnFixedUpdate (through self:Advance) writes self.timer"), std::string::npos) << leaky;
+    EXPECT_NE(leaky.find("OnFixedUpdate writes the global 'leakyGlobal'"), std::string::npos) << leaky;
+    EXPECT_NE(leaky.find("OnFixedUpdate assigns 'total'"), std::string::npos) << "the inner function's write: " << leaky;
+    EXPECT_NE(leaky.find("OnCollisionEnter writes the field 'hits' of 'Leaky'"), std::string::npos) << leaky;
+    EXPECT_EQ(leaky.find("self.hp"), std::string::npos) << "hp is replicated: " << leaky;
+    EXPECT_EQ(leaky.find("OnUpdate"), std::string::npos) << "OnUpdate does not run in a tick: " << leaky;
+    EXPECT_EQ(leaky.find("self.frame"), std::string::npos) << leaky;
+
+    // The same clean script on an object without a NetworkObject: none of its fields is in a snapshot
+    add("Loose", "res://rb/Clean.lua", false);
+    warnings = RollbackRuntime::LuaStateWarnings(*lintScene);
+    ASSERT_EQ(warnings.size(), 2u) << Joined(warnings);
+    const auto loose = std::find_if(warnings.begin(), warnings.end(),
+                                    [](const std::string &line) { return line.find("Clean.lua") != std::string::npos; });
+    ASSERT_NE(loose, warnings.end()) << Joined(warnings);
+    EXPECT_NE(loose->find("without a NetworkObject"), std::string::npos) << *loose;
+    EXPECT_NE(loose->find("OnFixedUpdate writes self.pos"), std::string::npos) << *loose;
+    EXPECT_EQ(loose->find("self.cache"), std::string::npos) << "set at attach, not in a tick: " << *loose;
 }

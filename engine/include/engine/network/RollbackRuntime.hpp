@@ -6,11 +6,17 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "engine/network/LockstepRuntime.hpp"
 #include "engine/network/NetworkSettings.hpp"
 #include "engine/network/RollbackWorld.hpp"
 #include "engine/network/n2net/Transport.hpp"
+
+namespace N2Engine
+{
+    class Scene;
+}
 
 namespace N2Engine::Physics
 {
@@ -61,7 +67,10 @@ namespace N2Engine::Network
      *     skips parked bodies), so a rollback peer and a lockstep peer of this runtime hash a confirmed tick alike;
      *   - a spectator (session.spectate) starts from a player's snapshot through RollbackWorld::RestoreForJoin; a restore
      *     whose physics part the backend refused ends the session unless allowInexactPhysics (CheckJoinPhysics);
-     *   - with driveApplication, Application::Tick calls Update with the frame's delta in place of its fixed steps.
+     *   - with driveApplication, Application::Tick calls Update with the frame's delta in place of its fixed steps;
+     *   - at construction, the scene's Lua scripts are linted once (LuaStateWarnings): each script whose tick callbacks
+     *     keep state outside its replicated fields is logged as a warning, in lockstep mode too (a late joiner and a
+     *     promoted spectator start from a snapshot, so such state differs there as after a rollback).
      *
      * Rollback needs a backend that can snapshot: with a physics backend whose SupportsSnapshot is false the runtime
      * runs lockstep and logs why. A network preset's simulation mode must be on (Application::Init sets it from
@@ -96,6 +105,13 @@ namespace N2Engine::Network
         [[nodiscard]] static std::expected<void, std::string> CheckJoinPhysics(const JoinRestoreResult &joined,
                                                                                bool snapshotHasPhysics,
                                                                                bool allowInexactPhysics);
+
+        /// The load-time lint of netcode design 9.2 (the N7 contract: state a rollback, a late joiner or a promoted
+        /// spectator needs must be a declared `replicated = true` field): for each script of the scene, once per script
+        /// file (and per networked or not), one line naming the file and every place its tick callbacks keep state a
+        /// WorldSnapshot does not hold (LuaComponent::FindTickStateOutsideSnapshot, LintTickState). Empty when nothing is
+        /// found. The constructor logs each as a warning, once per session.
+        [[nodiscard]] static std::vector<std::string> LuaStateWarnings(const Scene &scene);
 
     private:
         bool RunTick(const N2Net::TickInputs &inputs, std::uint32_t slotCount);

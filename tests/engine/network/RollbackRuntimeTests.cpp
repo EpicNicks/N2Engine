@@ -6,12 +6,17 @@
 #include <thread>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <functional>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 #include "RollbackTestSupport.hpp"
 #include "engine/Application.hpp"
@@ -886,6 +891,175 @@ TEST(RollbackRuntimePromotionTest, ARelayThatKnowsTokensRefusesASpectatorTokenAn
         }
     }
     EXPECT_GE(compared, 5u);
+}
+
+// ===== A promoted spectator in rollback mode, with its replay log and desync report (no wire change) =====
+
+namespace
+{
+    /// Two players (slot 0 a rollback peer, the snapshot source; slot 1 a lockstep peer that leaves) and a spectator
+    /// with `window` that takes slot 1 once it is dropped. Fills the spectator's start and join ticks.
+    Peer &PromoteIntoDroppedSlot(RelaySession &session, Peer *&player, const std::uint32_t window, std::uint32_t &startTick,
+                                 std::uint32_t &joinTick)
+    {
+        player = &session.AddPeer(0, 8);
+        EXPECT_TRUE(session.RunUntil([&] { return player->runtime->State() == LockstepState::Lobby; }, 20000));
+        Peer &leaver = session.AddPeer(1, 0);
+        EXPECT_TRUE(session.RunUntil([&] { return leaver.runtime->ConfirmedTick() >= 120; }));
+        Peer &spectator = session.AddPeer(2, window, true);
+        EXPECT_TRUE(session.RunUntil([&] { return spectator.runtime->TicksRun() >= 250; }));
+        EXPECT_EQ(spectator.runtime->Session(), nullptr) << "a spectator runs every tick on confirmed input";
+        EXPECT_EQ(spectator.runtime->Log(), nullptr) << "no log before the promotion";
+        leaver.runtime->Leave();
+        leaver.frozen = true;
+        EXPECT_TRUE(session.RunUntil([&] { return session.relay->IsSlotDropped(1); }));
+        EXPECT_TRUE(session.RunUntil(
+            [&]
+            {
+                if (spectator.runtime->IsSpectator() && !spectator.runtime->PromotionPending())
+                {
+                    (void)spectator.runtime->RequestPromotion();
+                }
+                return !spectator.runtime->IsSpectator() || spectator.runtime->Finished();
+            }))
+            << spectator.runtime->Error();
+        startTick = 0;
+        joinTick = 0;
+        for (const LockstepEvent &event : spectator.events)
+        {
+            if (event.type == LockstepEvent::Type::Started)
+            {
+                startTick = event.tick;
+            }
+            if (event.type == LockstepEvent::Type::Promoted)
+            {
+                joinTick = event.tick;
+            }
+        }
+        return spectator;
+    }
+
+    std::string ReadText(const std::string &path)
+    {
+        std::ifstream in(path, std::ios::binary);
+        return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    }
+}
+
+TEST(RollbackRuntimePromotionTest, APromotedSpectatorWithARollbackWindowRollsBackFromItsJoinTickInStepWithThePlayers)
+{
+    ShotPrefab prefab;
+    RelaySession session(84, 2, LateLink(),
+                         [](LockstepRelayOptions &options)
+                         {
+                             options.allowPromotion = true;
+                             options.promotionLeadMicros = 200'000; // 100 ticks at 500 Hz
+                         });
+    Peer *player = nullptr;
+    std::uint32_t startTick = 0;
+    std::uint32_t joinTick = 0;
+    Peer &spectator = PromoteIntoDroppedSlot(session, player, 8, startTick, joinTick);
+    ASSERT_EQ(spectator.runtime->State(), LockstepState::Running) << spectator.runtime->Error();
+    ASSERT_EQ(spectator.runtime->Slot(), 1u);
+    ASSERT_GT(joinTick, startTick);
+    EXPECT_EQ(spectator.runtime->Session(), nullptr) << "lockstep up to the join tick";
+
+    ASSERT_TRUE(session.RunUntil(
+        [&]
+        {
+            return spectator.runtime->ConfirmedTick() >= joinTick + 300 && player->runtime->ConfirmedTick() >= joinTick + 300;
+        }))
+        << spectator.runtime->Error() << " / " << player->runtime->Error();
+    ASSERT_EQ(spectator.runtime->State(), LockstepState::Running) << spectator.runtime->Error();
+    ASSERT_EQ(player->runtime->State(), LockstepState::Running) << player->runtime->Error();
+
+    // A rollback session from the join tick, which ran ahead on guesses and rolled back like a player from tick 0
+    const RollbackSession *const rollback = spectator.runtime->Session();
+    ASSERT_NE(rollback, nullptr);
+    EXPECT_EQ(rollback->Config().startTick, joinTick);
+    EXPECT_EQ(rollback->Config().localSlot, 1u);
+    EXPECT_GT(rollback->Stats().ticksPredicted, 0u);
+    EXPECT_GT(rollback->Stats().rollbacks, 0u);
+
+    // Its confirmed checkpoints are the player's, before and after the join tick
+    EXPECT_EQ(session.relay->Stats().desyncs, 0u);
+    EXPECT_GE(CompareHistories(*player->runtime, *spectator.runtime), 10u);
+    std::size_t afterJoin = 0;
+    for (const HashTree &tree : spectator.runtime->History().Trees())
+    {
+        afterJoin += tree.Tick() > joinTick + kHashInterval ? 1 : 0;
+    }
+    EXPECT_GE(afterJoin, 5u);
+
+    // Its replay log: every confirmed input from the snapshot's tick
+    ASSERT_NE(spectator.runtime->Log(), nullptr);
+    EXPECT_EQ(spectator.runtime->LogStartTick(), startTick);
+    EXPECT_GE(static_cast<std::uint32_t>(spectator.runtime->Log()->ticks), joinTick + 300 - startTick);
+    EXPECT_EQ(player->runtime->LogStartTick(), 0u);
+}
+
+TEST(RollbackRuntimePromotionTest, APromotedSpectatorThatDivergesWritesTheDesyncReportWithItsLogStartAndSnapshot)
+{
+    ShotPrefab prefab;
+    RelaySession session(85, 2, LateLink(),
+                         [](LockstepRelayOptions &options)
+                         {
+                             options.allowPromotion = true;
+                             options.promotionLeadMicros = 200'000;
+                         });
+    Peer *player = nullptr;
+    std::uint32_t startTick = 0;
+    std::uint32_t joinTick = 0;
+    Peer &spectator = PromoteIntoDroppedSlot(session, player, 8, startTick, joinTick);
+    ASSERT_EQ(spectator.runtime->State(), LockstepState::Running) << spectator.runtime->Error();
+    ASSERT_GT(joinTick, startTick);
+    // Its own state diverges three checkpoints after it starts playing
+    const std::uint32_t divergeAt = (joinTick / kHashInterval + 3) * kHashInterval;
+    spectator.divergeFrom = divergeAt;
+
+    ASSERT_TRUE(session.RunUntil([&] { return spectator.runtime->Finished() && player->runtime->Finished(); }))
+        << spectator.runtime->Error() << " / " << player->runtime->Error();
+    EXPECT_EQ(session.relay->Stats().desyncs, 1u);
+    const auto &stop = spectator.runtime->StopInfo();
+    ASSERT_TRUE(stop.has_value());
+    EXPECT_EQ(stop->reason, StopReason::Desync);
+    EXPECT_EQ(stop->tick, divergeAt);
+    ASSERT_TRUE(stop->reportWritten) << stop->reportError;
+
+    const nlohmann::json report = nlohmann::json::parse(ReadText(spectator.report), nullptr, false);
+    ASSERT_FALSE(report.is_discarded());
+    EXPECT_EQ(report["format"], "n2desync");
+    EXPECT_EQ(report["inputLogStartTick"], startTick);
+    ASSERT_TRUE(report.contains("startSnapshot"));
+    const std::string snapshotPath = report["startSnapshot"].get<std::string>();
+    EXPECT_EQ(snapshotPath, spectator.report + ".snapshot");
+    std::string error;
+    const auto log = Replay::ParseReplayLog(report["inputLog"].dump(), error);
+    ASSERT_TRUE(log.has_value()) << error;
+    EXPECT_GE(static_cast<std::uint32_t>(log->ticks), divergeAt - startTick) << "from its snapshot to the checkpoint";
+
+    // The snapshot next to it is the one it started from
+    const std::string bytes = ReadText(snapshotPath);
+    const auto snapshot = DeserializeWorldSnapshot(
+        std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t *>(bytes.data()), bytes.size()));
+    ASSERT_TRUE(snapshot.has_value()) << snapshot.error();
+    EXPECT_EQ(snapshot->tick, startTick);
+
+    // The player's report is a player's: from tick 0, no snapshot
+    const auto &playerStop = player->runtime->StopInfo();
+    ASSERT_TRUE(playerStop.has_value());
+    ASSERT_TRUE(playerStop->reportWritten) << playerStop->reportError;
+    const nlohmann::json playerReport = nlohmann::json::parse(ReadText(player->report), nullptr, false);
+    ASSERT_FALSE(playerReport.is_discarded());
+    EXPECT_EQ(playerReport["inputLogStartTick"], 0);
+    EXPECT_FALSE(playerReport.contains("startSnapshot"));
+
+    std::error_code ignored;
+    for (const auto &peer : session.peers)
+    {
+        std::filesystem::remove(peer->report, ignored);
+        std::filesystem::remove(peer->report + ".snapshot", ignored);
+    }
 }
 
 // ===== C5 follow-up coverage: more peers, a leaving snapshot source, long sessions, real sockets =====

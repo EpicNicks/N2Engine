@@ -94,7 +94,9 @@ namespace N2Engine::Network
         /// replayable by RunReplay)
         std::string scene = "lockstep";
         std::uint32_t seed = 0;
-        /// Where the n2desync report goes when the relay reports a mismatch; empty: not written
+        /// Where the n2desync report goes when the relay reports a mismatch; empty: not written. A promoted spectator
+        /// also writes the snapshot it started from to reportPath + ".snapshot" (so a spectator with a reportPath keeps
+        /// that snapshot's bytes, at most maxSnapshotBytes, for the session).
         std::string reportPath;
         /// A JSON object recorded in the report (engine version, scene hash, registry hash: whatever the host knows)
         std::string determinismFingerprintJson;
@@ -128,7 +130,9 @@ namespace N2Engine::Network
         /// on a guess for the inputs that have not arrived, at most this many ticks past the confirmed tick, and a late
         /// input that differs from the guess rolls the world back and resimulates (RollbackSession). The relay is the same
         /// either way and a rollback peer and a lockstep peer can share a session. What network.deterministic.mode selects
-        /// (RollbackWindowFor in RollbackRuntime.hpp).
+        /// (RollbackWindowFor in RollbackRuntime.hpp). A spectator runs every tick confirmed whatever this says; set, it
+        /// needs the save and restore hooks too (checked at the welcome), and once promoted it rolls back from its join
+        /// tick on.
         std::uint32_t rollbackWindow = 0;
         RollbackEventPolicy eventPolicy = RollbackEventPolicy::Immediate;
         /// Writes the state before `tick` (RollbackWorld::Save). Required for rollback. Also what a player answers a
@@ -238,10 +242,16 @@ namespace N2Engine::Network
      * Promotion (lockstep wire version 3). A running spectator may ask to play a dropped slot (RequestPromotion). On
      * Promoted it drops in its own scheduler every slot the relay names (from the slot's drop tick, or from its own
      * current tick when the drop is behind it: the inputs it ran up to there were the relay's synthesised ones), drops
-     * the slot it takes from its current tick and rejoins it from the join tick, and from then on is a LOCKSTEP player
-     * of that slot: its own input runs from the join tick, it reports roots and answers snapshot requests. It has no
-     * replay log (it did not see the session from tick 0), so it writes no desync report, and it does not roll back
-     * even with rollbackWindow set. A player that gets SlotRejoin rejoins the slot in its scheduler (the mirror of
+     * the slot it takes from its current tick and rejoins it from the join tick, and from then on is a player of that
+     * slot: its own input runs from the join tick, it reports roots and answers snapshot requests. Up to the join tick it
+     * runs lockstep (every input before it is confirmed or synthesised); with rollbackWindow set it starts a
+     * RollbackSession at the join tick (RollbackConfig::startTick, the inputs it already has handed over) and is a
+     * rollback player from there, as one that played from tick 0. A spectator records the confirmed inputs from its
+     * snapshot's tick (LogStartTick), so a promoted one has a replay log of its own part of the session and writes the
+     * desync report like any player; the log's ticks count from LogStartTick, so the report names that tick
+     * (inputLogStartTick) and, with the snapshot the spectator started from written next to it (reportPath +
+     * ".snapshot", SerializeWorldSnapshot bytes), holds what a replay of that part needs. No wire change: all of this is
+     * the client's own. A player that gets SlotRejoin rejoins the slot in its scheduler (the mirror of
      * DropSlot; a player already past the join tick fails, as for a DropSlot it cannot apply). With rejoin, a dropped
      * player's new client does this by itself: it spectates and asks for any dropped slot (255) until it is promoted, and
      * a relay that knows identities hands it the slot its token's user played.
@@ -298,8 +308,15 @@ namespace N2Engine::Network
         [[nodiscard]] const LockstepRuntimeStats &Stats() const noexcept { return stats_; }
         [[nodiscard]] const std::optional<LockstepStopInfo> &StopInfo() const noexcept { return stop_; }
         [[nodiscard]] const N2Net::HashTreeHistory &History() const noexcept { return history_; }
-        /// The confirmed inputs so far as an n2replay version 2 log; nullptr before the welcome
-        [[nodiscard]] const Replay::ReplayLog *Log() const noexcept { return recorder_ ? &recorder_->Log() : nullptr; }
+        /// The confirmed inputs so far as an n2replay version 2 log; nullptr before the welcome and for a spectator that
+        /// is not promoted. Its tick 0 is LogStartTick().
+        [[nodiscard]] const Replay::ReplayLog *Log() const noexcept
+        {
+            return recorder_ && !spectating_ ? &recorder_->Log() : nullptr;
+        }
+        /// The session tick the log's tick 0 is: 0 for a player from the start, the snapshot's tick for a promoted
+        /// spectator
+        [[nodiscard]] std::uint32_t LogStartTick() const noexcept { return logStartTick_; }
         [[nodiscard]] const N2Net::LockstepScheduler *Scheduler() const noexcept { return scheduler_.get(); }
 
     private:
@@ -322,6 +339,11 @@ namespace N2Engine::Network
         void DrainConfirmed();
         bool StepRollback(const N2Net::TickInputs &inputs);
         void OnConfirmed(std::uint32_t firstUnconfirmed);
+        /// The hooks of the rollback session (the options' and the runtime's own)
+        RollbackHost MakeRollbackHost();
+        /// A promoted spectator with rollbackWindow, at its join tick: the session from there, with the inputs the
+        /// scheduler already has. False after a Fail.
+        bool StartPromotedRollback();
         void PublishTree(N2Net::HashTree tree);
         void OnSnapshotPart(std::span<const std::uint8_t> message);
         void OnSlotRejoin(std::span<const std::uint8_t> message);
@@ -366,6 +388,12 @@ namespace N2Engine::Network
         bool haveIncoming_ = false;
         bool snapshotReady_ = false;
         std::unique_ptr<Replay::LockstepRecorder> recorder_;
+        /// The session tick the recorder's tick 0 is (a spectator's snapshot tick)
+        std::uint32_t logStartTick_ = 0;
+        /// A spectator with a reportPath: the snapshot it started from, as received (for a promoted one's report)
+        std::vector<std::uint8_t> startSnapshot_;
+        /// A promoted spectator with rollbackWindow: the join tick, where its rollback session starts
+        std::optional<std::uint32_t> rollbackFrom_;
         N2Net::HashTreeHistory history_;
         std::unique_ptr<N2Net::BisectResponder> responder_;
         std::unique_ptr<N2Net::BisectClient> bisectClient_;

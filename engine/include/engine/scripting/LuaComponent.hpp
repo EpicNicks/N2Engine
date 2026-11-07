@@ -249,5 +249,12 @@ namespace N2Engine::Scripting
         /// Sets the replicated script fields `values` names in "scriptData", on the instance and in the saved data; the
         /// script's other fields are not touched (SetEditorFields would write every saved field back to the instance)
         void ApplyReplicated(const nlohmann::json &values, ReferenceResolver *resolver) override;
+
+        /// Netcode design 9.2, the load-time lint a rollback or lockstep session runs (RollbackRuntime): where this
+        /// script's tick callbacks keep state a WorldSnapshot does not hold (LintTickState), one sentence each; empty when
+        /// none is found, no instance is loaded or scripts do not run. `networked`: the object has a NetworkObject, so the
+        /// script's replicated fields are in a snapshot; without one nothing of the script is, and every write to self
+        /// is named.
+        [[nodiscard]] std::vector<std::string> FindTickStateOutsideSnapshot(bool networked) const;
     };
 }

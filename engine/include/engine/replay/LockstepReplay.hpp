@@ -84,8 +84,14 @@ namespace N2Engine::Replay
         /// The determinism fingerprint of the session (engine version, scene, registry; whatever the host wants to
         /// record), a JSON object or empty
         std::string determinismFingerprintJson;
-        /// The input log from tick 0 (the replay file)
+        /// The input log from tick 0 (the replay file), or from inputLogStartTick
         ReplayLog inputLog;
+        /// The session tick the log's tick 0 is: 0 for a player from the start; a promoted spectator's log starts at the
+        /// snapshot it joined from ("inputLogStartTick" in the report, always written)
+        std::uint32_t inputLogStartTick = 0;
+        /// Where the snapshot of inputLogStartTick was written (SerializeWorldSnapshot bytes); empty: none
+        /// ("startSnapshot" in the report only when set)
+        std::string startSnapshotPath;
         /// The last K checkpoint trees, oldest first
         const std::vector<N2Net::HashTree> *trees = nullptr;
         /// What Bisect found
