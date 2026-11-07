@@ -34,7 +34,8 @@ namespace N2Engine::N2Net
      * is late; the host then keeps waiting, or ends the session, or drops the slot with DropSlot. Dropping is a session
      * decision that every peer must apply at the same tick (the relay broadcasts "slot S dropped from tick T"): the
      * scheduler only provides the deterministic mechanism (from that tick on the slot's input is neutral, or the last
-     * one it ran with, per DropFill).
+     * one it ran with, per DropFill). RejoinSlot is its mirror (a spectator promoted into a dropped slot): from a later
+     * tick the slot's input is real again, applied the same way by every peer.
      */
     inline constexpr int kMaxLockstepSlots = 8;
     /// Ticks of input buffered (and, after they ran, kept for resending): a power of two
@@ -173,10 +174,25 @@ namespace N2Engine::N2Net
         [[nodiscard]] std::optional<LockstepInput> Get(std::uint32_t slot, std::uint32_t tick) const noexcept;
 
         /// From `fromTick` (not before CurrentTick) the slot's input is synthesised per DropFill. False for a bad slot,
-        /// a tick in the past or a slot already dropped. Every peer must call this with the same arguments at the same
-        /// point of the input stream (the relay decides).
+        /// a tick in the past, a slot already dropped (and not rejoined since), a tick before the slot's last rejoin, or
+        /// no room for one more change (kMaxSlotChanges pending). Dropping at the very tick of a pending rejoin undoes
+        /// that rejoin. Every peer must call this with the same arguments at the same point of the input stream (the
+        /// relay decides).
         bool DropSlot(std::uint32_t slot, std::uint32_t fromTick) noexcept;
+        /// The mirror of DropSlot (lockstep wire version 3, SlotRejoin): a dropped slot's input is real again from
+        /// `fromTick` (not before CurrentTick, not before the drop), and a tick of it is waited for as before the drop.
+        /// The ticks between the drop and `fromTick` stay synthesised. The slot's local input (SubmitLocal) starts at
+        /// `fromTick`. False for a bad slot, a tick in the past, a slot that is not dropped, a tick before the drop, or
+        /// no room. Rejoining at the very tick of the drop undoes the drop.
+        bool RejoinSlot(std::uint32_t slot, std::uint32_t fromTick) noexcept;
+        /// Whether the slot's input for `tick` is synthesised. Exact from CurrentTick on; a change that every tick from
+        /// CurrentTick on has passed is forgotten, so an earlier tick may read as not dropped.
         [[nodiscard]] bool IsDropped(std::uint32_t slot, std::uint32_t tick) const noexcept;
+        /// Whether the slot is dropped from some tick on with no rejoin after it (the next change DropSlot cannot make)
+        [[nodiscard]] bool IsDroppedForGood(std::uint32_t slot) const noexcept;
+
+        /// The drops and rejoins of one slot that the scheduler remembers at once (older ones are folded as the ticks run)
+        static constexpr std::size_t kMaxSlotChanges = 8;
 
     private:
         struct Entry
@@ -186,16 +202,26 @@ namespace N2Engine::N2Net
             LockstepInput input;
         };
 
+        /// From `tick` on the slot is dropped (or live again)
+        struct SlotChange
+        {
+            std::uint32_t tick = 0;
+            bool dropped = false;
+        };
+
         struct Slot
         {
             std::array<Entry, kLockstepWindow> ring{};
             std::uint32_t nextLocalTick = 0;
-            bool dropped = false;
-            std::uint32_t droppedFrom = 0;
+            /// In tick order; before the first one the slot is live
+            std::array<SlotChange, kMaxSlotChanges> changes{};
+            std::uint32_t changeCount = 0;
             LockstepInput lastInput;
         };
 
         [[nodiscard]] static bool Lookup(const Slot &slot, std::uint32_t tick, LockstepInput &out) noexcept;
+        /// Forgets the changes every tick from CurrentTick on has passed
+        void FoldChanges() noexcept;
 
         bool valid_ = false;
         LockstepConfig config_;
@@ -249,7 +275,7 @@ namespace N2Engine::N2Net
                                                                             const LockstepLayoutInfo &layout);
 
     /// Builds the bundle for `slot` that a peer reporting `peerAck` (its CurrentTick) still needs: the frames from
-    /// peerAck (clamped to what is still held) up to the first one not known, at most kMaxBundleFrames. No frames when
-    /// it needs nothing.
+    /// peerAck (clamped to what is still held, and past the ticks the slot is dropped for, which nobody sends) up to the
+    /// first one not known, at most kMaxBundleFrames. No frames when it needs nothing.
     [[nodiscard]] InputBundle BuildBundleFor(const LockstepScheduler &scheduler, std::uint32_t slot, std::uint32_t peerAck);
 }

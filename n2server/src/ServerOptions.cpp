@@ -42,6 +42,7 @@ namespace N2Engine::Server
             "                          the largest snapshot the relay passes to a spectator, in MiB, 1 to 64 (default 16)\n"
             "  --relay-snapshot-timeout-ms <n>\n"
             "                          how long a spectator waits for its snapshot to begin, 1000 to 120000 (default 10000)\n"
+            "  --relay-promotion <p>   allow or deny (default): whether a spectator may take a dropped player slot\n"
             "  --exit-on-stdin-eof     stop when stdin closes (a launcher that has gone away)\n"
             "  --log-level <level>     info (default), warn or error\n"
             "  --log-file <path>       also append the log lines to this file (created 0600 on POSIX)\n"
@@ -158,7 +159,8 @@ namespace N2Engine::Server
                                     arg == "--scene" || arg == "--tokens-file" || arg == "--max-clients" ||
                                     arg == "--websocket-port" || arg == "--websocket-origin" || arg == "--protocol-id" || arg == "--log-level" || arg == "--log-file" ||
                                     arg == "--relay-players" || arg == "--relay-stall" || arg == "--relay-stall-ms" || arg == "--relay-layout" ||
-                                    arg == "--relay-spectators" || arg == "--relay-snapshot-max-mb" || arg == "--relay-snapshot-timeout-ms";
+                                    arg == "--relay-spectators" || arg == "--relay-snapshot-max-mb" || arg == "--relay-snapshot-timeout-ms" ||
+                                    arg == "--relay-promotion";
             if (!takesValue)
             {
                 return std::unexpected(std::format("Unknown option: {} (see --help)", Shown(arg)));
@@ -228,6 +230,15 @@ namespace N2Engine::Server
                                            " (expected a whole number from 1000 to 120000)");
                 }
                 options.relaySnapshotTimeoutMs = *ms;
+                continue;
+            }
+            if (arg == "--relay-promotion")
+            {
+                if (value != "allow" && value != "deny")
+                {
+                    return std::unexpected("Invalid --relay-promotion: " + Shown(value) + " (expected allow or deny)");
+                }
+                options.relayPromotion = value == "allow";
                 continue;
             }
             if (arg == "--relay-layout")
@@ -351,10 +362,12 @@ namespace N2Engine::Server
         }
         if (!options.relay && (options.relayPlayers != 2 || options.relayStallStops || options.relayStallMs != 5000 ||
                                !options.relayLayoutFile.empty() || options.relaySpectators != 4 ||
-                               options.relaySnapshotMaxMb != 16 || options.relaySnapshotTimeoutMs != 10000))
+                               options.relaySnapshotMaxMb != 16 || options.relaySnapshotTimeoutMs != 10000 ||
+                               options.relayPromotion))
         {
             return std::unexpected("--relay-players, --relay-stall, --relay-stall-ms, --relay-layout, --relay-spectators, "
-                                   "--relay-snapshot-max-mb and --relay-snapshot-timeout-ms only apply with --relay");
+                                   "--relay-snapshot-max-mb, --relay-snapshot-timeout-ms and --relay-promotion only apply "
+                                   "with --relay");
         }
         // Fail closed: a server on a non-loopback address must have a tokens file (every session is encrypted, but a
         // server with no tokens admits nobody), or be told explicitly that it may

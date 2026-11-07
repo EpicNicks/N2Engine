@@ -187,6 +187,37 @@ def scenario_source_killed(h, project, tokens, tokens_file):
     start_relay_end(h, server)
 
 
+def scenario_promotion(h, project, tokens, tokens_file):
+    say("a player is killed; a spectator is promoted into its slot (lockstep wire 3) and plays on in step")
+    server, port = h.start_relay(project, tokens_file, "relay-promote", ["--relay-stall-ms", "1500", "--relay-promotion", "allow"])
+    a = h.start_client(port, tokens[0], "pro-a", PLAYER + ["--ticks", "1200", "--hitch-every", "40", "--hitch-ms", "80"])
+    b = h.start_client(port, tokens[1], "pro-b", PLAYER + ["--ticks", "1200"])
+    wait_line(a, r"^hash tick=150 ", 90, "checkpoint 150", a, b)
+    spectator = h.start_client(port, tokens[2], "pro-spectator", ["--spectate", "1", "--promote-at-tick", "0", "--ticks", "1200"])
+    wait_line(spectator, r"^spectator-joined tick=\d+ ", 60, "the spectator's snapshot", spectator)
+    # The spectator asks at once and is refused (no slot is dropped) until the killed player's slot is
+    b.end()
+    survivor = a
+    finished_ok(survivor, "playing on after the promotion")
+    finished_ok(spectator, "playing the promoted slot")
+    check(re.search(r"^promotion-refused ", spectator.out(), re.MULTILINE),
+          "the spectator was never refused before the slot was dropped:\n" + spectator.out())
+    promoted = re.search(r"^promoted slot=(\d) from=(\d+)$", spectator.out(), re.MULTILINE)
+    check(promoted is not None, "the spectator was never promoted:\n" + spectator.out())
+    check(int(promoted.group(1)) == slot_of(b), "the spectator took slot %s, not the killed player's" % promoted.group(1))
+    join_tick = int(promoted.group(2))
+    rejoined = re.search(r"^rejoined slot=(\d) from=(\d+)$", survivor.out(), re.MULTILINE)
+    check(rejoined is not None, "the survivor saw no SlotRejoin:\n" + survivor.out())
+    check(int(rejoined.group(1)) == int(promoted.group(1)) and int(rejoined.group(2)) == join_tick,
+          "the survivor's rejoin (%s) is not the spectator's promotion (%s)" % (rejoined.group(0), promoted.group(0)))
+    common = agree(survivor, spectator, "promoted spectator", 5)
+    check(len([t for t in common if t > join_tick]) >= 5, "fewer than 5 shared checkpoints after the join tick %d" % join_tick)
+    check(not re.search(r"^stopped |^failed ", spectator.out(), re.MULTILINE), "the promoted spectator stopped:\n" + spectator.out())
+    check(re.search(r"promoted into slot", server.err()), "the relay did not log the promotion:\n" + server.err())
+    check_rolled_back(survivor)
+    start_relay_end(h, server)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--server", required=True)
@@ -207,6 +238,7 @@ def main():
         scenario_rollback_and_spectator(h, project, tokens, tokens_file)
         scenario_player_killed(h, project, tokens, tokens_file)
         scenario_source_killed(h, project, tokens, tokens_file)
+        scenario_promotion(h, project, tokens, tokens_file)
         say("n2server_rollback: all scenarios passed")
         return 0
     except Skip as skipped:

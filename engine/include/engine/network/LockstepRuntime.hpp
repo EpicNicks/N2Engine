@@ -69,6 +69,12 @@ namespace N2Engine::Network
             Failed,
             /// A player sent a spectator's snapshot whole; `tick` is its tick
             SnapshotSent,
+            /// A dropped slot is live again from `tick` (SlotRejoin: a spectator was promoted into it)
+            SlotRejoined,
+            /// This spectator now plays `slot`; its own input runs from `tick`
+            Promoted,
+            /// The relay refused this spectator's promotion; `text` is why. It stays a spectator.
+            PromotionRefused,
         };
 
         Type type = Type::Welcomed;
@@ -218,6 +224,15 @@ namespace N2Engine::Network
      * sends. A player answers the relay's SnapshotRequest with SerializeWorldSnapshot of a confirmed tick (in lockstep the
      * world as it is, in rollback the ring's snapshot of the confirmed tick), in parts paced by its reliable backlog.
      *
+     * Promotion (lockstep wire version 3). A running spectator may ask to play a dropped slot (RequestPromotion). On
+     * Promoted it drops in its own scheduler every slot the relay names (from the slot's drop tick, or from its own
+     * current tick when the drop is behind it: the inputs it ran up to there were the relay's synthesised ones), drops
+     * the slot it takes from its current tick and rejoins it from the join tick, and from then on is a LOCKSTEP player
+     * of that slot: its own input runs from the join tick, it reports roots and answers snapshot requests. It has no
+     * replay log (it did not see the session from tick 0), so it writes no desync report, and it does not roll back
+     * even with rollbackWindow set. A player that gets SlotRejoin rejoins the slot in its scheduler (the mirror of
+     * DropSlot; a player already past the join tick fails, as for a DropSlot it cannot apply).
+     *
      * Single-threaded. The SimulationClock's tick counter is Time::GetTick(), process-wide; the runtime touches it only
      * with ownsTickCounter.
      */
@@ -239,6 +254,14 @@ namespace N2Engine::Network
         /// Leaves the session (a disconnect; the relay then drops or stops per its policy)
         void Leave();
 
+        /// A running spectator asks to play a dropped slot: `slot`, or kSpectatorSlot for the lowest one. False when this
+        /// is not a running spectator, a request is pending, or the slot is out of range. The answer is a Promoted or a
+        /// PromotionRefused event.
+        bool RequestPromotion(std::uint8_t slot = kSpectatorSlot);
+        [[nodiscard]] bool PromotionPending() const noexcept { return promotionPending_; }
+        /// Why the last promotion was refused (None when none was)
+        [[nodiscard]] RefuseReason PromotionRefusal() const noexcept { return promotionRefusal_; }
+
         [[nodiscard]] LockstepState State() const noexcept { return state_; }
         [[nodiscard]] bool Finished() const noexcept
         {
@@ -250,7 +273,8 @@ namespace N2Engine::Network
         [[nodiscard]] std::uint32_t TicksRun() const noexcept;
         /// Every tick before it ran on confirmed input only and is final (TicksRun outside rollback)
         [[nodiscard]] std::uint32_t ConfirmedTick() const noexcept;
-        [[nodiscard]] bool IsSpectator() const noexcept { return options_.spectate; }
+        /// A spectator (joined with spectate and not promoted since)
+        [[nodiscard]] bool IsSpectator() const noexcept { return spectating_; }
         /// The rollback session (rollback mode, after the welcome); nullptr otherwise
         [[nodiscard]] const RollbackSession *Session() const noexcept { return session_.get(); }
         [[nodiscard]] RollbackSession *Session() noexcept { return session_.get(); }
@@ -287,6 +311,8 @@ namespace N2Engine::Network
         void OnConfirmed(std::uint32_t firstUnconfirmed);
         void PublishTree(N2Net::HashTree tree);
         void OnSnapshotPart(std::span<const std::uint8_t> message);
+        void OnSlotRejoin(std::span<const std::uint8_t> message);
+        void OnPromoted(std::span<const std::uint8_t> message);
         void ApplySnapshot();
         void ServeSnapshot();
         void SendSpectatorAck(std::uint64_t now);
@@ -331,6 +357,12 @@ namespace N2Engine::Network
         SimulationClock clock_;
         std::uint32_t slot_ = 0;
         std::uint32_t slotCount_ = 0;
+        /// The welcome's input delay (a spectator's scheduler has none; a promoted one samples by this)
+        std::uint32_t inputDelay_ = 0;
+        /// options_.spectate until a promotion
+        bool spectating_ = false;
+        bool promotionPending_ = false;
+        RefuseReason promotionRefusal_ = RefuseReason::None;
         std::uint32_t hashInterval_ = 30;
         std::uint32_t tickRate_ = 60;
         N2Net::DropFill dropFill_ = N2Net::DropFill::Neutral;

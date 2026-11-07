@@ -253,6 +253,11 @@ namespace
             case Type::Failed:
                 Say("failed " + event.text);
                 break;
+            case Type::SlotRejoined:
+                Say("rejoined slot=" + std::to_string(event.slot) + " from=" + std::to_string(event.tick));
+                break;
+            default:
+                break;
             }
         };
 

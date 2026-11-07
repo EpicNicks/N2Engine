@@ -231,11 +231,11 @@ namespace
     }
 }
 
-// ===== The codecs of wire version 2 =====
+// ===== The codecs of wire versions 2 and 3 =====
 
 TEST(RollbackRuntimeProtocolTest, SpectateSnapshotRequestAndSnapshotPartsRoundTripAndRefuseWhatIsWrong)
 {
-    EXPECT_EQ(kLockstepWireVersion, 2u);
+    EXPECT_EQ(kLockstepWireVersion, 3u);
     const JoinMessage join{kLockstepWireVersion, 3, 0x1122334455667788ull};
     const auto spectate = EncodeSpectate(join);
     ASSERT_EQ(spectate.size(), 12u);
@@ -295,7 +295,68 @@ TEST(RollbackRuntimeProtocolTest, SpectateSnapshotRequestAndSnapshotPartsRoundTr
     welcome.slot = 2;
     EXPECT_FALSE(DecodeWelcome(Encode(welcome)).has_value());
     EXPECT_EQ(DecodeRefuse(EncodeRefuse(RefuseReason::NoSnapshot)), RefuseReason::NoSnapshot);
-    EXPECT_FALSE(DecodeRefuse(std::vector<std::uint8_t>{0x44, 7}).has_value());
+    EXPECT_EQ(DecodeRefuse(EncodeRefuse(RefuseReason::NotReady)), RefuseReason::NotReady);
+    EXPECT_FALSE(DecodeRefuse(std::vector<std::uint8_t>{0x44, 9}).has_value());
+}
+
+TEST(RollbackRuntimeProtocolTest, PromotionMessagesRoundTripAndRefuseWhatIsWrong)
+{
+    // Promote: a slot below kMaxRelaySlots or kSpectatorSlot (any)
+    EXPECT_EQ(DecodePromote(EncodePromote(2)), std::optional<std::uint8_t>(2));
+    EXPECT_EQ(DecodePromote(EncodePromote(kSpectatorSlot)), std::optional<std::uint8_t>(kSpectatorSlot));
+    EXPECT_FALSE(DecodePromote(EncodePromote(4)).has_value());
+    EXPECT_FALSE(DecodePromote(std::vector<std::uint8_t>{0x65}).has_value());
+    EXPECT_FALSE(DecodePromote(std::vector<std::uint8_t>{0x65, 1, 0}).has_value());
+
+    // SlotRejoin mirrors DropSlot
+    const auto rejoin = Encode(SlotRejoinMessage{3, 0xA1B2C3D4u});
+    ASSERT_EQ(rejoin.size(), 6u);
+    EXPECT_EQ(rejoin[0], static_cast<std::uint8_t>(RelayMessage::SlotRejoin));
+    const auto decodedRejoin = DecodeSlotRejoin(rejoin);
+    ASSERT_TRUE(decodedRejoin.has_value());
+    EXPECT_EQ(decodedRejoin->slot, 3u);
+    EXPECT_EQ(decodedRejoin->fromTick, 0xA1B2C3D4u);
+    for (std::size_t length = 0; length < rejoin.size(); ++length)
+    {
+        EXPECT_FALSE(DecodeSlotRejoin(std::span<const std::uint8_t>(rejoin.data(), length)).has_value()) << length;
+    }
+    EXPECT_FALSE(DecodeSlotRejoin(Encode(SlotRejoinMessage{4, 1})).has_value());
+
+    // Promoted: one drop tick per set bit, never the promoted slot's own bit
+    PromotedMessage promoted;
+    promoted.slot = 1;
+    promoted.fromTick = 900;
+    promoted.droppedMask = 0b1001;
+    promoted.dropTicks[0] = 120;
+    promoted.dropTicks[3] = 456;
+    const auto encodedPromoted = Encode(promoted);
+    ASSERT_EQ(encodedPromoted.size(), 1u + 1u + 4u + 1u + 8u);
+    const auto back = DecodePromoted(encodedPromoted);
+    ASSERT_TRUE(back.has_value());
+    EXPECT_EQ(back->slot, 1u);
+    EXPECT_EQ(back->fromTick, 900u);
+    EXPECT_EQ(back->droppedMask, 0b1001u);
+    EXPECT_EQ(back->dropTicks[0], 120u);
+    EXPECT_EQ(back->dropTicks[3], 456u);
+    for (std::size_t length = 0; length < encodedPromoted.size(); ++length)
+    {
+        EXPECT_FALSE(DecodePromoted(std::span<const std::uint8_t>(encodedPromoted.data(), length)).has_value()) << length;
+    }
+    auto longer = encodedPromoted;
+    longer.push_back(0);
+    EXPECT_FALSE(DecodePromoted(longer).has_value());
+    promoted.droppedMask = 0b0010; // its own slot
+    EXPECT_FALSE(DecodePromoted(Encode(promoted)).has_value());
+    promoted.droppedMask = 0b10000; // past kMaxRelaySlots
+    EXPECT_FALSE(DecodePromoted(Encode(promoted)).has_value());
+    promoted.droppedMask = 0;
+    promoted.slot = 4;
+    EXPECT_FALSE(DecodePromoted(Encode(promoted)).has_value());
+
+    EXPECT_EQ(DecodePromotionRefused(EncodePromotionRefused(RefuseReason::NotAllowed)), RefuseReason::NotAllowed);
+    EXPECT_FALSE(DecodePromotionRefused(EncodeRefuse(RefuseReason::NotAllowed)).has_value()) << "the type is checked";
+    EXPECT_FALSE(DecodePromotionRefused(std::vector<std::uint8_t>{0x4A, 0}).has_value());
+    EXPECT_FALSE(DecodePromotionRefused(std::vector<std::uint8_t>{0x4A, 9}).has_value());
 }
 
 // ===== The deterministic.mode switch =====
@@ -565,6 +626,135 @@ TEST(RollbackRuntimeRelayTest, ASpectatorIsRefusedWhenTheRelayTakesNone)
     ASSERT_TRUE(session.RunUntil([&] { return spectator.runtime->Finished(); }, 20000));
     EXPECT_EQ(spectator.runtime->State(), LockstepState::Refused);
     EXPECT_EQ(spectator.runtime->Refusal(), RefuseReason::SessionFull);
+}
+
+// ===== Spectator-to-player promotion (lockstep wire version 3) =====
+
+TEST(RollbackRuntimePromotionTest, ASpectatorTakesADroppedSlotAndPlaysItInStepWithTheOthers)
+{
+    ShotPrefab prefab;
+    RelaySession session(81, 2, LateLink(),
+                         [](LockstepRelayOptions &options)
+                         {
+                             options.allowPromotion = true;
+                             options.promotionLeadMicros = 200'000; // 100 ticks at 500 Hz
+                         });
+    Peer &player = session.AddPeer(0, 8); // slot 0: the snapshot source, a rollback peer
+    ASSERT_TRUE(session.RunUntil([&] { return player.runtime->State() == LockstepState::Lobby; }, 20000));
+    ASSERT_EQ(player.runtime->Slot(), 0u);
+    Peer &leaver = session.AddPeer(1, 0);
+    ASSERT_TRUE(session.RunUntil([&] { return leaver.runtime->ConfirmedTick() >= 120; }));
+    ASSERT_EQ(leaver.runtime->Slot(), 1u);
+
+    Peer &spectator = session.AddPeer(2, 0, true);
+    ASSERT_TRUE(session.RunUntil([&] { return spectator.runtime->TicksRun() >= 250; }));
+    // Not before the slot is dropped: slot 1 is still played
+    ASSERT_TRUE(spectator.runtime->RequestPromotion(1));
+    EXPECT_FALSE(spectator.runtime->RequestPromotion(1)) << "one request at a time";
+    ASSERT_TRUE(session.RunUntil([&] { return !spectator.runtime->PromotionPending(); }, 20000));
+    EXPECT_EQ(spectator.runtime->PromotionRefusal(), RefuseReason::SessionFull);
+    EXPECT_TRUE(spectator.runtime->IsSpectator());
+
+    leaver.runtime->Leave();
+    leaver.frozen = true;
+    ASSERT_TRUE(session.RunUntil([&] { return session.relay->IsSlotDropped(1); }));
+    // Asked again until the relay takes it (it may first need to catch up past the drop tick)
+    ASSERT_TRUE(session.RunUntil(
+        [&]
+        {
+            if (spectator.runtime->IsSpectator() && !spectator.runtime->PromotionPending())
+            {
+                (void)spectator.runtime->RequestPromotion();
+            }
+            return !spectator.runtime->IsSpectator() || spectator.runtime->Finished();
+        }))
+        << spectator.runtime->Error();
+    ASSERT_EQ(spectator.runtime->State(), LockstepState::Running) << spectator.runtime->Error();
+    EXPECT_EQ(spectator.runtime->Slot(), 1u);
+    EXPECT_FALSE(session.relay->IsSlotDropped(1));
+    EXPECT_EQ(session.relay->Stats().promotions, 1u);
+    EXPECT_EQ(session.relay->SpectatorCount(), 0u);
+    EXPECT_EQ(session.relay->JoinedCount(), 2u);
+
+    std::uint32_t joinTick = 0;
+    for (const LockstepEvent &event : spectator.events)
+    {
+        if (event.type == LockstepEvent::Type::Promoted)
+        {
+            joinTick = event.tick;
+            EXPECT_EQ(event.slot, 1u);
+        }
+    }
+    ASSERT_GT(joinTick, 0u);
+    // The player heard the same join tick (SlotRejoin)
+    ASSERT_TRUE(session.RunUntil(
+        [&]
+        {
+            return std::any_of(player.events.begin(), player.events.end(),
+                               [](const LockstepEvent &event) { return event.type == LockstepEvent::Type::SlotRejoined; });
+        }));
+    for (const LockstepEvent &event : player.events)
+    {
+        if (event.type == LockstepEvent::Type::SlotRejoined)
+        {
+            EXPECT_EQ(event.slot, 1u);
+            EXPECT_EQ(event.tick, joinTick);
+        }
+    }
+
+    const std::uint64_t rootsBefore = session.relay->Stats().rootsReceived;
+    ASSERT_TRUE(session.RunUntil(
+        [&]
+        {
+            return spectator.runtime->ConfirmedTick() >= joinTick + 300 && player.runtime->ConfirmedTick() >= joinTick + 300;
+        }))
+        << spectator.runtime->Error() << " / " << player.runtime->Error();
+    ASSERT_EQ(player.runtime->State(), LockstepState::Running) << player.runtime->Error();
+    ASSERT_EQ(spectator.runtime->State(), LockstepState::Running) << spectator.runtime->Error();
+    EXPECT_EQ(session.relay->Stats().desyncs, 0u);
+    EXPECT_GT(session.relay->Stats().rootsReceived, rootsBefore + 10u) << "the promoted peer reports roots too";
+    EXPECT_GT(spectator.runtime->Stats().rootsSent, 5u);
+
+    // Its own input runs from the join tick: the confirmed checkpoints after it are the rollback player's
+    std::size_t compared = 0;
+    for (const HashTree &tree : player.runtime->History().Trees())
+    {
+        if (const auto found = spectator.confirmedRoots.find(tree.Tick()); found != spectator.confirmedRoots.end())
+        {
+            EXPECT_EQ(found->second, tree.Root()) << "tick " << tree.Tick();
+            if (tree.Tick() > joinTick)
+            {
+                ++compared;
+            }
+        }
+    }
+    EXPECT_GE(compared, 5u);
+    EXPECT_GE(CompareHistories(*player.runtime, *spectator.runtime), 5u);
+}
+
+TEST(RollbackRuntimePromotionTest, APromotionIsRefusedWhenTheRelayDoesNotAllowItAndTheSpectatorRunsOn)
+{
+    ShotPrefab prefab;
+    RelaySession session(82, 2, SimLinkConfig{});
+    Peer &first = session.AddPeer(0, 0);
+    Peer &second = session.AddPeer(1, 0);
+    ASSERT_TRUE(session.RunUntil([&] { return first.runtime->ConfirmedTick() >= 60; }));
+    Peer &spectator = session.AddPeer(2, 0, true);
+    EXPECT_FALSE(spectator.runtime->RequestPromotion()) << "not running yet";
+    ASSERT_TRUE(session.RunUntil([&] { return spectator.runtime->TicksRun() >= 150; }));
+    second.runtime->Leave();
+    second.frozen = true;
+    ASSERT_TRUE(session.RunUntil([&] { return session.relay->IsSlotDropped(1); }));
+    ASSERT_TRUE(spectator.runtime->RequestPromotion());
+    ASSERT_TRUE(session.RunUntil([&] { return !spectator.runtime->PromotionPending(); }, 20000));
+    EXPECT_EQ(spectator.runtime->PromotionRefusal(), RefuseReason::NotAllowed);
+    EXPECT_TRUE(spectator.runtime->IsSpectator());
+    EXPECT_EQ(session.relay->Stats().promotionsRefused, 1u);
+    EXPECT_EQ(session.relay->Stats().promotions, 0u);
+    const std::uint32_t at = spectator.runtime->TicksRun();
+    ASSERT_TRUE(session.RunUntil([&] { return spectator.runtime->TicksRun() >= at + 100; }));
+    EXPECT_EQ(spectator.runtime->State(), LockstepState::Running) << spectator.runtime->Error();
+    EXPECT_EQ(first.runtime->State(), LockstepState::Running) << first.runtime->Error();
 }
 
 // ===== C5 follow-up coverage: more peers, a leaving snapshot source, long sessions, real sockets =====

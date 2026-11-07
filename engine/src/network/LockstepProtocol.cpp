@@ -64,6 +64,10 @@ namespace N2Engine::Network
             return "protocol";
         case RefuseReason::NoSnapshot:
             return "no-snapshot";
+        case RefuseReason::NotAllowed:
+            return "not-allowed";
+        case RefuseReason::NotReady:
+            return "not-ready";
         }
         return "unknown";
     }
@@ -197,6 +201,42 @@ namespace N2Engine::Network
     std::vector<std::uint8_t> EncodePause(const bool paused)
     {
         return {static_cast<std::uint8_t>(RelayMessage::Pause), static_cast<std::uint8_t>(paused ? 1 : 0)};
+    }
+
+    std::vector<std::uint8_t> EncodePromote(const std::uint8_t slot)
+    {
+        return {static_cast<std::uint8_t>(RelayMessage::Promote), slot};
+    }
+
+    std::vector<std::uint8_t> Encode(const SlotRejoinMessage &message)
+    {
+        std::vector<std::uint8_t> out;
+        out.push_back(static_cast<std::uint8_t>(RelayMessage::SlotRejoin));
+        out.push_back(message.slot);
+        PutU32(out, message.fromTick);
+        return out;
+    }
+
+    std::vector<std::uint8_t> Encode(const PromotedMessage &message)
+    {
+        std::vector<std::uint8_t> out;
+        out.push_back(static_cast<std::uint8_t>(RelayMessage::Promoted));
+        out.push_back(message.slot);
+        PutU32(out, message.fromTick);
+        out.push_back(message.droppedMask);
+        for (std::uint32_t slot = 0; slot < kMaxRelaySlots; ++slot)
+        {
+            if ((message.droppedMask & (1u << slot)) != 0)
+            {
+                PutU32(out, message.dropTicks[slot]);
+            }
+        }
+        return out;
+    }
+
+    std::vector<std::uint8_t> EncodePromotionRefused(const RefuseReason reason)
+    {
+        return {static_cast<std::uint8_t>(RelayMessage::PromotionRefused), static_cast<std::uint8_t>(reason)};
     }
 
     std::vector<std::uint8_t> EncodeForward(const RelayMessage type, const std::uint8_t slot,
@@ -360,7 +400,73 @@ namespace N2Engine::Network
 
     std::optional<RefuseReason> DecodeRefuse(const std::span<const std::uint8_t> bytes) noexcept
     {
-        if (!Starts(bytes, RelayMessage::Refuse) || bytes.size() != 2 || bytes[1] < 1 || bytes[1] > 6)
+        if (!Starts(bytes, RelayMessage::Refuse) || bytes.size() != 2 || bytes[1] < 1 || bytes[1] > 8)
+        {
+            return std::nullopt;
+        }
+        return static_cast<RefuseReason>(bytes[1]);
+    }
+
+    std::optional<std::uint8_t> DecodePromote(const std::span<const std::uint8_t> bytes) noexcept
+    {
+        if (!Starts(bytes, RelayMessage::Promote) || bytes.size() != 2 ||
+            (bytes[1] >= kMaxRelaySlots && bytes[1] != kSpectatorSlot))
+        {
+            return std::nullopt;
+        }
+        return bytes[1];
+    }
+
+    std::optional<SlotRejoinMessage> DecodeSlotRejoin(const std::span<const std::uint8_t> bytes) noexcept
+    {
+        if (!Starts(bytes, RelayMessage::SlotRejoin))
+        {
+            return std::nullopt;
+        }
+        N2Net::ByteReader reader(bytes.subspan(1));
+        SlotRejoinMessage message;
+        message.slot = reader.U8();
+        message.fromTick = reader.U32();
+        if (reader.Failed() || reader.Remaining() != 0 || message.slot >= kMaxRelaySlots)
+        {
+            return std::nullopt;
+        }
+        return message;
+    }
+
+    std::optional<PromotedMessage> DecodePromoted(const std::span<const std::uint8_t> bytes) noexcept
+    {
+        if (!Starts(bytes, RelayMessage::Promoted))
+        {
+            return std::nullopt;
+        }
+        N2Net::ByteReader reader(bytes.subspan(1));
+        PromotedMessage message;
+        message.slot = reader.U8();
+        message.fromTick = reader.U32();
+        message.droppedMask = reader.U8();
+        if (reader.Failed() || message.slot >= kMaxRelaySlots || (message.droppedMask >> kMaxRelaySlots) != 0 ||
+            (message.droppedMask & (1u << message.slot)) != 0)
+        {
+            return std::nullopt;
+        }
+        for (std::uint32_t slot = 0; slot < kMaxRelaySlots; ++slot)
+        {
+            if ((message.droppedMask & (1u << slot)) != 0)
+            {
+                message.dropTicks[slot] = reader.U32();
+            }
+        }
+        if (reader.Failed() || reader.Remaining() != 0)
+        {
+            return std::nullopt;
+        }
+        return message;
+    }
+
+    std::optional<RefuseReason> DecodePromotionRefused(const std::span<const std::uint8_t> bytes) noexcept
+    {
+        if (!Starts(bytes, RelayMessage::PromotionRefused) || bytes.size() != 2 || bytes[1] < 1 || bytes[1] > 8)
         {
             return std::nullopt;
         }

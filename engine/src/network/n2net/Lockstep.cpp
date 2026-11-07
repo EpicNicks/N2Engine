@@ -79,7 +79,46 @@ namespace N2Engine::N2Net
             return false;
         }
         const Slot &s = slots_[slot];
-        return s.dropped && Diff(tick, s.droppedFrom) >= 0;
+        // The last change at or before the tick decides; before the first one the slot is live
+        for (std::uint32_t i = s.changeCount; i > 0; --i)
+        {
+            const SlotChange &change = s.changes[i - 1];
+            if (Diff(tick, change.tick) >= 0)
+            {
+                return change.dropped;
+            }
+        }
+        return false;
+    }
+
+    bool LockstepScheduler::IsDroppedForGood(const std::uint32_t slot) const noexcept
+    {
+        if (!valid_ || slot >= config_.slotCount)
+        {
+            return false;
+        }
+        const Slot &s = slots_[slot];
+        return s.changeCount > 0 && s.changes[s.changeCount - 1].dropped;
+    }
+
+    void LockstepScheduler::FoldChanges() noexcept
+    {
+        for (std::uint32_t index = 0; index < config_.slotCount; ++index)
+        {
+            Slot &s = slots_[index];
+            // A change the next one has already replaced for every tick from CurrentTick on is not needed any more
+            while (s.changeCount >= 2 && Diff(current_, s.changes[1].tick) >= 0)
+            {
+                std::copy(s.changes.begin() + 1, s.changes.begin() + static_cast<std::ptrdiff_t>(s.changeCount),
+                          s.changes.begin());
+                --s.changeCount;
+            }
+            // A slot live again from a tick that has passed is a slot that was never dropped
+            if (s.changeCount == 1 && !s.changes[0].dropped && Diff(current_, s.changes[0].tick) >= 0)
+            {
+                s.changeCount = 0;
+            }
+        }
     }
 
     SubmitResult LockstepScheduler::Submit(const std::uint32_t slot, const std::uint32_t tick, const LockstepInput &input) noexcept
@@ -184,6 +223,7 @@ namespace N2Engine::N2Net
         }
         ++current_;
         stalledPolls_ = 0;
+        FoldChanges();
         return AdvanceStatus::Runnable;
     }
 
@@ -226,12 +266,61 @@ namespace N2Engine::N2Net
             return false;
         }
         Slot &s = slots_[slot];
-        if (s.dropped)
+        if (s.changeCount > 0)
+        {
+            SlotChange &last = s.changes[s.changeCount - 1];
+            if (last.dropped || Diff(fromTick, last.tick) < 0)
+            {
+                return false;
+            }
+            if (fromTick == last.tick)
+            {
+                // A rejoin from this very tick: it is undone, the slot stays dropped
+                last.dropped = true;
+                return true;
+            }
+        }
+        if (s.changeCount >= kMaxSlotChanges)
         {
             return false;
         }
-        s.dropped = true;
-        s.droppedFrom = fromTick;
+        s.changes[s.changeCount++] = SlotChange{fromTick, true};
+        return true;
+    }
+
+    bool LockstepScheduler::RejoinSlot(const std::uint32_t slot, const std::uint32_t fromTick) noexcept
+    {
+        if (!valid_ || slot >= config_.slotCount || Diff(fromTick, current_) < 0)
+        {
+            return false;
+        }
+        Slot &s = slots_[slot];
+        if (s.changeCount == 0)
+        {
+            return false;
+        }
+        SlotChange &last = s.changes[s.changeCount - 1];
+        if (!last.dropped || Diff(fromTick, last.tick) < 0)
+        {
+            return false;
+        }
+        if (fromTick == last.tick)
+        {
+            // A drop from this very tick: it is undone
+            last.dropped = false;
+        }
+        else
+        {
+            if (s.changeCount >= kMaxSlotChanges)
+            {
+                return false;
+            }
+            s.changes[s.changeCount++] = SlotChange{fromTick, false};
+        }
+        if (Diff(fromTick, s.nextLocalTick) > 0)
+        {
+            s.nextLocalTick = fromTick;
+        }
         return true;
     }
 
@@ -323,6 +412,11 @@ namespace N2Engine::N2Net
         if (Diff(tick, oldest) < 0)
         {
             tick = oldest;
+        }
+        // Nobody sends a dropped slot's ticks: a rejoined slot's frames start where it is live again
+        for (std::uint32_t skipped = 0; skipped < kLockstepWindow && scheduler.IsDropped(slot, tick); ++skipped)
+        {
+            ++tick;
         }
         bundle.firstTick = tick;
         while (bundle.frames.size() < kMaxBundleFrames)

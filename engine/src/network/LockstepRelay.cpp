@@ -53,6 +53,7 @@ namespace N2Engine::Network
         options_.maxConnections = std::clamp<std::uint32_t>(options_.maxConnections, 1u, 256u);
         options_.sendIntervalMicros = std::max<std::uint64_t>(options_.sendIntervalMicros, 1000);
         options_.maxForwardMessages = std::min<std::uint32_t>(options_.maxForwardMessages, 65536u);
+        options_.promotionLeadMicros = std::min<std::uint64_t>(options_.promotionLeadMicros, 600'000'000);
         layout_ = options_.layout;
         valid_ = !layout_.Empty() && options_.slotCount >= 1 && options_.slotCount <= kMaxRelaySlots &&
                  MakeLockstepLayoutInfo(layout_).has_value();
@@ -326,6 +327,9 @@ namespace N2Engine::Network
         case static_cast<std::uint8_t>(RelayMessage::SnapshotData):
             OnSnapshotData(peer, message);
             break;
+        case static_cast<std::uint8_t>(RelayMessage::Promote):
+            OnPromote(peer, message);
+            break;
         case 2:
             OnRoot(peer, message);
             break;
@@ -506,6 +510,123 @@ namespace N2Engine::Network
         spectator.snapshotQueue.push_back(Encode(RelayMessage::SnapshotPart, *part));
     }
 
+    void LockstepRelay::RefusePromotion(Peer &peer, const RefuseReason reason, const std::string &why)
+    {
+        ++stats_.promotionsRefused;
+        (void)Send(peer, EncodePromotionRefused(reason));
+        Notify(RelayEvent::Type::PromotionRefused, kSpectatorSlot, ConfirmedTick(), why);
+    }
+
+    void LockstepRelay::OnPromote(Peer &peer, const std::span<const std::uint8_t> message)
+    {
+        const auto wanted = DecodePromote(message);
+        if (!wanted || !peer.spectator)
+        {
+            Mark(peer, wanted ? "a client that is not a spectator asked to be promoted" : "it sent a malformed promotion request");
+            return;
+        }
+        if (!options_.allowPromotion)
+        {
+            RefusePromotion(peer, RefuseReason::NotAllowed, "the relay does not promote spectators");
+            return;
+        }
+        if (state_ != RelayState::Running || !peer.snapshotDone)
+        {
+            RefusePromotion(peer, RefuseReason::NotReady, "the spectator does not run in step yet");
+            return;
+        }
+        std::uint32_t slot = kMaxRelaySlots;
+        if (*wanted == kSpectatorSlot)
+        {
+            for (std::uint32_t candidate = 0; candidate < options_.slotCount && slot == kMaxRelaySlots; ++candidate)
+            {
+                if (slotDropped_[candidate])
+                {
+                    slot = candidate;
+                }
+            }
+        }
+        else if (*wanted < options_.slotCount && slotDropped_[*wanted])
+        {
+            slot = *wanted;
+        }
+        if (slot == kMaxRelaySlots)
+        {
+            RefusePromotion(peer, RefuseReason::SessionFull,
+                            *wanted == kSpectatorSlot ? std::string("no slot is dropped")
+                                                      : std::format("slot {} is not a dropped slot", *wanted));
+            return;
+        }
+        const std::uint32_t current = scheduler_->CurrentTick();
+        // As a player it is sent the other slots' frames from its ack on, so they must still be held; and its own slot's
+        // drop must be behind it, since a player is never sent its own slot's frames (before the drop they were real)
+        const std::uint32_t oldestHeld = current - (N2Net::kLockstepWindow - N2Net::kMaxInputDelay);
+        if (Ahead(oldestHeld, peer.ack) || Ahead(dropTick_[slot], peer.ack))
+        {
+            RefusePromotion(peer, RefuseReason::NotReady,
+                            std::format("the spectator is at tick {}, the relay at {} and the slot was dropped at {}", peer.ack,
+                                        current, dropTick_[slot]));
+            return;
+        }
+        // The join tick: past the furthest tick any player can have reached or sent that the relay knows of, by the input
+        // delay and the lead, so that every player hears the SlotRejoin before it gets there
+        std::uint32_t reach = current;
+        for (std::uint32_t other = 0; other < options_.slotCount; ++other)
+        {
+            if (!slotDropped_[other])
+            {
+                const std::uint32_t next = scheduler_->NextNeeded(other);
+                if (Ahead(next, reach))
+                {
+                    reach = next;
+                }
+            }
+        }
+        for (const auto &entry : peers_)
+        {
+            const Peer &other = entry.second;
+            if (other.joined && !other.leaving && Ahead(other.ack, reach))
+            {
+                reach = other.ack;
+            }
+        }
+        const std::uint64_t leadTicks =
+            std::clamp<std::uint64_t>((options_.promotionLeadMicros * options_.tickRate + 999'999) / 1'000'000, 1, 1u << 20);
+        const std::uint32_t joinTick = reach + options_.inputDelay + static_cast<std::uint32_t>(leadTicks);
+        if (!scheduler_->RejoinSlot(slot, joinTick))
+        {
+            RefusePromotion(peer, RefuseReason::NotReady, std::format("slot {} cannot be rejoined now", slot));
+            return;
+        }
+        slotDropped_[slot] = false;
+        peer.spectator = false;
+        peer.joined = true;
+        peer.slot = slot;
+        peer.promoted = true;
+        peer.slotAccounted = false;
+        peer.snapshotQueue.clear();
+        peer.ackSent = false;
+        ++stats_.promotions;
+
+        PromotedMessage promoted;
+        promoted.slot = static_cast<std::uint8_t>(slot);
+        promoted.fromTick = joinTick;
+        for (std::uint32_t other = 0; other < options_.slotCount; ++other)
+        {
+            if (slotDropped_[other])
+            {
+                promoted.droppedMask = static_cast<std::uint8_t>(promoted.droppedMask | (1u << other));
+                promoted.dropTicks[other] = dropTick_[other];
+            }
+        }
+        (void)Send(peer, Encode(promoted));
+        SlotRejoinMessage rejoin;
+        rejoin.slot = static_cast<std::uint8_t>(slot);
+        rejoin.fromTick = joinTick;
+        Broadcast(Encode(rejoin), slot);
+        Notify(RelayEvent::Type::Promoted, slot, joinTick, "");
+    }
+
     void LockstepRelay::ServeSpectators()
     {
         if (history_.empty())
@@ -664,6 +785,15 @@ namespace N2Engine::Network
         }
         ++stats_.bundlesReceived;
         const auto bundle = DecodeInputBundleFor(layout_, message);
+        if (bundle && peer.promoted && bundle->slot != peer.slot && bundle->frames.empty())
+        {
+            // An ack it sent as a spectator before it heard of its promotion
+            if (Ahead(bundle->ackTick, peer.ack) && !Ahead(bundle->ackTick, scheduler_->CurrentTick()))
+            {
+                peer.ack = bundle->ackTick;
+            }
+            return;
+        }
         if (!bundle || bundle->slot != peer.slot)
         {
             ++stats_.bundlesRejected;

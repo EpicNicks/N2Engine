@@ -211,6 +211,7 @@ namespace N2Engine::Network
     LockstepRuntime::LockstepRuntime(N2Net::ITransport &transport, LockstepRuntimeOptions options)
         : transport_(transport), options_(std::move(options)), history_(options_.historyDepth)
     {
+        spectating_ = options_.spectate;
         clock_.SetMode(SimulationMode::Deterministic);
         // Lockstep paces itself: a tick that waits for an input resets the accumulator, so a "behind" report is not an
         // error here; with a handler installed the clock never drops time on its own
@@ -275,6 +276,18 @@ namespace N2Engine::Network
         {
             SendReliable(EncodePause(paused));
         }
+    }
+
+    bool LockstepRuntime::RequestPromotion(const std::uint8_t slot)
+    {
+        if (!spectating_ || promotionPending_ || state_ != LockstepState::Running || !connection_ || !scheduler_ ||
+            stop_ || (slot >= kMaxRelaySlots && slot != kSpectatorSlot))
+        {
+            return false;
+        }
+        promotionPending_ = true;
+        SendReliable(EncodePromote(slot));
+        return !Finished();
     }
 
     void LockstepRuntime::Leave()
@@ -366,7 +379,7 @@ namespace N2Engine::Network
             break;
         case static_cast<std::uint8_t>(RelayMessage::Start):
             // A spectator starts at its snapshot, not here
-            if (state_ == LockstepState::Lobby && !options_.spectate)
+            if (state_ == LockstepState::Lobby && !spectating_)
             {
                 state_ = LockstepState::Running;
                 Notify(LockstepEvent::Type::Started, slot_, 0, "");
@@ -385,7 +398,7 @@ namespace N2Engine::Network
             if (const auto request = DecodeSnapshotRequest(message))
             {
                 // The latest request wins (the relay gave up on an earlier one)
-                if (!options_.spectate)
+                if (!spectating_)
                 {
                     snapshotRequest_ = *request;
                 }
@@ -396,14 +409,36 @@ namespace N2Engine::Network
             }
             break;
         case static_cast<std::uint8_t>(RelayMessage::SnapshotPart):
-            if (options_.spectate)
+            if (spectating_)
             {
                 OnSnapshotPart(message);
             }
             break;
+        case static_cast<std::uint8_t>(RelayMessage::SlotRejoin):
+            OnSlotRejoin(message);
+            break;
+        case static_cast<std::uint8_t>(RelayMessage::Promoted):
+            OnPromoted(message);
+            break;
+        case static_cast<std::uint8_t>(RelayMessage::PromotionRefused):
+            if (const auto reason = DecodePromotionRefused(message))
+            {
+                if (spectating_ && promotionPending_)
+                {
+                    promotionPending_ = false;
+                    promotionRefusal_ = *reason;
+                    Notify(LockstepEvent::Type::PromotionRefused, slot_, TicksRun(),
+                           std::format("the relay refused the promotion ({})", ToString(*reason)));
+                }
+            }
+            else
+            {
+                Fail("the relay sent a malformed promotion refusal");
+            }
+            break;
         case static_cast<std::uint8_t>(RelayMessage::DropSlot):
         {
-            if (options_.spectate)
+            if (spectating_)
             {
                 // A spectator is sent every slot's confirmed input, a dropped slot's synthesised one included
                 break;
@@ -466,6 +501,7 @@ namespace N2Engine::Network
         tickRate_ = welcome.tickRate;
         step_ = 1.0 / static_cast<double>(std::max<std::uint32_t>(tickRate_, 1));
         dropFill_ = welcome.dropFill == 1 ? N2Net::DropFill::HoldLast : N2Net::DropFill::Neutral;
+        inputDelay_ = welcome.inputDelay;
         if (options_.spectate)
         {
             // The scheduler starts at the snapshot's tick (ApplySnapshot)
@@ -617,8 +653,8 @@ namespace N2Engine::Network
             recorderFull_ = true;
         }
         const std::uint32_t done = scheduler_->CurrentTick();
-        // A spectator does not report roots: it has no slot to report for
-        if (options_.buildTree && hashInterval_ != 0 && done % hashInterval_ == 0 && !options_.spectate)
+        // A spectator does not report roots: it has no slot to report for (a promoted one does)
+        if (options_.buildTree && hashInterval_ != 0 && done % hashInterval_ == 0 && !spectating_)
         {
             if (std::optional<N2Net::HashTree> tree = options_.buildTree(done))
             {
@@ -833,6 +869,83 @@ namespace N2Engine::Network
         }
     }
 
+    void LockstepRuntime::OnSlotRejoin(const std::span<const std::uint8_t> message)
+    {
+        if (spectating_)
+        {
+            // The relay sends a spectator every slot's confirmed input instead
+            return;
+        }
+        const auto rejoin = DecodeSlotRejoin(message);
+        if (!rejoin || !scheduler_ || rejoin->slot >= slotCount_ || rejoin->slot == slot_)
+        {
+            Fail("the relay sent a malformed or impossible slot rejoin");
+        }
+        else if (!scheduler_->RejoinSlot(rejoin->slot, rejoin->fromTick))
+        {
+            Fail(std::format("the relay rejoined slot {} from tick {}, which this peer cannot apply (it is at tick {})",
+                             rejoin->slot, rejoin->fromTick, scheduler_->CurrentTick()));
+        }
+        else
+        {
+            Notify(LockstepEvent::Type::SlotRejoined, rejoin->slot, rejoin->fromTick, "");
+        }
+    }
+
+    void LockstepRuntime::OnPromoted(const std::span<const std::uint8_t> message)
+    {
+        const auto promoted = DecodePromoted(message);
+        if (!promoted)
+        {
+            Fail("the relay sent a malformed promotion");
+            return;
+        }
+        if (!spectating_ || !promotionPending_ || !scheduler_ || state_ != LockstepState::Running ||
+            promoted->slot >= slotCount_)
+        {
+            Fail("the relay sent a promotion this client did not ask for");
+            return;
+        }
+        const std::uint32_t current = scheduler_->CurrentTick();
+        if (!Ahead(promoted->fromTick, current))
+        {
+            Fail(std::format("the relay promoted this spectator from tick {}, which it has passed (it is at tick {})",
+                             promoted->fromTick, current));
+            return;
+        }
+        // The other dropped slots: from their drop tick, or from now when it is behind (the inputs this spectator ran up
+        // to now were the relay's synthesised ones, so its own synthesis goes on from the same last input)
+        for (std::uint32_t slot = 0; slot < kMaxRelaySlots; ++slot)
+        {
+            if ((promoted->droppedMask & (1u << slot)) == 0)
+            {
+                continue;
+            }
+            const std::uint32_t from = Ahead(promoted->dropTicks[slot], current) ? promoted->dropTicks[slot] : current;
+            if (slot >= slotCount_ || !scheduler_->DropSlot(slot, from))
+            {
+                Fail(std::format("the relay's promotion names slot {} dropped from tick {}, which this spectator cannot "
+                                 "apply (it is at tick {})",
+                                 slot, promoted->dropTicks[slot], current));
+                return;
+            }
+        }
+        // Its own slot: synthesised from now (the relay only promotes a spectator that is past the slot's drop), real
+        // from the join tick, when this client's own input starts
+        if (!scheduler_->DropSlot(promoted->slot, current) || !scheduler_->RejoinSlot(promoted->slot, promoted->fromTick))
+        {
+            Fail(std::format("this spectator cannot take slot {} from tick {} (it is at tick {})", promoted->slot,
+                             promoted->fromTick, current));
+            return;
+        }
+        slot_ = promoted->slot;
+        spectating_ = false;
+        promotionPending_ = false;
+        lastSendAt_ = 0;
+        lastAckAt_ = 0;
+        Notify(LockstepEvent::Type::Promoted, slot_, promoted->fromTick, "");
+    }
+
     void LockstepRuntime::ApplySnapshot()
     {
         snapshotReady_ = false;
@@ -873,7 +986,7 @@ namespace N2Engine::Network
 
     void LockstepRuntime::ServeSnapshot()
     {
-        if (!connection_ || !scheduler_ || options_.spectate)
+        if (!connection_ || !scheduler_ || spectating_)
         {
             return;
         }
@@ -973,7 +1086,7 @@ namespace N2Engine::Network
 
     void LockstepRuntime::RunTicks(const double unscaledDelta)
     {
-        if (options_.spectate)
+        if (spectating_)
         {
             RunSpectatorTicks(unscaledDelta);
             return;
@@ -984,7 +1097,8 @@ namespace N2Engine::Network
             return;
         }
         clock_.BeginFrame(unscaledDelta);
-        const std::uint32_t delay = scheduler_->Config().inputDelay;
+        // The welcome's delay (the scheduler's own is 0 for a promoted spectator, whose scheduler began as a spectator's)
+        const std::uint32_t delay = inputDelay_;
         while (state_ == LockstepState::Running && clock_.TickDue(step_))
         {
             // The local slot never runs further ahead than the input delay needs, so a long stall does not queue up
@@ -1213,7 +1327,7 @@ namespace N2Engine::Network
         if (state_ == LockstepState::Running && scheduler_ && !stop_)
         {
             RunTicks(unscaledDeltaSeconds);
-            if (options_.spectate)
+            if (spectating_)
             {
                 SendSpectatorAck(nowMicros);
             }

@@ -734,6 +734,7 @@ namespace N2Engine::Server
                 relayOptions.maxSnapshotBytes = static_cast<std::uint32_t>(options.relaySnapshotMaxMb) * 1024u * 1024u;
                 relayOptions.snapshotTimeoutMicros = static_cast<std::uint64_t>(options.relaySnapshotTimeoutMs) * 1000;
                 relayOptions.maxConnections = static_cast<std::uint32_t>(std::min(options.maxClients, 64));
+                relayOptions.allowPromotion = options.relayPromotion;
                 relay = std::make_unique<Network::LockstepRelay>(transport, std::move(relayOptions));
                 if (!relay->Valid())
                 {
@@ -772,6 +773,15 @@ namespace N2Engine::Server
                             break;
                         case Type::Reset:
                             Logger::Info("Relay: the session is over; waiting for the next one");
+                            break;
+                        case Type::Promoted:
+                            Logger::Info(std::format("Relay: a spectator was promoted into slot {} from tick {}", event.slot,
+                                                     event.tick));
+                            break;
+                        case Type::PromotionRefused:
+                            Logger::Info(std::format("Relay: a promotion was refused ({})", event.text));
+                            break;
+                        default:
                             break;
                         }
                     });

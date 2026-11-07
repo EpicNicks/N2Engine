@@ -108,7 +108,7 @@ TEST(N2ServerOptionsTest, HelpWinsOverEverythingElse)
     // Every option the parser takes is in the usage text
     const std::string usage(ServerUsage());
     for (const char *option : {"--project", "--scene", "--bind", "--port", "--tokens-file", "--max-clients", "--protocol-id",
-                               "--insecure-bind", "--relay", "--relay-players", "--relay-stall", "--relay-stall-ms", "--relay-layout", "--relay-spectators", "--relay-snapshot-max-mb", "--relay-snapshot-timeout-ms", "--exit-on-stdin-eof", "--log-level", "--log-file",
+                               "--insecure-bind", "--relay", "--relay-players", "--relay-stall", "--relay-stall-ms", "--relay-layout", "--relay-spectators", "--relay-snapshot-max-mb", "--relay-snapshot-timeout-ms", "--relay-promotion", "--exit-on-stdin-eof", "--log-level", "--log-file",
                                "--new-token"})
     {
         EXPECT_NE(usage.find(option), std::string::npos) << option;
@@ -301,6 +301,22 @@ TEST(N2ServerOptionsTest, RelaySpectatorOptionsParseWithTheDocumentedDefaultsAnd
     EXPECT_NE(ErrorOf(Serving({"--relay-spectators", "0"})).find("only apply with --relay"), std::string::npos);
     EXPECT_NE(ErrorOf(Serving({"--relay-snapshot-max-mb", "8"})).find("only apply with --relay"), std::string::npos);
     EXPECT_NE(ErrorOf(Serving({"--relay-snapshot-timeout-ms", "2000"})).find("only apply with --relay"), std::string::npos);
+}
+
+TEST(N2ServerOptionsTest, RelayPromotionIsDeniedByDefaultAndTakesAllowOrDeny)
+{
+    const auto defaults = Parse(Serving({"--relay"}));
+    ASSERT_TRUE(defaults.has_value()) << defaults.error();
+    EXPECT_FALSE(defaults->relayPromotion);
+    const auto allowed = Parse(Serving({"--relay", "--relay-promotion", "allow"}));
+    ASSERT_TRUE(allowed.has_value()) << allowed.error();
+    EXPECT_TRUE(allowed->relayPromotion);
+    const auto denied = Parse(Serving({"--relay", "--relay-promotion", "deny"}));
+    ASSERT_TRUE(denied.has_value()) << denied.error();
+    EXPECT_FALSE(denied->relayPromotion);
+    EXPECT_NE(ErrorOf(Serving({"--relay", "--relay-promotion", "yes"})).find("--relay-promotion"), std::string::npos);
+    EXPECT_NE(ErrorOf(Serving({"--relay", "--relay-promotion"})).find("missing a value"), std::string::npos);
+    EXPECT_NE(ErrorOf(Serving({"--relay-promotion", "allow"})).find("only apply with --relay"), std::string::npos);
 }
 
 TEST(N2ServerOptionsTest, NewTokenTakesAUserAndARoleAndNeedsATokensFile)
