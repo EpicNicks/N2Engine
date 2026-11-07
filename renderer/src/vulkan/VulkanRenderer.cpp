@@ -6,21 +6,26 @@
 #include <limits>
 #include <string>
 
+#include "renderer/vulkan/VulkanDeviceChoice.hpp"
 #include "renderer/vulkan/VulkanRenderer.hpp"
 
 #include "VulkanDraw.hpp"
 #include "VulkanResources.hpp"
+#include "VulkanSwapchain.hpp"
 
-// Stage 0 of the Vulkan backend (#43): headless initialisation, an offscreen colour and depth target, a frame that
-// clears it, readback, resizing and shutdown. Nothing here needs a window, a surface or a swapchain. Meshes and textures
+// Stage 0 of the Vulkan backend (#43): initialisation, an offscreen colour and depth target, a frame that clears it,
+// readback, resizing and shutdown, and (stage F) the device choice and the GPU selection API. Meshes and textures
 // (stage A) are in VulkanResources.cpp; the built-in shaders, materials, pipelines and draws (stage B) and
-// the scene lighting (stage C), blending (stage D) and the text shader (stage E) are in VulkanDraw.cpp. What is still a
-// stub (the window) logs once and does nothing.
+// the scene lighting (stage C), blending (stage D) and the text shader (stage E) are in VulkanDraw.cpp; the window's
+// surface, swapchain and Present (stage F) in VulkanSwapchain.cpp. Without a window (and without the test-only headless
+// surface) there is no surface and no surface or swapchain extension: the headless path is stage 0's.
 //
 // Object lifetimes, in creation order (Shutdown destroys them in reverse):
-//   instance -> debug messenger -> device -> VMA allocator -> command pool (+ the frames' command buffers and fences) ->
-//   render pass -> targets (colour and depth images + views, framebuffer, host-visible readback buffer) -> meshes,
-//   textures and samplers, as the caller makes them (and the deferred-deletion lists)
+//   instance -> debug messenger -> surface (a window only) -> device -> VMA allocator -> command pool (+ the frames'
+//   command buffers and fences, and with a surface the present slots' command buffers, semaphores and fences) ->
+//   render pass -> targets (colour and depth images + views, framebuffer, host-visible readback buffer) -> swapchain (a
+//   window only: its images' semaphores) -> meshes, textures and samplers, as the caller makes them (and the
+//   deferred-deletion lists). The swapchain goes before the device, the surface after the device and before the instance
 // The targets and the readback buffer are plain vkAllocateMemory allocations (stage 0's AllocateMemory), not VMA ones:
 // moving them onto VMA was optional and left alone.
 //
@@ -31,7 +36,7 @@
 //
 // Image layouts: the colour image is UNDEFINED, then TRANSFER_DST for one initial clear to black, then rests in
 // TRANSFER_SRC_OPTIMAL (the render pass's initial layout is UNDEFINED, it clears, and its final layout is
-// TRANSFER_SRC_OPTIMAL), which is what the readback copy (and stage F's blit to a swapchain) reads from. The depth image
+// TRANSFER_SRC_OPTIMAL), which is what the readback copy and Present's blit to a swapchain image read from. The depth image
 // is only ever used inside the render pass (UNDEFINED in, DEPTH_STENCIL_ATTACHMENT_OPTIMAL out, contents not stored).
 
 using namespace Renderer::Vulkan;
@@ -148,16 +153,28 @@ namespace
             VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT);
     }
 
-    uint32_t ScoreDeviceType(VkPhysicalDeviceType type)
+    /// Whether the device offers the device extension `name`
+    bool HasDeviceExtension(VkPhysicalDevice device, const char* name)
     {
-        switch (type)
+        uint32_t count = 0;
+        if (vkEnumerateDeviceExtensionProperties(device, nullptr, &count, nullptr) != VK_SUCCESS || count == 0)
         {
-        case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: return 1000;
-        case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: return 500;
-        case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU: return 200;
-        case VK_PHYSICAL_DEVICE_TYPE_CPU: return 100;
-        default: return 10;
+            return false;
         }
+        std::vector<VkExtensionProperties> available(count);
+        const VkResult result = vkEnumerateDeviceExtensionProperties(device, nullptr, &count, available.data());
+        if (result != VK_SUCCESS && result != VK_INCOMPLETE)
+        {
+            return false;
+        }
+        for (uint32_t i = 0; i < count && i < available.size(); ++i)
+        {
+            if (std::strcmp(available[i].extensionName, name) == 0)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     VkImageMemoryBarrier ColorBarrier(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
@@ -187,7 +204,7 @@ namespace
 
 VulkanRenderer::VulkanRenderer()
     : _debug(std::make_shared<DebugState>()), _resources(std::make_unique<ResourceState>()),
-      _draw(std::make_unique<DrawState>())
+      _draw(std::make_unique<DrawState>()), _swapchain(std::make_unique<SwapchainState>())
 {
 }
 
@@ -371,11 +388,20 @@ bool VulkanRenderer::Initialize(GLFWwindow* windowHandle, uint32_t width, uint32
     }
     _initStatus = InitStatus::NotInitialized;
     _initMessage.clear();
-    _warnedWindow = false;
     _requestedWidth = width;
     _requestedHeight = height;
     _targetFixed = false;
-    static_cast<void>(windowHandle); // no surface yet: frames render offscreen whether or not there is a window
+    // Frames always render offscreen; a window (stage F) also gets a surface and a swapchain, and its handle is kept only
+    // for glfwGetFramebufferSize. Without one (and without the test-only headless surface) nothing of that is made
+    _window = windowHandle;
+    if (_vsyncSetting)
+    {
+        _vsync = *_vsyncSetting;
+    }
+    else
+    {
+        _vsync = GetEnvironment("N2_VULKAN_VSYNC") != "0"; // on unless N2_VULKAN_VSYNC=0
+    }
 
     if (width == 0 || height == 0)
     {
@@ -383,9 +409,31 @@ bool VulkanRenderer::Initialize(GLFWwindow* windowHandle, uint32_t width, uint32
         return false;
     }
 
-    const bool ok = CreateInstance() && SetupDebugMessenger() && PickPhysicalDevice() && CreateLogicalDevice() &&
-        CreateAllocator() && CreateCommandPool() && CreateFrameResources() && CreateRenderPass() &&
-        CreateDrawResources() && CreateTargets(width, height);
+    // With a surface the first swapchain is made here (none while the window is 0x0): a window whose surface offers
+    // nothing usable fails Initialize instead of staying blank
+    const auto createFirstSwapchain = [this]
+    {
+        if (_surface == VK_NULL_HANDLE)
+        {
+            return true;
+        }
+        std::string error;
+        switch (CreateSwapchainLocked(error))
+        {
+        case SwapchainResult::Created:
+        case SwapchainResult::Minimised:
+            return true;
+        case SwapchainResult::SurfaceLost:
+            return Fail(InitStatus::NoSurface, "the window's surface was lost while the swapchain was made");
+        default:
+            return Fail(InitStatus::NoSurface, "could not make a swapchain for the window: " + error);
+        }
+    };
+
+    const bool ok = CreateInstance() && SetupDebugMessenger() && CreateSurfaceLocked() && PickPhysicalDevice() &&
+        CreateLogicalDevice() && CreateAllocator() && CreateCommandPool() && CreateFrameResources() &&
+        CreatePresentResources() && CreateRenderPass() && CreateDrawResources() && CreateTargets(width, height) &&
+        createFirstSwapchain();
     if (!ok)
     {
         // Every step above leaves what it made in the members; destroy it all, keeping the reason
@@ -409,6 +457,7 @@ bool VulkanRenderer::CreateInstance()
 
     bool layerPresent = false;
     bool debugUtilsPresent = false;
+    std::set<std::string> availableExtensions;
     {
         uint32_t count = 0;
         if (vkEnumerateInstanceLayerProperties(&count, nullptr) == VK_SUCCESS && count > 0)
@@ -437,6 +486,7 @@ bool VulkanRenderer::CreateInstance()
             {
                 for (uint32_t i = 0; i < count && i < extensions.size(); ++i)
                 {
+                    availableExtensions.insert(extensions[i].extensionName);
                     if (std::strcmp(extensions[i].extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0)
                     {
                         debugUtilsPresent = true;
@@ -468,7 +518,60 @@ bool VulkanRenderer::CreateInstance()
     appInfo.apiVersion = VK_API_VERSION_1_1;
 
     const char* layers[] = {ValidationLayerName};
-    const char* extensions[] = {VK_EXT_DEBUG_UTILS_EXTENSION_NAME};
+    std::vector<const char*> extensions;
+    if (validation)
+    {
+        extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    }
+    const auto addExtension = [&extensions](const char* name)
+    {
+        for (const char* present : extensions)
+        {
+            if (std::strcmp(present, name) == 0)
+            {
+                return;
+            }
+        }
+        extensions.push_back(name);
+    };
+    // A window needs the surface extensions GLFW names for this platform (VK_KHR_surface and the platform's own); the
+    // test-only headless surface needs VK_KHR_surface and VK_EXT_headless_surface; the headless path enables neither
+    if (_window != nullptr)
+    {
+        if (glfwVulkanSupported() != GLFW_TRUE)
+        {
+            return Fail(InitStatus::NoSurface, "GLFW cannot reach a Vulkan loader (glfwVulkanSupported is false), so the "
+                                               "window cannot get a Vulkan surface");
+        }
+        uint32_t count = 0;
+        const char** names = glfwGetRequiredInstanceExtensions(&count);
+        if (names == nullptr || count == 0)
+        {
+            return Fail(InitStatus::NoSurface, "GLFW names no Vulkan instance extensions for windows on this platform "
+                                               "(glfwGetRequiredInstanceExtensions)");
+        }
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            if (!availableExtensions.contains(names[i]))
+            {
+                return Fail(InitStatus::NoSurface,
+                            std::string("the Vulkan instance lacks ") + names[i] + ", which a window's surface needs");
+            }
+            addExtension(names[i]);
+        }
+    }
+    else if (_headlessSurfaceForTest)
+    {
+        for (const char* name : {VK_KHR_SURFACE_EXTENSION_NAME, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME})
+        {
+            if (!availableExtensions.contains(name))
+            {
+                return Fail(InitStatus::NoSurface, std::string("the Vulkan instance lacks ") + name +
+                                                       ", which the test-only headless surface needs");
+            }
+            addExtension(name);
+        }
+    }
 
     // A messenger in the create info's pNext also reports what happens during vkCreateInstance and vkDestroyInstance
     VkDebugUtilsMessengerCreateInfoEXT messengerInfo{};
@@ -481,10 +584,10 @@ bool VulkanRenderer::CreateInstance()
     {
         createInfo.enabledLayerCount = 1;
         createInfo.ppEnabledLayerNames = layers;
-        createInfo.enabledExtensionCount = 1;
-        createInfo.ppEnabledExtensionNames = extensions;
         createInfo.pNext = &messengerInfo;
     }
+    createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+    createInfo.ppEnabledExtensionNames = extensions.empty() ? nullptr : extensions.data();
 
     const VkResult result = vkCreateInstance(&createInfo, nullptr, &_instance);
     if (result == VK_SUCCESS)
@@ -545,64 +648,135 @@ bool VulkanRenderer::PickPhysicalDevice()
 
     constexpr VkFormatFeatureFlags colorFeatures = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
         VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+    // With a surface a device must also present to it: VK_KHR_swapchain, at least one surface format and present mode,
+    // and ONE queue family that both draws and presents (the norm on desktop). A device whose presenting family is a
+    // different one is not used (it is listed as unsupported, and logged): one queue keeps the swapchain images in
+    // exclusive mode with no ownership transfer
+    const bool needsPresent = _surface != VK_NULL_HANDLE;
 
-    uint32_t bestScore = 0;
-    for (const VkPhysicalDevice device : devices)
+    // What is learnt about each device, in enumeration order
+    struct Probe
     {
         VkPhysicalDeviceProperties properties{};
-        vkGetPhysicalDeviceProperties(device, &properties);
-        if (properties.apiVersion < VK_API_VERSION_1_1)
+        std::optional<uint32_t> family; // the queue family the renderer would use
+        VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+    };
+    std::vector<Probe> probes(devices.size());
+    std::vector<DeviceCandidate> candidates(devices.size());
+    _gpus.clear();
+    for (std::size_t i = 0; i < devices.size(); ++i)
+    {
+        const VkPhysicalDevice device = devices[i];
+        Probe& probe = probes[i];
+        DeviceCandidate& candidate = candidates[i];
+        vkGetPhysicalDeviceProperties(device, &probe.properties);
+        candidate.index = static_cast<uint32_t>(i);
+        candidate.name = probe.properties.deviceName;
+        candidate.type = probe.properties.deviceType;
+        candidate.apiVersion = probe.properties.apiVersion;
+
+        VkPhysicalDeviceMemoryProperties memory{};
+        vkGetPhysicalDeviceMemoryProperties(device, &memory);
+        for (uint32_t heap = 0; heap < memory.memoryHeapCount; ++heap)
         {
-            continue;
+            if ((memory.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0)
+            {
+                candidate.deviceLocalBytes += memory.memoryHeaps[heap].size;
+            }
         }
 
+        // Headless: the first family with a graphics queue. With a surface: the first that can also present to it
         uint32_t familyCount = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(device, &familyCount, nullptr);
         std::vector<VkQueueFamilyProperties> families(familyCount);
         vkGetPhysicalDeviceQueueFamilyProperties(device, &familyCount, families.data());
-        std::optional<uint32_t> graphicsFamily;
-        for (uint32_t i = 0; i < familyCount; ++i)
+        for (uint32_t family = 0; family < familyCount; ++family)
         {
-            if ((families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0 && families[i].queueCount > 0)
+            if ((families[family].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0 || families[family].queueCount == 0)
             {
-                graphicsFamily = i;
+                continue;
+            }
+            candidate.hasGraphics = true;
+            if (!needsPresent)
+            {
+                probe.family = family;
                 break;
             }
-        }
-        if (!graphicsFamily)
-        {
-            continue;
+            VkBool32 presents = VK_FALSE;
+            if (vkGetPhysicalDeviceSurfaceSupportKHR(device, family, _surface, &presents) == VK_SUCCESS &&
+                presents == VK_TRUE)
+            {
+                probe.family = family;
+                break;
+            }
         }
 
         VkFormatProperties colorProperties{};
         vkGetPhysicalDeviceFormatProperties(device, ColorFormat, &colorProperties);
-        if ((colorProperties.optimalTilingFeatures & colorFeatures) != colorFeatures)
+        probe.depthFormat = FindDepthFormat(device);
+        candidate.formatsOk = (colorProperties.optimalTilingFeatures & colorFeatures) == colorFeatures &&
+            probe.depthFormat != VK_FORMAT_UNDEFINED;
+
+        if (needsPresent)
         {
-            continue;
-        }
-        const VkFormat depthFormat = FindDepthFormat(device);
-        if (depthFormat == VK_FORMAT_UNDEFINED)
-        {
-            continue;
+            candidate.swapchainExtOk = HasDeviceExtension(device, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+            uint32_t formatCount = 0;
+            uint32_t modeCount = 0;
+            const bool queried =
+                vkGetPhysicalDeviceSurfaceFormatsKHR(device, _surface, &formatCount, nullptr) == VK_SUCCESS &&
+                vkGetPhysicalDeviceSurfacePresentModesKHR(device, _surface, &modeCount, nullptr) == VK_SUCCESS;
+            candidate.presentOk = probe.family.has_value() && queried && formatCount > 0 && modeCount > 0;
         }
 
-        const uint32_t score = ScoreDeviceType(properties.deviceType);
-        if (score > bestScore)
+        GPUInfo info;
+        info.device = device;
+        info.name = candidate.name;
+        info.type = candidate.type;
+        info.vramMB = candidate.deviceLocalBytes / (1024ull * 1024ull);
+        info.vendorId = probe.properties.vendorID;
+        info.isSupported = Qualifies(candidate, needsPresent);
+        info.driverVersion = probe.properties.driverVersion;
+        info.apiVersion = probe.properties.apiVersion;
+        info.limits = probe.properties.limits;
+        _gpus.push_back(info);
+        if (needsPresent && !info.isSupported)
         {
-            bestScore = score;
-            _physicalDevice = device;
-            _deviceProperties = properties;
-            _graphicsFamily = *graphicsFamily;
-            _depthFormat = depthFormat;
+            std::cerr << "Vulkan renderer: not using " << candidate.name << " for the window: "
+                      << WhyNotQualified(candidate, needsPresent) << std::endl;
         }
     }
 
-    if (_physicalDevice == VK_NULL_HANDLE)
+    // SetGpuPreference wins over N2_VULKAN_GPU; a preference that cannot be followed is one warning, never a failure
+    const bool preferenceSet = _gpuPreference.has_value();
+    const GpuPreference preference =
+        ParseGpuPreference(preferenceSet ? *_gpuPreference : GetEnvironment("N2_VULKAN_GPU"));
+    const char* preferenceSource = preferenceSet ? "SetGpuPreference" : "N2_VULKAN_GPU";
+    const DeviceChoice choice = ChooseDevice(candidates, needsPresent, preference);
+    if (!choice.warning.empty())
+    {
+        std::cerr << "Vulkan renderer: " << choice.warning << " (" << preferenceSource << ")" << std::endl;
+    }
+    if (!choice.found)
     {
         return Fail(InitStatus::NoSuitableDevice,
-                    "no Vulkan device has a graphics queue, Vulkan 1.1 and the colour and depth formats the render "
-                    "target needs");
+                    needsPresent ? "no Vulkan device can both draw and present to the window (a graphics queue that "
+                                   "presents, VK_KHR_swapchain, Vulkan 1.1 and the colour and depth formats the render "
+                                   "target needs)"
+                                 : "no Vulkan device has a graphics queue, Vulkan 1.1 and the colour and depth formats the "
+                                   "render target needs");
     }
+
+    const Probe& chosen = probes[choice.position];
+    _physicalDevice = devices[choice.position];
+    _deviceProperties = chosen.properties;
+    _graphicsFamily = *chosen.family; // set for every qualifying device
+    _depthFormat = chosen.depthFormat;
+    std::cerr << "Vulkan renderer: using " << _deviceProperties.deviceName << " ("
+              << DeviceTypeName(_deviceProperties.deviceType) << "), chosen by "
+              << (choice.byPreference
+                      ? "the GPU preference " + DescribeGpuPreference(preference) + " (" + preferenceSource + ")"
+                      : std::string("default"))
+              << std::endl;
     return true;
 }
 
@@ -635,6 +809,11 @@ bool VulkanRenderer::CreateLogicalDevice()
                 }
             }
         }
+    }
+    // The swapchain extension only with a surface (PickPhysicalDevice checked the device offers it)
+    if (_surface != VK_NULL_HANDLE)
+    {
+        extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     }
 
     // Wireframe drawing (VK_POLYGON_MODE_LINE) needs fillModeNonSolid, the one optional feature stage B uses: it is
@@ -1149,6 +1328,8 @@ void VulkanRenderer::ShutdownLocked()
     if (_device != VK_NULL_HANDLE)
     {
         vkDeviceWaitIdle(_device);
+        DestroySwapchainLocked(); // the swapchain and its images' semaphores: before the device
+        DestroyPresentResources(); // the present slots' semaphores and fences (their command buffers go with the pool)
         DestroyDrawResources(); // pipelines, layouts, pools, rings, default textures: before the allocator and the render pass
         DestroyAllResources(); // meshes, textures, samplers and everything retired: before the allocator that made them
         DestroyTargets();
@@ -1173,6 +1354,7 @@ void VulkanRenderer::ShutdownLocked()
     }
     if (_instance != VK_NULL_HANDLE)
     {
+        DestroySurfaceLocked(); // after the device, before the instance that made it
         if (_debugMessenger != VK_NULL_HANDLE)
         {
             const auto destroy = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
@@ -1186,6 +1368,10 @@ void VulkanRenderer::ShutdownLocked()
     }
 
     _draw = std::make_unique<DrawState>(); // materials and the rest of the CPU-side state go with the device
+    _swapchain = std::make_unique<SwapchainState>();
+    _surface = VK_NULL_HANDLE;
+    _window = nullptr;
+    _gpus.clear();
     _debugMessenger = VK_NULL_HANDLE;
     _instance = VK_NULL_HANDLE;
     _physicalDevice = VK_NULL_HANDLE;
@@ -1345,24 +1531,10 @@ void VulkanRenderer::EndFrame()
         return;
     }
     _currentFrame = (_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+    _swapchain->frameToPresent = true; // with a window, the next Present blits this frame
 }
 
-void VulkanRenderer::Present()
-{
-    // No swapchain yet (stage F of #43): a frame is only ever read back, so there is nothing to present. Say so once per
-    // renderer (windowed or not), because with a window the user would otherwise just see it stay blank
-    {
-        std::lock_guard lock(_mutex);
-        if (_warnedWindow)
-        {
-            return;
-        }
-        _warnedWindow = true;
-    }
-    std::cerr << "Vulkan renderer: Vulkan swapchain/present is not implemented yet (stage F): frames render offscreen "
-                 "and the window stays blank"
-              << std::endl;
-}
+// Present (stage F) is in VulkanSwapchain.cpp
 
 void VulkanRenderer::ReadFramebuffer(std::uint8_t* buffer, int width, int height) const
 {
@@ -1464,6 +1636,10 @@ void VulkanRenderer::ReadFramebuffer(std::uint8_t* buffer, int width, int height
 void VulkanRenderer::Resize(uint32_t width, uint32_t height)
 {
     std::lock_guard lock(_mutex);
+    if (_surface != VK_NULL_HANDLE)
+    {
+        _swapchain->recreatePending = true; // the next Present makes a swapchain for the window's new size
+    }
     if (width == 0 || height == 0)
     {
         return; // a minimised window
@@ -1483,6 +1659,14 @@ void VulkanRenderer::Resize(uint32_t width, uint32_t height)
 
 void VulkanRenderer::OnResize(int width, int height)
 {
+    {
+        // Also 0x0 (a minimised window): the next Present then skips, and recreates once the size is back
+        std::lock_guard lock(_mutex);
+        if (_surface != VK_NULL_HANDLE)
+        {
+            _swapchain->recreatePending = true;
+        }
+    }
     if (width > 0 && height > 0)
     {
         Resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
@@ -1510,24 +1694,61 @@ bool VulkanRenderer::SetRenderTargetSize(uint32_t width, uint32_t height)
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Stubs: stages D-F of #43. Each fails loudly (a log, once) and cleanly (nothing), never crashes.
-// (Meshes and textures, stage A, are in VulkanResources.cpp; shaders, materials, draws and scene lighting, stages B and C,
-// in VulkanDraw.cpp.)
+// GPU selection (stage F). The choice itself is PickPhysicalDevice's, through ChooseDevice (VulkanChoice.cpp)
 // ---------------------------------------------------------------------------------------------------------------------
+
+void VulkanRenderer::SetGpuPreference(const std::string& preference)
+{
+    std::lock_guard lock(_mutex);
+    if (preference.empty())
+    {
+        _gpuPreference.reset();
+    }
+    else
+    {
+        _gpuPreference = preference;
+    }
+}
 
 std::vector<GPUInfo> VulkanRenderer::GetCompatibleGPUs()
 {
-    return {}; // stage F
+    std::lock_guard lock(_mutex);
+    return _initialized ? _gpus : std::vector<GPUInfo>{};
 }
 
 bool VulkanRenderer::SelectGPU(VkPhysicalDevice device)
 {
-    static_cast<void>(device);
-    return false; // stage F
+    std::lock_guard lock(_mutex);
+    if (!_initialized || device == VK_NULL_HANDLE)
+    {
+        return false;
+    }
+    if (device == _physicalDevice)
+    {
+        return true;
+    }
+    // Switching the device would invalidate every mesh, texture and material a caller holds: not done in a running renderer
+    std::cerr << "Vulkan renderer: SelectGPU cannot switch the device of a running renderer; call SetGpuPreference with "
+                 "the device's index or name and Initialize again"
+              << std::endl;
+    return false;
 }
 
 VkPhysicalDevice VulkanRenderer::GetRecommendedGPU(const std::vector<GPUInfo>& gpus)
 {
-    static_cast<void>(gpus);
-    return VK_NULL_HANDLE; // stage F
+    // The default rule of ChooseDevice over the listed devices: a supported device qualifies, the rest do not
+    std::vector<DeviceCandidate> candidates(gpus.size());
+    for (std::size_t i = 0; i < gpus.size(); ++i)
+    {
+        DeviceCandidate& candidate = candidates[i];
+        candidate.index = static_cast<uint32_t>(i);
+        candidate.name = gpus[i].name;
+        candidate.type = gpus[i].type;
+        candidate.deviceLocalBytes = gpus[i].vramMB;
+        candidate.apiVersion = VK_API_VERSION_1_1;
+        candidate.hasGraphics = gpus[i].isSupported;
+        candidate.formatsOk = gpus[i].isSupported;
+    }
+    const DeviceChoice choice = ChooseDevice(candidates, false, GpuPreference{});
+    return choice.found ? gpus[choice.position].device : VK_NULL_HANDLE;
 }

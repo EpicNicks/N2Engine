@@ -521,8 +521,23 @@ jobs:
           # device must be a CPU device (lavapipe), so a green run means they executed
           N2_REQUIRE_VULKAN: "1"
           N2_VULKAN_EXPECT_CPU_DEVICE: "1"
+          # lavapipe offers VK_EXT_headless_surface: the Vulkan swapchain tests (VulkanHeadlessSwapchainTest) fail instead of
+          # skipping without it, so they cannot silently stop running here
+          N2_REQUIRE_VULKAN_HEADLESS_SURFACE: "1"
           # Silent OpenAL output device; the runner has no sound card
           ALSOFT_DRIVERS: "null"
+
+      # ctest hides a passing test's output: run the Vulkan swapchain tests again directly, so the swapchain lavapipe's
+      # headless surface gets (format, present modes, image count) appears in this job's log and summary
+      - name: Vulkan swapchain (headless surface)
+        run: |
+          set -o pipefail
+          ./build/bin/renderer_tests --gtest_filter='VulkanHeadlessSwapchainTest.*' | tee vulkan-swapchain.log
+          { echo; echo "${{ github.job }} (Vulkan swapchain on lavapipe's headless surface):"; echo; grep '^\[ vulkan \]' vulkan-swapchain.log | sort -u | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          N2_REQUIRE_VULKAN: "1"
+          N2_VULKAN_EXPECT_CPU_DEVICE: "1"
+          N2_REQUIRE_VULKAN_HEADLESS_SURFACE: "1"
 
       # ctest hides a passing test's output: run the PhysX determinism tests again directly, so their [DETERMINISM] lines
       # (divergence steps, state hashes) appear in this job's log
@@ -722,8 +737,23 @@ jobs:
           # device must be a CPU device (lavapipe), so a green run means they executed
           N2_REQUIRE_VULKAN: "1"
           N2_VULKAN_EXPECT_CPU_DEVICE: "1"
+          # lavapipe offers VK_EXT_headless_surface: the Vulkan swapchain tests (VulkanHeadlessSwapchainTest) fail instead of
+          # skipping without it, so they cannot silently stop running here
+          N2_REQUIRE_VULKAN_HEADLESS_SURFACE: "1"
           # Silent OpenAL output device; the runner has no sound card
           ALSOFT_DRIVERS: "null"
+
+      # ctest hides a passing test's output: run the Vulkan swapchain tests again directly, so the swapchain lavapipe's
+      # headless surface gets (format, present modes, image count) appears in this job's log and summary
+      - name: Vulkan swapchain (headless surface)
+        run: |
+          set -o pipefail
+          ./build/bin/renderer_tests --gtest_filter='VulkanHeadlessSwapchainTest.*' | tee vulkan-swapchain.log
+          { echo; echo "${{ github.job }} (Vulkan swapchain on lavapipe's headless surface):"; echo; grep '^\[ vulkan \]' vulkan-swapchain.log | sort -u | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          N2_REQUIRE_VULKAN: "1"
+          N2_VULKAN_EXPECT_CPU_DEVICE: "1"
+          N2_REQUIRE_VULKAN_HEADLESS_SURFACE: "1"
 
       # The real host, end to end (tests/smoke/editor_host_smoke.py, standard library only): create a project, serve it
       # on the software renderer, and the --exit-on-* flags; then the --tls host, its certificate and key file mode.

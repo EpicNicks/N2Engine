@@ -85,34 +85,33 @@ TEST_F(VulkanTest, ValidationCanaryTheDebugMessengerReallyCountsErrorsAndKeepsTh
     EXPECT_TRUE(R().GetValidationMessages().empty());
 }
 
-TEST_F(VulkanTest, PresentWarnsOncePerRendererThatThereIsNoSwapchainYet)
+TEST_F(VulkanTest, PresentOnAHeadlessRendererIsASilentNoOp)
 {
+    // Stage F of #43 replaced the "swapchain/present is not implemented yet (stage F)" warning: without a window there is
+    // nothing to present, so Present does nothing and says nothing, as the software renderer's headless Present
     VulkanRenderer& renderer = NewRenderer();
     ASSERT_TRUE(renderer.Initialize(nullptr, 4, 4)) << renderer.GetInitMessage();
-
-    const auto countWarnings = [](const std::string& output)
-    {
-        const std::string needle = "swapchain/present is not implemented yet (stage F)";
-        int count = 0;
-        for (std::size_t at = output.find(needle); at != std::string::npos; at = output.find(needle, at + 1))
-        {
-            ++count;
-        }
-        return count;
-    };
+    EXPECT_FALSE(renderer.GetSwapchainInfoForTest().hasSurface) << "the headless path makes no surface";
 
     ::testing::internal::CaptureStderr();
     renderer.Present();
+    ClearTo(renderer, {9, 19, 29, 255});
+    RenderFrame(renderer); // BeginFrame, EndFrame, Present
     renderer.Present();
     renderer.Present();
-    EXPECT_EQ(countWarnings(::testing::internal::GetCapturedStderr()), 1);
+    EXPECT_EQ(::testing::internal::GetCapturedStderr(), "");
+    EXPECT_TRUE(IsSolid(Read(renderer, 4, 4), 4, 4, {9, 19, 29, 255}));
 
-    // A re-initialized renderer is a new one: it warns again, once
+    // A re-initialized renderer is still silent
     ASSERT_TRUE(renderer.Initialize(nullptr, 4, 4)) << renderer.GetInitMessage();
     ::testing::internal::CaptureStderr();
+    RenderFrame(renderer);
     renderer.Present();
-    renderer.Present();
-    EXPECT_EQ(countWarnings(::testing::internal::GetCapturedStderr()), 1);
+    EXPECT_EQ(::testing::internal::GetCapturedStderr(), "");
+    const auto info = renderer.GetSwapchainInfoForTest();
+    EXPECT_FALSE(info.hasSurface);
+    EXPECT_FALSE(info.hasSwapchain);
+    EXPECT_EQ(info.presentCount, 0u);
 }
 
 TEST_P(VulkanSizeTest, ClearColourReadsBackExactlyWhenInitializedAtTheSize)
@@ -485,7 +484,8 @@ TEST_F(VulkanTest, EverythingThatWouldDrawFailsCleanly)
     R().DestroyMesh(nullptr);
     R().DestroyTexture(nullptr);
     R().DestroyMaterial(nullptr);
-    EXPECT_TRUE(R().GetCompatibleGPUs().empty());
+    // Stage F implemented the GPU selection API: after Initialize it lists the devices (VulkanGpuSelectionTests.cpp)
+    EXPECT_FALSE(R().GetCompatibleGPUs().empty());
 
     constexpr float Identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
     R().BeginFrame();
