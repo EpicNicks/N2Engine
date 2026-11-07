@@ -247,6 +247,9 @@ def scenario_own_slot_rejoin(h, project, tokens, tokens_file, watcher_token):
     wait_line(other, r"^spectator-joined tick=\d+ ", 60, "the other spectator's snapshot", other)
     b.end()
     wait_line(a, r"^dropped slot=\d ", 30, "the drop of the killed player's slot", a)
+    # The slot is kept for its own player: the other player, asking every 200 ms, is told so (before the comeback starts,
+    # which can take the slot back within a few tens of milliseconds on loopback)
+    wait_line(other, r"^promotion-refused .*not-ready", 20, "the other player's refusal for the kept slot", other)
     back = h.start_client(port, tokens[1], "rj-b-back", ["--rejoin", "1", "--ticks", "1200"])
     for client, what in ((a, "playing on after the rejoin"), (back, "playing its own slot again"),
                          (watcher, "watching"), (other, "watching")):
