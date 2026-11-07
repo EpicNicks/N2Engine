@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -34,6 +35,12 @@ namespace N2Engine::Network
      *     0x45 From      u8 sender slot, then a bisect request or reply of that slot
      *     0x46 SnapshotRequest  u32 request id: send the relay a serialised snapshot of a confirmed tick (version 2)
      *     0x47 SnapshotPart     the body of a SnapshotData, to the spectator it was asked for (version 2)
+     *     0x48 SlotRejoin u8 slot, u32 fromTick: the mirror of DropSlot (version 3). A dropped slot is live again from
+     *                    that tick: every player applies it, so every peer waits for that slot's real input from then on
+     *     0x49 Promoted  u8 slot, u32 fromTick, u8 droppedMask, then a u32 drop tick for each set bit, lowest slot first
+     *                    (version 3): to the spectator that asked, it plays `slot` from fromTick; the mask names the
+     *                    OTHER slots that are dropped now and from which tick (a spectator never got their DropSlot)
+     *     0x4A PromotionRefused  u8 reason (a RefuseReason): the spectator stays a spectator (version 3)
      *   client to relay (0x60 to 0x7F), reliable
      *     0x60 Join      u16 version, u8 payloadBytes, u64 layoutHash
      *     0x61 To        u8 target slot, then a bisect request or reply for that slot
@@ -42,13 +49,17 @@ namespace N2Engine::Network
      *                    kSpectatorSlot.
      *     0x64 SnapshotData  u32 request id, u32 tick, u32 total bytes, u32 offset, then 1 to kMaxSnapshotPartBytes bytes of
      *                    a SerializeWorldSnapshot result, in order (version 2)
+     *     0x65 Promote   u8 slot (or kSpectatorSlot: any dropped slot): a spectator asks to play a dropped slot
+     *                    (version 3)
      *
      * Every decoder checks its lengths against the bytes present and its caps before it takes anything, refuses trailing
      * bytes, and allocates nothing a count asks for. The wire version of this protocol is separate from the world
      * protocol's kWireVersion: a lockstep session does not speak the world protocol at all. Version 2 (netcode C5/C6)
-     * added the spectator and snapshot messages and the NoSnapshot refusal; a version 1 client is refused at its Join.
+     * added the spectator and snapshot messages and the NoSnapshot refusal. Version 3 (the first C5 follow-up, player
+     * join after the start) added spectator-to-player promotion: Promote, Promoted, PromotionRefused, SlotRejoin and the
+     * NotAllowed and NotReady reasons. A client of another version is refused at its Join or Spectate.
      */
-    inline constexpr std::uint16_t kLockstepWireVersion = 2;
+    inline constexpr std::uint16_t kLockstepWireVersion = 3;
     /// The slot of a spectator's Welcome: it owns no slot and sends no input
     inline constexpr std::uint8_t kSpectatorSlot = 0xFF;
     /// The most snapshot bytes one SnapshotData or SnapshotPart carries (the message less its 17-byte head, with room)
@@ -71,11 +82,15 @@ namespace N2Engine::Network
         From = 0x45,
         SnapshotRequest = 0x46,
         SnapshotPart = 0x47,
+        SlotRejoin = 0x48,
+        Promoted = 0x49,
+        PromotionRefused = 0x4A,
         Join = 0x60,
         To = 0x61,
         Pause = 0x62,
         Spectate = 0x63,
         SnapshotData = 0x64,
+        Promote = 0x65,
     };
 
     enum class RefuseReason : std::uint8_t
@@ -91,6 +106,11 @@ namespace N2Engine::Network
         Protocol = 5,
         /// A spectator could not be given a snapshot (no player sent one in time, the source left, it was too large)
         NoSnapshot = 6,
+        /// A promotion: the relay does not promote spectators (LockstepRelayOptions::allowPromotion)
+        NotAllowed = 7,
+        /// A promotion: not now (the spectator is not in step yet or too far behind, or no join tick could be placed);
+        /// it may ask again
+        NotReady = 8,
     };
 
     enum class DropReason : std::uint8_t
@@ -150,6 +170,23 @@ namespace N2Engine::Network
         DropReason reason = DropReason::Stalled;
     };
 
+    /// SlotRejoin: the dropped slot is live again from fromTick
+    struct SlotRejoinMessage
+    {
+        std::uint8_t slot = 0;
+        std::uint32_t fromTick = 0;
+    };
+
+    /// Promoted: the spectator plays `slot` from fromTick; the other slots dropped now, with their drop ticks
+    struct PromotedMessage
+    {
+        std::uint8_t slot = 0;
+        std::uint32_t fromTick = 0;
+        /// Bit s: slot s is dropped from dropTicks[s] (never the promoted slot's own bit)
+        std::uint8_t droppedMask = 0;
+        std::array<std::uint32_t, kMaxRelaySlots> dropTicks{};
+    };
+
     struct StopMessage
     {
         StopReason reason = StopReason::Desync;
@@ -191,6 +228,12 @@ namespace N2Engine::Network
     [[nodiscard]] std::vector<std::uint8_t> EncodeStart();
     [[nodiscard]] std::vector<std::uint8_t> EncodeRefuse(RefuseReason reason);
     [[nodiscard]] std::vector<std::uint8_t> EncodePause(bool paused);
+    /// Promote: `slot` below kMaxRelaySlots, or kSpectatorSlot for any dropped slot
+    [[nodiscard]] std::vector<std::uint8_t> EncodePromote(std::uint8_t slot);
+    [[nodiscard]] std::vector<std::uint8_t> Encode(const SlotRejoinMessage &message);
+    /// Only the mask's slots' drop ticks are written
+    [[nodiscard]] std::vector<std::uint8_t> Encode(const PromotedMessage &message);
+    [[nodiscard]] std::vector<std::uint8_t> EncodePromotionRefused(RefuseReason reason);
     /// Type byte, slot, inner. Empty when the result would be over kLockstepMaxMessageBytes or `inner` is empty.
     [[nodiscard]] std::vector<std::uint8_t> EncodeForward(RelayMessage type, std::uint8_t slot,
                                                           std::span<const std::uint8_t> inner);
@@ -210,6 +253,12 @@ namespace N2Engine::Network
     [[nodiscard]] std::optional<RefuseReason> DecodeRefuse(std::span<const std::uint8_t> bytes) noexcept;
     /// The paused flag of a Pause message
     [[nodiscard]] std::optional<bool> DecodePause(std::span<const std::uint8_t> bytes) noexcept;
+    /// The slot a Promote asks for: below kMaxRelaySlots, or kSpectatorSlot
+    [[nodiscard]] std::optional<std::uint8_t> DecodePromote(std::span<const std::uint8_t> bytes) noexcept;
+    [[nodiscard]] std::optional<SlotRejoinMessage> DecodeSlotRejoin(std::span<const std::uint8_t> bytes) noexcept;
+    /// The mask holds slots below kMaxRelaySlots only and never `slot`; one drop tick per set bit, nothing more
+    [[nodiscard]] std::optional<PromotedMessage> DecodePromoted(std::span<const std::uint8_t> bytes) noexcept;
+    [[nodiscard]] std::optional<RefuseReason> DecodePromotionRefused(std::span<const std::uint8_t> bytes) noexcept;
     /// To or From (`type` says which): the slot and a view of the inner message, which must be a bisect request (To and
     /// From) or reply, kind 3 or 4, of at most kMaxBisectReplySize bytes
     [[nodiscard]] std::optional<ForwardedMessage> DecodeForward(RelayMessage type, std::span<const std::uint8_t> bytes) noexcept;

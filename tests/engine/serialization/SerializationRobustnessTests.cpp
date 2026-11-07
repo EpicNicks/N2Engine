@@ -534,10 +534,12 @@ TEST(SceneDepthTest, JsonScannerCountsNestingOutsideStringsOnly)
     EXPECT_FALSE(JsonLimits::NestsDeeperThan("[[[[1]]]]", 4));
     EXPECT_TRUE(JsonLimits::NestsDeeperThan("[[[[[1]]]]]", 4));
     // brackets, braces and escaped quotes inside strings do not count, and an escaped quote does not end the string
-    // (named locals, not raw strings inside the macro arguments: MSVC 14.44 mis-lexes a raw string holding \" inside
-    // a macro argument list, error C2017)
-    const std::string escapedQuoteInString = R"({"a":"[[[[[[\"[[{{","b":[1]})";
-    const std::string escapedBackslashThenBrackets = R"(["\\", "[[[[", {"k":"}}}}"}])";
+    // (ordinary escaped literals, not raw strings: MSVC 14.44 mis-lexes a raw string that holds a backslash before a
+    // quote, error C2017, even outside a macro argument list)
+    // The text {"a":"[[[[[[ backslash quote [[{{","b":[1]}
+    const std::string escapedQuoteInString = "{\"a\":\"[[[[[[\\\"[[{{\",\"b\":[1]}";
+    // The text [" backslash backslash ", "[[[[", {"k":"}}}}"}]
+    const std::string escapedBackslashThenBrackets = "[\"\\\\\", \"[[[[\", {\"k\":\"}}}}\"}]";
     EXPECT_FALSE(JsonLimits::NestsDeeperThan(escapedQuoteInString, 2));
     EXPECT_FALSE(JsonLimits::NestsDeeperThan(escapedBackslashThenBrackets, 2));
     // nesting through component data counts as much as nesting through children

@@ -73,6 +73,13 @@ namespace N2Engine::Network
         /// A spectator whose snapshot has not begun to arrive this long after it was asked for, or has not arrived whole
         /// twice that long after, is refused (NoSnapshot)
         std::uint64_t snapshotTimeoutMicros = 10'000'000;
+        /// Spectator-to-player promotion (lockstep wire version 3, Promote): a spectator that runs in step may take a
+        /// dropped slot. Off by default: the relay does not see a join token's role, so any spectator could take a slot.
+        bool allowPromotion = false;
+        /// How far ahead of what the relay knows of every player the join tick of a promotion is placed, so that every
+        /// player hears the SlotRejoin before it reaches that tick (a player that is already past it fails). Turned into
+        /// ticks at the session's tick rate, at least 1 tick.
+        std::uint64_t promotionLeadMicros = 1'000'000;
     };
 
     /// Confirmed ticks of every slot's input (dropped slots synthesised) the relay keeps for spectators: a spectator's
@@ -117,6 +124,9 @@ namespace N2Engine::Network
         /// Snapshots passed whole from a player to a spectator
         std::uint64_t snapshotsRelayed = 0;
         std::uint64_t snapshotRequests = 0;
+        /// Spectators seated in a dropped slot (Promote)
+        std::uint64_t promotions = 0;
+        std::uint64_t promotionsRefused = 0;
     };
 
     /// What the relay tells its observer (a host that logs)
@@ -137,6 +147,10 @@ namespace N2Engine::Network
             Spectating,
             /// A spectator's snapshot arrived whole; `tick` is its tick
             SnapshotRelayed,
+            /// A spectator was seated in `slot`, live from `tick` (SlotRejoin)
+            Promoted,
+            /// A spectator's Promote was refused; `text` is why
+            PromotionRefused,
         };
 
         Type type = Type::Joined;
@@ -178,6 +192,17 @@ namespace N2Engine::Network
      * included, so a spectator needs no DropSlot), and its ack-only bundles move it on. If the source leaves before the
      * snapshot is whole the request goes to another player. Bounded by maxSpectators, maxSnapshotBytes and
      * snapshotTimeoutMicros; a spectator gets the Stop too.
+     *
+     * Promotion (wire version 3, allowPromotion). A spectator whose snapshot was passed whole may send Promote to take a
+     * dropped slot (a named one or the lowest). The relay refuses (PromotionRefused, the spectator stays one) unless the
+     * slot is dropped, the spectator's acknowledged tick is at or past the slot's drop tick and still inside the input
+     * window the relay keeps for players. It places the join tick T past the furthest tick it knows any player to have
+     * reached or sent (its confirmed tick, every live slot's next needed tick, every player's ack) by the input delay
+     * plus promotionLeadMicros, runs RejoinSlot(slot, T) on its scheduler, seats the spectator in the slot, sends it
+     * Promoted (with every other dropped slot and its drop tick, which a spectator never got) and broadcasts
+     * SlotRejoin(slot, T) to the players. From then on the peer is a player: it is sent the other slots' frames like any
+     * player, its frames from T on are waited for, and a stall or a leave drops the slot again (a drop at T itself
+     * undoes the rejoin).
      *
      * Single-threaded; call Update every pass with a monotonic microsecond clock. After a session ends (every client
      * gone, or the linger over) the relay is back in the Lobby for the next one.
@@ -255,6 +280,9 @@ namespace N2Engine::Network
             std::uint32_t snapshotForwarded = 0;
             bool snapshotDone = false;
             std::deque<std::vector<std::uint8_t>> snapshotQueue;
+            /// A promoted spectator: its spectator acks (slot 0, no frames) that were still in flight, or arrive late,
+            /// are taken as acks, not as a bundle for another slot
+            bool promoted = false;
         };
 
         struct HistoryTick
@@ -285,6 +313,8 @@ namespace N2Engine::Network
         void OnPause(Peer &peer, std::span<const std::uint8_t> message);
         void OnSpectate(Peer &peer, std::span<const std::uint8_t> message);
         void OnSnapshotData(Peer &peer, std::span<const std::uint8_t> message);
+        void OnPromote(Peer &peer, std::span<const std::uint8_t> message);
+        void RefusePromotion(Peer &peer, RefuseReason reason, const std::string &why);
         void RefusePeer(Peer &peer, RefuseReason reason, const std::string &why);
         /// Asks for snapshots, times them out, passes their parts on
         void ServeSpectators();

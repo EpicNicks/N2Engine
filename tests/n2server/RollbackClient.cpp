@@ -15,6 +15,10 @@
 //   spectator-joined tick=<t> snapshotBytes=<n>                   a spectator took its snapshot and starts at tick t
 //   snapshot-sent tick=<t>                                        a player sent its snapshot whole to the relay
 //   dropped slot=<s> from=<t> reason=<text>
+//   rejoined slot=<s> from=<t>                                    a dropped slot is live again (a spectator was promoted)
+//   promoted slot=<s> from=<t>                                    this spectator now plays slot s; its input runs from t
+//   promotion-refused <text>                                      the relay refused this spectator's promotion (it asks
+//                                                                 again every 200 ms, at most 100 times)
 //   stopped reason=<text> tick=<t>
 //   rollback-stats window=<w> rollbacks=<n> resimulated=<n> mispredictions=<n> predicted=<n> deepest=<n> snapshots=<n> ran=<n>
 //                                 at the end of a player's run (not for a spectator or a client killed from outside)
@@ -25,7 +29,11 @@
 //   n2server_rollback_client --port <n> --layout-file <json> [--host <ip>] [--protocol-id <n>] [--scene <name>] [--seed <n>]
 //       [--ticks <n>] [--rollback-window <0..15>] [--spectate <0|1>] [--mispredict <0|1>] [--hitch-every <ticks>]
 //       [--hitch-ms <n>] [--snapshot-pad-kb <n>] [--stall-at-tick <t>] [--report <path>] [--replay-out <path>]
-//       [--max-ms <n>] [--peer-name <text>]
+//       [--max-ms <n>] [--peer-name <text>] [--promote-at-tick <t>]
+//
+// --promote-at-tick <t> (a spectator): once it has run to tick t it asks the relay to play a dropped slot (lockstep wire
+// version 3, Promote; the relay must allow it). Promoted, it plays that slot as a LOCKSTEP player and prints every
+// checkpoint hash it runs, as a spectator does (every tick it runs is confirmed).
 //
 // The join token is the first line of stdin. The injected misprediction has two parts, because on loopback every remote
 // input normally arrives before its tick, so nothing would ever be guessed: --hitch-every <t> with --hitch-ms <m> makes the
@@ -86,6 +94,7 @@ namespace
         std::string replayOut;
         int maxMs = 90000;
         std::string peerName = "client";
+        long long promoteAtTick = -1;
     };
 
     void Say(const std::string &line)
@@ -124,11 +133,12 @@ namespace
             else if (key == "--replay-out") a.replayOut = value;
             else if (key == "--max-ms") a.maxMs = std::atoi(value.c_str());
             else if (key == "--peer-name") a.peerName = value;
+            else if (key == "--promote-at-tick") a.promoteAtTick = std::atoll(value.c_str());
             else return std::nullopt;
         }
         if (a.port <= 0 || a.port > 65535 || a.layoutFile.empty() || a.rollbackWindow < 0 ||
             a.rollbackWindow > static_cast<int>(Network::kMaxRollbackWindow) || a.hitchEvery < 0 || a.hitchMs < 0 ||
-            a.snapshotPadKb < 0 || a.snapshotPadKb > 8192)
+            a.snapshotPadKb < 0 || a.snapshotPadKb > 8192 || (a.promoteAtTick >= 0 && !a.spectate))
         {
             return std::nullopt;
         }
@@ -278,9 +288,11 @@ namespace
                 std::fprintf(stderr, "scene step: %s\n", stepError.c_str());
                 return false;
             }
-            // A spectator reports no roots, so it prints the checkpoint it has just run (a spectator never rolls back)
+            // Without a rollback session (a spectator, or a promoted spectator, which plays lockstep) every tick run is
+            // confirmed, so it prints the checkpoint it has just run
             const std::uint32_t done = inputs.tick + 1;
-            if (args.spectate && runtimePtr != nullptr && runtimePtr->HashInterval() != 0 && done % runtimePtr->HashInterval() == 0)
+            if (runtimePtr != nullptr && runtimePtr->Session() == nullptr && runtimePtr->HashInterval() != 0 &&
+                done % runtimePtr->HashInterval() == 0)
             {
                 Say("hash tick=" + std::to_string(done) + " " + Replay::FormatHash(simulation->Hash()));
             }
@@ -414,6 +426,15 @@ namespace
             case Type::SnapshotSent:
                 Say("snapshot-sent tick=" + std::to_string(event.tick));
                 break;
+            case Type::SlotRejoined:
+                Say("rejoined slot=" + std::to_string(event.slot) + " from=" + std::to_string(event.tick));
+                break;
+            case Type::Promoted:
+                Say("promoted slot=" + std::to_string(event.slot) + " from=" + std::to_string(event.tick));
+                break;
+            case Type::PromotionRefused:
+                Say("promotion-refused " + event.text);
+                break;
             }
         };
 
@@ -423,6 +444,8 @@ namespace
         auto last = start;
         bool done = false;
         long long nextHitch = args.hitchEvery;
+        int promoteAttempts = 0;
+        long long nextPromoteAt = 0;
         const auto printStats = [&]
         {
             if (const Network::RollbackSession *session = runtime.Session())
@@ -453,6 +476,15 @@ namespace
                 // A hung process: nothing is read or sent until the harness kills it
                 std::this_thread::sleep_for(std::chrono::milliseconds(args.maxMs));
                 return 1;
+            }
+            if (args.promoteAtTick >= 0 && runtime.IsSpectator() && runtime.State() == Network::LockstepState::Running &&
+                !runtime.PromotionPending() && promoteAttempts < 100 &&
+                runtime.TicksRun() >= static_cast<std::uint32_t>(args.promoteAtTick) && micros >= nextPromoteAt)
+            {
+                // Asked again every 200 ms: the slot may not be dropped yet, or the spectator not caught up
+                ++promoteAttempts;
+                nextPromoteAt = micros + 200'000;
+                (void)runtime.RequestPromotion();
             }
             if (args.hitchEvery > 0 && args.hitchMs > 0 && runtime.State() == Network::LockstepState::Running &&
                 static_cast<long long>(runtime.TicksRun()) >= nextHitch)
@@ -509,7 +541,8 @@ int main(int argc, char *argv[])
         std::fprintf(stderr, "usage: n2server_rollback_client --port <n> --layout-file <json> [--host ip] [--protocol-id n] "
                              "[--scene name] [--seed n] [--ticks n] [--rollback-window 0..15] [--spectate 0|1] [--mispredict 0|1] "
                              "[--hitch-every ticks] [--hitch-ms n] [--snapshot-pad-kb n] [--stall-at-tick t] [--report path] "
-                             "[--replay-out path] [--max-ms n] [--peer-name text]   (the token is the first line of stdin)\n");
+                             "[--replay-out path] [--max-ms n] [--peer-name text] [--promote-at-tick t]   (the token is the "
+                             "first line of stdin)\n");
         return 2;
     }
     std::string token;

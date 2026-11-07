@@ -225,6 +225,94 @@ TEST(LockstepScheduler, DroppedSlotIsNeutralOrHoldsItsLastInput)
     }
 }
 
+TEST(LockstepScheduler, ARejoinedSlotIsSynthesisedBetweenItsDropAndItsRejoinThenWaitedForAgain)
+{
+    for (const DropFill fill : {DropFill::Neutral, DropFill::HoldLast})
+    {
+        LockstepConfig config = Config(2, 0);
+        config.dropFill = fill;
+        LockstepScheduler scheduler(config);
+        TickInputs out;
+        scheduler.Submit(0, 0, In(1));
+        scheduler.Submit(1, 0, In(7));
+        ASSERT_EQ(scheduler.TryAdvance(out), AdvanceStatus::Runnable);
+
+        EXPECT_FALSE(scheduler.RejoinSlot(1, 3)) << "a slot that is not dropped";
+        ASSERT_TRUE(scheduler.DropSlot(1, 1));
+        EXPECT_TRUE(scheduler.IsDroppedForGood(1));
+        EXPECT_FALSE(scheduler.RejoinSlot(1, 0)) << "not in the past";
+        EXPECT_FALSE(scheduler.RejoinSlot(5, 3));
+        ASSERT_TRUE(scheduler.RejoinSlot(1, 3));
+        EXPECT_FALSE(scheduler.RejoinSlot(1, 4)) << "it is live again already";
+        EXPECT_FALSE(scheduler.IsDroppedForGood(1));
+        EXPECT_TRUE(scheduler.IsDropped(1, 1));
+        EXPECT_TRUE(scheduler.IsDropped(1, 2));
+        EXPECT_FALSE(scheduler.IsDropped(1, 3));
+        EXPECT_EQ(scheduler.NextNeeded(1), 3u) << "the dropped ticks need nothing";
+        EXPECT_EQ(scheduler.Submit(1, 2, In(5)), SubmitResult::SlotDropped);
+
+        // Ticks 1 and 2 run without slot 1, synthesised as for any drop
+        scheduler.Submit(0, 1, In(2));
+        ASSERT_EQ(scheduler.TryAdvance(out), AdvanceStatus::Runnable);
+        EXPECT_EQ(out.inputs[1], fill == DropFill::Neutral ? Neutral() : In(7));
+        scheduler.Submit(0, 2, In(3));
+        ASSERT_EQ(scheduler.TryAdvance(out), AdvanceStatus::Runnable);
+        EXPECT_EQ(out.inputs[1], fill == DropFill::Neutral ? Neutral() : In(7));
+
+        // Tick 3 waits for slot 1 again
+        scheduler.Submit(0, 3, In(3));
+        EXPECT_EQ(scheduler.TryAdvance(out), AdvanceStatus::Waiting);
+        EXPECT_EQ(scheduler.MissingSlots(), 0b10u);
+        EXPECT_EQ(scheduler.Submit(1, 3, In(4)), SubmitResult::Accepted);
+        ASSERT_EQ(scheduler.TryAdvance(out), AdvanceStatus::Runnable);
+        EXPECT_EQ(out.tick, 3u);
+        EXPECT_EQ(out.inputs[1], In(4));
+        EXPECT_FALSE(scheduler.IsDropped(1, 4));
+
+        // Dropped again; a rejoin at the very tick of a drop undoes it, and so does a drop at the tick of a rejoin
+        EXPECT_FALSE(scheduler.DropSlot(1, 3)) << "not in the past";
+        ASSERT_TRUE(scheduler.DropSlot(1, 6));
+        EXPECT_FALSE(scheduler.DropSlot(1, 7)) << "once";
+        ASSERT_TRUE(scheduler.RejoinSlot(1, 6));
+        EXPECT_FALSE(scheduler.IsDropped(1, 6));
+        ASSERT_TRUE(scheduler.DropSlot(1, 6));
+        EXPECT_TRUE(scheduler.IsDropped(1, 6));
+        EXPECT_TRUE(scheduler.IsDroppedForGood(1));
+        EXPECT_FALSE(scheduler.IsDropped(1, 5));
+    }
+}
+
+TEST(LockstepScheduler, ARejoinedLocalSlotSubmitsFromItsRejoinTickAndBundlesSkipTheDroppedTicks)
+{
+    LockstepScheduler local(Config(1, 0));
+    ASSERT_TRUE(local.DropSlot(0, 0));
+    ASSERT_TRUE(local.RejoinSlot(0, 4));
+    std::uint32_t assigned = 0;
+    ASSERT_EQ(local.SubmitLocal(0, In(9), assigned), SubmitResult::Accepted);
+    EXPECT_EQ(assigned, 4u) << "the local input starts at the rejoin tick";
+    TickInputs out;
+    for (std::uint32_t tick = 0; tick < 5; ++tick)
+    {
+        ASSERT_EQ(local.TryAdvance(out), AdvanceStatus::Runnable) << tick;
+    }
+    EXPECT_EQ(out.inputs[0], In(9));
+
+    // A bundle for a peer that is still before the rejoin tick starts at it: nobody sends the dropped ticks
+    LockstepScheduler relay(Config(2, 0));
+    ASSERT_TRUE(relay.DropSlot(1, 0));
+    ASSERT_TRUE(relay.RejoinSlot(1, 3));
+    ASSERT_EQ(relay.Submit(1, 3, In(6)), SubmitResult::Accepted);
+    ASSERT_EQ(relay.Submit(1, 4, In(8)), SubmitResult::Accepted);
+    const InputBundle bundle = BuildBundleFor(relay, 1, 0);
+    EXPECT_EQ(bundle.firstTick, 3u);
+    ASSERT_EQ(bundle.frames.size(), 2u);
+    EXPECT_EQ(bundle.frames[0], In(6));
+    EXPECT_EQ(bundle.frames[1], In(8));
+    // A slot dropped for good has nothing to send
+    ASSERT_TRUE(relay.DropSlot(1, 5));
+    EXPECT_EQ(BuildBundleFor(relay, 1, 5).frames.size(), 0u);
+}
+
 TEST(LockstepScheduler, TicksWrapModulo2To32)
 {
     LockstepConfig config = Config(2, 2);
