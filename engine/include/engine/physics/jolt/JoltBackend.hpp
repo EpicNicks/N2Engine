@@ -108,6 +108,9 @@ namespace N2Engine::Physics
         [[nodiscard]] PhysicsFeatureSet GetImplementedFeatures() const override { return kImplementedFeatures; }
         /// "jolt"
         [[nodiscard]] std::string_view BackendId() const override { return "jolt"; }
+        /// Jolt's body manager (PhysicsSystem::GetBodyStats, which walks the bodies under its lock): every rigid body, the
+        /// static ones, and the active dynamic and kinematic ones. Empty before Initialize.
+        [[nodiscard]] std::optional<PhysicsStats> GetStats() const override;
 
         bool Initialize() override;
         void Update(float deltaTime) override;

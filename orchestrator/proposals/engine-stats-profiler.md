@@ -1,6 +1,6 @@
 # Proposal: host stats (EN5) for the Profiler panel (FE-S5)
 
-Status: design only, no code. Written against engine master at 448b06e5 (editor protocol **1.26.0**) and frontend master at 4a8e91c. Tags: [V] verified in the tree at those commits, [M] from memory or general knowledge, not checked here, [E] estimate. `[FE]` marks a path in the frontend repo (N2Engine-Electron-Frontend); other paths are in N2Engine. Protocol: this proposal takes the next free minor, working number **1.27.0**; `prefab-overrides.md` (EN4) takes 1.28.0. Renumber if the merge order flips.
+Status: design only, no code. Written against engine master at 448b06e5 (editor protocol **1.26.0**) and frontend master at 4a8e91c. Tags: [V] verified in the tree at those commits, [M] from memory or general knowledge, not checked here, [E] estimate. `[FE]` marks a path in the frontend repo (N2Engine-Electron-Frontend); other paths are in N2Engine. Protocol: this proposal takes the next free minor, **1.28.0** (1.27.0 went to the PickResult normal, #297); `prefab-overrides.md` (EN4) then takes the next free minor.
 
 Roadmap: `electron-ui-roadmap.md` section 14 ("Later (EN5): `GetEngineStats` ...") and the table rows EN5 (L, "after WebGPU G2+ settled") and FE-S5 (Profiler panel, M). CONTINUE.md queue item 6 says the WebGPU stages are settled, so the dependency is met.
 
@@ -65,7 +65,7 @@ Cost: two integer adds per draw.
 - **Process**: `workingSetBytes` / `peakWorkingSetBytes` from a small platform function (`GetProcessMemoryInfo` on Windows, `/proc/self/statm` on Linux, the wasm heap size under Emscripten [M]); absent where unsupported.
 - **Host**: renderer name, whether stats are enabled, the play state (Edit/Playing/Paused), the time scale.
 
-## 4. Protocol (1.27.0, working number)
+## 4. Protocol (1.28.0)
 
 Hello capability `engineStats`.
 
@@ -120,7 +120,7 @@ Engine size **L** [E ~1200-1500 lines with tests and docs; most of it the four b
 
 - `FrameStats` unit tests: sections nest and sum, the ring wraps at 240, `sinceFrame` returns exactly the newer records, disabled records nothing, re-enabling starts clean.
 - Renderer: the software renderer's counters for a known draw list (N `DrawMesh` calls of known meshes give N draws and the right triangles; an `IndexRange` counts its range; `DrawObjects` counts each); counters reset at `BeginFrame` and publish at `EndFrame`; the reorder in the software backend does not change counts. OpenGL, Vulkan and WebGPU: the same test where CI has the backend (OpenGL headless legs; Vulkan and WebGPU where their jobs run), otherwise a record-path test; a fake renderer reports `counters: false`.
-- Host (`tests/editor-server`, next to `EngineHealthProtocolTests.cpp`): `GetEngineStats` on an edit host (no frames, scene counts right); on a play host after `Step(5)` exactly five records with increasing `frame`; `sinceFrame` semantics over the wire; a `RenderFrame` fills `render` and `renderRequestMs`/`readbackMs`; a viewer may call it; it never logs (the polled-command test); timers switch off after the idle timeout (with an injected clock); protocol golden, test vectors and generated clients at 1.27.0; Hello capability.
+- Host (`tests/editor-server`, next to `EngineHealthProtocolTests.cpp`): `GetEngineStats` on an edit host (no frames, scene counts right); on a play host after `Step(5)` exactly five records with increasing `frame`; `sinceFrame` semantics over the wire; a `RenderFrame` fills `render` and `renderRequestMs`/`readbackMs`; a viewer may call it; it never logs (the polled-command test); timers switch off after the idle timeout (with an injected clock); protocol golden, test vectors and generated clients at 1.28.0; Hello capability.
 - Determinism: the cross-leg state hash job and the lockstep/rollback tests unchanged with timers on (run one with timers forced on).
 - Docs in the same PR (project rule): `docs/editor.html` (stats command and the Profiler), `docs/application.html` (the frame sections), protocol.json.
 
@@ -134,7 +134,7 @@ Engine size **L** [E ~1200-1500 lines with tests and docs; most of it the four b
 
 ## 9. PR order
 
-1. Engine + protocol 1.27.0: `FrameStats` and sections in `Application::Tick` and the play host, render counters in the four backends, `IPhysicsBackend::GetStats` for PhysX and Jolt, process memory, `GetEngineStats`, docs, tests.
+1. Engine + protocol 1.28.0: `FrameStats` and sections in `Application::Tick` and the play host, render counters in the four backends, `IPhysicsBackend::GetStats` for PhysX and Jolt, process memory, `GetEngineStats`, docs, tests.
 2. Frontend FE-S5: protocol sync, Profiler panel.
 3. Docs-only ledger and MCP entries.
 
@@ -143,4 +143,4 @@ Engine size **L** [E ~1200-1500 lines with tests and docs; most of it the four b
 1. **Poll or push**: `GetEngineStats {sinceFrame}` polled at 4 Hz by the panel, over a pushed stats event. Recommendation: poll.
 2. **Per-frame history on the host**: a 240-frame ring returned incrementally (every frame reaches the graph), over aggregates only. Recommendation: the ring.
 3. **GPU timings**: not in v1 (CPU-side sections only); add timer queries per backend later if a GPU-bound case needs them. Recommendation: later.
-4. **Protocol number**: 1.27.0, before EN4 overrides (1.28.0). Recommendation: confirm; renumber if EN4 lands first.
+4. **Protocol number**: 1.28.0 (1.27.0 was taken by #297), before EN4 overrides. Decided at implementation.

@@ -11,7 +11,7 @@ namespace N2Engine::Editor
 {
     /// The version of protocol.json this server implements (ProtocolSpecTest pins the two equal). Hello compares the
     /// client's with it: the same major version is compatible, whatever the minor and patch versions.
-    inline constexpr std::string_view ProtocolVersion = "1.27.0";
+    inline constexpr std::string_view ProtocolVersion = "1.28.0";
 
     struct ProtocolVersionNumber
     {
@@ -118,6 +118,8 @@ namespace N2Engine::Editor
         SetNetworkSettings = 0x52,
         GetNetworkValidation = 0x53,
         GetEngineHealth = 0x50,
+        // Host stats for the Profiler (since 1.28.0)
+        GetEngineStats = 0x54,
         GetComponentTypes = 0x60,
         AddComponent = 0x61,
         RemoveComponent = 0x62,
@@ -190,6 +192,7 @@ namespace N2Engine::Editor
         NetworkSettings = 0x24,
         NetworkValidation = 0x25,
         PrefabStageInfo = 0x26,
+        EngineStats = 0x27,
         AssetList = 0xA0,
         AssetDetail = 0xA1,
         TextData = 0xA2,

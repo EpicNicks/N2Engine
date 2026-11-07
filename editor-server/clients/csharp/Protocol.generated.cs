@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.27.0";
+        public const string ProtocolVersion = "1.28.0";
     }
 
     public enum CommandType : byte
@@ -105,6 +105,7 @@ namespace N2Engine.Editor.Protocol
         SavePrefabStage = 0x2C,
         ClosePrefabStage = 0x2D,
         GetPrefabStage = 0x2E,
+        GetEngineStats = 0x54,
     }
 
     public enum ResponseType : byte
@@ -156,6 +157,7 @@ namespace N2Engine.Editor.Protocol
         NetworkValidation = 0x25,
         AssetsMoved = 0xA5,
         PrefabStageInfo = 0x26,
+        EngineStats = 0x27,
     }
 
     public struct Vec3
@@ -922,6 +924,148 @@ namespace N2Engine.Editor.Protocol
         public AudioPeak[]? Peaks { get; set; }
     }
 
+    public class EngineStatsHost
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("kind")]
+        public string Kind { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("state")]
+        public string State { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("renderer")]
+        public string? Renderer { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("timersEnabled")]
+        public bool TimersEnabled { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("timeScale")]
+        public double TimeScale { get; set; }
+    }
+
+    public class EngineFrameRecord
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("frame")]
+        public double Frame { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("intervalMs")]
+        public double IntervalMs { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("tickMs")]
+        public double TickMs { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("fixedMs")]
+        public double FixedMs { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("fixedTicks")]
+        public double FixedTicks { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("physicsMs")]
+        public double PhysicsMs { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("updateMs")]
+        public double UpdateMs { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("audioMs")]
+        public double AudioMs { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("renderMs")]
+        public double RenderMs { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("commandsMs")]
+        public double CommandsMs { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("renderRequestMs")]
+        public double RenderRequestMs { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("readbackMs")]
+        public double ReadbackMs { get; set; }
+    }
+
+    public class EngineTiming
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("avg")]
+        public double Avg { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("p95")]
+        public double P95 { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("max")]
+        public double Max { get; set; }
+    }
+
+    public class EngineStatsSummary
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("windowFrames")]
+        public double WindowFrames { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("fps")]
+        public double Fps { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("tickMs")]
+        public EngineTiming TickMs { get; set; }
+    }
+
+    public class EngineRenderStats
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("counters")]
+        public bool Counters { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("drawCalls")]
+        public double DrawCalls { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("triangles")]
+        public double Triangles { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("vertices")]
+        public double Vertices { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("framesRendered")]
+        public double FramesRendered { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("width")]
+        public double Width { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("height")]
+        public double Height { get; set; }
+    }
+
+    public class EngineSceneStats
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("objects")]
+        public double Objects { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("activeObjects")]
+        public double ActiveObjects { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("components")]
+        public double Components { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("luaComponents")]
+        public double LuaComponents { get; set; }
+    }
+
+    public class EngineLuaStats
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("memoryBytes")]
+        public double MemoryBytes { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("memoryCapBytes")]
+        public double MemoryCapBytes { get; set; }
+    }
+
+    public class EnginePhysicsStats
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("backend")]
+        public string Backend { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("bodies")]
+        public double? Bodies { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("staticBodies")]
+        public double? StaticBodies { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("activeBodies")]
+        public double? ActiveBodies { get; set; }
+    }
+
+    public class EngineProcessStats
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("workingSetBytes")]
+        public double WorkingSetBytes { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("peakWorkingSetBytes")]
+        public double? PeakWorkingSetBytes { get; set; }
+    }
+
+    public class EngineStats
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("host")]
+        public EngineStatsHost Host { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("frame")]
+        public double Frame { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("frames")]
+        public EngineFrameRecord[] Frames { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("summary")]
+        public EngineStatsSummary Summary { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("render")]
+        public EngineRenderStats? Render { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("scene")]
+        public EngineSceneStats? Scene { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("lua")]
+        public EngineLuaStats? Lua { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("physics")]
+        public EnginePhysicsStats? Physics { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("process")]
+        public EngineProcessStats? Process { get; set; }
+    }
+
     public struct SetViewportSizeRequest
     {
         public int Width;
@@ -1309,6 +1453,11 @@ namespace N2Engine.Editor.Protocol
         public bool Discard;
     }
 
+    public struct GetEngineStatsRequest
+    {
+        public uint SinceFrame;
+    }
+
     public struct FrameDataResponse
     {
         public uint Width;
@@ -1620,6 +1769,12 @@ namespace N2Engine.Editor.Protocol
     {
         /// <summary>JSON text: PrefabStageInfo</summary>
         public string Info;
+    }
+
+    public struct EngineStatsResponse
+    {
+        /// <summary>JSON text: EngineStats</summary>
+        public string Stats;
     }
 
     public struct ErrorCodedResponse

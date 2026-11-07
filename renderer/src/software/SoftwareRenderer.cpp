@@ -1090,10 +1090,13 @@ void SoftwareRenderer::Clear(float r, float g, float b, float a)
 void SoftwareRenderer::BeginFrame()
 {
     m_drawQueue.clear();
+    ResetRenderCounters();
 }
 
 void SoftwareRenderer::EndFrame()
 {
+    // The frame's draws were counted as they were recorded (RecordDraw), before any reordering
+    PublishRenderCounters();
     // Snapshot everything the render thread needs. The queue is MOVED, not
     // copied (the old code deep-copied it every frame). Camera position and
     // clear color are now part of the snapshot too — previously specular
@@ -1362,6 +1365,14 @@ void SoftwareRenderer::RecordDraw(IMesh* mesh, const float* modelMatrix, IMateri
     cmd.firstIndex = firstIndex;
     cmd.indexCount = indexCount;
     m_drawQueue.push_back(cmd);
+
+    // The frame's counters: the indices this draw covers, clipped to the mesh as the rasterizer clips them
+    const auto meshIndices = static_cast<uint32_t>(swMesh->indices.size());
+    const uint32_t drawnIndices = firstIndex >= meshIndices ? 0u : std::min(indexCount, meshIndices - firstIndex);
+    if (drawnIndices > 0)
+    {
+        NoteDraw(drawnIndices, static_cast<uint32_t>(swMesh->vertices.size()));
+    }
 }
 
 void SoftwareRenderer::DrawObjects(const std::vector<RenderObject> &objects)

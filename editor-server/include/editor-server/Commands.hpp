@@ -322,6 +322,17 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    struct GetEngineStatsCmd
+    {
+        /// The newest frame the client has seen (the last answer's frame), or 0 for every frame the host holds
+        uint32_t sinceFrame;
+
+        static GetEngineStatsCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadU32()};
+        }
+    };
+
     struct StepCmd
     {
         uint32_t frames;
@@ -1266,6 +1277,16 @@ namespace N2Engine::Editor::Protocol
         BufferWriter payload;
         WriteJson(payload, ids);
         w.WriteU8(static_cast<uint8_t>(ResponseType::EntitiesCreated));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// GetEngineStats' response (since 1.28.0): the EngineStats as one JSON value
+    inline void WriteEngineStats(BufferWriter &w, const nlohmann::json &stats)
+    {
+        BufferWriter payload;
+        WriteJson(payload, stats);
+        w.WriteU8(static_cast<uint8_t>(ResponseType::EngineStats));
         w.WriteU32(static_cast<uint32_t>(payload.Size()));
         w.WriteBytes(payload.Data());
     }

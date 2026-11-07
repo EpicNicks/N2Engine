@@ -756,6 +756,24 @@ namespace N2Engine::Editor
         /// that run or reload editor extensions (a play host runs none)
         [[nodiscard]] static bool IsEditOnlyCommand(uint8_t commandType);
 
+        // ==================== Host stats (EN5, protocol 1.28.0) ====================
+
+        /// The frame timers (Application::GetFrameStats) go off again when no GetEngineStats has come for this long
+        static constexpr std::chrono::seconds EngineStatsIdleTimeout{10};
+
+        /**
+         * GetEngineStats' answer (EngineStats in protocol.json): the host (kind, state, renderer, whether the timers are on,
+         * the time scale), the newest frame held and the frame records after `sinceFrame` (FrameStats::FramesAfter), a
+         * summary of the frames held, the last rendered frame's counters, the loaded scene's object and component counts,
+         * the Lua state's memory, the physics backend's body counts and the process's memory. A block the host can't fill
+         * is absent (no renderer, no scene, no Lua runtime yet, no physics backend, no platform memory query). Turns the
+         * frame timers on (the first answer then has no frames). Main thread.
+         */
+        [[nodiscard]] nlohmann::json GetEngineStats(uint32_t sinceFrame);
+        /// Turns the frame timers off when they are on and the last GetEngineStats is EngineStatsIdleTimeout or more before
+        /// `now`, so a host nobody watches pays nothing. RunPlayFrame calls it; public for tests.
+        void ExpireEngineStats(std::chrono::steady_clock::time_point now);
+
         // ==================== Lua editor extensions (main thread, before Start) ====================
 
         /**
@@ -1042,6 +1060,8 @@ namespace N2Engine::Editor
         void HandleSavePrefabStage(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleClosePrefabStage(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetPrefabStage(int clientSocket, const std::vector<uint8_t> &payload);
+        // Host stats (protocol 1.28.0)
+        void HandleGetEngineStats(int clientSocket, const std::vector<uint8_t> &payload);
         /// Answers PrefabStageInfo (GetPrefabStageInfo)
         void SendPrefabStageInfo(int clientSocket);
         /// Pushes prefabStageChanged {stage: PrefabStageInfo} and notes the dirty state it reported
@@ -1564,6 +1584,9 @@ namespace N2Engine::Editor
         void RunGameFrame(std::optional<double> deltaSeconds);
         void SetPausedState(bool paused);
         void PushPlayState();
+
+        // Host stats (GetEngineStats): when the last request came, for ExpireEngineStats
+        std::chrono::steady_clock::time_point _lastEngineStatsRequest{};
 
         // UpdateAudio's clock; unset until its first call
         std::optional<std::chrono::steady_clock::time_point> _lastAudioUpdate;

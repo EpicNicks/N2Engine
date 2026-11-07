@@ -1305,6 +1305,7 @@ void VulkanRenderer::BeginFrame()
     vkCmdSetScissor(frame.commandBuffer, 0, 1, &scissor);
 
     BeginDrawFrame(_currentFrame);
+    ResetRenderCounters();
     _frameOpen = true;
 }
 
@@ -1318,6 +1319,8 @@ void VulkanRenderer::EndFrame()
 
     FrameResources& frame = _frames[_currentFrame];
     _frameOpen = false;
+    // What the frame recorded (DrawLocked counted each vkCmdDrawIndexed), whether or not its submit succeeds
+    PublishRenderCounters();
     vkCmdEndRenderPass(frame.commandBuffer);
     if (vkEndCommandBuffer(frame.commandBuffer) != VK_SUCCESS)
     {
