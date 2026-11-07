@@ -52,7 +52,8 @@ namespace Renderer::Common
      *   GetStandardTextShader); text is still ordered by its submitted (Transparent) state.
      * - VulkanRenderer renders into its own offscreen target and draws in submission order, like OpenGL (#43). It
      *   draws the unlit, lit and text shaders' materials with OpenGL's blending (stages B-E); text is antialiased and blended
-     *   like OpenGL's (see GetStandardTextShader). Only a window is still to come (stage F).
+     *   like OpenGL's (see GetStandardTextShader). With a window, Present blits the offscreen frame to a swapchain image
+     *   (stage F).
      */
     class IRenderer
     {

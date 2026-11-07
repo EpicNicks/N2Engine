@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPU Vulkan checklist · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="particles.html">Particles</a></li>
+<li><a href="soft-bodies.html">Soft bodies</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+<li><a href="netcode.html">Netcode (n2net)</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+<li><a href="editor-extensions.html">Lua editor extensions</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="editor.html">Editor projects</a></li>
+<li><a href="mcp.html">MCP bridge (n2-mcp)</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+<li><a href="web-build.html">Web build</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>GPU Vulkan checklist <span class="badge">PR #308</span></h1>
+<p class="lead">What to run by hand on a Windows PC with a GPU to check the Vulkan renderer's window path (stage F of <a href="https://github.com/EpicNicks/N2Engine/issues/43">#43</a>: the surface, the swapchain, <code>Present</code>, resize and minimise, vsync and the GPU choice), which CI cannot run: the CI runners have no GPU and no display, so CI runs the Vulkan renderer on Mesa lavapipe, a CPU driver, and the swapchain only on lavapipe's headless surface. Nothing here needs more than the repository, the Vulkan SDK and a build. Report which steps pass, and the text of any warning, validation message or crash.</p>
+
+<div class="callout open-question">
+<p class="callout-title">Hardware rule</p>
+<p>The Vulkan swapchain stage (PR #308) is not merged until this checklist has been run on a real GPU PC and the result reported.</p>
+</div>
+
+<h2 id="requirements">Requirements</h2>
+<ul>
+<li>Windows 10 or 11 x64 and a GPU with a current Vulkan 1.1 (or newer) driver: NVIDIA, AMD or Intel. A driver from the last year or two is fine; note its version.</li>
+<li>The <a href="https://vulkan.lunarg.com/sdk/home">LunarG Vulkan SDK</a> installed, so <code>VULKAN_SDK</code> is set (open a new terminal after installing). It provides <code>glslangValidator</code>, which compiles the built-in shaders when the renderer is built, and the Khronos validation layer the tests and the validated run use.</li>
+<li>Visual Studio with the C++ workload, and CMake.</li>
+</ul>
+
+<h2 id="build">1. Build with Vulkan</h2>
+<p>From the repository root (<code>N2ENGINE_RENDERER_VULKAN</code> is <code>ON</code> by default):</p>
+<pre class="lang-shell"><code>cmake -S . -B build -A x64 -DN2ENGINE_BUILD_TESTS=ON
+cmake --build build --config Release --parallel --target renderer_tests lua_project</code></pre>
+<ul>
+<li>Expected in the configure output: a line <code>Vulkan shader compiler: glslangValidator at C:/VulkanSDK/&lt;version&gt;/Bin/glslangValidator.exe (--version: ...)</code>, and <strong>no</strong> warning <code>Vulkan built-in shaders not compiled</code>. If that warning appears, the SDK was not found: the renderer would initialise but draw nothing. Fix the SDK install (or <code>VULKAN_SDK</code>) first.</li>
+<li><code>build\bin\Release</code> then holds <code>renderer_tests.exe</code> and <code>lua_project.exe</code>.</li>
+</ul>
+
+<h2 id="tests">2. Run the Vulkan tests on the GPU</h2>
+<p>In PowerShell, from the repository root:</p>
+<pre class="lang-shell"><code>$env:N2_REQUIRE_VULKAN='1'
+build\bin\Release\renderer_tests.exe --gtest_filter=Vulkan*:CrossBackend*
+Remove-Item Env:N2_REQUIRE_VULKAN</code></pre>
+<ul>
+<li>Do <strong>not</strong> set <code>N2_VULKAN_EXPECT_CPU_DEVICE</code> (that one demands lavapipe). <code>N2_REQUIRE_VULKAN=1</code> makes a missing device or validation layer a failure instead of a skip.</li>
+<li>Expected: every test passes on the GPU, with validation on (each test fails on any validation error or warning, or on a leaked Vulkan object). The log prints the device per test (<code>[ vulkan ] device: &lt;your GPU&gt; (validation on)</code>) and <code>Vulkan renderer: using &lt;your GPU&gt; (discrete GPU), chosen by default</code>: note the name.</li>
+<li>Expected skips: the <code>VulkanHeadlessSwapchainTest.*</code> tests skip with <code>VK_EXT_headless_surface not offered by this driver: the swapchain path was not executed</code> on most desktop drivers, which do not offer that extension. That is fine here: steps 3 and 4 run the same swapchain code on a real window. Nothing else should skip.</li>
+<li>Any failure is a real-driver finding: copy the test name and its whole message (lit, text and blended goldens compare against tolerances measured on lavapipe, so a small difference is worth reporting with its numbers).</li>
+</ul>
+
+<h2 id="demo">3. Select the Vulkan backend and run the demo</h2>
+<p><code>lua_project</code> takes the renderer on its command line. A game selects Vulkan with <code>ApplicationOptions::renderBackend = RenderBackend::VULKAN</code> in <code>Application::Init</code>; OpenGL stays the default renderer, and the editor host does not offer Vulkan (it refuses <code>--renderer vulkan</code>).</p>
+<pre class="lang-shell"><code>$env:N2_VULKAN_VALIDATION='1'
+build\bin\Release\lua_project.exe --renderer vulkan
+Remove-Item Env:N2_VULKAN_VALIDATION</code></pre>
+<ul>
+<li><code>N2_VULKAN_VALIDATION=1</code> loads the validation layer (it comes with the SDK; <code>vkconfig</code> is optional and not needed), so the log shows any validation message as a <code>Vulkan error:</code> or <code>Vulkan warning:</code> line. A Release build without it runs without the layer.</li>
+<li>The window title says <code>N2Engine lua_project (Vulkan)</code>, and the log says <code>Vulkan renderer: using &lt;your GPU&gt; (discrete GPU), chosen by default</code> (on a PC with one GPU it may say integrated GPU; that is its type, not a failure).</li>
+<li>Then run the same build with <code>--renderer opengl</code> and compare station by station (keys <kbd>1</kbd> to <kbd>7</kbd>, <kbd>8</kbd>, <kbd>9</kbd>, <kbd>0</kbd>, <kbd>-</kbd>; the HUD and the <a href="testing.html#gpu-smoke-stations">GPU smoke test's table</a> say what each should show).</li>
+</ul>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Key</th><th>Station</th><th>What it exercises on Vulkan</th></tr></thead>
+<tbody>
+<tr><td><kbd>1</kbd></td><td>Physics</td><td>Lit meshes (stage C)</td></tr>
+<tr><td><kbd>2</kbd></td><td>World text</td><td>The SDF text shader (stage E)</td></tr>
+<tr><td><kbd>3</kbd></td><td>Text effects</td><td>Outline, softness, shadow (stage E)</td></tr>
+<tr><td><kbd>4</kbd></td><td>World-space canvas</td><td>Blended UI quads and UI text (stages D and E)</td></tr>
+<tr><td><kbd>5</kbd></td><td>Meshes and materials</td><td>Lit and PBR materials, normal maps (stage C)</td></tr>
+<tr><td><kbd>6</kbd></td><td>The glTF model</td><td>Lit model materials and textures (stage C)</td></tr>
+<tr><td><kbd>7</kbd></td><td>Screen-space UI panel</td><td>Images (stage D) and UI text (stage E) in the UI pass, after a mid-frame view change</td></tr>
+<tr><td><kbd>8</kbd></td><td>Particles</td><td>Blended and additive particles, updated every frame (stage D)</td></tr>
+<tr><td><kbd>9</kbd></td><td>World canvas and colliders</td><td>Blended UI and text in the world (stages D and E)</td></tr>
+<tr><td><kbd>0</kbd></td><td>Text effect passes</td><td>Multi-pass text effects (stage E)</td></tr>
+<tr><td><kbd>-</kbd></td><td>Soft bodies</td><td>Lit meshes updated every frame (stage C; the soft-body backend itself does not depend on the renderer)</td></tr>
+</tbody>
+</table>
+</div>
+<p>Expected: each station looks like the same station on OpenGL. Small antialiasing or precision differences are fine. A failure is: anything missing or black, the whole picture <strong>too bright or too dark</strong> compared with OpenGL (a colour-space or swapchain-format problem: the swapchain must be a <code>UNORM</code> format, <a href="application.html#design-vulkan-swapchain-format">why</a>), red and blue swapped, the picture upside down or mirrored, stretched in one direction, or flickering. The log must have no <code>Vulkan error:</code> or <code>Vulkan warning:</code> line.</p>
+
+<h2 id="window">4. Window behaviour</h2>
+<ul>
+<li><strong>Resize</strong> by dragging an edge and a corner: while dragging and after release the picture fills the window without stretch artefacts that stay, and nothing crashes or logs a validation message.</li>
+<li><strong>Maximise and restore</strong> (the title bar button, or <kbd>Win</kbd>+<kbd>Up</kbd> / <kbd>Down</kbd>).</li>
+<li><strong>Minimise</strong> for a few seconds, then restore: the app keeps running (the soft bodies and particles moved on meanwhile), CPU use is not pegged while minimised (Task Manager), nothing is logged while minimised, and the picture comes back.</li>
+<li><strong>Alt-Tab</strong> away and back, a few times.</li>
+<li><strong>Fullscreen or borderless</strong>: the demo has no key for it, so skip this.</li>
+<li><strong>A second monitor</strong>, if there is one: drag the window to it, and if its scaling (Windows display settings) differs, check the picture stays sharp and fills the window after the move (HiDPI: the swapchain follows the framebuffer size in pixels).</li>
+<li><strong>Wireframe</strong>: the demo has no key for it, so skip this (a Vulkan test checks wireframe offscreen).</li>
+<li><strong>Vsync.</strong> By default the swapchain uses FIFO (vsync on): the frame rate (read it from an overlay such as NVIDIA's or the Xbox Game Bar's; the demo shows none) is the monitor's refresh rate. Run again with vsync off:
+<pre class="lang-shell"><code>$env:N2_VULKAN_VSYNC='0'
+build\bin\Release\lua_project.exe --renderer vulkan
+Remove-Item Env:N2_VULKAN_VSYNC</code></pre>
+The frame rate should now be above the refresh rate (MAILBOX where the driver offers it, else IMMEDIATE). MAILBOX does not tear; IMMEDIATE may. Say which you saw.</li>
+</ul>
+
+<h2 id="two-gpus">5. Two GPUs (only on a PC with an integrated and a discrete GPU)</h2>
+<ul>
+<li>With nothing set, the log says the discrete GPU was chosen.</li>
+<li><code>$env:N2_VULKAN_GPU='&lt;index or part of the name&gt;'</code> (for example <code>'intel'</code>, or <code>'1'</code>: the index in Vulkan's enumeration order) picks the other one: the log says <code>chosen by the GPU preference ...</code>, and the demo still runs and looks the same.</li>
+<li>A nonsense value (<code>$env:N2_VULKAN_GPU='nonsense'</code>) logs exactly one line <code>the GPU preference name 'nonsense' names no Vulkan device ...; using '&lt;GPU&gt;' instead (N2_VULKAN_GPU)</code> and runs on the default GPU.</li>
+<li>Remove it afterwards: <code>Remove-Item Env:N2_VULKAN_GPU</code>.</li>
+</ul>
+
+<h2 id="performance">6. Performance sanity</h2>
+<p>At two or three stations (for example 1, 7 and 8), note the frame rate or frame time on <code>--renderer opengl</code> and on <code>--renderer vulkan</code> (both with vsync off for Vulkan, <code>N2_VULKAN_VSYNC=0</code>; OpenGL sets no swap interval, so it uses the driver's default). No numbers are required to pass: report both, and whether Vulkan stutters, for example a hitch the first time a station appears (pipelines are made the first time a material and state are drawn) or while text and particles update.</p>
+
+<h2 id="exit">7. Exit</h2>
+<p>Press <kbd>Esc</kbd>: the app quits promptly and cleanly, with no crash and no hang, and (with <code>N2_VULKAN_VALIDATION=1</code>) no validation message at shutdown: the layer reports any Vulkan object still alive when the device is destroyed.</p>
+
+<h2 id="revert">Revert</h2>
+<p>Nothing to revert: no file is edited. If you set any of <code>N2_REQUIRE_VULKAN</code>, <code>N2_VULKAN_VALIDATION</code>, <code>N2_VULKAN_VSYNC</code> or <code>N2_VULKAN_GPU</code> persistently (System Properties), remove them.</p>
+
+<h2 id="report">What to report</h2>
+<ul>
+<li>The GPU(s) and driver version(s), and the Windows version.</li>
+<li>Step 2: the summary line (<code>[  PASSED  ]</code>, <code>[  SKIPPED ]</code>, <code>[  FAILED  ]</code> counts), the device name it printed, and the name and message of any failing test.</li>
+<li>Step 3: per station, anything that differs from OpenGL (a screenshot helps), and any <code>Vulkan error:</code> or <code>Vulkan warning:</code> line verbatim.</li>
+<li>Step 4: resize, maximise, minimise, Alt-Tab, multi-monitor and HiDPI results; the vsync frame rates and which mode it looked like.</li>
+<li>Step 5 (if two GPUs): which GPU the default chose, and whether the preference and the nonsense value behaved as described.</li>
+<li>Step 6: the frame-rate comparison and any stutter.</li>
+<li>Step 7: how the exit went.</li>
+</ul>
+<p>Background: <a href="application.html#vulkan-renderer">The Vulkan renderer</a>, <a href="application.html#vulkan-window">its window path</a>, <a href="testing.html#vulkan-swapchain-tests">the swapchain tests CI runs</a>, <a href="testing.html#gpu-smoke">the GPU smoke test</a>.</p>
+
+<div class="page-footer">
+<span>Describes the Vulkan window path of PR #308 (stage F of #43).</span>
+<a href="application.html#vulkan-renderer">Back to the Vulkan renderer</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>
