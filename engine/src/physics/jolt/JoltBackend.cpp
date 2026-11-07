@@ -3922,6 +3922,22 @@ namespace N2Engine::Physics
         return _impl->jobSystem ? _impl->jobSystem->GetMaxConcurrency() : 0;
     }
 
+    std::optional<PhysicsStats> JoltBackend::GetStats() const
+    {
+        if (!_impl->initialized || !_impl->system)
+        {
+            return std::nullopt;
+        }
+        const JPH::PhysicsSystem::BodyStats bodyStats = _impl->system->GetBodyStats();
+        PhysicsStats stats;
+        stats.bodies = static_cast<std::uint32_t>(bodyStats.mNumBodiesStatic + bodyStats.mNumBodiesDynamic +
+                                                  bodyStats.mNumBodiesKinematic);
+        stats.staticBodies = static_cast<std::uint32_t>(bodyStats.mNumBodiesStatic);
+        stats.activeBodies =
+            static_cast<std::uint32_t>(bodyStats.mNumActiveBodiesDynamic + bodyStats.mNumActiveBodiesKinematic);
+        return stats;
+    }
+
     std::size_t JoltBackend::GetContactThreadCount() const
     {
         const std::lock_guard lock(_impl->contactMutex);

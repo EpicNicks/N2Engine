@@ -29,6 +29,8 @@
 #include "engine/ProjectSettings.hpp"
 #include "engine/Version.hpp"
 #include "engine/audio/AudioSystem.hpp"
+#include "engine/diagnostics/FrameStats.hpp"
+#include "engine/diagnostics/ProcessMemory.hpp"
 #include "engine/example/renderers/CubeRenderer.hpp"
 #include "engine/input/InputTypes.hpp"
 #include "engine/input/Mouse.hpp"
@@ -2886,7 +2888,7 @@ namespace N2Engine::Editor
     std::vector<std::string> EditorServer::Capabilities()
     {
         return {"editorExtensions","editorTooling","luaSyntax","assetPreviews","entityClipboard","prefabAssets","physicsBackends","networkPanel","prefabFields",
-                "prefabStage","prefabStageContext"};
+                "prefabStage","prefabStageContext","engineStats"};
     }
 
     bool EditorServer::EnableEditorExtensions(std::filesystem::path projectRoot)
@@ -4128,6 +4130,31 @@ namespace N2Engine::Editor
         // so the command answers within it however many scripts are slow (ScriptDeclarationCache::CommandBudget)
         const Scripting::ScriptDeclarationCache::CommandBudget evaluationBudget;
 
+        // A play host's frame record (EN5): the time this command takes goes to the game frame it follows
+        // (FrameStats::AddToNewestFrame, open until the next frame or a pause), unless it ran frames itself (Step)
+        struct CommandTimer
+        {
+            Diagnostics::FrameStats *stats = nullptr;
+            std::optional<uint32_t> frameBefore;
+            Diagnostics::FrameStats::Clock::time_point start{};
+
+            ~CommandTimer()
+            {
+                if (stats != nullptr && stats->NewestFrame() == frameBefore)
+                {
+                    stats->AddToNewestFrame(
+                        Diagnostics::FrameSection::Commands,
+                        std::chrono::duration<double, std::milli>(Diagnostics::FrameStats::Clock::now() - start).count());
+                }
+            }
+        } commandTimer;
+        if (Diagnostics::FrameStats &frameStats = Application::GetInstance().GetFrameStats(); _playMode && frameStats.IsEnabled())
+        {
+            commandTimer.stats = &frameStats;
+            commandTimer.frameBefore = frameStats.NewestFrame();
+            commandTimer.start = Diagnostics::FrameStats::Clock::now();
+        }
+
         bool failed = false;
         std::string failure;
         try
@@ -4312,6 +4339,8 @@ namespace N2Engine::Editor
         {CommandType::GetNetworkSettings, "GetNetworkSettings", EditorServer::CommandClass::Read},
         {CommandType::GetNetworkValidation, "GetNetworkValidation", EditorServer::CommandClass::Read},
         {CommandType::GetPrefabStage, "GetPrefabStage", EditorServer::CommandClass::Read},
+        // Host stats (1.28.0): counts and timings, no file or object named
+        {CommandType::GetEngineStats, "GetEngineStats", EditorServer::CommandClass::Read},
         // The extension lists answer from what was captured at load: they run no Lua. InvokeMenuItem (0x82) and
         // InvokeInspectorAction (0x83) run extension code, so they are Writes below.
         {CommandType::ListEditorExtensions, "ListEditorExtensions", EditorServer::CommandClass::Read},
@@ -4462,6 +4491,7 @@ namespace N2Engine::Editor
         case CommandType::GetEntityTransform: // the inspector
         case CommandType::GetCameraPosition:  // the scene view
         case CommandType::GetEngineHealth:    // the status panel
+        case CommandType::GetEngineStats:     // the Profiler panel, every ~250 ms while it is open
         case CommandType::GetHierarchy:       // the hierarchy panel, whenever the scene revision moves
         case CommandType::GetEntity:          // the inspector, whenever the selected object changes
         case CommandType::GetComponent:       // the inspector, for the components it shows
@@ -4810,6 +4840,9 @@ namespace N2Engine::Editor
         case CommandType::GetEngineHealth:
             HandleGetEngineHealth(clientSocket);
             break;
+        case CommandType::GetEngineStats:
+            HandleGetEngineStats(clientSocket, payload);
+            break;
         case CommandType::Undo:
             HandleUndo(clientSocket);
             break;
@@ -5000,10 +5033,22 @@ namespace N2Engine::Editor
         // frame has to be rendered again to be sent (its revision is still current: nothing about the editor view
         // changed). Said first, so a render or read that throws can't leave a half-written buffer marked valid.
         _frames.InvalidateBuffer();
+        // A play host's frame record (EN5): the drawing and the readback, split out of the command's time
+        Diagnostics::FrameStats &frameStats = app.GetFrameStats();
+        const bool timed = _playMode && frameStats.IsEnabled();
+        const auto elapsedMs = [](const Diagnostics::FrameStats::Clock::time_point since)
+        {
+            return std::chrono::duration<double, std::milli>(Diagnostics::FrameStats::Clock::now() - since).count();
+        };
+        auto sectionStart = Diagnostics::FrameStats::Clock::now();
         if (_playMode)
         {
             // The running game from its main camera: no window events, no clock (the game's frames own both)
             app.RenderGameFrame();
+            if (timed)
+            {
+                frameStats.AddToNewestFrame(Diagnostics::FrameSection::RenderRequest, elapsedMs(sectionStart));
+            }
         }
         else
         {
@@ -5011,7 +5056,12 @@ namespace N2Engine::Editor
         }
 
         // RGBA, top row first, whatever the backend
+        sectionStart = Diagnostics::FrameStats::Clock::now();
         ReadFrame(*renderer, _viewportWidth, _viewportHeight, _frameBuffer);
+        if (timed)
+        {
+            frameStats.AddToNewestFrame(Diagnostics::FrameSection::Readback, elapsedMs(sectionStart));
+        }
 
         BufferWriter response;
         WriteFrameData(response,
@@ -6361,19 +6411,27 @@ namespace N2Engine::Editor
         TickOptions options;
         options.render = false; // frames are drawn when the client asks (RenderFrame)
         options.deltaSeconds = deltaSeconds;
+        // The frame record is numbered as GetPlayState will count this frame
+        Application::GetInstance().GetFrameStats().SetNextFrameNumber(_playFrame + 1);
         Application::GetInstance().Tick(options);
         ++_playFrame;
     }
 
     size_t EditorServer::RunPlayFrame(const std::chrono::milliseconds frameBudget)
     {
+        ExpireEngineStats(std::chrono::steady_clock::now());
         if (!_playMode)
         {
             return ProcessCommands(frameBudget);
         }
 
         const auto start = std::chrono::steady_clock::now();
-        if (!_paused)
+        if (_paused)
+        {
+            // No frame runs: the commands of a paused game are not piled on its last frame's record
+            Application::GetInstance().GetFrameStats().CloseNewestFrame();
+        }
+        else
         {
             try
             {
@@ -6513,6 +6571,171 @@ namespace N2Engine::Editor
         }
         WriteEngineHealth(response, health);
         SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+    }
+
+    namespace
+    {
+        /// A millisecond or byte figure as JSON: three decimals are plenty for a profiler, and a float's widening to double
+        /// would otherwise print 16.700000762939453
+        double Rounded(const double value)
+        {
+            return std::round(value * 1000.0) / 1000.0;
+        }
+
+        nlohmann::json FrameRecordJson(const Diagnostics::FrameRecord &record)
+        {
+            return nlohmann::json{
+                {"frame", record.frame},
+                {"intervalMs", Rounded(record.intervalMs)},
+                {"tickMs", Rounded(record.tickMs)},
+                {"fixedMs", Rounded(record.fixedMs)},
+                {"fixedTicks", record.fixedTicks},
+                {"physicsMs", Rounded(record.physicsMs)},
+                {"updateMs", Rounded(record.updateMs)},
+                {"audioMs", Rounded(record.audioMs)},
+                {"renderMs", Rounded(record.renderMs)},
+                {"commandsMs", Rounded(record.commandsMs)},
+                {"renderRequestMs", Rounded(record.renderRequestMs)},
+                {"readbackMs", Rounded(record.readbackMs)},
+            };
+        }
+    }
+
+    nlohmann::json EditorServer::GetEngineStats(const uint32_t sinceFrame)
+    {
+        Application &app = Application::GetInstance();
+        Diagnostics::FrameStats &frameStats = app.GetFrameStats();
+        // Asked: the timers run (from now: the first answer has no frames yet) until nobody has asked for a while
+        _lastEngineStatsRequest = std::chrono::steady_clock::now();
+        frameStats.SetEnabled(true);
+
+        nlohmann::json stats;
+        Renderer::Common::IRenderer *renderer = app.GetWindow().GetRenderer();
+
+        nlohmann::json host{
+            {"kind", _playMode ? "play" : "edit"},
+            {"state", _playMode ? (_paused ? "Paused" : "Playing") : "Edit"},
+            {"timersEnabled", frameStats.IsEnabled()},
+            {"timeScale", Rounded(Time::GetTimeScale())},
+        };
+        if (renderer != nullptr)
+        {
+            host["renderer"] = renderer->GetRendererName();
+        }
+        stats["host"] = std::move(host);
+
+        stats["frame"] = frameStats.NewestFrame().value_or(0u);
+        nlohmann::json frames = nlohmann::json::array();
+        for (const Diagnostics::FrameRecord &record : frameStats.FramesAfter(sinceFrame))
+        {
+            frames.push_back(FrameRecordJson(record));
+        }
+        stats["frames"] = std::move(frames);
+
+        const Diagnostics::FrameSummary summary = frameStats.Summarize();
+        stats["summary"] = nlohmann::json{
+            {"windowFrames", summary.windowFrames},
+            {"fps", Rounded(summary.fps)},
+            {"tickMs", {{"avg", Rounded(summary.tickMs.avg)}, {"p95", Rounded(summary.tickMs.p95)}, {"max", Rounded(summary.tickMs.max)}}},
+        };
+
+        if (renderer != nullptr)
+        {
+            // The last frame the renderer finished: on a play host the game as drawn for the client's RenderFrame, on the
+            // edit host the editor view
+            const Renderer::Common::RenderCounters &counters = renderer->GetLastFrameCounters();
+            stats["render"] = nlohmann::json{
+                {"counters", renderer->SupportsRenderCounters()},
+                {"drawCalls", counters.drawCalls},
+                {"triangles", counters.triangles},
+                {"vertices", counters.vertices},
+                {"framesRendered", counters.frames},
+                {"width", _viewportWidth},
+                {"height", _viewportHeight},
+            };
+        }
+
+        if (const Scene *scene = SceneManager::GetCurScene(); scene != nullptr)
+        {
+            std::uint64_t objects = 0;
+            std::uint64_t activeObjects = 0;
+            std::uint64_t components = 0;
+            std::uint64_t luaComponents = 0;
+            scene->TraverseAll([&](const std::shared_ptr<GameObject> &object)
+            {
+                ++objects;
+                if (object->IsActiveInHierarchy())
+                {
+                    ++activeObjects;
+                }
+                for (const std::unique_ptr<Component> &component : object->GetAllComponents())
+                {
+                    ++components;
+                    if (dynamic_cast<const Scripting::LuaComponent *>(component.get()) != nullptr)
+                    {
+                        ++luaComponents;
+                    }
+                }
+            });
+            stats["scene"] = nlohmann::json{
+                {"objects", objects},
+                {"activeObjects", activeObjects},
+                {"components", components},
+                {"luaComponents", luaComponents},
+            };
+        }
+
+        // Only a runtime that exists: asking Instance() would make one (and seed it) on a host that never ran a script
+        if (Scripting::LuaRuntime::HasInstance())
+        {
+            const Scripting::LuaRuntime &lua = Scripting::LuaRuntime::Instance();
+            stats["lua"] = nlohmann::json{
+                {"memoryBytes", lua.GetMemoryUsed()},
+                {"memoryCapBytes", lua.GetLimits().maxBytes},
+            };
+        }
+
+        if (const Physics::IPhysicsBackend *physics = app.Get3DPhysicsBackend(); physics != nullptr)
+        {
+            nlohmann::json block{{"backend", std::string(physics->BackendId())}};
+            if (const std::optional<Physics::PhysicsStats> bodies = physics->GetStats())
+            {
+                block["bodies"] = bodies->bodies;
+                block["staticBodies"] = bodies->staticBodies;
+                block["activeBodies"] = bodies->activeBodies;
+            }
+            stats["physics"] = std::move(block);
+        }
+
+        if (const std::optional<Diagnostics::ProcessMemory> memory = Diagnostics::QueryProcessMemory())
+        {
+            nlohmann::json block{{"workingSetBytes", memory->workingSetBytes}};
+            if (memory->peakWorkingSetBytes)
+            {
+                block["peakWorkingSetBytes"] = *memory->peakWorkingSetBytes;
+            }
+            stats["process"] = std::move(block);
+        }
+        return stats;
+    }
+
+    void EditorServer::ExpireEngineStats(const std::chrono::steady_clock::time_point now)
+    {
+        Diagnostics::FrameStats &frameStats = Application::GetInstance().GetFrameStats();
+        if (frameStats.IsEnabled() && now - _lastEngineStatsRequest >= EngineStatsIdleTimeout)
+        {
+            frameStats.SetEnabled(false);
+        }
+    }
+
+    void EditorServer::HandleGetEngineStats(const int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const GetEngineStatsCmd cmd = GetEngineStatsCmd::Deserialize(reader);
+        // Polled: nothing here logs (IsPolledCommand)
+        BufferWriter response;
+        WriteEngineStats(response, GetEngineStats(cmd.sinceFrame));
+        SendResponse(clientSocket, response.Release());
     }
 
     void EditorServer::HandleGetEntityTransform(int clientSocket, const std::vector<uint8_t> &payload)

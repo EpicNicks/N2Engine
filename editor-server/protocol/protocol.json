@@ -1,5 +1,5 @@
 {
-  "version": "1.27.0",
+  "version": "1.28.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -60,7 +60,7 @@
     },
     "Hello": {
       "id": "0x04",
-      "description": "Opens a session: the client's name, the protocol version it speaks (its PROTOCOL_VERSION) and the host's access token (empty when it has none). Error when the major versions differ, or when the host requires a token and this isn't it. Optional on a host without a token. On a host with one, every other command (Shutdown included) is refused with an Error until a Hello on the same connection succeeds, and a failed Hello ends the session. The session belongs to the connection: a client that reconnects sends Hello again. capabilities names optional features beyond what the version implies: \"editorExtensions\" (since 1.14.0) says the host has the Lua editor extension commands (ListEditorExtensions, GetEditorUi, ReloadEditorExtensions, since 1.15.0, InvokeMenuItem and, since 1.16.0, InvokeInspectorAction); whether it was started with --editor-extensions is ListEditorExtensions' enabled; projectLoaded is whether the host has a project (was started with --project). Since 1.11.0: errorCodes (a trailing request field, false when absent) says the client understands ErrorCoded: the host answers a refused command with ErrorCoded (message and a stable code from errorCodes) to a client that sent true, and with a plain Error whose message says why to every other client, so a client of an older minor version keeps working and still shows the reason. The flag belongs to the connection, like the session: a later Hello on it replaces the value. readOnly (a trailing response field) is whether the host was started with --read-only: it answers every command that is not a read with the readOnly error (a client can show that and disable what would be refused). A read command is one the host classifies as a read: it changes nothing a client could save, run or lose (the host's own classification, which refuses a command it has not classified). Since 1.12.0: user (a trailing request field, empty when absent) names the user whose token this is, for a host started with --tokens-file: only that user's entry is considered, and an empty user matches the token against every entry (a client of an older minor version sends none). A host with one token (--token-env) or none ignores it. A wrong user and a wrong token are the same Error (Invalid access token). A host with a tokens file binds the matched user and its role (admin, editor or viewer) to the connection; user and role (trailing response fields, empty strings from an older host) report them. A host with no tokens file answers an empty user and the role admin (--token-env: the user token and the role admin), so role is always one of the three. A command the role may not run is refused with the forbidden code (ErrorCoded for a client that asked for it in Hello, else an Error whose message says why), and the connection stays open: a viewer may run reads only and may not play (SendInput, WritePlaySnapshot, SetPaused and Step are refused), an editor everything except Shutdown, an admin everything. The host re-reads its tokens file without a restart and closes the connection of a user whose entry was removed or changed. Since 1.13.0: a host serves one session at a time. A Hello that succeeds while another session is active ends that session when the new client is the same user with the same role (it takes over, so a client that lost its connection can reconnect at once) or has a strictly higher role (admin over editor over viewer: it preempts), and every other client is answered with the busy error and the connection is closed (ErrorCoded busy for a client that asked for it in Hello, else an Error whose message says why). A host with no access token has no Hello and every client is an admin with no name, so the newest connection takes over. Since 1.22.0: yield (a trailing request field, false when absent, sent after errorCodes and user; a client of an older minor version sends none) says the client is an agent that yields to people. A yielding client never takes over or preempts a session: when no session is active it is accepted, and otherwise it is answered with the busy error, even when it is the same user as the active session and even on a host with no access token. A session that yielded in its Hello is preempted by any client that does not yield, whatever the roles (a viewer preempts a yielding admin, and the same user preempts itself), also on a host with no access token. Two yielding clients never replace each other. The flag belongs to the connection, like the session: a later Hello on it replaces the value, and the host judges the next client against the flag the session has now. The host logs yield=1 on the line that says the client said Hello. Since 1.26.0: \"prefabStage\" says the host has the prefab stage commands (OpenPrefabStage, SetPrefabStageMode, SavePrefabStage, ClosePrefabStage, GetPrefabStage) and \"prefabStageContext\" that its renderer draws the In Scene mode's dimmed scene (every backend does: OpenGL, Vulkan, WebGPU and the software renderer).",
+      "description": "Opens a session: the client's name, the protocol version it speaks (its PROTOCOL_VERSION) and the host's access token (empty when it has none). Error when the major versions differ, or when the host requires a token and this isn't it. Optional on a host without a token. On a host with one, every other command (Shutdown included) is refused with an Error until a Hello on the same connection succeeds, and a failed Hello ends the session. The session belongs to the connection: a client that reconnects sends Hello again. capabilities names optional features beyond what the version implies: \"editorExtensions\" (since 1.14.0) says the host has the Lua editor extension commands (ListEditorExtensions, GetEditorUi, ReloadEditorExtensions, since 1.15.0, InvokeMenuItem and, since 1.16.0, InvokeInspectorAction); whether it was started with --editor-extensions is ListEditorExtensions' enabled; projectLoaded is whether the host has a project (was started with --project). Since 1.11.0: errorCodes (a trailing request field, false when absent) says the client understands ErrorCoded: the host answers a refused command with ErrorCoded (message and a stable code from errorCodes) to a client that sent true, and with a plain Error whose message says why to every other client, so a client of an older minor version keeps working and still shows the reason. The flag belongs to the connection, like the session: a later Hello on it replaces the value. readOnly (a trailing response field) is whether the host was started with --read-only: it answers every command that is not a read with the readOnly error (a client can show that and disable what would be refused). A read command is one the host classifies as a read: it changes nothing a client could save, run or lose (the host's own classification, which refuses a command it has not classified). Since 1.12.0: user (a trailing request field, empty when absent) names the user whose token this is, for a host started with --tokens-file: only that user's entry is considered, and an empty user matches the token against every entry (a client of an older minor version sends none). A host with one token (--token-env) or none ignores it. A wrong user and a wrong token are the same Error (Invalid access token). A host with a tokens file binds the matched user and its role (admin, editor or viewer) to the connection; user and role (trailing response fields, empty strings from an older host) report them. A host with no tokens file answers an empty user and the role admin (--token-env: the user token and the role admin), so role is always one of the three. A command the role may not run is refused with the forbidden code (ErrorCoded for a client that asked for it in Hello, else an Error whose message says why), and the connection stays open: a viewer may run reads only and may not play (SendInput, WritePlaySnapshot, SetPaused and Step are refused), an editor everything except Shutdown, an admin everything. The host re-reads its tokens file without a restart and closes the connection of a user whose entry was removed or changed. Since 1.13.0: a host serves one session at a time. A Hello that succeeds while another session is active ends that session when the new client is the same user with the same role (it takes over, so a client that lost its connection can reconnect at once) or has a strictly higher role (admin over editor over viewer: it preempts), and every other client is answered with the busy error and the connection is closed (ErrorCoded busy for a client that asked for it in Hello, else an Error whose message says why). A host with no access token has no Hello and every client is an admin with no name, so the newest connection takes over. Since 1.22.0: yield (a trailing request field, false when absent, sent after errorCodes and user; a client of an older minor version sends none) says the client is an agent that yields to people. A yielding client never takes over or preempts a session: when no session is active it is accepted, and otherwise it is answered with the busy error, even when it is the same user as the active session and even on a host with no access token. A session that yielded in its Hello is preempted by any client that does not yield, whatever the roles (a viewer preempts a yielding admin, and the same user preempts itself), also on a host with no access token. Two yielding clients never replace each other. The flag belongs to the connection, like the session: a later Hello on it replaces the value, and the host judges the next client against the flag the session has now. The host logs yield=1 on the line that says the client said Hello. Since 1.26.0: \"prefabStage\" says the host has the prefab stage commands (OpenPrefabStage, SetPrefabStageMode, SavePrefabStage, ClosePrefabStage, GetPrefabStage) and \"prefabStageContext\" that its renderer draws the In Scene mode's dimmed scene (every backend does: OpenGL, Vulkan, WebGPU and the software renderer). Since 1.28.0: \"engineStats\" says the host answers GetEngineStats (its frame timings, render counters and counts, for a Profiler).",
       "request": {
         "clientName": "string",
         "protocolVersion": "string",
@@ -1159,6 +1159,19 @@
           "info": "json:PrefabStageInfo"
         }
       }
+    },
+    "GetEngineStats": {
+      "id": "0x54",
+      "description": "Since 1.28.0 (Hello lists the capability \"engineStats\"). Read command (a viewer may call it; not offered to editor extensions). Never logs (a client polls it: the Profiler every ~250 ms while it is open). Where the host's frames go and what it holds: stats is an EngineStats. The first call turns the host's frame timers on (the sections of Application::Tick; they only read the steady clock, so the game runs the same with them on), so its answer has no frames yet; they go off again when no GetEngineStats has come for 10 s. host: kind (\"play\" on a play host, else \"edit\"), state (\"Playing\", \"Paused\" or \"Edit\", as GetPlayState), renderer (the backend's name; absent without a renderer), timersEnabled, timeScale. frame: the newest frame record's number (0 when none is held); a play host numbers its frames as GetPlayState counts them, frames Step ran included. frames: the records the host holds (the last 240 frames) whose frame is greater than sinceFrame, oldest first; sinceFrame 0, or one past the newest record (a new play session), gives all of them, so a client that sends the last answer's frame gets every frame once. An edit host runs no game frames: its frames are empty. A record: intervalMs (from the previous frame's start; 0 for the first frame after the timers came on or after a pause), tickMs (the whole frame), fixedMs and fixedTicks (the fixed-step loop and the ticks it ran), physicsMs (inside those ticks: the physics backend's step, transform sync and collision callbacks), updateMs (pointer dispatch, Update, coroutines, LateUpdate), audioMs, renderMs (0 on a play host, which draws on request), and, on a play host, commandsMs (the time spent handling the commands that came after the frame, until the next one; a paused game's commands count for no frame), of which renderRequestMs and readbackMs are RenderFrame's drawing and readback. The newest record's command times can still grow after it was sent, until the next frame starts. Durations are wall-clock milliseconds, rounded to 3 decimals. summary: over the frames held, windowFrames, fps (1000 over the average intervalMs) and tickMs {avg, p95, max}. render (absent without a renderer): the last frame the renderer finished (on a play host the game as drawn for RenderFrame, on the edit host the editor view): counters (whether the backend counts its draws: OpenGL, Vulkan, WebGPU and the software renderer do), drawCalls, triangles (indices / 3: the built-in pipelines draw triangle lists), vertices (the vertex count of each drawn mesh), framesRendered (the frames the renderer has finished), width and height (the viewport size frames are drawn at). scene (absent without a loaded scene): objects, activeObjects (active in the hierarchy), components, luaComponents. lua (absent before the Lua runtime exists): memoryBytes (what the state holds, which the cap counts) and memoryCapBytes. physics (absent without a physics backend): backend (\"physx\" or \"jolt\") and, once it is initialized, bodies, staticBodies and activeBodies (the dynamic and kinematic bodies awake as of the last step). process (absent where the platform has no query): workingSetBytes (the working set on Windows, the resident set on Linux) and peakWorkingSetBytes. No GPU timings.",
+      "request": {
+        "sinceFrame": "uint32"
+      },
+      "response": {
+        "type": "EngineStats",
+        "fields": {
+          "stats": "json:EngineStats"
+        }
+      }
     }
   },
   "types": {
@@ -1551,6 +1564,77 @@
       "channels?": "number",
       "sampleRate?": "number",
       "peaks?": "AudioPeak[]"
+    },
+    "EngineStatsHost": {
+      "kind": "string",
+      "state": "string",
+      "renderer?": "string",
+      "timersEnabled": "bool",
+      "timeScale": "number"
+    },
+    "EngineFrameRecord": {
+      "frame": "number",
+      "intervalMs": "number",
+      "tickMs": "number",
+      "fixedMs": "number",
+      "fixedTicks": "number",
+      "physicsMs": "number",
+      "updateMs": "number",
+      "audioMs": "number",
+      "renderMs": "number",
+      "commandsMs": "number",
+      "renderRequestMs": "number",
+      "readbackMs": "number"
+    },
+    "EngineTiming": {
+      "avg": "number",
+      "p95": "number",
+      "max": "number"
+    },
+    "EngineStatsSummary": {
+      "windowFrames": "number",
+      "fps": "number",
+      "tickMs": "EngineTiming"
+    },
+    "EngineRenderStats": {
+      "counters": "bool",
+      "drawCalls": "number",
+      "triangles": "number",
+      "vertices": "number",
+      "framesRendered": "number",
+      "width": "number",
+      "height": "number"
+    },
+    "EngineSceneStats": {
+      "objects": "number",
+      "activeObjects": "number",
+      "components": "number",
+      "luaComponents": "number"
+    },
+    "EngineLuaStats": {
+      "memoryBytes": "number",
+      "memoryCapBytes": "number"
+    },
+    "EnginePhysicsStats": {
+      "backend": "string",
+      "bodies?": "number",
+      "staticBodies?": "number",
+      "activeBodies?": "number"
+    },
+    "EngineProcessStats": {
+      "workingSetBytes": "number",
+      "peakWorkingSetBytes?": "number"
+    },
+    "EngineStats": {
+      "host": "EngineStatsHost",
+      "frame": "number",
+      "frames": "EngineFrameRecord[]",
+      "summary": "EngineStatsSummary",
+      "render?": "EngineRenderStats",
+      "scene?": "EngineSceneStats",
+      "lua?": "EngineLuaStats",
+      "physics?": "EnginePhysicsStats",
+      "process?": "EngineProcessStats"
     }
   },
   "responses": {
@@ -1600,7 +1684,8 @@
     "NetworkSettings": "0x24",
     "NetworkValidation": "0x25",
     "AssetsMoved": "0xA5",
-    "PrefabStageInfo": "0x26"
+    "PrefabStageInfo": "0x26",
+    "EngineStats": "0x27"
   },
   "extraResponses": {
     "ErrorCoded": {

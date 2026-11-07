@@ -203,6 +203,8 @@ namespace Renderer
             [[nodiscard]] const char* GetRendererName() const override { return "WebGPU Renderer"; }
             /// The per-draw block carries uStageDim (RenderState::dim) to the built-in shaders
             [[nodiscard]] bool SupportsStageDim() const override { return true; }
+            /// Counts each indexed draw DrawLocked records
+            [[nodiscard]] bool SupportsRenderCounters() const override { return true; }
             /// The three built-ins; nullptr before Initialize
             [[nodiscard]] Common::IShader* GetStandardUnlitShader() const override;
             [[nodiscard]] Common::IShader* GetStandardLitShader() const override;

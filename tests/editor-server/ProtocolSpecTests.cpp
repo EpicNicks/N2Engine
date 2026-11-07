@@ -95,6 +95,7 @@ namespace
             {"SavePrefabStage", CommandType::SavePrefabStage},
             {"ClosePrefabStage", CommandType::ClosePrefabStage},
             {"GetPrefabStage", CommandType::GetPrefabStage},
+            {"GetEngineStats", CommandType::GetEngineStats},
             {"GetNetworkSettings", CommandType::GetNetworkSettings},
             {"SetNetworkSettings", CommandType::SetNetworkSettings},
             {"GetNetworkValidation", CommandType::GetNetworkValidation},
@@ -173,6 +174,7 @@ namespace
             {"PhysicsBackends", ResponseType::PhysicsBackends},
             {"AssetsMoved", ResponseType::AssetsMoved},
             {"PrefabStageInfo", ResponseType::PrefabStageInfo},
+            {"EngineStats", ResponseType::EngineStats},
             {"NetworkSettings", ResponseType::NetworkSettings},
             {"NetworkValidation", ResponseType::NetworkValidation},
             {"AssetPreview",ResponseType::AssetPreview},
@@ -244,6 +246,7 @@ namespace
             {"ClosePrefabStage", [](BufferReader &r) { (void)ClosePrefabStageCmd::Deserialize(r); }},
             {"SetNetworkSettings", [](BufferReader &r) { (void)SetNetworkSettingsCmd::Deserialize(r); }},
             {"GetNetworkValidation", [](BufferReader &r) { (void)GetNetworkValidationCmd::Deserialize(r); }},
+            {"GetEngineStats", [](BufferReader &r) { (void)GetEngineStatsCmd::Deserialize(r); }},
             {"GetEntity", [](BufferReader &r) { (void)GetEntityCmd::Deserialize(r); }},
             {"SetLocalTransform", [](BufferReader &r) { (void)SetLocalTransformCmd::Deserialize(r); }},
             {"AddComponent", [](BufferReader &r) { (void)AddComponentCmd::Deserialize(r); }},
@@ -695,6 +698,8 @@ TEST(ProtocolSpecTest, EveryCommandIsClassifiedForAPlayHost)
         {"GetPhysicsBackends", false}, {"GetNetworkSettings", false}, {"GetNetworkValidation", false},
         {"WritePlaySnapshot", false}, {"SetPaused", false}, {"Step", false}, {"GetPlayState", false},
         {"SendInput", false}, {"Shutdown", false},
+        // 1.28.0: host stats, a read that both kinds of host answer
+        {"GetEngineStats", false},
         // A play host runs no editor extension: the lists answer (nothing is loaded there), the reload and the invocation
         // are refused
         {"ListEditorExtensions", false}, {"GetEditorUi", false}, {"ReloadEditorExtensions", true},

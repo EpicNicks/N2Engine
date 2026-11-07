@@ -200,6 +200,7 @@ bool OpenGLRenderer::IsValidShader(Common::IShader *shader) const
 
 void OpenGLRenderer::BeginFrame()
 {
+    ResetRenderCounters();
     // The frame's target: the offscreen one while SetRenderTargetSize is in effect, else the window. The
     // viewport is set every frame, as the two can differ in size.
     if (m_offscreenFramebuffer != 0)
@@ -241,6 +242,7 @@ void OpenGLRenderer::BeginFrame()
 
 void OpenGLRenderer::EndFrame()
 {
+    PublishRenderCounters();
     // Whatever the last draw left on, readback and Present must not run with the sRGB encode enabled
     if (m_framebufferSrgbOn)
     {
@@ -703,6 +705,7 @@ void OpenGLRenderer::DrawIndices(Common::IMesh *mesh, const float *modelMatrix, 
     glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(indexCount), GL_UNSIGNED_INT,
                    reinterpret_cast<const void *>(offset));
     glBindVertexArray(0);
+    NoteDraw(indexCount, glMesh->GetVertexCount());
 }
 
 void OpenGLRenderer::DrawObjects(const std::vector<Common::RenderObject> &objects)

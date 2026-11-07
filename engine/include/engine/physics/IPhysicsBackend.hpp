@@ -27,6 +27,17 @@ namespace N2Engine::Physics
     struct OverlapHit;
     enum class QueryTriggers : std::uint8_t; // Raycast.hpp
 
+    /// How many bodies a backend's world holds (EN5, the editor's Profiler): what IPhysicsBackend::GetStats answers
+    struct PhysicsStats
+    {
+        /// Every rigid body: static, dynamic and kinematic
+        std::uint32_t bodies = 0;
+        /// Of them, the static ones
+        std::uint32_t staticBodies = 0;
+        /// Dynamic and kinematic bodies awake as of the last step
+        std::uint32_t activeBodies = 0;
+    };
+
     class IPhysicsBackend
     {
     public:
@@ -58,6 +69,10 @@ namespace N2Engine::Physics
         /// "unknown" for a backend that does not say (the default, so mocks keep compiling). It is the name the Physics
         /// and Network health rows give, and the start of the id the determinism fingerprint will carry.
         [[nodiscard]] virtual std::string_view BackendId() const { return "unknown"; }
+
+        /// The body counts of the world as it is now (PhysicsStats). Empty by default (a backend that does not count, a
+        /// mock) and before Initialize. Read-only: it changes nothing the simulation sees.
+        [[nodiscard]] virtual std::optional<PhysicsStats> GetStats() const { return std::nullopt; }
 
         /// Reads a body's full state into `out`: pose, both velocities and whether it is asleep. False (and `out`
         /// untouched) for a stale or invalid handle, a body that is not in the simulation (disabled), or a backend

@@ -166,6 +166,8 @@ namespace N2Engine::Editor
             {CommandType::CreateScriptAsset, false},
             {CommandType::MoveAsset, false},
             {CommandType::GetEngineHealth, false},
+            // Host stats (1.28.0): the Profiler's, not an extension's (and it turns the frame timers on)
+            {CommandType::GetEngineStats, false},
         };
     }
 

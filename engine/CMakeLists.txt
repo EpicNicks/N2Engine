@@ -90,6 +90,8 @@ if (WIN32)
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
     )
     target_compile_options(engine PRIVATE /bigobj)
+    # GetProcessMemoryInfo (src/diagnostics/ProcessMemory.cpp): kernel32's K32 name on Windows 7 and later, psapi for the rest
+    target_link_libraries(engine PRIVATE psapi)
 endif ()
 
 # Web: the standard library has no std::generator (external/web-stubs/include/generator stands in for it)
