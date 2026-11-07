@@ -10,6 +10,7 @@
 #include "engine/Camera.hpp"
 #include "engine/Health.hpp"
 #include "engine/SimulationClock.hpp"
+#include "engine/diagnostics/FrameStats.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
 #include "engine/input/PointerDispatcher.hpp"
 
@@ -74,6 +75,8 @@ namespace N2Engine
         // next) and owns the tick counter
         SimulationClock _simulationClock;
         std::function<void(double)> _fixedTickDriver;
+        // Where each Tick's time goes (EN5): off until a host asks (the editor's GetEngineStats)
+        Diagnostics::FrameStats _frameStats;
 
     private:
         /// Installs the UI hit provider (UI::UISystem) on the pointer dispatcher
@@ -82,7 +85,7 @@ namespace N2Engine
         /// Draws the current scene as seen by `camera`, and, when `screenSpaceUI` is set, the screen-space UI pass over it
         /// (what Render does with the main camera). World-space canvases are part of the scene and always draw.
         void Render(const Camera &camera, bool screenSpaceUI = true);
-        void PhysicsUpdate(const Scene &scene) const;
+        void PhysicsUpdate(const Scene &scene);
         /// One fixed tick of `scene`: in None mode the physics step (FixedUpdate, the backend, the transform sync),
         /// unless the time scale is 0; in a network mode the same after the tick counter moves on and the attach queue is
         /// processed. True if a step ran.
@@ -224,5 +227,14 @@ namespace N2Engine
         /// made. The SoftBodies row (Physics::MakeSoftBodiesStatus) is built the same way from its own failure
         /// state: a particle failure never changes it and the reverse.
         [[nodiscard]] const EngineHealth& GetHealth() const;
+
+        /**
+         * Per-frame timers of Tick (EN5): each Tick is one frame record, with the fixed-step loop, the physics step inside
+         * it, Update (pointer dispatch, Update, coroutines, LateUpdate), audio and drawing timed. Off by default (one
+         * branch per section); a host turns it on (the editor host at its first GetEngineStats). The timers read the
+         * steady clock only, so the simulation is the same with them on or off.
+         */
+        [[nodiscard]] Diagnostics::FrameStats& GetFrameStats() { return _frameStats; }
+        [[nodiscard]] const Diagnostics::FrameStats& GetFrameStats() const { return _frameStats; }
     };
 }

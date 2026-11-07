@@ -266,6 +266,7 @@ namespace ProtocolVectors
                 return json{{"preset", cmd.preset}, {"settings", cmd.settings}};
             }},
             {"GetNetworkValidation", [](BufferReader &r) { return json{{"preset", GetNetworkValidationCmd::Deserialize(r).preset}}; }},
+            {"GetEngineStats", [](BufferReader &r) { return json{{"sinceFrame", GetEngineStatsCmd::Deserialize(r).sinceFrame}}; }},
             {"InstantiateEntities", [](BufferReader &r)
             {
                 const auto cmd = InstantiateEntitiesCmd::Deserialize(r);
@@ -392,6 +393,7 @@ namespace ProtocolVectors
             {"PhysicsBackends", [](BufferWriter &w, const json &f) { WritePhysicsBackends(w, f.at("info")); }},
             {"AssetsMoved", [](BufferWriter &w, const json &f) { WriteAssetsMoved(w, f.at("result")); }},
             {"PrefabStageInfo", [](BufferWriter &w, const json &f) { WritePrefabStageInfo(w, f.at("info")); }},
+            {"EngineStats", [](BufferWriter &w, const json &f) { WriteEngineStats(w, f.at("stats")); }},
             {"NetworkSettings", [](BufferWriter &w, const json &f) { WriteNetworkSettings(w, f.at("info")); }},
             {"NetworkValidation", [](BufferWriter &w, const json &f) { WriteNetworkValidation(w, f.at("report")); }},
             {"AssetPreview",[](BufferWriter &w,const json &f){const auto pixels=FromHex(StringField(f,"pixels"));WriteAssetPreview(w,f.at("info"),pixels);}},

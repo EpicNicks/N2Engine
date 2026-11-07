@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.27.0";
+inline constexpr const char *ProtocolVersion = "1.28.0";
 
 enum class CommandType : uint8_t
 {
@@ -106,6 +106,7 @@ enum class CommandType : uint8_t
     SavePrefabStage = 0x2C,
     ClosePrefabStage = 0x2D,
     GetPrefabStage = 0x2E,
+    GetEngineStats = 0x54,
 };
 
 enum class ResponseType : uint8_t
@@ -157,6 +158,7 @@ enum class ResponseType : uint8_t
     NetworkValidation = 0x25,
     AssetsMoved = 0xA5,
     PrefabStageInfo = 0x26,
+    EngineStats = 0x27,
 };
 
 // Custom types
@@ -561,6 +563,11 @@ struct ClosePrefabStageCmd
     bool discard;
 };
 
+struct GetEngineStatsCmd
+{
+    uint32_t sinceFrame;
+};
+
 // Response structures
 struct FrameDataData
 {
@@ -842,6 +849,11 @@ struct AssetsMovedData
 struct PrefabStageInfoData
 {
     std::string info; // JSON: PrefabStageInfo
+};
+
+struct EngineStatsData
+{
+    std::string stats; // JSON: EngineStats
 };
 
 struct ErrorCodedData

@@ -2483,6 +2483,22 @@ namespace N2Engine::Physics
         return static_cast<int>(hits.size());
     }
 
+    std::optional<PhysicsStats> PhysXBackend::GetStats() const
+    {
+        if (_scene == nullptr)
+        {
+            return std::nullopt;
+        }
+        PhysicsStats stats;
+        stats.staticBodies = _scene->getNbActors(PxActorTypeFlags(PxActorTypeFlag::eRIGID_STATIC));
+        stats.bodies = stats.staticBodies + _scene->getNbActors(PxActorTypeFlags(PxActorTypeFlag::eRIGID_DYNAMIC));
+        // As of the last simulate (zeros before the first): the statistics are gathered by the step itself
+        PxSimulationStatistics simulation;
+        _scene->getSimulationStatistics(simulation);
+        stats.activeBodies = simulation.nbActiveDynamicBodies + simulation.nbActiveKinematicBodies;
+        return stats;
+    }
+
     // Stub implementations for unused callbacks
     void PhysXBackend::onConstraintBreak(PxConstraintInfo *constraints, PxU32 count) {}
     void PhysXBackend::onWake(PxActor **actors, PxU32 count) {}

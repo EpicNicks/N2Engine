@@ -1264,4 +1264,5 @@ void VulkanRenderer::DrawLocked(IMesh* mesh, const float* modelMatrix, IMaterial
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vulkanMesh.vertexBuffer, &vertexOffset);
     vkCmdBindIndexBuffer(commandBuffer, vulkanMesh.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
     vkCmdDrawIndexed(commandBuffer, count, 1, first, 0, 0);
+    NoteDraw(count, vulkanMesh.vertexCount);
 }

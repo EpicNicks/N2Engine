@@ -115,6 +115,10 @@ namespace N2Engine::Physics
         [[nodiscard]] PhysicsFeatureSet GetImplementedFeatures() const override { return kImplementedFeatures; }
         /// "physx"
         [[nodiscard]] std::string_view BackendId() const override { return "physx"; }
+        /// The scene's rigid actors (PxScene::getNbActors: static, and static plus dynamic, kinematic ones included) and
+        /// the dynamic and kinematic bodies awake in the last step (PxScene::getSimulationStatistics). Empty before
+        /// Initialize.
+        [[nodiscard]] std::optional<PhysicsStats> GetStats() const override;
         /// For tests: the dispatcher worker-thread count to use instead of the one SetDeterministic implies (4 by
         /// default, 0 when deterministic). Call before Initialize.
         void SetWorkerThreadsForTesting(std::optional<unsigned> threads) { _workerThreadsOverride = threads; }

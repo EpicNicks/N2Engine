@@ -363,7 +363,7 @@ TEST(EditorServerLoggingTest, PolledCommandsAreTheOnesClientsPoll)
                                      CommandType::GetComponent, CommandType::GetComponentTypes,
                                      CommandType::GetLuaFields, CommandType::GetHistory,
                                      CommandType::GetAutosave, CommandType::ListAssets, CommandType::GetAssetInfo,
-                                     CommandType::ReadTextAsset})
+                                     CommandType::ReadTextAsset, CommandType::GetEngineStats})
     {
         EXPECT_TRUE(EditorServer::IsPolledCommand(static_cast<uint8_t>(polled))) << static_cast<int>(polled);
     }
