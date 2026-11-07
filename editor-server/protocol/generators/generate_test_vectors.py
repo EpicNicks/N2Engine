@@ -47,9 +47,29 @@ LUA_FIELDS_PREFAB_SCHEMA = {
          "container": "scriptData"},
     ],
 }
+# EngineStats of a play host (since 1.28.0) with every block: what GetEngineStats answers after a frame and a RenderFrame, on
+# a host with a physics backend and a platform memory query. editor_project_tests checks that a play host's answer has no
+# other block and, in each block it has, these keys (EditorEngineStatsTest.APlayHostsAnswerHasTheShapeOfTheGoldenVector).
+ENGINE_STATS_PLAY_HOST = {
+    "host": {"kind": "play", "state": "Playing", "renderer": "OpenGL", "timersEnabled": True, "timeScale": 1},
+    "frame": 18234,
+    "frames": [
+        {"frame": 18234, "intervalMs": 16.75, "tickMs": 2.125, "fixedMs": 0.875, "fixedTicks": 1, "physicsMs": 0.5,
+         "updateMs": 0.75, "audioMs": 0.125, "renderMs": 0, "commandsMs": 4.25, "renderRequestMs": 3.125,
+         "readbackMs": 0.75},
+    ],
+    "summary": {"windowFrames": 240, "fps": 59.75, "tickMs": {"avg": 2, "p95": 3.5, "max": 9.25}},
+    "render": {"counters": True, "drawCalls": 412, "triangles": 183220, "vertices": 120004, "framesRendered": 5120,
+               "width": 1280, "height": 720},
+    "scene": {"objects": 1530, "activeObjects": 1490, "components": 4120, "luaComponents": 61},
+    "lua": {"memoryBytes": 3145728, "memoryCapBytes": 268435456},
+    "physics": {"backend": "physx", "bodies": 820, "staticBodies": 400, "activeBodies": 37},
+    "process": {"workingSetBytes": 412000000, "peakWorkingSetBytes": 430000000},
+}
 RESPONSE_VARIANTS = [
     ("FrameUpdate", {"modified": False, "pixels": ""}),
     ("LuaFields", {"schema": LUA_FIELDS_PREFAB_SCHEMA}),
+    ("EngineStats", {"stats": ENGINE_STATS_PLAY_HOST}),
 ]
 
 

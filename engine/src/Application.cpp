@@ -625,6 +625,8 @@ void Application::EndRun()
 
 void Application::Tick(const TickOptions &options)
 {
+    // One frame record (EN5; nothing while the timers are off). The clock is only read, so the frame is the same either way
+    _frameStats.BeginFrame();
     if (options.pollEvents)
     {
         _window.PollEvents();
@@ -675,29 +677,35 @@ void Application::Tick(const TickOptions &options)
             curScene.ProcessAttachQueue();
         }
 
-        if (_fixedTickDriver)
         {
-            // A network session decides the ticks (it runs each through StepTicks); nothing builds up behind it. A copy:
-            // the driver may remove itself
-            const FixedTickDriver driver = _fixedTickDriver;
-            driver(static_cast<double>(Time::GetUnscaledDeltaTime()));
-            _simulationClock.ResetAccumulator();
-        }
-        else
-        {
-            while (_simulationClock.TickDue(Time::GetFixedUnscaledDeltaTime()))
+            const Diagnostics::ScopedFrameSection fixedSection(_frameStats, Diagnostics::FrameSection::Fixed);
+            if (_fixedTickDriver)
             {
-                RunFixedTick(curScene);
-                _simulationClock.CompleteTick(Time::GetFixedUnscaledDeltaTime());
+                // A network session decides the ticks (it runs each through StepTicks); nothing builds up behind it. A
+                // copy: the driver may remove itself
+                const FixedTickDriver driver = _fixedTickDriver;
+                driver(static_cast<double>(Time::GetUnscaledDeltaTime()));
+                _simulationClock.ResetAccumulator();
             }
-            _simulationClock.EndFrame(Time::GetFixedUnscaledDeltaTime());
+            else
+            {
+                while (_simulationClock.TickDue(Time::GetFixedUnscaledDeltaTime()))
+                {
+                    RunFixedTick(curScene);
+                    _simulationClock.CompleteTick(Time::GetFixedUnscaledDeltaTime());
+                }
+                _simulationClock.EndFrame(Time::GetFixedUnscaledDeltaTime());
+            }
         }
-        // OnMouse*: after the fixed steps (so it picks against this frame's physics) and before Update,
-        // where Unity sends them
-        _pointerDispatcher.Update();
-        curScene.Update();
-        curScene.AdvanceCoroutines();
-        curScene.LateUpdate();
+        {
+            const Diagnostics::ScopedFrameSection updateSection(_frameStats, Diagnostics::FrameSection::Update);
+            // OnMouse*: after the fixed steps (so it picks against this frame's physics) and before Update,
+            // where Unity sends them
+            _pointerDispatcher.Update();
+            curScene.Update();
+            curScene.AdvanceCoroutines();
+            curScene.LateUpdate();
+        }
     }
     else
     {
@@ -708,10 +716,14 @@ void Application::Tick(const TickOptions &options)
     // After LateUpdate, where listeners and sources push their positions. A loopback device (headless) only
     // mixes when asked, so it is paced here by real elapsed time (no-op with a sound card), then Update
     // recycles whatever that finished.
-    Audio::AudioSystem::Instance().AdvanceStream(Time::GetUnscaledDeltaTime());
-    Audio::AudioSystem::Instance().Update();
+    {
+        const Diagnostics::ScopedFrameSection audioSection(_frameStats, Diagnostics::FrameSection::Audio);
+        Audio::AudioSystem::Instance().AdvanceStream(Time::GetUnscaledDeltaTime());
+        Audio::AudioSystem::Instance().Update();
+    }
     if (options.render)
     {
+        const Diagnostics::ScopedFrameSection renderSection(_frameStats, Diagnostics::FrameSection::Render);
         Render();
     }
     if (SceneManager::GetCurSceneIndex() != -1)
@@ -720,6 +732,7 @@ void Application::Tick(const TickOptions &options)
         curScene.ProcessDestroyed();
     }
     SceneManager::ProcessAnyPendingSceneChange();
+    _frameStats.EndFrame();
 }
 
 bool Application::RunFixedTick(Scene &scene)
@@ -746,6 +759,7 @@ bool Application::RunFixedTick(Scene &scene)
         _simulationClock.BeginTick();
         scene.ProcessAttachQueue();
         PhysicsUpdate(scene);
+        _frameStats.NoteFixedTick();
         return true;
     }
     // Paused (timeScale 0): no fixed steps, as in Unity; stepping PhysX by 0 is an error
@@ -753,6 +767,7 @@ bool Application::RunFixedTick(Scene &scene)
     {
         _simulationClock.BeginTick();
         PhysicsUpdate(scene);
+        _frameStats.NoteFixedTick();
         return true;
     }
     return false;
@@ -793,6 +808,8 @@ void Application::SetFixedTickDriver(FixedTickDriver driver)
 void Application::ResetFrameClock()
 {
     Time::ResetFrameClock();
+    // The frame timers' interval too: the stretch since the last frame (a pause) is not a frame
+    _frameStats.ResetInterval();
 }
 
 void Application::RenderGameFrame()
@@ -912,12 +929,14 @@ void Application::OnWindowResize(const int width, const int height) const
     }
 }
 
-void Application::PhysicsUpdate(const Scene &scene) const
+void Application::PhysicsUpdate(const Scene &scene)
 {
     if (_3DphysicsBackend)
     {
         _3DphysicsBackend->ApplyPendingChanges();
         scene.FixedUpdate();
+        // The frame record's physicsMs: the backend's step, the sync and the callbacks (FixedUpdate is the game's)
+        const Diagnostics::ScopedFrameSection physicsSection(_frameStats, Diagnostics::FrameSection::Physics);
         _3DphysicsBackend->Update(Time::GetFixedDeltaTime());
 
         // Sync physics results back to GameObjects

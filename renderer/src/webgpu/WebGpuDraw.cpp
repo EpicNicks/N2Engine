@@ -894,6 +894,7 @@ namespace Renderer::WebGpu
         wgpuRenderPassEncoderSetVertexBuffer(pass, 0, webMesh.vertexBuffer.Get(), 0, WGPU_WHOLE_SIZE);
         wgpuRenderPassEncoderSetIndexBuffer(pass, webMesh.indexBuffer.Get(), WGPUIndexFormat_Uint32, 0, WGPU_WHOLE_SIZE);
         wgpuRenderPassEncoderDrawIndexed(pass, count, 1, first, 0, 0);
+        NoteDraw(count, webMesh.vertexCount);
         // The in-frame UpdateMesh rule: this mesh's buffers are now referenced by the frame being recorded
         webMesh.lastDrawFrame = state.frameSerial;
     }

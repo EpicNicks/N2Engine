@@ -1059,6 +1059,7 @@ namespace Renderer::WebGpu
         }
         ++state.frameSerial; // the frame being recorded: the in-frame UpdateMesh rule compares against it
         BeginDrawFrame();
+        ResetRenderCounters();
         _frameOpen = true;
     }
 
@@ -1071,6 +1072,8 @@ namespace Renderer::WebGpu
             return;
         }
         _frameOpen = false;
+        // What the frame recorded (DrawLocked counted each indexed draw), whether or not its submit succeeds
+        PublishRenderCounters();
         EndPass();
         CommandBufferRef commands(wgpuCommandEncoderFinish(state.encoder.Get(), nullptr));
         state.encoder.Reset();

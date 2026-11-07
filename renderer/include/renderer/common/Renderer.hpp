@@ -13,6 +13,7 @@
 #include <math/Vector3.hpp>
 
 #include "renderer/common/RenderTypes.hpp"
+#include "renderer/common/RenderCounters.hpp"
 #include "renderer/common/RenderState.hpp"
 #include "renderer/common/IMaterial.hpp"
 #include "renderer/common/IShader.hpp"
@@ -257,13 +258,47 @@ namespace Renderer::Common
         /// software); the default (a test fake) does not.
         [[nodiscard]] virtual bool SupportsStageDim() const { return false; }
 
+        /**
+         * What the last finished frame drew (EN5): its draw calls, triangles and vertices, counted between its BeginFrame
+         * and EndFrame (RenderCounters). Like the stage dim, the counting is non-virtual state each backend updates where
+         * it records a draw (NoteDraw), clears in BeginFrame (ResetRenderCounters) and publishes in EndFrame
+         * (PublishRenderCounters). All zeros before the first frame, and for a backend that does not count.
+         */
+        [[nodiscard]] const RenderCounters& GetLastFrameCounters() const { return m_lastFrameCounters; }
+        /// Whether this backend counts its draws (GetLastFrameCounters means something). The four backends do (OpenGL,
+        /// Vulkan, WebGPU, software); the default (a test fake) does not.
+        [[nodiscard]] virtual bool SupportsRenderCounters() const { return false; }
+
     protected:
         /// Expires every token handed out so far: the renderer's resources are gone (Shutdown). Later calls to
         /// GetLifetimeToken return a fresh token.
         void EndLifetime() { m_lifetime = std::make_shared<const int>(0); }
 
+        /// A frame starts: nothing drawn in it yet
+        void ResetRenderCounters()
+        {
+            m_frameCounters.drawCalls = 0;
+            m_frameCounters.triangles = 0;
+            m_frameCounters.vertices = 0;
+        }
+        /// One draw of `indexCount` indices of a mesh of `vertexCount` vertices reached the backend's draw call
+        void NoteDraw(const std::uint32_t indexCount, const std::uint32_t vertexCount)
+        {
+            ++m_frameCounters.drawCalls;
+            m_frameCounters.triangles += indexCount / 3;
+            m_frameCounters.vertices += vertexCount;
+        }
+        /// The frame is finished: its counts become the last frame's
+        void PublishRenderCounters()
+        {
+            ++m_frameCounters.frames;
+            m_lastFrameCounters = m_frameCounters;
+        }
+
     private:
         std::shared_ptr<const int> m_lifetime = std::make_shared<const int>(0);
         float m_stageDim = 0.0f;
+        RenderCounters m_frameCounters{};
+        RenderCounters m_lastFrameCounters{};
     };
 }
