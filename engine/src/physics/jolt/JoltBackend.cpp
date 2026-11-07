@@ -1268,6 +1268,8 @@ namespace N2Engine::Physics
 
         std::vector<BodyData> bodies;
         std::vector<std::uint32_t> freeList;
+        /// A late joiner's pending claims (ClaimBodyHandles)
+        std::vector<BodyHandleClaim> claims;
 
         Math::Vector3 currentGravity{0.0f, -9.81f, 0.0f};
         std::optional<Math::Vector3> pendingGravity;
@@ -1312,17 +1314,40 @@ namespace N2Engine::Physics
         }
 
         // ===== Handles (the PhysX backend's scheme, so both give the same handles for the same sequence) =====
+        // A late joiner's pending claims (ClaimBodyHandles): the slot of each is kept for its Rigidbody
+        bool IsClaimedIndex(const std::uint32_t index) const
+        {
+            return std::any_of(claims.begin(), claims.end(),
+                               [index](const BodyHandleClaim &claim) { return claim.handle.index == index; });
+        }
+
         PhysicsBodyHandle AllocateHandle()
         {
             PhysicsBodyHandle handle;
-            if (!freeList.empty())
+            // The last free slot that no claim keeps (with no claims pending: the last free slot, as always)
+            std::size_t pick = freeList.size();
+            for (std::size_t i = freeList.size(); i > 0; --i)
             {
-                handle.index = freeList.back();
-                freeList.pop_back();
+                if (!IsClaimedIndex(freeList[i - 1]))
+                {
+                    pick = i - 1;
+                    break;
+                }
+            }
+            if (pick < freeList.size())
+            {
+                handle.index = freeList[pick];
+                freeList.erase(freeList.begin() + static_cast<std::ptrdiff_t>(pick));
                 bodies[handle.index].generation++;
             }
             else
             {
+                // A claimed slot at the end of the table is made now and stays free for its claim
+                while (bodies.size() < maxBodies && IsClaimedIndex(static_cast<std::uint32_t>(bodies.size())))
+                {
+                    freeList.push_back(static_cast<std::uint32_t>(bodies.size()));
+                    bodies.emplace_back();
+                }
                 if (bodies.size() >= maxBodies)
                 {
                     return INVALID_PHYSICS_HANDLE;
@@ -1334,6 +1359,47 @@ namespace N2Engine::Physics
             handle.generation = bodies[handle.index].generation;
             bodies[handle.index].active = true;
             return handle;
+        }
+
+        // A claimed handle, exactly (its index and generation), when its slot is free; false and nothing changed otherwise
+        bool AllocateHandleAt(const PhysicsBodyHandle wanted)
+        {
+            if (!wanted.IsValid() || wanted.index >= maxBodies ||
+                (wanted.index < bodies.size() && bodies[wanted.index].active))
+            {
+                return false;
+            }
+            while (bodies.size() <= wanted.index)
+            {
+                freeList.push_back(static_cast<std::uint32_t>(bodies.size()));
+                bodies.emplace_back();
+            }
+            std::erase(freeList, wanted.index);
+            BodyData &data = bodies[wanted.index];
+            data.generation = wanted.generation;
+            data.active = true;
+            return true;
+        }
+
+        // The handle of a new body: the claimed one for a claimed Rigidbody when its slot is free (the claim is used up
+        // either way), otherwise the next one
+        PhysicsBodyHandle AllocateHandleFor(const Rigidbody *rigidbody)
+        {
+            if (rigidbody != nullptr)
+            {
+                const auto claim = std::find_if(claims.begin(), claims.end(), [rigidbody](const BodyHandleClaim &entry)
+                                                { return entry.rigidbody == rigidbody; });
+                if (claim != claims.end())
+                {
+                    const PhysicsBodyHandle wanted = claim->handle;
+                    claims.erase(claim);
+                    if (AllocateHandleAt(wanted))
+                    {
+                        return wanted;
+                    }
+                }
+            }
+            return AllocateHandle();
         }
 
         void FreeHandle(const PhysicsBodyHandle handle)
@@ -1455,7 +1521,7 @@ namespace N2Engine::Physics
                 return INVALID_PHYSICS_HANDLE;
             }
 
-            const PhysicsBodyHandle handle = AllocateHandle();
+            const PhysicsBodyHandle handle = AllocateHandleFor(rigidbody);
             if (!handle.IsValid())
             {
                 Logger::Error(std::format("Failed to create a physics body: the Jolt backend holds at most {} bodies",
@@ -2955,6 +3021,7 @@ namespace N2Engine::Physics
             }
             s.bodies.clear();
             s.freeList.clear();
+            s.claims.clear();
             s.pendingGravity.reset();
             s.initialized = false;
         }
@@ -3732,6 +3799,11 @@ namespace N2Engine::Physics
             return false;
         }
         return true;
+    }
+
+    void JoltBackend::ClaimBodyHandles(const std::span<const BodyHandleClaim> claims)
+    {
+        _impl->claims.assign(claims.begin(), claims.end());
     }
 
     bool JoltBackend::RestoreState(const std::span<const std::byte> in)

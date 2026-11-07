@@ -108,7 +108,7 @@ TEST(N2ServerOptionsTest, HelpWinsOverEverythingElse)
     // Every option the parser takes is in the usage text
     const std::string usage(ServerUsage());
     for (const char *option : {"--project", "--scene", "--bind", "--port", "--tokens-file", "--max-clients", "--protocol-id",
-                               "--insecure-bind", "--relay", "--relay-players", "--relay-stall", "--relay-stall-ms", "--relay-layout", "--relay-spectators", "--relay-snapshot-max-mb", "--relay-snapshot-timeout-ms", "--relay-promotion", "--exit-on-stdin-eof", "--log-level", "--log-file",
+                               "--insecure-bind", "--relay", "--relay-players", "--relay-stall", "--relay-stall-ms", "--relay-layout", "--relay-spectators", "--relay-snapshot-max-mb", "--relay-snapshot-timeout-ms", "--relay-promotion", "--relay-rejoin-reserve-ms", "--exit-on-stdin-eof", "--log-level", "--log-file",
                                "--new-token"})
     {
         EXPECT_NE(usage.find(option), std::string::npos) << option;
@@ -303,11 +303,13 @@ TEST(N2ServerOptionsTest, RelaySpectatorOptionsParseWithTheDocumentedDefaultsAnd
     EXPECT_NE(ErrorOf(Serving({"--relay-snapshot-timeout-ms", "2000"})).find("only apply with --relay"), std::string::npos);
 }
 
-TEST(N2ServerOptionsTest, RelayPromotionIsDeniedByDefaultAndTakesAllowOrDeny)
+TEST(N2ServerOptionsTest, RelayPromotionIsAllowedByDefaultAndTakesAllowOrDeny)
 {
+    // Allowed by default: the relay is given every peer's token identity, so a spectator token is never promoted
     const auto defaults = Parse(Serving({"--relay"}));
     ASSERT_TRUE(defaults.has_value()) << defaults.error();
-    EXPECT_FALSE(defaults->relayPromotion);
+    EXPECT_TRUE(defaults->relayPromotion);
+    EXPECT_FALSE(defaults->relayPromotionGiven);
     const auto allowed = Parse(Serving({"--relay", "--relay-promotion", "allow"}));
     ASSERT_TRUE(allowed.has_value()) << allowed.error();
     EXPECT_TRUE(allowed->relayPromotion);
@@ -317,6 +319,25 @@ TEST(N2ServerOptionsTest, RelayPromotionIsDeniedByDefaultAndTakesAllowOrDeny)
     EXPECT_NE(ErrorOf(Serving({"--relay", "--relay-promotion", "yes"})).find("--relay-promotion"), std::string::npos);
     EXPECT_NE(ErrorOf(Serving({"--relay", "--relay-promotion"})).find("missing a value"), std::string::npos);
     EXPECT_NE(ErrorOf(Serving({"--relay-promotion", "allow"})).find("only apply with --relay"), std::string::npos);
+    EXPECT_NE(ErrorOf(Serving({"--relay-promotion", "deny"})).find("only apply with --relay"), std::string::npos);
+    const auto plain = Parse(Serving());
+    ASSERT_TRUE(plain.has_value()) << plain.error() << " (the allow default alone is not an error without --relay)";
+}
+
+TEST(N2ServerOptionsTest, RelayRejoinReserveDefaultsTo30SecondsAndTakes0To600000)
+{
+    const auto defaults = Parse(Serving({"--relay"}));
+    ASSERT_TRUE(defaults.has_value()) << defaults.error();
+    EXPECT_EQ(defaults->relayRejoinReserveMs, 30000);
+    const auto none = Parse(Serving({"--relay", "--relay-rejoin-reserve-ms", "0"}));
+    ASSERT_TRUE(none.has_value()) << none.error();
+    EXPECT_EQ(none->relayRejoinReserveMs, 0);
+    const auto most = Parse(Serving({"--relay", "--relay-rejoin-reserve-ms", "600000"}));
+    ASSERT_TRUE(most.has_value()) << most.error();
+    EXPECT_EQ(most->relayRejoinReserveMs, 600000);
+    EXPECT_NE(ErrorOf(Serving({"--relay", "--relay-rejoin-reserve-ms", "600001"})).find("--relay-rejoin-reserve-ms"), std::string::npos);
+    EXPECT_NE(ErrorOf(Serving({"--relay", "--relay-rejoin-reserve-ms", "-1"})).find("--relay-rejoin-reserve-ms"), std::string::npos);
+    EXPECT_NE(ErrorOf(Serving({"--relay-rejoin-reserve-ms", "0"})).find("only apply with --relay"), std::string::npos);
 }
 
 TEST(N2ServerOptionsTest, NewTokenTakesAUserAndARoleAndNeedsATokensFile)

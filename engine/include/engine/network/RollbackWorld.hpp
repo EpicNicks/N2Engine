@@ -14,6 +14,7 @@
 
 #include "engine/Transform.hpp"
 #include "engine/physics/BodyState.hpp"
+#include "engine/physics/PhysicsHandle.hpp"
 
 #include "engine/network/NetworkId.hpp"
 #include "engine/network/NetworkObject.hpp"
@@ -48,6 +49,21 @@ namespace N2Engine::Network
             /// Restore does not use it (the physics part is exact); a late joiner whose backend refuses the physics part
             /// puts the bodies back from it (RestoreForJoin)
             std::optional<Physics::BodyState> body;
+
+            /// One Rigidbody's body in the object's hierarchy: `node` 0 is the root, node k the (k-1)th object of
+            /// GetChildrenRecursive
+            struct BodyHandle
+            {
+                std::uint32_t node = 0;
+                Physics::PhysicsBodyHandle handle;
+
+                friend bool operator==(const BodyHandle &, const BodyHandle &) = default;
+            };
+            /// The handles of the Rigidbodies' bodies on the root and its descendants (only those that have a body). A
+            /// late joiner instantiates the object's prefab and has the backend create these bodies under the same
+            /// handles (IPhysicsBackend::ClaimBodyHandles), so its bodies are the snapshot's and the physics part applies
+            /// exactly (RestoreForJoin)
+            std::vector<BodyHandle> bodyHandles;
         };
 
         /// The state BEFORE tick `tick` runs (so the world after tick - 1 ticks)
@@ -65,9 +81,10 @@ namespace N2Engine::Network
         std::vector<std::uint32_t> streams;
     };
 
-    /// The bytes of a snapshot that travel to a late joiner or a spectator (netcode C6): "N2WS", a format version, the
-    /// tick, the id counter, the random streams, each object (id, owner, spawned and active flags, prefab, layout hash, its
-    /// replicated fields as CBOR, the root body state), the physics bytes, and an FNV-1a 64-bit checksum of all of it.
+    /// The bytes of a snapshot that travel to a late joiner or a spectator (netcode C6): "N2WS", a format version (2: the
+    /// body handles were added), the tick, the id counter, the random streams, each object (id, owner, spawned and active
+    /// flags, prefab, layout hash, its replicated fields as CBOR, the root body state, its bodies' handles), the physics
+    /// bytes, and an FNV-1a 64-bit checksum of all of it.
     /// Little-endian. The physics part is still the backend's own bytes: it restores only on the same build, and only
     /// into a backend with the same bodies (see RestoreForJoin).
     [[nodiscard]] std::vector<std::uint8_t> SerializeWorldSnapshot(const WorldSnapshot &snapshot);
@@ -86,6 +103,8 @@ namespace N2Engine::Network
         bool exactPhysics = false;
         std::size_t spawned = 0;
         std::size_t removed = 0;
+        /// Bodies of the instantiated objects the backend was asked to create under the snapshot's handles
+        std::size_t bodiesClaimed = 0;
     };
 
     struct RollbackWorldStats
@@ -148,14 +167,18 @@ namespace N2Engine::Network
         [[nodiscard]] std::expected<void, std::string> Restore(const WorldSnapshot &snapshot);
 
         /// A late joiner or spectator (netcode C6) takes a snapshot another peer made, into a world bound to the same
-        /// scene: registered objects the snapshot does not hold are despawned, spawned objects it holds and this world
-        /// does not are instantiated under their ids, the scene's attach and destroy queues run (so their bodies exist),
-        /// then the objects, fields, id counter and random streams are restored as by Restore. The physics part goes to
-        /// RestoreState; when the backend refuses it (its bodies are not the ones of the snapshot: their slots,
-        /// generations or Jolt ids differ, as they do after bodies were destroyed and recreated on the other peer) the
-        /// bodies of the objects' root Rigidbodies are set from the snapshot's body states instead and exactPhysics is
-        /// false. Errors: a scene object of the snapshot missing here, a prefab that does not instantiate, anything
-        /// Restore refuses.
+        /// scene: registered objects the snapshot does not hold are despawned and the destroy queue runs (their bodies
+        /// go, so their slots are free), spawned objects it holds and this world does not are instantiated under their
+        /// ids, and the attach queue runs with the backend told to create each of their Rigidbodies' bodies under the
+        /// handle the snapshot names for it (IPhysicsBackend::ClaimBodyHandles: the same slot, generation and so Jolt id
+        /// as on the peer that saved it, which makes the bodies match even after bodies were destroyed and recreated
+        /// there), then the objects, fields, id counter and random streams are restored as by Restore. The physics part
+        /// goes to RestoreState; when the backend still refuses it (its bodies are not the ones of the snapshot: a claimed
+        /// slot was taken here by a body the other peer does not have, a scene object's body has another handle here, a
+        /// body of a non-networked object differs) the bodies of the objects' root Rigidbodies are set from the
+        /// snapshot's body states instead and exactPhysics is false (RollbackRuntime then ends a spectator's session
+        /// unless the host allows it, RollbackRuntimeOptions::allowInexactPhysics). Errors: a scene object of the
+        /// snapshot missing here, a prefab that does not instantiate, anything Restore refuses.
         [[nodiscard]] std::expected<JoinRestoreResult, std::string> RestoreForJoin(const WorldSnapshot &snapshot);
 
         /// The simulation spawns `prefab` for `owner` at tick `tick`: the next net id, a parked object of that id and

@@ -152,6 +152,17 @@ namespace N2Engine::Network
         std::function<std::expected<void, std::string>(const WorldSnapshot &)> join;
         /// The largest snapshot a spectator takes
         std::uint32_t maxSnapshotBytes = 16u * 1024u * 1024u;
+
+        // ===== Coming back to a dropped slot (lockstep wire version 3) =====
+        /// A dropped player comes back: the client joins as a spectator (rejoin implies spectate), starts from a player's
+        /// snapshot, and once it runs in step asks the relay for a dropped slot (Promote 255) by itself, again every
+        /// rejoinRetryMicros while the answer is a refusal other than NotAllowed, for at most rejoinTimeoutMicros. A relay
+        /// that knows identities (LockstepRelayOptions::identify, as N2Server) gives a user its own dropped slot, matched
+        /// by the join token's user name, and keeps it for that user for a while; one that does not gives the lowest
+        /// dropped slot. The answer is the Promoted event (or the last PromotionRefused).
+        bool rejoin = false;
+        std::uint64_t rejoinRetryMicros = 250'000;
+        std::uint64_t rejoinTimeoutMicros = 60'000'000;
     };
 
     struct LockstepRuntimeStats
@@ -231,7 +242,9 @@ namespace N2Engine::Network
      * of that slot: its own input runs from the join tick, it reports roots and answers snapshot requests. It has no
      * replay log (it did not see the session from tick 0), so it writes no desync report, and it does not roll back
      * even with rollbackWindow set. A player that gets SlotRejoin rejoins the slot in its scheduler (the mirror of
-     * DropSlot; a player already past the join tick fails, as for a DropSlot it cannot apply).
+     * DropSlot; a player already past the join tick fails, as for a DropSlot it cannot apply). With rejoin, a dropped
+     * player's new client does this by itself: it spectates and asks for any dropped slot (255) until it is promoted, and
+     * a relay that knows identities hands it the slot its token's user played.
      *
      * Single-threaded. The SimulationClock's tick counter is Time::GetTick(), process-wide; the runtime touches it only
      * with ownsTickCounter.
@@ -316,6 +329,8 @@ namespace N2Engine::Network
         void ApplySnapshot();
         void ServeSnapshot();
         void SendSpectatorAck(std::uint64_t now);
+        /// options_.rejoin: asks for a dropped slot when it is time to
+        void StepRejoin(std::uint64_t now);
         void SendBundle(std::uint64_t now);
         void BeginStop(const StopMessage &stop);
         void StepStop(std::uint64_t now);
@@ -363,6 +378,11 @@ namespace N2Engine::Network
         bool spectating_ = false;
         bool promotionPending_ = false;
         RefuseReason promotionRefusal_ = RefuseReason::None;
+        /// options_.rejoin: when it started asking, when it asks next, and whether it gave up
+        bool rejoinStarted_ = false;
+        bool rejoinOver_ = false;
+        std::uint64_t rejoinSince_ = 0;
+        std::uint64_t rejoinNextAt_ = 0;
         std::uint32_t hashInterval_ = 30;
         std::uint32_t tickRate_ = 60;
         N2Net::DropFill dropFill_ = N2Net::DropFill::Neutral;

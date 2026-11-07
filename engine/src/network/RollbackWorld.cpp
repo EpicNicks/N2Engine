@@ -56,7 +56,11 @@ namespace N2Engine::Network
         // ===== Snapshot bytes =====
 
         constexpr std::uint32_t kSnapshotMagic = 0x5357324Eu; // "N2WS" little-endian
-        constexpr std::uint32_t kSnapshotFormat = 1;
+        /// 2: each object carries its bodies' handles (a late joiner creates the same ones)
+        constexpr std::uint32_t kSnapshotFormat = 2;
+        /// The most body handles one object's record carries (a hierarchy with more Rigidbodies is cut there; the rest
+        /// get handles as usual on a joiner)
+        constexpr std::size_t kMaxBodyHandlesPerObject = 1024;
 
         std::uint64_t Fnv1a(const std::span<const std::uint8_t> bytes)
         {
@@ -222,6 +226,29 @@ namespace N2Engine::Network
                     if (_physics->GetBodyState(body->GetHandle(), state))
                     {
                         saved.body = state;
+                    }
+                }
+                // Every body's handle, so a late joiner can create the same ones (the hierarchy walk only for an object
+                // that has children: this runs at every save of a rollback window)
+                const auto note = [&saved](const std::uint32_t node, GameObject &target)
+                {
+                    if (const Physics::Rigidbody *const body = target.GetComponent<Physics::Rigidbody>();
+                        body != nullptr && body->GetHandle().IsValid())
+                    {
+                        saved.bodyHandles.push_back(WorldSnapshot::Object::BodyHandle{node, body->GetHandle()});
+                    }
+                };
+                note(0, gameObject);
+                if (gameObject.GetChildCount() > 0)
+                {
+                    std::uint32_t node = 1;
+                    for (const GameObject::Ptr &child : gameObject.GetChildrenRecursive())
+                    {
+                        if (child)
+                        {
+                            note(node, *child);
+                        }
+                        ++node;
                     }
                 }
             }
@@ -596,8 +623,12 @@ namespace N2Engine::Network
             _world.ReleaseParked(NetworkId{id});
             ++_stats.released;
         }
+        // Their bodies go now, before the spawns below make theirs: a slot a body of the snapshot needs may be one of them
+        scene->ProcessDestroyed();
 
-        // What the snapshot has and this world does not: spawned on the other peers before the snapshot
+        // What the snapshot has and this world does not: spawned on the other peers before the snapshot. Each of its
+        // Rigidbodies' bodies is to be created under the handle it has in the snapshot.
+        std::vector<Physics::BodyHandleClaim> claims;
         for (const WorldSnapshot::Object &saved : snapshot.objects)
         {
             if (_world.Find(NetworkId{saved.id}) != nullptr || _world.FindParked(NetworkId{saved.id}) != nullptr)
@@ -611,9 +642,40 @@ namespace N2Engine::Network
                                                    saved.prefab, spawned.error()));
             }
             ++result.spawned;
+            if (_physics == nullptr || saved.bodyHandles.empty())
+            {
+                continue;
+            }
+            GameObject &root = (*spawned)->GetGameObject();
+            std::vector<GameObject *> nodes{&root};
+            if (root.GetChildCount() > 0)
+            {
+                for (const GameObject::Ptr &child : root.GetChildrenRecursive())
+                {
+                    nodes.push_back(child.get());
+                }
+            }
+            for (const WorldSnapshot::Object::BodyHandle &body : saved.bodyHandles)
+            {
+                GameObject *const node = body.node < nodes.size() ? nodes[body.node] : nullptr;
+                const Physics::Rigidbody *const rigidbody = node != nullptr ? node->GetComponent<Physics::Rigidbody>() : nullptr;
+                if (rigidbody != nullptr)
+                {
+                    claims.push_back(Physics::BodyHandleClaim{rigidbody, body.handle});
+                }
+            }
         }
-        // Their bodies come into existence here, the despawned ones go
+        // Their bodies come into existence here
+        result.bodiesClaimed = claims.size();
+        if (!claims.empty())
+        {
+            _physics->ClaimBodyHandles(claims);
+        }
         scene->ProcessAttachQueue();
+        if (!claims.empty())
+        {
+            _physics->ClaimBodyHandles(std::span<const Physics::BodyHandleClaim>{});
+        }
         scene->ProcessDestroyed();
 
         WorldSnapshot objectsOnly = snapshot;
@@ -699,6 +761,14 @@ namespace N2Engine::Network
                 WriteVector(writer, body.linearVelocity);
                 WriteVector(writer, body.angularVelocity);
                 writer.U8(body.sleeping ? 1 : 0);
+            }
+            const std::size_t handles = std::min<std::size_t>(object.bodyHandles.size(), kMaxBodyHandlesPerObject);
+            writer.U16(static_cast<std::uint16_t>(handles));
+            for (std::size_t i = 0; i < handles; ++i)
+            {
+                writer.U32(object.bodyHandles[i].node);
+                writer.U32(object.bodyHandles[i].handle.index);
+                writer.U32(object.bodyHandles[i].handle.generation);
             }
         }
         writer.U8(snapshot.hasPhysics ? 1 : 0);
@@ -813,6 +883,20 @@ namespace N2Engine::Network
                 state.angularVelocity = ReadVector(reader);
                 state.sleeping = reader.U8() != 0;
                 object.body = state;
+            }
+            const std::uint16_t handles = reader.U16();
+            if (!reader.Ok() || static_cast<std::size_t>(handles) > kMaxBodyHandlesPerObject ||
+                static_cast<std::size_t>(handles) > reader.Remaining() / 12)
+            {
+                return std::unexpected(std::format("net object {}: its body handle count is impossible", object.id));
+            }
+            for (std::uint16_t h = 0; h < handles; ++h)
+            {
+                WorldSnapshot::Object::BodyHandle record;
+                record.node = reader.U32();
+                record.handle.index = reader.U32();
+                record.handle.generation = reader.U32();
+                object.bodyHandles.push_back(record);
             }
             snapshot.objects.push_back(std::move(object));
         }

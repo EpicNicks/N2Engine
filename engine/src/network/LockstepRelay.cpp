@@ -383,6 +383,8 @@ namespace N2Engine::Network
         slotTaken_[slot] = true;
         peer.joined = true;
         peer.slot = slot;
+        peer.identity = options_.identify ? options_.identify(peer.id) : std::nullopt;
+        slotUser_[slot] = peer.identity ? std::optional<std::string>(peer.identity->user) : std::nullopt;
         ++stats_.joined;
 
         WelcomeMessage welcome;
@@ -434,6 +436,7 @@ namespace N2Engine::Network
             return;
         }
         peer.spectator = true;
+        peer.identity = options_.identify ? options_.identify(peer.id) : std::nullopt;
         ++stats_.spectatorsJoined;
 
         WelcomeMessage welcome;
@@ -517,6 +520,59 @@ namespace N2Engine::Network
         Notify(RelayEvent::Type::PromotionRefused, kSpectatorSlot, ConfirmedTick(), why);
     }
 
+    std::uint32_t LockstepRelay::PickPromotionSlot(const Peer &peer, const std::uint8_t wanted, RefuseReason &reason,
+                                                   std::string &why) const
+    {
+        const std::optional<std::string> user =
+            options_.identify && peer.identity ? std::optional<std::string>(peer.identity->user) : std::nullopt;
+        // A dropped slot whose own user is known and is someone else, dropped less than rejoinReserveMicros ago
+        const auto keptForAnother = [&](const std::uint32_t slot)
+        {
+            return user.has_value() && slotUser_[slot].has_value() && *slotUser_[slot] != *user &&
+                   now_ - dropAt_[slot] < options_.rejoinReserveMicros;
+        };
+        if (wanted == kSpectatorSlot)
+        {
+            // The user's own dropped slot first (a dropped player coming back), then the lowest one no one else keeps
+            for (std::uint32_t slot = 0; slot < options_.slotCount; ++slot)
+            {
+                if (slotDropped_[slot] && user.has_value() && slotUser_[slot] == *user)
+                {
+                    return slot;
+                }
+            }
+            bool kept = false;
+            for (std::uint32_t slot = 0; slot < options_.slotCount; ++slot)
+            {
+                if (slotDropped_[slot])
+                {
+                    if (!keptForAnother(slot))
+                    {
+                        return slot;
+                    }
+                    kept = true;
+                }
+            }
+            reason = kept ? RefuseReason::NotReady : RefuseReason::SessionFull;
+            why = kept ? std::string("every dropped slot is kept for the player who played it, for now")
+                       : std::string("no slot is dropped");
+            return kMaxRelaySlots;
+        }
+        if (wanted >= options_.slotCount || !slotDropped_[wanted])
+        {
+            reason = RefuseReason::SessionFull;
+            why = std::format("slot {} is not a dropped slot", wanted);
+            return kMaxRelaySlots;
+        }
+        if (keptForAnother(wanted))
+        {
+            reason = RefuseReason::NotReady;
+            why = std::format("slot {} is kept for the player who played it, for now", wanted);
+            return kMaxRelaySlots;
+        }
+        return wanted;
+    }
+
     void LockstepRelay::OnPromote(Peer &peer, const std::span<const std::uint8_t> message)
     {
         const auto wanted = DecodePromote(message);
@@ -530,31 +586,43 @@ namespace N2Engine::Network
             RefusePromotion(peer, RefuseReason::NotAllowed, "the relay does not promote spectators");
             return;
         }
+        if (options_.identify)
+        {
+            // The relay knows the token behind every peer: only a token that may play takes a slot, one slot per user
+            if (!peer.identity)
+            {
+                RefusePromotion(peer, RefuseReason::NotAllowed, "the relay cannot tell whose token this spectator has");
+                return;
+            }
+            if (peer.identity->role == N2Net::JoinRole::Spectator)
+            {
+                RefusePromotion(peer, RefuseReason::NotAllowed,
+                                std::format("user {} has a spectator token", peer.identity->user));
+                return;
+            }
+            for (std::uint32_t other = 0; other < options_.slotCount; ++other)
+            {
+                if (state_ == RelayState::Running && !slotDropped_[other] && slotUser_[other] == peer.identity->user)
+                {
+                    // Not now: the user's other connection may be one that is going away (a player coming back before
+                    // the relay dropped its old connection's slot)
+                    RefusePromotion(peer, RefuseReason::NotReady,
+                                    std::format("user {} already plays slot {}", peer.identity->user, other));
+                    return;
+                }
+            }
+        }
         if (state_ != RelayState::Running || !peer.snapshotDone)
         {
             RefusePromotion(peer, RefuseReason::NotReady, "the spectator does not run in step yet");
             return;
         }
-        std::uint32_t slot = kMaxRelaySlots;
-        if (*wanted == kSpectatorSlot)
-        {
-            for (std::uint32_t candidate = 0; candidate < options_.slotCount && slot == kMaxRelaySlots; ++candidate)
-            {
-                if (slotDropped_[candidate])
-                {
-                    slot = candidate;
-                }
-            }
-        }
-        else if (*wanted < options_.slotCount && slotDropped_[*wanted])
-        {
-            slot = *wanted;
-        }
+        RefuseReason refusal = RefuseReason::None;
+        std::string why;
+        const std::uint32_t slot = PickPromotionSlot(peer, *wanted, refusal, why);
         if (slot == kMaxRelaySlots)
         {
-            RefusePromotion(peer, RefuseReason::SessionFull,
-                            *wanted == kSpectatorSlot ? std::string("no slot is dropped")
-                                                      : std::format("slot {} is not a dropped slot", *wanted));
+            RefusePromotion(peer, refusal, why);
             return;
         }
         const std::uint32_t current = scheduler_->CurrentTick();
@@ -599,6 +667,7 @@ namespace N2Engine::Network
             return;
         }
         slotDropped_[slot] = false;
+        slotUser_[slot] = peer.identity ? std::optional<std::string>(peer.identity->user) : std::nullopt;
         peer.spectator = false;
         peer.joined = true;
         peer.slot = slot;
@@ -667,7 +736,10 @@ namespace N2Engine::Network
                         source = PeerOfSlot(slot);
                     }
                 }
-                if (source == nullptr)
+                // One request per source at a time: a player answers only its latest request, so a second spectator's
+                // request would take the first one's snapshot away (found by two spectators joining at once). The
+                // second waits until the first one's parts have all arrived; its timeout starts when it is asked for.
+                if (source == nullptr || AwaitsSnapshotFrom(source->id))
                 {
                     continue;
                 }
@@ -949,6 +1021,7 @@ namespace N2Engine::Network
         }
         slotDropped_[slot] = true;
         dropTick_[slot] = from;
+        dropAt_[slot] = now_;
         ++stats_.slotsDropped;
         progressAt_ = now_;
         DropSlotMessage message;
@@ -1036,6 +1109,8 @@ namespace N2Engine::Network
         slotTaken_ = {};
         slotDropped_ = {};
         dropTick_ = {};
+        dropAt_ = {};
+        slotUser_ = {};
         roots_ = {};
         rootOrder_ = 0;
         forwardCount_ = 0;
@@ -1254,6 +1329,7 @@ namespace N2Engine::Network
                 if (state_ == RelayState::Lobby)
                 {
                     slotTaken_[peer.slot] = false;
+                    slotUser_[peer.slot].reset();
                 }
                 else if (state_ == RelayState::Running && !peer.slotAccounted)
                 {
