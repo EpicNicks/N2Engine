@@ -97,12 +97,14 @@ namespace N2Engine::Particles
 
         float Poly6Coefficient(const float h)
         {
-            return 315.0f / (64.0f * std::numbers::pi_v<float> * std::pow(h, 9.0f));
+            const float h3 = h * h * h;
+            return 315.0f / (64.0f * std::numbers::pi_v<float> * h3 * h3 * h3); // integer powers, multiplied out
         }
 
         float SpikyGradCoefficient(const float h)
         {
-            return -45.0f / (std::numbers::pi_v<float> * std::pow(h, 6.0f));
+            const float h3 = h * h * h;
+            return -45.0f / (std::numbers::pi_v<float> * h3 * h3);
         }
 
         float Poly6(const float r2, const float h)
@@ -491,8 +493,18 @@ namespace N2Engine::Particles
         case GpuReadStatus::Pending:
             return;
         case GpuReadStatus::Done:
+            // Field by field: Math::Vector4 keeps its components in the order w, x, y, z, not the GPU's x, y, z, w
             system.mirror.resize(system.readBytes.size() / kVec4Bytes);
-            std::memcpy(system.mirror.data(), system.readBytes.data(), system.mirror.size() * kVec4Bytes);
+            for (std::size_t i = 0; i < system.mirror.size(); ++i)
+            {
+                float slot[4];
+                std::memcpy(slot, system.readBytes.data() + i * kVec4Bytes, sizeof(slot));
+                Math::Vector4 &m = system.mirror[i];
+                m.x = slot[0];
+                m.y = slot[1];
+                m.z = slot[2];
+                m.w = slot[3];
+            }
             system.mirrorStep = system.ticketStep;
             break;
         case GpuReadStatus::Failed:
