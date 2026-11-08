@@ -213,7 +213,7 @@ TEST_F(LuaParticleSystemTest, AnUnknownEnumNameIsAnErrorThatListsTheOptionsAndCh
     std::string error = RunExpectingError(R"(lua_ps:SetBackend("Gpu"))");
     EXPECT_NE(error.find("ParticleSystem:SetBackend"), std::string::npos) << error;
     EXPECT_NE(error.find("'Gpu'"), std::string::npos) << error;
-    EXPECT_NE(error.find("Auto, PhysX, CPU"), std::string::npos) << error;
+    EXPECT_NE(error.find("Auto, PhysX, CPU, WebGPU"), std::string::npos) << error;
     EXPECT_EQ(Eval<std::string>("lua_ps:GetBackend()"), "Auto");
 
     error = RunExpectingError(R"(lua_ps:SetShape("Box"))");

@@ -754,6 +754,22 @@ namespace Renderer::WebGpu
             const bool alignmentKnown =
                 limits.minUniformBufferOffsetAlignment != 0 && limits.minUniformBufferOffsetAlignment != WGPU_LIMIT_U32_UNDEFINED;
             _state->uniformAlignment = alignmentKnown ? limits.minUniformBufferOffsetAlignment : DefaultUniformAlignment;
+            // Compute (WebGpuCompute.cpp) checks its buffers and dispatches against these; a value the device does not say
+            // keeps the core default
+            if (limits.maxStorageBufferBindingSize != 0 && limits.maxStorageBufferBindingSize != WGPU_LIMIT_U64_UNDEFINED)
+            {
+                _state->maxStorageBindingSize = std::min(limits.maxStorageBufferBindingSize, limits.maxBufferSize);
+            }
+            if (limits.maxComputeWorkgroupsPerDimension != 0 &&
+                limits.maxComputeWorkgroupsPerDimension != WGPU_LIMIT_U32_UNDEFINED)
+            {
+                _state->maxWorkgroupsPerDimension = limits.maxComputeWorkgroupsPerDimension;
+            }
+            if (limits.maxStorageBuffersPerShaderStage != 0 &&
+                limits.maxStorageBuffersPerShaderStage != WGPU_LIMIT_U32_UNDEFINED)
+            {
+                _state->maxStorageBuffersPerStage = limits.maxStorageBuffersPerShaderStage;
+            }
             // What the draws need (WebGpuDraw.cpp): in group 0 a 192-byte per-draw block and a 752-byte lighting block, each bound
             // at a dynamic offset (stage G3b added the lighting block: it raised the uniform binding size and the dynamic buffer
             // count from 2 to 3 and the uniform buffers per stage to 3), in group 1 a material block at a dynamic offset and five
@@ -922,6 +938,7 @@ namespace Renderer::WebGpu
         state.lastReadback.clear();
         state.lastReadbackWidth = 0;
         state.lastReadbackHeight = 0;
+        DestroyComputeResourcesLocked(); // every compute id made so far names nothing from here (the counter goes on)
         DestroyAllResources(); // meshes, textures, materials, pipelines, the ring: all released before the device is
         DestroyTargets();
         state.queue.Reset();

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validates the three built-in WGSL files and the loader canvas shader with Tint and naga, the WGSL compilers of Chrome/Edge
+# Validates the three built-in WGSL files, the two compute kernel files and the loader canvas shader with Tint and naga, the WGSL compilers of Chrome/Edge
 # (Dawn) and Firefox (wgpu); Safari's own WGSL compiler (WebKit) has no CI path (a check by hand). The "wgsl (Tint, naga)" CI
 # job runs it; scripts/install-wgsl-validators.sh installs the pinned tools.
 # Locally: TINT=/path/to/tint NAGA=/path/to/naga scripts/validate-wgsl.sh
@@ -68,12 +68,30 @@ fi
 node -e 'process.stdout.write(require(process.argv[1]).presenterWgsl)' "$root/web/n2-loader.js" > "$out/present.wgsl" || exit 2
 shaders+=("$out/present.wgsl")
 
+# The compute kernels of the engine's WebGPU simulations (renderer/shaders/webgpu/compute/): every entry point, as each file
+# declares them ("@compute @workgroup_size(...) fn name")
+compute_shaders=("$root"/renderer/shaders/webgpu/compute/*.wgsl)
+if [ "${#compute_shaders[@]}" -ne 2 ]; then
+  echo "::error::expected particles.wgsl and softbody.wgsl under renderer/shaders/webgpu/compute, found ${#compute_shaders[@]} files"
+  exit 2
+fi
+shaders+=("${compute_shaders[@]}")
+
 for shader in "${shaders[@]}"; do
   name="$(basename "$shader" .wgsl)"
   echo "== $name.wgsl"
   # Tint writes one entry point per output file (--ep), so each of the two goes through the SPIR-V writer and spirv-val
   entries=(vs_main fs_main)
   if [ "$name" = present ]; then entries=(vs fs); fi
+  case "$shader" in
+    */compute/*)
+      mapfile -t entries < <(grep -oE '@compute[^;{]*fn [A-Za-z_][A-Za-z0-9_]*' "$shader" | awk '{print $NF}')
+      if [ "${#entries[@]}" -eq 0 ]; then
+        echo "::error::$name.wgsl declares no compute entry point"
+        failures=$((failures + 1))
+      fi
+      ;;
+  esac
   for entry in "${entries[@]}"; do
     run "tint $name.wgsl $entry (resolve, uniformity, SPIR-V + spirv-val)" "$tint" --format spvasm --validate --ep "$entry" -o "$out/$name.$entry.spvasm" "$shader"
   done

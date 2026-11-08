@@ -691,7 +691,7 @@ namespace N2Engine::Scripting::Bindings
             "IsPlaying", [](const ParticleSystemRef &c) { return c.Pin()->IsPlaying(); },
             // Living particles
             "GetAliveCount", [](const ParticleSystemRef &c) { return static_cast<int>(c.Pin()->GetAliveCount()); },
-            // The backend that simulates this system: "CPU" or "PhysX"; nil until the system has started
+            // The backend that simulates this system: "CPU", "PhysX" or "WebGPU"; nil until the system has started
             "GetActiveBackend", [](const ParticleSystemRef &c) -> sol::optional<std::string>
             {
                 const std::string_view name = c.Pin()->GetActiveBackendName();
@@ -701,7 +701,7 @@ namespace N2Engine::Scripting::Bindings
                 }
                 return std::string(name);
             },
-            // "Auto", "PhysX" or "CPU"; an unknown name raises an error and changes nothing
+            // "Auto", "PhysX", "CPU" or "WebGPU"; an unknown name raises an error and changes nothing
             "SetBackend", [](const ParticleSystemRef &c, const std::string &name)
             {
                 c.Pin()->backend = ParseEnumName<Particles::ParticleBackend>(name, "ParticleSystem:SetBackend");

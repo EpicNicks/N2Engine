@@ -10,9 +10,9 @@ return {
         key = "Key8",
         camera = Vector3(120.0, 1.6, 16.0),
         look = "Three ParticleSystems: a blue water fountain, a sand burst that lands and lies on the ground, a grey "
-            .. "smoke column that rises. Each sign says which backend it asked for and which is RUNNING (CPU, or PhysX "
-            .. "GPU) and its live particle count. B: burst. P: play / stop. C: clear. K: backend Auto, CPU, PhysX. "
-            .. "PhysX with no GPU particle backend runs on the CPU, and the sign says so.",
+            .. "smoke column that rises. Each sign says which backend it asked for and which is RUNNING (CPU, PhysX "
+            .. "GPU or WebGPU compute) and its live particle count. B: burst. P: play / stop. C: clear. K: backend "
+            .. "Auto, CPU, PhysX, WebGPU. A GPU backend that is not there runs on the CPU, and the sign says so.",
     },
     {
         name = "World canvas and colliders",
@@ -38,8 +38,8 @@ return {
         key = "Minus",
         camera = Vector3(210.0, 1.6, 19.0),
         look = "SoftBody: cubes of 1e4, 1e5 and 1e6 Pa (soft squashes most), two spheres (damping 0.1, 3) and a "
-            .. "robot body drop and wobble. Each sign says which backend it asked for and which is RUNNING (CPU or "
-            .. "PhysX GPU). R: drop again. J: backend Auto, CPU, PhysX. V: push up. PhysX with no GPU soft-body "
-            .. "backend runs on the CPU, and the sign says so.",
+            .. "robot body drop and wobble. Each sign says which backend it asked for and which is RUNNING (CPU, "
+            .. "PhysX GPU or WebGPU compute). R: drop again. J: backend Auto, CPU, PhysX, WebGPU. V: push up. A GPU "
+            .. "backend that is not there runs on the CPU, and the sign says so.",
     },
 }

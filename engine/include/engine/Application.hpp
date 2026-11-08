@@ -67,6 +67,9 @@ namespace N2Engine
         mutable EngineHealth _health;
         std::string _particlesBaseDetail; // the Particles row's detail as Init made it (the GPU probe's)
         std::string _softBodiesBaseDetail; // the same for the SoftBodies row
+        // physics.gpu is auto or on and physics.deterministic is off (read by Init): Auto particles and soft bodies may
+        // run on the renderer's GPU compute (IsGpuSimulationAllowed)
+        bool _gpuSimulationAllowed = false;
         bool _quitRequested = false;
         static inline bool _scriptQuitAllowed = true;
         static inline bool _scriptQuitWarned = false;
@@ -217,6 +220,19 @@ namespace N2Engine
         void OnWindowResize(int width, int height) const;
 
         [[nodiscard]] Physics::IPhysicsBackend* Get3DPhysicsBackend() const;
+
+        /**
+         * The general-purpose GPU compute of the window's renderer (Renderer::Common::IRenderer::GetCompute), when it has
+         * one that works: today the WebGPU renderer's, so in practice the browser's. nullptr for every other renderer and
+         * without a renderer. `lifetime`, when given, gets the renderer's lifetime token: the compute must not be called
+         * once it has expired. The WebGPU particle and soft-body backends run on it.
+         */
+        [[nodiscard]] Renderer::Common::IGpuCompute* GetGpuCompute(std::weak_ptr<const void>* lifetime = nullptr);
+        /// Whether a ParticleSystem or SoftBody asking for Auto may run on GetGpuCompute: physics.gpu is auto or on and
+        /// physics.deterministic is off (as Init read them; false before Init). An explicit WebGPU request ignores it.
+        [[nodiscard]] bool IsGpuSimulationAllowed() const { return _gpuSimulationAllowed; }
+        /// For tests and headless tools that run without Init
+        void SetGpuSimulationAllowed(bool allowed) { _gpuSimulationAllowed = allowed; }
         /// Installs a physics backend without Init, for headless tools and tests (Init needs a window).
         /// Replaces and destroys any existing backend; pass nullptr to remove it.
         void Set3DPhysicsBackend(std::unique_ptr<Physics::IPhysicsBackend> backend);
