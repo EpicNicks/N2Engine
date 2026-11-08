@@ -169,13 +169,14 @@ fn spiky_grad(d: vec3<f32>, r: f32) -> vec3<f32> {
                         let normal = d / r;
                         // Half the overlap each, then friction: the relative sideways motion of this sub-step is cut
                         // by friction (Coulomb in PBD: at most friction * the normal correction)
-                        let push = 0.5 * (params.spacing - r);
-                        var correction = normal * push;
+                        let overlap = params.spacing - r;
+                        var correction = normal * (0.5 * overlap);
                         let relative = (pi - pos[i].xyz) - (other.xyz - pos[j].xyz);
                         let tangential = relative - normal * dot(relative, normal);
                         let slide = length(tangential);
                         if (slide > 1e-9) {
-                            correction -= tangential * (min(slide, params.friction * push) / slide) * 0.5;
+                            // Static below friction * overlap (all the sideways motion undone), kinetic above it
+                            correction -= tangential * (min(slide, params.friction * overlap) / slide) * 0.5;
                         }
                         shift += correction;
                         contacts += 1.0;
@@ -201,7 +202,7 @@ fn spiky_grad(d: vec3<f32>, r: f32) -> vec3<f32> {
     if (length2 > params.maxMove * params.maxMove) {
         shift *= params.maxMove / sqrt(length2);
     }
-    delta[i] = vec4<f32>(shift, 0.0);
+    delta[i] = vec4<f32>(shift, contacts); // w: the grains it touched (granular), read by finalize
 }
 
 @compute @workgroup_size(64) fn apply(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -242,6 +243,12 @@ fn spiky_grad(d: vec3<f32>, r: f32) -> vec3<f32> {
     if (before.w > 0.5 && before.y < 0.0) {
         // Off the ground with `bounce` of the speed it came down with
         v.y = max(v.y, -before.y * params.bounce);
+    }
+    if (params.granular == 1u && (before.w > 0.5 || delta[i].w > 0.0)) {
+        // A grain resting on others or on the ground loses `friction` of its sideways speed each sub-step, so grains
+        // stay where they land and pile up instead of flowing out into one layer
+        v.x *= 1.0 - params.friction;
+        v.z *= 1.0 - params.friction;
     }
     pos[i] = vec4<f32>(q, p.w - params.lifetimeStep);
     vel[i] = vec4<f32>(v, 0.0);
