@@ -1,5 +1,12 @@
 # Vulkan Renderer Notes
 
+> These notes predate the rewrite of the Vulkan backend (#43, stages 0 and A to F) and describe the old tutorial-style
+> code: they are background, not a description of what the renderer does now. The current renderer always renders
+> offscreen and, with a window, blits the frame to the swapchain at Present; its swapchain choices (a UNORM format, FIFO
+> with vsync on and MAILBOX/IMMEDIATE/FIFO with it off, minImageCount + 1 images, TRANSFER_DST usage, opaque composite
+> alpha) are pure functions in renderer/include/renderer/vulkan/VulkanSwapchainChoice.hpp, documented in
+> docs/application.html#vulkan-renderer.
+
 ## Vulkan Setup Sequence
 
 - **CreateInstance** ✅  

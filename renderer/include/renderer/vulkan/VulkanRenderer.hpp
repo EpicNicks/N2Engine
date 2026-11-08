@@ -30,18 +30,20 @@ namespace Renderer
         // The shader interface table is shared by the GPU backends (renderer/common/GpuShaderInterface.hpp)
         namespace ShaderInterface = Gpu::ShaderInterface;
 
+        /// One physical device as GetCompatibleGPUs lists it (in vkEnumeratePhysicalDevices' order, so its position in
+        /// the list is the index SetGpuPreference and N2_VULKAN_GPU take)
         struct GPUInfo
         {
-            VkPhysicalDevice device;
+            VkPhysicalDevice device = VK_NULL_HANDLE;
             std::string name;
-            VkPhysicalDeviceType type;
-            uint64_t vramMB;
-            uint32_t vendorId;
-            bool isSupported;
+            VkPhysicalDeviceType type = VK_PHYSICAL_DEVICE_TYPE_OTHER;
+            uint64_t vramMB = 0; // the DEVICE_LOCAL memory heaps, in MiB
+            uint32_t vendorId = 0;
+            bool isSupported = false; // this renderer can use it (headless, or for its window's surface)
 
-            uint32_t driverVersion;
-            uint32_t apiVersion;
-            VkPhysicalDeviceLimits limits;
+            uint32_t driverVersion = 0;
+            uint32_t apiVersion = 0;
+            VkPhysicalDeviceLimits limits{};
         };
 
         /// A buffer and its memory; `mapped` is non-null while the memory stays mapped (the readback buffer)
@@ -92,6 +94,36 @@ namespace Renderer
             NoSuitableDevice,      // no physical device has a graphics queue and the formats the targets need
             ValidationUnavailable, // validation was demanded but the layer (or VK_EXT_debug_utils) is missing
             Failed,                // anything else: a bug or a resource failure
+            NoSurface, // with a window: no Vulkan surface or swapchain for it (GLFW reaches no Vulkan loader, the surface
+                       // extensions are missing, the window has an OpenGL context, or no usable swapchain format)
+        };
+
+        /// Which swapchain call a test makes report a result (ForceNextSwapchainResultForTest)
+        enum class SwapchainCallForTest
+        {
+            Acquire,
+            Present,
+        };
+
+        /// The swapchain as a test sees it (GetSwapchainInfoForTest)
+        struct SwapchainInfoForTest
+        {
+            bool hasSurface = false;
+            bool hasSwapchain = false;
+            bool minimised = false;         // the last recreate found a 0 extent: nothing is presented
+            bool presentingStopped = false; // no swapchain can be made any more (see Present)
+            VkSurfaceFormatKHR format{VK_FORMAT_UNDEFINED, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
+            VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
+            uint32_t requestedImageCount = 0; // ChooseImageCount's
+            uint32_t imageCount = 0;          // what the driver made
+            VkExtent2D extent{0, 0};
+            uint32_t createCount = 0;        // swapchains made since Initialize (the first one counts)
+            uint32_t presentCount = 0;       // vkQueuePresentKHR calls since Initialize
+            uint32_t surfaceCreateCount = 0; // surfaces made since Initialize (the first one counts)
+            /// What the surface offers now (queried by GetSwapchainInfoForTest)
+            VkSurfaceCapabilitiesKHR capabilities{};
+            std::vector<VkSurfaceFormatKHR> offeredFormats;
+            std::vector<VkPresentModeKHR> offeredPresentModes;
         };
 
         /// What a test can ask about a texture (GetTextureInfoForTest); `valid` is false for a pointer this renderer
@@ -114,20 +146,21 @@ namespace Renderer
         struct DebugState;    // the messenger's counters, shared with the callback (defined in the .cpp)
         struct ResourceState; // meshes, textures, samplers, the VMA allocator and the deletion queues (private header)
         struct DrawState;     // shaders, materials, the pipeline layout and cache, the uniform rings (private header)
+        struct SwapchainState; // the swapchain and the present resources (private header, stage F)
         class VulkanTexture;  // a texture (private header)
 
         /**
-         * The Vulkan backend, stages 0, A, B, C, D and E of #43: initialisation, an offscreen colour and depth target, a frame that
+         * The Vulkan backend, stages 0 and A to F of #43: initialisation, an offscreen colour and depth target, a frame that
          * clears it, readback, resizing and shutdown (stage 0); meshes and textures (stage A: GPU memory from
          * VulkanMemoryAllocator, staging uploads, samplers, blit mipmaps, deferred deletion); and the built-in shaders,
-         * the pipeline layout and cache, and unlit drawing (stage B); lit and PBR materials and the scene lighting (stage C); blending, dynamic meshes and the UI pass (stage D); and the SDF text shader (stage E). It renders ONLY offscreen (R8G8B8A8_UNORM colour,
-         * a depth target), with or without a window: there is no surface or swapchain yet, so Present puts nothing on a
-         * window (stage F). Initialize(nullptr, w, h) works with no window and no display.
+         * the pipeline layout and cache, and unlit drawing (stage B); lit and PBR materials and the scene lighting (stage C); blending, dynamic meshes and the UI pass (stage D); the SDF text shader (stage E); and the window (stage F: a surface, a swapchain, Present, resize and minimise, the GPU selection API). It ALWAYS renders offscreen (R8G8B8A8_UNORM colour,
+         * a depth target), with or without a window; with a window, Present blits the finished colour image to a swapchain
+         * image and presents it. Initialize(nullptr, w, h) works with no window and no display (no surface, no swapchain).
          *
          * What draws: the unlit, lit and text built-in shaders (GetStandardUnlitShader, GetStandardLitShader, GetStandardTextShader: lit is Blinn-Phong
          * or PBR with emissive, occlusion, normal and metallic-roughness maps and up to 2 directional, 8 point and 4 spot
          * lights from UpdateSceneLighting) with DrawMesh, IndexRange and DrawObjects, with the depth, depth write and cull
-         * state of every RenderState and wireframe. Blend and additive draw as on OpenGL (SRC_ALPHA / ONE_MINUS_SRC_ALPHA, additive SRC_ALPHA / ONE, the same factors for alpha, additive only with blend; stage D); draws stay in submission order and depth write is off whenever the draw's depthWrite or depthTest is off. Text is the OpenGL shader's port: antialiased over one pixel and blended per the draw's state, outline, softness and shadow composited under the face, multi-pass effects through the per-draw material snapshot, no atlas (or a destroyed one) draws nothing. Still to come: a window (F). The shaders are the three built-ins only (custom
+         * state of every RenderState and wireframe. Blend and additive draw as on OpenGL (SRC_ALPHA / ONE_MINUS_SRC_ALPHA, additive SRC_ALPHA / ONE, the same factors for alpha, additive only with blend; stage D); draws stay in submission order and depth write is off whenever the draw's depthWrite or depthTest is off. Text is the OpenGL shader's port: antialiased over one pixel and blended per the draw's state, outline, softness and shadow composited under the face, multi-pass effects through the per-draw material snapshot, no atlas (or a destroyed one) draws nothing. The shaders are the three built-ins only (custom
          * GLSL is not supported: CreateShaderProgram returns nullptr), compiled to SPIR-V when the renderer is built (see
          * HasBuiltInShaders). All public methods may be called from any thread (one mutex).
          */
@@ -149,21 +182,28 @@ namespace Renderer
             /// returns nullptr
             [[nodiscard]] static bool HasBuiltInShaders();
 
-            /// Creates the instance, device and an offscreen target of width x height (both non-zero; the window
-            /// handle is accepted and not used yet). Returns false and leaves nothing allocated on any failure; see
-            /// GetInitStatus. Initializing a renderer that is already initialized shuts it down first.
+            /// Creates the instance, device and an offscreen target of width x height (both non-zero). With a window
+            /// (a GLFW window made with GLFW_CLIENT_API = GLFW_NO_API), also a surface for it from this renderer's own
+            /// instance (glfwCreateWindowSurface), a device that can present to it, and a swapchain at the window's
+            /// framebuffer size (none while it is 0x0); the handle is kept only for glfwGetFramebufferSize. Without one
+            /// (nullptr) there is no surface and no surface or swapchain extension. Returns false and leaves nothing
+            /// allocated on any failure; see GetInitStatus. Initializing a renderer that is already initialized shuts it
+            /// down first (destroying its surface before the new one is made).
             bool Initialize(GLFWwindow* windowHandle, uint32_t width, uint32_t height) override;
             /// Destroys every Vulkan object and expires the lifetime token. Safe to call twice, or without Initialize
             void Shutdown() override;
-            /// Sets the size of the offscreen target, unless SetRenderTargetSize fixed it (then ignored)
+            /// Sets the size of the offscreen target, unless SetRenderTargetSize fixed it (then ignored); a 0 changes
+            /// nothing of it. With a window it also makes the next Present recreate the swapchain
             void Resize(uint32_t width, uint32_t height) override;
             /// The colour the next BeginFrame clears to; between BeginFrame and EndFrame it also clears the frame so far
             void Clear(float r, float g, float b, float a) override;
 
             void BeginFrame() override;
             void EndFrame() override;
-            /// Nothing to present until stage F (the frame is only readable through ReadFramebuffer): logs a warning to
-            /// stderr the first time, once per renderer, whether or not there is a window
+            /// With a window: blits the last submitted frame's colour image to a swapchain image (scaled, linear, when the
+            /// sizes differ) and presents it. Does nothing when no frame was submitted since the last Present, while the
+            /// window is minimised (0x0), and once presenting has stopped; recreates the swapchain first when the window
+            /// changed size, after an OUT_OF_DATE / SUBOPTIMAL result and after SetVSync. Without a window: a silent no-op
             void Present() override;
 
             // Meshes and textures (stage A). Uploads are synchronous (a queue stall per call) and work inside or
@@ -245,7 +285,8 @@ namespace Renderer
                           const Common::RenderState& state, const Common::IndexRange& range) override;
             /// DrawMesh of each object's mesh, transform.model, material and state, in order
             void DrawObjects(const std::vector<Common::RenderObject>& objects) override;
-            /// Like Resize, from a window's framebuffer-size callback
+            /// Like Resize, from a window's framebuffer-size callback (0x0 when it is minimised: the offscreen target is
+            /// kept, and no swapchain is made or presented until the size is non-zero again)
             void OnResize(int width, int height) override;
 
             /// Draws that follow are drawn as lines (a wireframe pipeline per shader and state) when the device supports
@@ -257,10 +298,30 @@ namespace Renderer
             /// Counts each vkCmdDrawIndexed DrawLocked records
             [[nodiscard]] bool SupportsRenderCounters() const override { return true; }
 
-            // GPU selection: stage F
+            // GPU selection (stage F). The device is chosen once, in Initialize: the best device this renderer can use
+            // (discrete GPU, then integrated, virtual, CPU, other; ties by more device-local memory, then enumeration
+            // order), unless a preference names a usable one. A preference that names nothing, or a device that cannot be
+            // used, logs one warning and the default is used (never a failure).
+            /// Before Initialize: the device to prefer, as an index in enumeration order (only digits: "1") or a
+            /// case-insensitive part of the name ("nvidia"); empty clears it. Wins over the N2_VULKAN_GPU environment
+            /// variable, which takes the same text. Takes effect at the next Initialize
+            void SetGpuPreference(const std::string& preference);
+            /// After Initialize: every physical device in enumeration order, isSupported for those this renderer could
+            /// use (for its window's surface, or headless). Empty before Initialize and after Shutdown
             std::vector<GPUInfo> GetCompatibleGPUs();
+            /// The engine never switches device in the middle of a run: true when `device` is the one in use, else false
+            /// (before Initialize always false; for another device with one log line saying to call SetGpuPreference and
+            /// Initialize again)
             bool SelectGPU(VkPhysicalDevice device);
+            /// The default rule over `gpus`: the supported one with the best type, then the most VRAM, then the first;
+            /// VK_NULL_HANDLE when none is supported. Uses nothing but `gpus`
             VkPhysicalDevice GetRecommendedGPU(const std::vector<GPUInfo>& gpus);
+
+            /// Vsync: on (the default) presents with FIFO, off with MAILBOX if the surface offers it, else IMMEDIATE, else
+            /// FIFO. Unless this was called, the environment variable N2_VULKAN_VSYNC=0 (or 1) decides at Initialize.
+            /// After Initialize it takes effect at the next Present (the swapchain is recreated)
+            void SetVSync(bool enabled);
+            [[nodiscard]] bool GetVSync() const;
 
             /// The unlit built-in; nullptr when the build has no shaders (HasBuiltInShaders), logged once
             [[nodiscard]] Common::IShader* GetStandardUnlitShader() const override;
@@ -352,6 +413,29 @@ namespace Renderer
             /// address of a destroyed one looks like to the draw. False for a material that is not this renderer's or a bad slot
             bool SetMaterialTextureIdForTest(Common::IMaterial* material, std::size_t slot, std::uint64_t id);
 
+            // Test hooks for stage F: the real swapchain path without a window, on a VK_EXT_headless_surface surface
+            /// Whether the Vulkan instance offers VK_KHR_surface and VK_EXT_headless_surface (asks the loader; no instance
+            /// is made)
+            [[nodiscard]] static bool IsHeadlessSurfaceAvailableForTest();
+            /// Before Initialize(nullptr, ...): also make a headless surface (the two extensions above) and a swapchain on
+            /// it, with a "window framebuffer" of framebufferWidth x framebufferHeight. Initialize fails with
+            /// InitStatus::NoSurface when the extensions are missing
+            void SetHeadlessSurfaceForTest(bool enabled, uint32_t framebufferWidth, uint32_t framebufferHeight);
+            /// The headless surface's "window framebuffer" size, what glfwGetFramebufferSize gives with a window (0x0 is
+            /// a minimised window). Call OnResize too, as a window's callback would
+            void SetFramebufferSizeForTest(uint32_t width, uint32_t height);
+            /// The next call of that kind reports `result`: an error result (OUT_OF_DATE, SURFACE_LOST, DEVICE_LOST) from the
+            /// acquire replaces the call, which is not made; SUBOPTIMAL from the acquire, and any result from the present,
+            /// replace a successful call's result (the call is made)
+            void ForceNextSwapchainResultForTest(SwapchainCallForTest call, VkResult result);
+            [[nodiscard]] SwapchainInfoForTest GetSwapchainInfoForTest() const;
+            /// Before Initialize: give the swapchain images TRANSFER_SRC usage too (when the surface allows it) and copy each
+            /// presented image to host memory, for ReadPresentedImageForTest
+            void SetPresentCaptureForTest(bool enabled);
+            /// The last presented swapchain image, RGBA8 with the top row first (an 8-bit format's bytes reordered to RGBA).
+            /// False when there is none or the capture is off
+            bool ReadPresentedImageForTest(std::vector<std::uint8_t>& rgba, uint32_t& width, uint32_t& height);
+
         private:
             static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -367,6 +451,27 @@ namespace Renderer
 
             bool CreateInstance();
             bool SetupDebugMessenger();
+            // Stage F (VulkanSwapchain.cpp)
+            enum class SwapchainResult
+            {
+                Created,     // a new swapchain exists
+                Minimised,   // the extent is 0: nothing changed, nothing is presented
+                Retry,       // vkCreateSwapchainKHR failed: try again at the next Present
+                Unusable,    // the surface offers nothing usable (format, usage): presenting stops
+                SurfaceLost, // the surface is gone
+            };
+            bool CreateSurfaceLocked();
+            void DestroySurfaceLocked();
+            bool CreatePresentResources();
+            void DestroyPresentResources();
+            SwapchainResult CreateSwapchainLocked(std::string& error);
+            void DestroySwapchainLocked();
+            void RecreateSwapchainLocked();
+            void RecreateSurfaceLocked();
+            void StopPresentingLocked(const std::string& reason);
+            [[nodiscard]] VkExtent2D FramebufferSizeLocked() const;
+            void MarkDeviceLostLocked(const char* where, VkResult result);
+            bool CreateCaptureBufferLocked(VkDeviceSize size);
             bool PickPhysicalDevice();
             bool CreateLogicalDevice();
             bool CreateAllocator();
@@ -471,7 +576,22 @@ namespace Renderer
             InitStatus _initStatus = InitStatus::NotInitialized;
             std::string _initMessage;
             bool _initialized = false;
-            bool _warnedWindow = false;
+
+            // The window (stage F): the handle is used only for glfwGetFramebufferSize
+            GLFWwindow* _window = nullptr;
+            VkSurfaceKHR _surface = VK_NULL_HANDLE;
+            std::unique_ptr<SwapchainState> _swapchain; // never null; empty without a surface
+            std::vector<GPUInfo> _gpus;                  // GetCompatibleGPUs, filled by PickPhysicalDevice
+            std::optional<std::string> _gpuPreference;   // SetGpuPreference (wins over N2_VULKAN_GPU)
+            std::optional<bool> _vsyncSetting;           // SetVSync (wins over N2_VULKAN_VSYNC)
+            bool _vsync = true;                          // what the swapchain uses
+
+            // Test settings (kept across Shutdown, like the validation mode)
+            bool _headlessSurfaceForTest = false;
+            VkExtent2D _testFramebuffer{0, 0};
+            bool _presentCaptureForTest = false;
+            std::optional<VkResult> _forcedAcquireResult;
+            std::optional<VkResult> _forcedPresentResult;
 
             float _clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
         };

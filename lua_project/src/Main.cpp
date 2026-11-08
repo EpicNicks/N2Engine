@@ -28,6 +28,11 @@ namespace
         {
             return RenderBackend::OPENGL;
         }
+        if (name == "vulkan")
+        {
+            // A build with N2ENGINE_RENDERER_VULKAN=OFF still parses it: Window's init then explains there is no Vulkan
+            return RenderBackend::VULKAN;
+        }
         if (name == "software")
         {
             return RenderBackend::SOFTWARE;
@@ -43,13 +48,19 @@ namespace
 
     std::string_view RenderBackendTitle(const RenderBackend backend)
     {
-        return backend == RenderBackend::OPENGL ? "OpenGL" : "software";
+        switch (backend)
+        {
+        case RenderBackend::OPENGL: return "OpenGL";
+        case RenderBackend::VULKAN: return "Vulkan";
+        default: return "software";
+        }
     }
 }
 
-// Usage: lua_project [project folder] [--renderer opengl|software]
+// Usage: lua_project [project folder] [--renderer opengl|vulkan|software]
 // The project folder holds assets/scene.lua; it defaults to the lua_project source folder. The renderer defaults to
-// software; the GPU smoke test (docs/testing.html) runs it with --renderer opengl.
+// software; the GPU smoke test (docs/testing.html) runs it with --renderer opengl, and the Vulkan GPU checklist
+// (docs/gpu-vulkan-checklist.html) with --renderer vulkan.
 int main(int argc, char *argv[])
 {
     using namespace N2Engine;
@@ -66,7 +77,7 @@ int main(int argc, char *argv[])
             {
                 if (i + 1 >= argc)
                 {
-                    UsageError("--renderer needs a value: opengl or software");
+                    UsageError("--renderer needs a value: opengl, vulkan or software");
                     return 1;
                 }
                 value = argv[++i];
@@ -78,7 +89,7 @@ int main(int argc, char *argv[])
             const auto parsed = ParseRenderBackend(value);
             if (!parsed)
             {
-                UsageError(std::format("Unknown renderer '{}': expected opengl or software", value));
+                UsageError(std::format("Unknown renderer '{}': expected opengl, vulkan or software", value));
                 return 1;
             }
             renderBackend = *parsed;
@@ -86,7 +97,7 @@ int main(int argc, char *argv[])
         else if (arg.starts_with("--"))
         {
             UsageError(std::format("Unknown option '{}'. Usage: lua_project [project folder] "
-                                   "[--renderer opengl|software]", arg));
+                                   "[--renderer opengl|vulkan|software]", arg));
             return 1;
         }
         else
