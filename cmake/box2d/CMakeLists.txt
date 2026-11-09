@@ -60,10 +60,12 @@ if(EMSCRIPTEN)
     target_compile_definitions(box2d PRIVATE BOX2D_DISABLE_SIMD)
 endif()
 
-# libm for sqrtf and friends. Threads: only the internal scheduler uses them, which needs workerCount above 1.
+# libm for sqrtf and friends, as upstream links it. No find_package(Threads) here, as upstream has none: it moved the first
+# Threads check ahead of OpenAL Soft's configure probes, which flipped several of their results (HAVE_LIBATOMIC among them),
+# so the Docker image's host needed a libatomic the image does not ship (PR #312). Only the internal scheduler uses threads,
+# which needs workerCount above 1; glibc 2.34 and later has pthread in libc.
 if(UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
-    find_package(Threads REQUIRED)
-    target_link_libraries(box2d PUBLIC m Threads::Threads)
+    target_link_libraries(box2d PUBLIC m)
 endif()
 
 message(STATUS "Box2D (vendored, external/box2d): static library, single precision")
