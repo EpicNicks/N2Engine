@@ -576,7 +576,7 @@ RewriteRule ^(.*\.(js|wasm|data|html))$ $1.gz [L]
 </div>
 <p>Against master before the module (<code>e3e48dc2</code>), the default package grew by 224,306 raw and 75,855 brotli in the size profile, and by 347,114 raw and 97,374 brotli in the speed profile. No budget was raised. The components that stay in a build without Box2D account for about 18,000 of those raw bytes in the size profile. Lua bindings are not in these numbers.</p>
 
-<h2 id="download-cache">Dawn downloads in CI <span class="badge">PR #__N__</span></h2>
+<h2 id="download-cache">Dawn downloads in CI <span class="badge">PR #316</span></h2>
 <p>The web build fetches Dawn's emdawnwebgpu remote port at configure time, and emcc fetches the port's package at the first compile. The native WebGPU harness fetches the prebuilt Dawn. All three come from Dawn's GitHub releases, which have failed CI with HTTP errors.</p>
 <ul>
 <li><strong>Retries:</strong> <code>cmake/N2Download.cmake</code> tries a failed download twice more, after 10 and 30 seconds.</li>
