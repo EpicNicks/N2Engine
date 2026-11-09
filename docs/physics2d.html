@@ -181,7 +181,7 @@ function Crate:OnTriggerEnter2D(trigger)
 end
 
 return Crate</code></pre>
-<p>A script handles <code>OnCollisionEnter2D</code>, <code>OnCollisionStay2D</code>, <code>OnCollisionExit2D</code>, <code>OnTriggerEnter2D</code>, <code>OnTriggerStay2D</code> and <code>OnTriggerExit2D</code>. The argument is safe to keep after the callback. Beyond the 3D members it has <code>collider</code> and <code>otherCollider</code>, as their concrete types, and <code>nil</code> when removed.</p>
+<p>A script handles <code>OnCollisionEnter2D</code>, <code>OnCollisionStay2D</code>, <code>OnCollisionExit2D</code>, <code>OnTriggerEnter2D</code>, <code>OnTriggerStay2D</code> and <code>OnTriggerExit2D</code>. The argument is safe to keep after the callback. It has every member of the 3D <code>Collision</code> and <code>Trigger</code>, and also <code>collider</code> and <code>otherCollider</code>, as their concrete types, and <code>nil</code> when removed.</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Call</th><th>Returns</th></tr></thead>
@@ -192,11 +192,11 @@ return Crate</code></pre>
 <tr><td><code>Physics2D.BoxCast(origin, halfExtents, angle, direction, maxDistance?, layerMask?, ignoreTriggers?)</code></td><td>The nearest hit, or <code>nil</code>. <code>angle</code> is in radians and may be <code>nil</code>.</td></tr>
 <tr><td><code>Physics2D.OverlapCircle(center, radius, layerMask?, ignoreTriggers?)</code></td><td>An array of <code>{gameObject, collider, rigidbody}</code></td></tr>
 <tr><td><code>Physics2D.OverlapBox(center, halfExtents, angle?, layerMask?, ignoreTriggers?)</code></td><td>The same</td></tr>
-<tr><td><code>Physics2D.SetGravity(gravity)</code>, <code>Physics2D.GetGravity()</code></td><td><code>Vector2</code></td></tr>
+<tr><td><code>Physics2D.SetGravity(gravity)</code>, <code>Physics2D.GetGravity()</code></td><td>The loaded scene's gravity, a <code>Vector2</code>. It ends with the scene: the next one starts at the default.</td></tr>
 </tbody>
 </table>
 </div>
-<p>A layer mask of <code>-1</code> means every layer, and the default is every layer but Ignore Raycast. An optional argument of the wrong type is a Lua error, not the default. A negative distance finds nothing. <code>BodyType2D.Static</code>, <code>Dynamic</code> and <code>Kinematic</code> are the body types. Annotations are in <code>engine-api.lua</code>.</p>
+<p>A layer mask is a whole number; <code>-1</code> means every layer, and the default is every layer but Ignore Raycast. An optional argument of the wrong type is a Lua error, not the default. A negative distance finds nothing. <code>BodyType2D.Static</code>, <code>Dynamic</code> and <code>Kinematic</code> are the body types. Annotations are in <code>engine-api.lua</code>.</p>
 
 <h2 id="network">Networking</h2>
 <div class="callout warning"><p class="callout-title">Warning: not covered by the network modes</p><p>2D state is not in the desync hash and a rollback does not restore it, so a rollback session would rewind everything except the 2D world. Creating a world in <code>SimulationMode::Deterministic</code> logs one warning. Box2D's results have matched across CI legs (<code>tests/box2d</code>, and the determinism test in <code>tests/engine/physics2d</code>), which is the basis for adding this later.</p></div>

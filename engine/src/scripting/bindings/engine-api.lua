@@ -1998,6 +1998,9 @@ Collision2D = {}
 ---@return ContactPoint2D|nil
 function Collision2D:GetContact(index) end
 
+---@return Vector2
+function Collision2D:GetAverageContactPoint() end
+
 ---The argument of OnTriggerEnter2D/Stay2D/Exit2D; safe to keep, like Collision2D
 ---@class Trigger2D
 ---@field gameObject GameObject|nil
@@ -2080,10 +2083,11 @@ function Physics2D.OverlapCircle(center, radius, layerMask, ignoreTriggers) end
 ---@return OverlapHit2D[]
 function Physics2D.OverlapBox(center, halfExtents, angle, layerMask, ignoreTriggers) end
 
----For every world, live and future; wakes their dynamic bodies. A top-down game sets it to zero.
+---The loaded scene's gravity; wakes its dynamic bodies. It ends with the scene. A top-down game sets it to zero.
 ---@param gravity Vector2
 function Physics2D.SetGravity(gravity) end
 
+---The loaded scene's gravity, or the default when it has no 2D world
 ---@return Vector2
 function Physics2D.GetGravity() end
 

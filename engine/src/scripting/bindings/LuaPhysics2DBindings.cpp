@@ -3,7 +3,9 @@
 
 #include "engine/scripting/bindings/LuaBindings.hpp"
 
+#include <cmath>
 #include <cstddef>
+#include <optional>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -18,6 +20,8 @@
 #include "engine/physics2d/Physics2DQueries.hpp"
 #include "engine/physics2d/Physics2DWorld.hpp"
 #include "engine/physics2d/Rigidbody2D.hpp"
+#include "engine/sceneManagement/Scene.hpp"
+#include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 
 namespace N2Engine::Scripting::Bindings
@@ -32,11 +36,14 @@ namespace N2Engine::Scripting::Bindings
         sol::optional<GameObjectRef> otherGameObject;
         sol::optional<Rigidbody2DRef> rigidbody;
         sol::optional<Rigidbody2DRef> otherRigidbody;
-        sol::object collider;
-        sol::object otherCollider;
+        // Handles, not Lua objects: making a Lua object here would take registry references the caller did not reserve, and
+        // a script that never reads the collider would pay for it on every event
+        std::optional<ComponentRef<Physics2D::Collider2D>> collider;
+        std::optional<ComponentRef<Physics2D::Collider2D>> otherCollider;
         std::vector<Physics2D::ContactPoint2D> contacts;
         Math::Vector2 relativeVelocity;
         Math::Vector2 impulse;
+        Math::Vector2 averageContactPoint;
     };
 
     struct LuaTrigger2D
@@ -45,8 +52,8 @@ namespace N2Engine::Scripting::Bindings
         sol::optional<GameObjectRef> otherGameObject;
         sol::optional<Rigidbody2DRef> rigidbody;
         sol::optional<Rigidbody2DRef> otherRigidbody;
-        sol::object collider;
-        sol::object otherCollider;
+        std::optional<ComponentRef<Physics2D::Collider2D>> collider;
+        std::optional<ComponentRef<Physics2D::Collider2D>> otherCollider;
     };
 
     namespace
@@ -69,9 +76,39 @@ namespace N2Engine::Scripting::Bindings
             return Rigidbody2DRef(*rigidbody);
         }
 
-        sol::object ColliderOrNil(Physics2D::Collider2D *collider, lua_State *state)
+        std::optional<ComponentRef<Physics2D::Collider2D>> ColliderHandle(Physics2D::Collider2D *collider)
         {
-            return collider ? ComponentToLua(*collider, state) : sol::make_object(state, sol::lua_nil);
+            if (!collider)
+            {
+                return std::nullopt;
+            }
+            return ComponentRef<Physics2D::Collider2D>(*collider);
+        }
+
+        // The collider as its concrete Lua type, or nil when there is none or it is gone. Runs inside the script's own read.
+        sol::object ColliderToLua(const std::optional<ComponentRef<Physics2D::Collider2D>> &collider, lua_State *state)
+        {
+            if (!collider || !collider->IsValid())
+            {
+                return sol::make_object(state, sol::lua_nil);
+            }
+            const auto live = collider->Pin();
+            return ComponentToLua(*live, state);
+        }
+
+        Math::Vector2 AverageOf(const std::vector<Physics2D::ContactPoint2D> &contacts)
+        {
+            if (contacts.empty())
+            {
+                return {};
+            }
+            Math::Vector2 sum;
+            for (const Physics2D::ContactPoint2D &contact : contacts)
+            {
+                sum = Math::Vector2(sum.x + contact.point.x, sum.y + contact.point.y);
+            }
+            const float count = static_cast<float>(contacts.size());
+            return Math::Vector2(sum.x / count, sum.y / count);
         }
 
         sol::table HitToLua(const Physics2D::RaycastHit2D &hit, lua_State *state)
@@ -158,8 +195,14 @@ namespace N2Engine::Scripting::Bindings
             {
                 throw std::runtime_error(std::string(query) + ": layerMask must be a number or nil");
             }
-            // Cut to 32 bits, so -1 means every layer
-            return static_cast<std::uint32_t>(static_cast<std::uint64_t>(argument.as<std::int64_t>()) & 0xFFFFFFFFu);
+            // A whole number within 64 bits, then cut to 32, so -1 means every layer. Anything else (1.5, math.huge, NaN) is an error,
+            // not a mask sol would make up by converting it.
+            const double value = argument.as<double>();
+            if (!std::isfinite(value) || value != std::floor(value) || value < -9.2233720368547758e18 || value >= 9.2233720368547758e18)
+            {
+                throw std::runtime_error(std::string(query) + ": layerMask must be a whole number");
+            }
+            return static_cast<std::uint32_t>(static_cast<std::uint64_t>(static_cast<std::int64_t>(value)) & 0xFFFFFFFFu);
         }
 
         Physics::QueryTriggers ReadIgnoreTriggers(const sol::object &argument, const char *query)
@@ -218,11 +261,12 @@ namespace N2Engine::Scripting::Bindings
                                            RefOrNil(collision.otherGameObject),
                                            RefOrNil(collision.rigidbody),
                                            RefOrNil(collision.otherRigidbody),
-                                           ColliderOrNil(collision.collider, state),
-                                           ColliderOrNil(collision.otherCollider, state),
+                                           ColliderHandle(collision.collider),
+                                           ColliderHandle(collision.otherCollider),
                                            collision.contacts,
                                            collision.relativeVelocity,
                                            collision.impulse,
+                                           AverageOf(collision.contacts),
                                        });
     }
 
@@ -233,8 +277,8 @@ namespace N2Engine::Scripting::Bindings
                                            RefOrNil(trigger.otherGameObject),
                                            RefOrNil(trigger.rigidbody),
                                            RefOrNil(trigger.otherRigidbody),
-                                           ColliderOrNil(trigger.collider, state),
-                                           ColliderOrNil(trigger.otherCollider, state),
+                                           ColliderHandle(trigger.collider),
+                                           ColliderHandle(trigger.otherCollider),
                                        });
     }
 
@@ -278,8 +322,8 @@ namespace N2Engine::Scripting::Bindings
             "otherGameObject", sol::property([](const LuaCollision2D &c) { return c.otherGameObject; }),
             "rigidbody", sol::property([](const LuaCollision2D &c) { return c.rigidbody; }),
             "otherRigidbody", sol::property([](const LuaCollision2D &c) { return c.otherRigidbody; }),
-            "collider", sol::property([](const LuaCollision2D &c) { return c.collider; }),
-            "otherCollider", sol::property([](const LuaCollision2D &c) { return c.otherCollider; }),
+            "collider", sol::property([](const LuaCollision2D &c, const sol::this_state s) { return ColliderToLua(c.collider, s); }),
+            "otherCollider", sol::property([](const LuaCollision2D &c, const sol::this_state s) { return ColliderToLua(c.otherCollider, s); }),
             "relativeVelocity", sol::property([](const LuaCollision2D &c) { return c.relativeVelocity; }),
             "impulse", sol::property([](const LuaCollision2D &c) { return c.impulse; }),
             "contactCount", sol::property([](const LuaCollision2D &c) { return c.contacts.size(); }),
@@ -291,7 +335,8 @@ namespace N2Engine::Scripting::Bindings
                     return sol::nullopt;
                 }
                 return c.contacts[index - 1];
-            }
+            },
+            "GetAverageContactPoint", [](const LuaCollision2D &c) { return c.averageContactPoint; }
         );
 
         lua.new_usertype<LuaTrigger2D>("Trigger2D",
@@ -300,8 +345,8 @@ namespace N2Engine::Scripting::Bindings
             "otherGameObject", sol::property([](const LuaTrigger2D &t) { return t.otherGameObject; }),
             "rigidbody", sol::property([](const LuaTrigger2D &t) { return t.rigidbody; }),
             "otherRigidbody", sol::property([](const LuaTrigger2D &t) { return t.otherRigidbody; }),
-            "collider", sol::property([](const LuaTrigger2D &t) { return t.collider; }),
-            "otherCollider", sol::property([](const LuaTrigger2D &t) { return t.otherCollider; })
+            "collider", sol::property([](const LuaTrigger2D &t, const sol::this_state s) { return ColliderToLua(t.collider, s); }),
+            "otherCollider", sol::property([](const LuaTrigger2D &t, const sol::this_state s) { return ColliderToLua(t.otherCollider, s); })
         );
 
         // ===== Queries and gravity =====
@@ -374,8 +419,25 @@ namespace N2Engine::Scripting::Bindings
                                       ReadIgnoreTriggers(ignoreTriggers, "Physics2D.OverlapBox"));
                 return OverlapToLua(hits, state);
             },
-            "SetGravity", [](const Math::Vector2 &gravity) { Physics2D::Physics2DWorld::SetGravity(gravity); },
-            "GetGravity", [] { return Physics2D::Physics2DWorld::GetGravity(); }
+            // The loaded scene's gravity: the next scene starts with the default again
+            "SetGravity", [](const Math::Vector2 &gravity)
+            {
+                Scene *scene = SceneManager::GetCurScene();
+                if (!scene)
+                {
+                    throw std::runtime_error("Physics2D.SetGravity: no scene is loaded");
+                }
+                if (const auto world = scene->GetOrCreatePhysics2DWorld())
+                {
+                    world->SetWorldGravity(gravity);
+                }
+            },
+            "GetGravity", []
+            {
+                const Scene *scene = SceneManager::GetCurScene();
+                const Physics2D::Physics2DWorld *world = scene ? scene->GetPhysics2DWorld() : nullptr;
+                return world ? world->GetWorldGravity() : Physics2D::Physics2DWorld::GetGravity();
+            }
         );
 
         // ===== Components =====

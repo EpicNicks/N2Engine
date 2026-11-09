@@ -271,6 +271,7 @@ namespace
         EXPECT_TRUE(Eval<bool>("p2d_collision.collider:GetRadius() > 0"));
         EXPECT_TRUE(Eval<bool>("p2d_collision.otherCollider:GetHalfExtents().x == 50"));
         EXPECT_TRUE(Eval<bool>("p2d_collision:GetContact(99) == nil"));
+        EXPECT_NEAR(Eval<float>("p2d_collision:GetAverageContactPoint().y"), 0.0f, 0.05f);
 
         rb->SetLinearVelocity(Vector2(0.0f, 20.0f));
         Step(5);
@@ -318,6 +319,7 @@ namespace
         EXPECT_FALSE(Eval<bool>("kept:IsValid()"));
         EXPECT_FALSE(ErrorOf("kept:GetHalfExtents()").empty()) << "a destroyed component must be a Lua error";
         EXPECT_FALSE(ErrorOf("kept_go:GetName()").empty());
+        EXPECT_TRUE(Eval<bool>("p2d_collision.otherCollider == nil")) << "a collider read after it is gone is nil";
         Run("kept_go = nil");
     }
 
@@ -353,7 +355,7 @@ namespace
         EXPECT_EQ(Eval<int>("#Physics2D.OverlapBox(Vector2(5, 0), Vector2(1, 1), 0.5, -1)"), 1);
     }
 
-    TEST_F(LuaPhysics2DTest, GravityCanBeSetFromAScript)
+    TEST_F(LuaPhysics2DTest, GravityFromAScriptIsTheScenesAndEndsWithIt)
     {
         Run("Physics2D.SetGravity(Vector2(0, 0))");
         EXPECT_FLOAT_EQ(Eval<float>("Physics2D.GetGravity().y"), 0.0f);
@@ -362,6 +364,17 @@ namespace
         go->AddComponent<CircleCollider2D>();
         Step(20);
         EXPECT_FLOAT_EQ(go->GetPositionable()->GetPosition().y, 0.0f);
+
+        // A top-down level's choice must not reach the next scene
+        SceneManager::AddScene(Scene::Create("LuaPhysics2D_NextLevel"), true);
+        SceneManager::ProcessAnyPendingSceneChange();
+        _scene = SceneManager::GetCurScene();
+        EXPECT_FLOAT_EQ(Eval<float>("Physics2D.GetGravity().y"), -9.81f);
+        auto falling = Make("Falling", 0.0f, 0.0f);
+        falling->AddComponent<Rigidbody2D>();
+        falling->AddComponent<CircleCollider2D>();
+        Step(20);
+        EXPECT_LT(falling->GetPositionable()->GetPosition().y, -0.1f);
     }
 
     TEST_F(LuaPhysics2DTest, WrongArgumentsAreLuaErrors)
@@ -371,6 +384,9 @@ namespace
         EXPECT_NE(ErrorOf("Physics2D.Raycast(Vector2(0, 0), Vector2(1, 0), 1, 'layer')").find("layerMask"), std::string::npos);
         EXPECT_NE(ErrorOf("Physics2D.Raycast(Vector2(0, 0), Vector2(1, 0), 1, 1, 'yes')").find("ignoreTriggers"), std::string::npos);
         EXPECT_NE(ErrorOf("Physics2D.OverlapBox(Vector2(0, 0), Vector2(1, 1), 'tilted')").find("angle"), std::string::npos);
+        EXPECT_NE(ErrorOf("Physics2D.Raycast(Vector2(0, 0), Vector2(1, 0), 1, 1.5)").find("whole number"), std::string::npos);
+        EXPECT_NE(ErrorOf("Physics2D.OverlapCircle(Vector2(0, 0), 1, math.huge)").find("whole number"), std::string::npos);
+        EXPECT_TRUE(ErrorOf("Physics2D.OverlapCircle(Vector2(0, 0), 1, -1)").empty());
         Run("kept_go = GameObject.Create('Poly'); kept = kept_go:AddComponent('PolygonCollider2D')");
         EXPECT_NE(ErrorOf("kept:SetVertices({Vector2(0, 0), 'corner'})").find("Vector2"), std::string::npos);
         Run("kept_go = nil");
