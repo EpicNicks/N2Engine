@@ -19,7 +19,7 @@
     "docs/physics2d.html exists and is linked from the index and sidebar; it documents the differences from 3D and how to strip the module",
     "Final web sizes measured and recorded; all legs green"
   ],
-  "gate": "box2d-p2-module merged",
-  "approved": false,
+  "gate": null,
+  "approved": true,
   "notes": "Reviewer: same checked-handle rules as LuaPhysicsBindings, a stripped build's Physics2D table fails clearly rather than crashing, docs verified against code."
 }

@@ -806,7 +806,8 @@ function GameObject:FindChildRecursive(name) end
 function GameObject:Destroy() end
 
 ---Add a component by type name and return it.
----Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CharacterController", "CubeRenderer",
+---Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CharacterController", "Rigidbody2D", "BoxCollider2D",
+---"CircleCollider2D", "PolygonCollider2D", "CubeRenderer",
 ---"SphereRenderer", "QuadRenderer", "Sprite2D", "MeshRenderer", "TextRenderer", "ParticleSystem", "SoftBody", "Light", "AudioSource", "AudioListener",
 ---"LuaComponent", "RectTransform", "Canvas", "Image", "UIText", "Button". Unknown names raise an error.
 ---@param typeName string
@@ -1962,6 +1963,240 @@ function Physics.OverlapCapsule(point0, point1, radius, layerMask) end
 ---@return boolean
 function Physics.IsGpuAvailable() end
 
+---@alias BodyType2D integer
+---@class BodyType2DValues
+---@field Static BodyType2D
+---@field Dynamic BodyType2D
+---@field Kinematic BodyType2D
+BodyType2D = {}
+
+---A point of a 2D contact. The normal points from the other collider to this one.
+---@class ContactPoint2D
+---@field point Vector2
+---@field normal Vector2
+---@field separation number
+---@field normalImpulse number
+---@field tangentImpulse number
+ContactPoint2D = {}
+
+---The argument of OnCollisionEnter2D/Stay2D/Exit2D. Safe to keep after the callback: its objects are checked references.
+---relativeVelocity is after this step's solve, so it is not the approach speed.
+---@class Collision2D
+---@field gameObject GameObject|nil The object receiving the callback
+---@field otherGameObject GameObject|nil The other object
+---@field rigidbody Rigidbody2D|nil nil for a collider alone
+---@field otherRigidbody Rigidbody2D|nil nil for a collider alone
+---@field collider BoxCollider2D|CircleCollider2D|PolygonCollider2D|nil nil when it was removed
+---@field otherCollider BoxCollider2D|CircleCollider2D|PolygonCollider2D|nil nil when it was removed
+---@field relativeVelocity Vector2
+---@field impulse Vector2
+---@field contactCount integer
+Collision2D = {}
+
+---A contact point, 1-based
+---@param index integer
+---@return ContactPoint2D|nil
+function Collision2D:GetContact(index) end
+
+---@return Vector2
+function Collision2D:GetAverageContactPoint() end
+
+---The argument of OnTriggerEnter2D/Stay2D/Exit2D; safe to keep, like Collision2D
+---@class Trigger2D
+---@field gameObject GameObject|nil
+---@field otherGameObject GameObject|nil
+---@field rigidbody Rigidbody2D|nil
+---@field otherRigidbody Rigidbody2D|nil
+---@field collider BoxCollider2D|CircleCollider2D|PolygonCollider2D|nil
+---@field otherCollider BoxCollider2D|CircleCollider2D|PolygonCollider2D|nil
+Trigger2D = {}
+
+---What a 2D ray or cast found
+---@class RaycastHit2D
+---@field point Vector2
+---@field normal Vector2
+---@field distance number
+---@field gameObject GameObject|nil
+---@field collider BoxCollider2D|CircleCollider2D|PolygonCollider2D|nil
+---@field rigidbody Rigidbody2D|nil nil for a collider alone
+
+---One collider a 2D overlap found
+---@class OverlapHit2D
+---@field gameObject GameObject|nil
+---@field collider BoxCollider2D|CircleCollider2D|PolygonCollider2D|nil
+---@field rigidbody Rigidbody2D|nil nil for a collider alone
+
+---2D physics on the loaded scene (docs/physics2d.html). Every query finds nothing when the scene has no 2D component, or in a
+---build without Box2D. A layerMask of -1 means every layer; the default is every layer but Ignore Raycast.
+---@class Physics2D
+Physics2D = {}
+
+---The nearest hit, or nil
+---@param origin Vector2
+---@param direction Vector2
+---@param maxDistance? number
+---@param layerMask? integer
+---@param ignoreTriggers? boolean
+---@return RaycastHit2D|nil
+function Physics2D.Raycast(origin, direction, maxDistance, layerMask, ignoreTriggers) end
+
+---Every hit, nearest first
+---@param origin Vector2
+---@param direction Vector2
+---@param maxDistance? number
+---@param layerMask? integer
+---@param ignoreTriggers? boolean
+---@return RaycastHit2D[]
+function Physics2D.RaycastAll(origin, direction, maxDistance, layerMask, ignoreTriggers) end
+
+---@param origin Vector2
+---@param radius number
+---@param direction Vector2
+---@param maxDistance? number
+---@param layerMask? integer
+---@param ignoreTriggers? boolean
+---@return RaycastHit2D|nil
+function Physics2D.CircleCast(origin, radius, direction, maxDistance, layerMask, ignoreTriggers) end
+
+---@param origin Vector2
+---@param halfExtents Vector2
+---@param angle number|nil Radians
+---@param direction Vector2
+---@param maxDistance? number
+---@param layerMask? integer
+---@param ignoreTriggers? boolean
+---@return RaycastHit2D|nil
+function Physics2D.BoxCast(origin, halfExtents, angle, direction, maxDistance, layerMask, ignoreTriggers) end
+
+---@param center Vector2
+---@param radius number
+---@param layerMask? integer
+---@param ignoreTriggers? boolean
+---@return OverlapHit2D[]
+function Physics2D.OverlapCircle(center, radius, layerMask, ignoreTriggers) end
+
+---@param center Vector2
+---@param halfExtents Vector2
+---@param angle? number Radians
+---@param layerMask? integer
+---@param ignoreTriggers? boolean
+---@return OverlapHit2D[]
+function Physics2D.OverlapBox(center, halfExtents, angle, layerMask, ignoreTriggers) end
+
+---The loaded scene's gravity; wakes its dynamic bodies. It ends with the scene. A top-down game sets it to zero.
+---@param gravity Vector2
+function Physics2D.SetGravity(gravity) end
+
+---The loaded scene's gravity, or the default when it has no 2D world
+---@return Vector2
+function Physics2D.GetGravity() end
+
+---A 2D body: uses the object's world x, y and rotation about z.
+---@class Rigidbody2D : Component
+Rigidbody2D = {}
+---@param bodyType BodyType2D
+function Rigidbody2D:SetBodyType(bodyType) end
+---@return BodyType2D
+function Rigidbody2D:GetBodyType() end
+---Overrides the mass worked out from the colliders' density
+---@param mass number
+function Rigidbody2D:SetMass(mass) end
+---@return number
+function Rigidbody2D:GetMass() end
+function Rigidbody2D:UseAutoMass() end
+---@return boolean
+function Rigidbody2D:UsesAutoMass() end
+---Kept and applied when the body exists, if it does not yet
+---@param velocity Vector2
+function Rigidbody2D:SetLinearVelocity(velocity) end
+---@return Vector2
+function Rigidbody2D:GetLinearVelocity() end
+---@param radiansPerSecond number
+function Rigidbody2D:SetAngularVelocity(radiansPerSecond) end
+---@return number
+function Rigidbody2D:GetAngularVelocity() end
+---@param damping number
+function Rigidbody2D:SetLinearDamping(damping) end
+---@return number
+function Rigidbody2D:GetLinearDamping() end
+---@param damping number
+function Rigidbody2D:SetAngularDamping(damping) end
+---@return number
+function Rigidbody2D:GetAngularDamping() end
+---@param scale number
+function Rigidbody2D:SetGravityScale(scale) end
+---@return number
+function Rigidbody2D:GetGravityScale() end
+---@param fixed boolean
+function Rigidbody2D:SetFixedRotation(fixed) end
+---@return boolean
+function Rigidbody2D:IsFixedRotation() end
+---Continuous collision against other moving bodies, for fast projectiles
+---@param bullet boolean
+function Rigidbody2D:SetBullet(bullet) end
+---@return boolean
+function Rigidbody2D:IsBullet() end
+---@param force Vector2
+function Rigidbody2D:AddForce(force) end
+---@param impulse Vector2
+function Rigidbody2D:AddImpulse(impulse) end
+---@param torque number
+function Rigidbody2D:AddTorque(torque) end
+---@param impulse number
+function Rigidbody2D:AddAngularImpulse(impulse) end
+
+---What every 2D collider has. Sizes ignore the transform's scale.
+---@class Collider2D : Component
+local Collider2D = {}
+---A trigger reports overlaps and does not collide. Toggling it ends and restarts its pairs.
+---@param isTrigger boolean
+function Collider2D:SetIsTrigger(isTrigger) end
+---@return boolean
+function Collider2D:IsTrigger() end
+---dynamicFriction and restitution apply
+---@param material PhysicsMaterial
+function Collider2D:SetMaterial(material) end
+---@return PhysicsMaterial
+function Collider2D:GetMaterial() end
+---@param offset Vector2
+function Collider2D:SetOffset(offset) end
+---@return Vector2
+function Collider2D:GetOffset() end
+---@param density number
+function Collider2D:SetDensity(density) end
+---@return number
+function Collider2D:GetDensity() end
+---Moves what touches this surface along it, for conveyors
+---@param speed number
+function Collider2D:SetSurfaceSpeed(speed) end
+---@return number
+function Collider2D:GetSurfaceSpeed() end
+
+---@class BoxCollider2D : Collider2D
+BoxCollider2D = {}
+---@param size Vector2
+function BoxCollider2D:SetSize(size) end
+---@return Vector2
+function BoxCollider2D:GetSize() end
+---@param halfExtents Vector2
+function BoxCollider2D:SetHalfExtents(halfExtents) end
+---@return Vector2
+function BoxCollider2D:GetHalfExtents() end
+
+---@class CircleCollider2D : Collider2D
+CircleCollider2D = {}
+---@param radius number
+function CircleCollider2D:SetRadius(radius) end
+---@return number
+function CircleCollider2D:GetRadius() end
+
+---A convex polygon of 3 to 8 points
+---@class PolygonCollider2D : Collider2D
+PolygonCollider2D = {}
+---@param vertices Vector2[]
+function PolygonCollider2D:SetVertices(vertices) end
+---@return Vector2[]
+function PolygonCollider2D:GetVertices() end
 ---@alias Sprite2DShape integer
 ---@class Sprite2DShapeValues
 ---@field Rect Sprite2DShape
