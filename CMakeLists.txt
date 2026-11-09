@@ -28,6 +28,9 @@ option(N2ENGINE_USE_PHYSX "Use PhysX physics backend" ON)
 # setting physics.backend) and, with the tests, builds its smoke test (tests/jolt). OFF (the default) builds none of it
 # and the engine has no Jolt backend.
 option(N2ENGINE_USE_JOLT "Build the vendored Jolt Physics library and the engine's Jolt physics backend" OFF)
+# ON builds the vendored Box2D (external/box2d) as the static library box2d::box2d (cmake/box2d/CMakeLists.txt) and, with
+# the tests, its smoke test (tests/box2d). OFF leaves Box2D out of the build. Nothing in the engine links it yet.
+option(N2ENGINE_USE_BOX2D "Build the vendored Box2D library" ON)
 # OFF compiles the Vulkan renderer out: the build then needs no Vulkan headers or loader, and --renderer vulkan / the
 # VULKAN render backend fail with a clear message. ON (the default) needs the Vulkan SDK (Windows) or libvulkan-dev (Linux).
 option(N2ENGINE_RENDERER_VULKAN "Build the Vulkan renderer backend" ON)
@@ -324,6 +327,11 @@ endif()
 # == Jolt Physics (vendored; linked into the engine by engine/CMakeLists.txt) ==
 if(N2ENGINE_USE_JOLT)
     add_subdirectory(cmake/jolt)
+endif()
+
+# == Box2D (vendored) ==
+if(N2ENGINE_USE_BOX2D)
+    add_subdirectory(cmake/box2d)
 endif()
 
 # == Mbed TLS (vendored; native builds only) ==

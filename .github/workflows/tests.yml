@@ -271,6 +271,19 @@ jobs:
           Select-String -Path jolt-smoke.log -Pattern '^\[JOLT-DETERMINISM\]' | ForEach-Object { Add-Content $env:GITHUB_STEP_SUMMARY ('    ' + $_.Line) }
           Add-Content $env:GITHUB_STEP_SUMMARY ''
 
+      # The vendored Box2D alone: this leg's [BOX2D-DETERMINISM] line, which must equal every other leg's
+      - name: Box2D determinism numbers
+        if: needs.changes.outputs.docs_only != 'true'
+        shell: pwsh
+        run: |
+          & "./build/bin/${{ matrix.config }}/box2d_smoke_tests.exe" | Tee-Object -FilePath box2d-smoke.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Add-Content $env:GITHUB_STEP_SUMMARY ''
+          Add-Content $env:GITHUB_STEP_SUMMARY 'windows ${{ matrix.config }}, PhysX ${{ matrix.physx }}:'
+          Add-Content $env:GITHUB_STEP_SUMMARY ''
+          Select-String -Path box2d-smoke.log -Pattern '^\[BOX2D-DETERMINISM\]' | ForEach-Object { Add-Content $env:GITHUB_STEP_SUMMARY ('    ' + $_.Line) }
+          Add-Content $env:GITHUB_STEP_SUMMARY ''
+
       # The Jolt BACKEND (engine/src/physics/jolt) stepping one scene twice in a process: its [JOLT-BACKEND-DETERMINISM] lines
       # (compiler, job system, declared level, and the state hashes after 60 and 240 steps) are in this job's log and summary.
       # The hashes must be equal on every leg that builds the backend: a difference is a finding, never a number to loosen
@@ -488,11 +501,15 @@ jobs:
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
-        run: cmake --build build --parallel --target N2EditorHost N2Server math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client n2server_net_host n2server_net_client n2server_lockstep_client n2server_rollback_client n2_replay websocket_echo jolt_smoke_tests -- -k 0
+        run: cmake --build build --parallel --target N2EditorHost N2Server math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client n2server_net_host n2server_net_client n2server_lockstep_client n2server_rollback_client n2_replay websocket_echo jolt_smoke_tests box2d_smoke_tests -- -k 0
 
       # The vendored Jolt Physics tree is exactly upstream's v5.6.0 (the SHA-256 of every file, no extra file under Jolt/)
       - name: Check the vendored Jolt Physics tree
         run: bash scripts/check-jolt-vendor.sh
+
+      # The vendored Box2D tree is exactly upstream's v3.2.0 (the SHA-256 of every file, no extra file)
+      - name: Check the vendored Box2D tree
+        run: bash scripts/check-box2d-vendor.sh
 
       # The vendored Jolt Physics (N2ENGINE_USE_JOLT): its smoke test (the library alone) run directly, because ctest
       # hides a passing test's output, so this leg's [JOLT-DETERMINISM] line (the state hash every leg must produce, the
@@ -502,6 +519,13 @@ jobs:
           set -o pipefail
           ./build/bin/jolt_smoke_tests | tee jolt-smoke.log
           { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-DETERMINISM\]' jolt-smoke.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
+
+      # The vendored Box2D alone: this leg's [BOX2D-DETERMINISM] line, which must equal every other leg's
+      - name: Box2D determinism numbers
+        run: |
+          set -e -o pipefail
+          ./build/bin/box2d_smoke_tests | tee box2d-smoke.log
+          { echo; echo "${{ github.job }}:"; echo; grep '^\[BOX2D-DETERMINISM\]' box2d-smoke.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
 
       # The Jolt BACKEND (engine/src/physics/jolt) stepping one scene twice in a process: its [JOLT-BACKEND-DETERMINISM] lines
       # (compiler, job system, declared level, and the state hashes after 60 and 240 steps) are in this job's log and summary.
@@ -708,7 +732,7 @@ jobs:
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/aarch64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
-        run: cmake --build build --parallel --target N2EditorHost N2Server math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client n2server_net_host n2server_net_client n2server_lockstep_client n2server_rollback_client n2_replay websocket_echo jolt_smoke_tests -- -k 0
+        run: cmake --build build --parallel --target N2EditorHost N2Server math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client n2server_net_host n2server_net_client n2server_lockstep_client n2server_rollback_client n2_replay websocket_echo jolt_smoke_tests box2d_smoke_tests -- -k 0
 
       # The vendored Jolt Physics (N2ENGINE_USE_JOLT): its smoke test (the library alone) run directly, because ctest
       # hides a passing test's output, so this leg's [JOLT-DETERMINISM] line (the state hash every leg must produce, the
@@ -718,6 +742,13 @@ jobs:
           set -o pipefail
           ./build/bin/jolt_smoke_tests | tee jolt-smoke.log
           { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-DETERMINISM\]' jolt-smoke.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
+
+      # The vendored Box2D alone: this leg's [BOX2D-DETERMINISM] line, which must equal every other leg's
+      - name: Box2D determinism numbers
+        run: |
+          set -e -o pipefail
+          ./build/bin/box2d_smoke_tests | tee box2d-smoke.log
+          { echo; echo "${{ github.job }}:"; echo; grep '^\[BOX2D-DETERMINISM\]' box2d-smoke.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
 
       # The Jolt BACKEND (engine/src/physics/jolt) stepping one scene twice in a process: its [JOLT-BACKEND-DETERMINISM] lines
       # (compiler, job system, declared level, and the state hashes after 60 and 240 steps) are in this job's log and summary.
@@ -888,7 +919,7 @@ jobs:
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DN2ENGINE_RENDERER_VULKAN=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
-        run: cmake --build build --parallel --target N2EditorHost N2Server math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client n2server_net_host n2server_net_client n2server_lockstep_client n2server_rollback_client n2_replay websocket_echo jolt_smoke_tests -- -k 0
+        run: cmake --build build --parallel --target N2EditorHost N2Server math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client n2server_net_host n2server_net_client n2server_lockstep_client n2server_rollback_client n2_replay websocket_echo jolt_smoke_tests box2d_smoke_tests -- -k 0
 
       # The vendored Jolt Physics (N2ENGINE_USE_JOLT): its smoke test (the library alone) run directly, because ctest
       # hides a passing test's output, so this leg's [JOLT-DETERMINISM] line (the state hash every leg must produce, the
@@ -898,6 +929,13 @@ jobs:
           set -o pipefail
           ./build/bin/jolt_smoke_tests | tee jolt-smoke.log
           { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-DETERMINISM\]' jolt-smoke.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
+
+      # The vendored Box2D alone: this leg's [BOX2D-DETERMINISM] line, which must equal every other leg's
+      - name: Box2D determinism numbers
+        run: |
+          set -e -o pipefail
+          ./build/bin/box2d_smoke_tests | tee box2d-smoke.log
+          { echo; echo "${{ github.job }}:"; echo; grep '^\[BOX2D-DETERMINISM\]' box2d-smoke.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
 
       # The Jolt BACKEND (engine/src/physics/jolt) stepping one scene twice in a process: its [JOLT-BACKEND-DETERMINISM] lines
       # (compiler, job system, declared level, and the state hashes after 60 and 240 steps) are in this job's log and summary.
@@ -1186,7 +1224,7 @@ jobs:
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
-          cmake --build build-web --target math_tests text_tests assetimport_tests engine_tests renderer_tests web_tests jolt_smoke_tests N2WebGpuReadbackTests -- -k 0
+          cmake --build build-web --target math_tests text_tests assetimport_tests engine_tests renderer_tests web_tests jolt_smoke_tests box2d_smoke_tests N2WebGpuReadbackTests -- -k 0
 
       # CMake's Emscripten toolchain sets CMAKE_CROSSCOMPILING_EMULATOR to node, so ctest runs build-web/bin/<name>.js under node
       - name: Test under node

@@ -1,0 +1,35 @@
+{
+  "name": "box2d-2d-physics",
+  "repo": "engine",
+  "branch": "feat-physics2d-box2d",
+  "title": "Physics2D: vendor Box2D v3 and add a 2D physics module (bodies, colliders, sensors, layers, events, queries, Lua bindings) for 2D games such as Triangle-Like",
+  "closes": null,
+  "issue": "Why: the engine's physics is 3D only (IPhysicsBackend with PhysX and Jolt; Rigidbody has no axis lock and no 2D body type), so a 2D game has to fake 2D with a flattened 3D scene. The Triangle-Like recreation (plan: E:/Code/Projects/Triangle-Like N2Engine/PLAN.md) needs real 2D collision: circles, boxes and polygons, sensors, collision and trigger events, raycasts and overlap queries, projectiles that hit and reflect, pushable crates and conveyors. Decision (user, 2026-11-08): use Box2D, the industry-standard 2D engine. Read first: docs/physics.html (the 3D contracts this module should mirror in naming and event ordering), engine/include/engine/physics/IPhysicsBackend.hpp, Rigidbody.hpp, ICollider.hpp, Raycast.hpp, PhysicsFeatures.hpp, the layer and collision matrix code (engine/src/Layers.cpp), how Jolt was vendored (orchestrator/items/jolt-j1-vendor.json, external/, THIRD_PARTY_NOTICES.md, docs/third-party), the fixed-step order in docs/application.html, the web build size budgets (docs/web-build.html, cmake/N2EngineWeb.cmake, scripts/), Lua binding conventions (engine/src/scripting/bindings, docs/scripting-lua.html). DESIGN FIRST: write the design into orchestrator/proposals/physics2d-box2d-design.md before code, and stop for the user's go on these choices: (a) Box2D v3 (C API, MIT, cross-platform deterministic) versus v2.4 (C++), recommend v3; (b) a SEPARATE Physics2D module (IPhysics2DBackend or a direct wrapper) rather than extending IPhysicsBackend, recommend separate, since 2D shapes, queries and events do not fit the 3D interface; (c) whether components are Rigidbody2D plus BoxCollider2D, CircleCollider2D, PolygonCollider2D (Unity-like, recommended) or one body component; (d) layer reuse: the same 32 layers and the same collision matrix as 3D, recommended; (e) units and the 2D plane: the 2D world uses the scene transform's x,y and rotation about z, z is ignored by physics; (f) determinism: fixed timestep from the engine step, single-threaded, no wall-clock, so a Deterministic project can include it. SCOPE after the design is approved, in order: (1) Vendor Box2D under external/ pinned and checked in like Jolt (license file, THIRD_PARTY_NOTICES.md and docs updated, no network at build time). (2) CMake target and option (N2ENGINE_USE_BOX2D, default ON where cheap), built in the Windows, Linux and web legs. (3) The module: world owned by the Application or scene (decide in the design; recommend per scene so scene switches are clean), body types Static, Kinematic, Dynamic, linear and angular velocity, damping, gravity scale, fixed rotation, bullet flag, mass from shapes, circle, box and convex polygon shapes, sensors, friction, restitution, layer filtering from the shared collision matrix, transform sync both ways in the engine fixed-step order, creation and destruction safe from inside event callbacks (deferred). (4) Events: OnCollisionEnter, Stay and Exit and OnTriggerEnter and Exit with contact points and normals, dispatched after the step in the same order and with the same payload shape as 3D. (5) Queries: Raycast, RaycastAll, OverlapCircle, OverlapBox, shape casts. (6) Lua bindings for the components, events and queries with the same checked-handle rules as the 3D bindings. (7) Serialization: the components save and load in scenes and prefabs, including prefab overrides. (8) Docs: new docs/physics2d.html, index and sidebar entries, web-build size numbers measured and recorded, protocol or version badges per docs/README.md. (9) Tests: GoogleTest for bodies, each shape, sensors, layer filtering, event order, queries, destroy-in-callback, scene reload, serialization round trip, Lua binding behaviour, and a determinism test (same inputs on two runs give the same hash; compare across legs if the CI golden job is extended). NOT in scope: 2D joints beyond a distance/revolute joint if the design asks for them (the Triangle-Like game needs none; list them as follow-ups), soft bodies, particles, GPU, networking and rollback integration (list as follow-ups: Box2D snapshot/restore for rollback), editor gizmos (follow-up). Constraints: no editor protocol bump unless the editor must list the new components (if so stop and ask, protocols are serial); the 3D physics behaviour and every existing test unchanged; builds run through the build coordinator; Windows, Linux and web legs green; web package size must stay within budgets or the budgets are raised on purpose with the measurement in the PR, as for Jolt.",
+  "allowedPaths": [
+    "^engine/",
+    "^external/",
+    "^cmake/",
+    "^CMakeLists\\.txt$",
+    "^tests/",
+    "^docs/",
+    "^scripts/",
+    "^web/",
+    "^THIRD_PARTY_NOTICES\\.md$",
+    "^\\.github/workflows/",
+    "^orchestrator/proposals/physics2d-box2d-design\\.md$"
+  ],
+  "acceptance": [
+    "Box2D is vendored and pinned with its license and listed in THIRD_PARTY_NOTICES.md; a build needs no network",
+    "Rigidbody2D and circle, box and polygon colliders with sensors and layer filtering simulate in the engine fixed step and sync transforms; creating and destroying bodies inside event callbacks is safe",
+    "Collision and trigger Enter, Stay and Exit events fire in the documented order; raycast and overlap queries return correct hits",
+    "Components serialize in scenes and prefabs, and Lua can use bodies, events and queries through checked handles",
+    "docs/physics2d.html exists and is linked from the index; web package size is measured and within budget (or the raise is explained)",
+    "Existing 3D physics tests are unchanged and green; Windows, Linux and web CI legs green; the same inputs give the same state hash on two runs"
+  ],
+  "requiresDocs": true,
+  "allowProtocol": false,
+  "gate": "split into stages: box2d-p1-vendor, box2d-p2-module, box2d-p3-lua-docs (user, 2026-11-08). Do not launch this entry; it keeps the original brief.",
+  "approved": false,
+  "reviewer": "opus",
+  "notes": "Reviewer: that the 3D path is untouched, that event dispatch cannot run user code while Box2D is mid-step (destroy and create are deferred), that layer filtering uses the shared matrix and cannot drift from it, that body and collider lifetimes follow the engine's ownership rules (no dangling handles after scene teardown, Lua handles are checked), that the fixed-step order matches docs/application.html, that nothing in the step depends on wall-clock or thread count, that web size budgets were measured and not guessed, and that the vendored source is pristine apart from documented build glue."
+}

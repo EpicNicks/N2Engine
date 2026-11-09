@@ -1,0 +1,25 @@
+{
+  "repo": "engine",
+  "closes": null,
+  "allowProtocol": false,
+  "reviewer": "opus",
+  "requiresDocs": true,
+  "name": "box2d-p3-lua-docs",
+  "branch": "feat-physics2d-box2d-lua",
+  "title": "Physics2D stage 3: Lua bindings for the 2D components, events and queries; docs/physics2d.html; final measured sizes",
+  "issue": "User's go on the design, 2026-11-08, with decisions G (OnCollisionEnter2D names), H (warn once in Deterministic mode) and I (three PRs). Design: orchestrator/proposals/physics2d-box2d-design.md, section 8. Scope items 6 and 8 of box2d-2d-physics.json.",
+  "allowedPaths": [
+    "^engine/",
+    "^tests/",
+    "^docs/",
+    "^web/budgets\\.json$"
+  ],
+  "acceptance": [
+    "Lua can use bodies, events and queries through checked handles; a stale handle is a checked failure",
+    "docs/physics2d.html exists and is linked from the index and sidebar; it documents the differences from 3D and how to strip the module",
+    "Final web sizes measured and recorded; all legs green"
+  ],
+  "gate": "box2d-p2-module merged",
+  "approved": false,
+  "notes": "Reviewer: same checked-handle rules as LuaPhysicsBindings, a stripped build's Physics2D table fails clearly rather than crashing, docs verified against code."
+}
