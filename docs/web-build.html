@@ -568,13 +568,13 @@ RewriteRule ^(.*\.(js|wasm|data|html))$ $1.gz [L]
 <table>
 <thead><tr><th>Size profile <code>index.wasm</code></th><th>Raw</th><th><code>gzip -9</code></th></tr></thead>
 <tbody>
-<tr><td>With Box2D (the default)</td><td>8,424,356</td><td>2,798,588</td></tr>
-<tr><td>Without (<code>-DN2ENGINE_USE_BOX2D=OFF</code>)</td><td>8,225,938</td><td>2,709,644</td></tr>
-<tr><td>What leaving it out saves</td><td>198,418</td><td>88,944</td></tr>
+<tr><td>With Box2D (the default)</td><td>8,431,940</td><td>2,802,626</td></tr>
+<tr><td>Without (<code>-DN2ENGINE_USE_BOX2D=OFF</code>)</td><td>8,226,001</td><td>2,709,848</td></tr>
+<tr><td>What leaving it out saves</td><td>205,939</td><td>92,778</td></tr>
 </tbody>
 </table>
 </div>
-<p>Against master before the module (<code>e3e48dc2</code>), the default package grew by 216,722 raw and 73,028 brotli in the size profile, and by 335,476 raw and 93,377 brotli in the speed profile. No budget was raised. The components that stay in a build without Box2D account for about 18,000 of those raw bytes in the size profile. Lua bindings are not in these numbers.</p>
+<p>Against master before the module (<code>e3e48dc2</code>), the default package grew by 224,306 raw and 75,855 brotli in the size profile, and by 347,114 raw and 97,374 brotli in the speed profile. No budget was raised. The components that stay in a build without Box2D account for about 18,000 of those raw bytes in the size profile. Lua bindings are not in these numbers.</p>
 
 <h2 id="size-report">The size report and budgets</h2>
 <p><code>scripts/web-size-report.sh [dir]</code> (default <code>build/bin</code>) lists every <code>.wasm</code> and <code>.js</code> file under the directory (and, for a web package, its <code>.data</code> and <code>.html</code> files) with its raw and <code>gzip -9</code> size, prints a table, and appends it to the GitHub job summary when <code>GITHUB_STEP_SUMMARY</code> is set. It only reports (exit 1 only when it finds no files); until stage 3 it also took budgets from environment variables and CMake cache variables, which are removed: the budgets are in one place now.</p>
