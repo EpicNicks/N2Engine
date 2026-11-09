@@ -577,6 +577,7 @@ namespace
         {
             auto spawned = GameObject::Create("Spawned");
             spawned->CreatePositionable();
+            spawned->GetPositionable()->SetPosition(Vector3(30.0f, 30.0f, 0.0f)); // away from this body, or it would touch and spawn again
             GetGameObject().GetScene()->AddRootGameObject(spawned);
             auto *rb = spawned->AddComponent<Rigidbody2D>();
             spawned->AddComponent<CircleCollider2D>();
@@ -626,7 +627,7 @@ namespace
         ASSERT_EQ(spawner->spawnedCount, 1);
         const auto spawned = _scene->FindGameObject("Spawned");
         ASSERT_NE(spawned, nullptr);
-        EXPECT_GT(PositionOf(spawned).x, 0.1f);
+        EXPECT_GT(PositionOf(spawned).x, 30.1f);
     }
 
     // ===== Layers =====
@@ -993,7 +994,7 @@ namespace
         const std::uint64_t second = RunCrates(*_scene, 120);
 
         // Measured in CI on every leg. A leg that differs is a finding to report; do not loosen this to make it pass.
-        constexpr std::uint64_t kGolden = 0x0000000000000000ull;
+        constexpr std::uint64_t kGolden = 0x8fcedfc23f34c20bull;
         std::printf("[PHYSICS2D-DETERMINISM] steps=120 hash=0x%016llx golden=0x%016llx\n", static_cast<unsigned long long>(first), static_cast<unsigned long long>(kGolden));
         EXPECT_EQ(first, second);
         EXPECT_NE(first, 0u);

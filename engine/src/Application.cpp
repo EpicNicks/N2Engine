@@ -966,8 +966,12 @@ void Application::PhysicsUpdate(const Scene &scene)
     else
     {
         scene.FixedUpdate();
-        const Diagnostics::ScopedFrameSection physicsSection(_frameStats, Diagnostics::FrameSection::Physics);
-        step2D();
+        // Only with a 2D world: a project with no physics at all reports no physics time
+        if (scene._physics2DWorld)
+        {
+            const Diagnostics::ScopedFrameSection physicsSection(_frameStats, Diagnostics::FrameSection::Physics);
+            step2D();
+        }
     }
 }
 

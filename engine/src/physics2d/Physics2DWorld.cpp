@@ -851,11 +851,13 @@ namespace N2Engine::Physics2D
 
             static void RefreshMass(const BodyRecord &body)
             {
+                // For every body type: a shape made or removed with updateBodyMass false leaves the body's mass marked dirty, and
+                // Box2D asserts on that in the next step even for a kinematic or static body
+                b2Body_UpdateMassFromShapes(body.id);
                 if (body.type != BodyType2D::Dynamic)
                 {
                     return;
                 }
-                b2Body_UpdateMassFromShapes(body.id);
                 b2MassData data = b2Body_GetMassData(body.id);
                 if (body.autoMass)
                 {
