@@ -17,6 +17,12 @@ namespace N2Engine
     class Scene;
     class ReferenceResolver;
 
+    namespace Physics2D
+    {
+        struct Collision2D;
+        struct Trigger2D;
+    }
+
     namespace Network
     {
         struct RpcDescriptor;
@@ -169,6 +175,19 @@ namespace N2Engine
         virtual void OnTriggerStay(Physics::Trigger trigger) {}
 
         virtual void OnTriggerExit(Physics::Trigger trigger) {}
+
+        // 2D physics events (docs/physics2d.html): the same order and rules as the six above, from the 2D world
+        virtual void OnCollisionEnter2D(const Physics2D::Collision2D &collision) {}
+
+        virtual void OnCollisionStay2D(const Physics2D::Collision2D &collision) {}
+
+        virtual void OnCollisionExit2D(const Physics2D::Collision2D &collision) {}
+
+        virtual void OnTriggerEnter2D(const Physics2D::Trigger2D &trigger) {}
+
+        virtual void OnTriggerStay2D(const Physics2D::Trigger2D &trigger) {}
+
+        virtual void OnTriggerExit2D(const Physics2D::Trigger2D &trigger) {}
 
         // Pointer events (Unity's OnMouse* messages), sent by Input::PointerDispatcher before Update to every
         // component of the object under the pointer (left button only); see docs/input.html#picking

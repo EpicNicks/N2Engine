@@ -520,6 +520,16 @@ jobs:
           ./build/bin/jolt_smoke_tests | tee jolt-smoke.log
           { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-DETERMINISM\]' jolt-smoke.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
 
+      # A game can leave 2D physics out (docs/physics2d.html#stripping): that build must keep working. Only two files differ from
+      # the build above, so ccache makes this cheap.
+      - name: Build and test without Box2D
+        run: |
+          set -e
+          cmake -S . -B build-nobox2d -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DN2ENGINE_USE_BOX2D=OFF
+          cmake --build build-nobox2d --parallel --target engine_tests -- -k 0
+          if grep -q 'libbox2d' build-nobox2d/build.ninja; then echo 'a build without Box2D still links it'; exit 1; fi
+          ./build-nobox2d/bin/engine_tests --gtest_filter='Physics2DStrippedTest.*'
+
       # The vendored Box2D alone: this leg's [BOX2D-DETERMINISM] line, which must equal every other leg's
       - name: Box2D determinism numbers
         run: |
@@ -1367,6 +1377,20 @@ jobs:
           cmake --build build-web-size --target jolt_size_baseline jolt_size_probe -- -k 0
           node build-web-size/bin/jolt_size_probe.js
           node scripts/web-jolt-size-report.mjs build-web-size size
+
+      # What 2D physics costs a game that does not use it, and what leaving it out saves: the size profile built without Box2D
+      - name: Measure the size profile without Box2D
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          emcmake cmake -S . -B build-web-size-nobox2d -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=size -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_BOX2D=OFF
+          cmake --build build-web-size-nobox2d --target web-package -- -k 0
+          for tree in build-web-size build-web-size-nobox2d; do
+            w="$tree/web-package/index.wasm"
+            line="$tree: index.wasm raw $(wc -c < "$w") gzip $(gzip -9 -c "$w" | wc -c)"
+            echo "[BOX2D-SIZE] $line"
+            echo "    $line" >> "$GITHUB_STEP_SUMMARY"
+          done
 
       - name: Build and check the web package (speed profile)
         run: |

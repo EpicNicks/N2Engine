@@ -2,6 +2,7 @@
 #include "engine/Application.hpp"
 #include "engine/Logger.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
+#include "engine/physics2d/Physics2DWorld.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -272,5 +273,6 @@ namespace N2Engine
         {
             backend->RefreshCollisionMatrix();
         }
+        Physics2D::Physics2DWorld::RefreshAllCollisionMatrices();
     }
 }

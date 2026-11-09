@@ -33,6 +33,7 @@
 <h2>Systems</h2>
 <ul>
 <li><a href="physics.html">Physics</a></li>
+<li><a href="physics2d.html">2D physics</a></li>
 <li><a href="input.html">Input</a></li>
 <li><a href="audio.html">Audio</a></li>
 <li><a href="text.html">Text &amp; fonts</a></li>
@@ -146,6 +147,7 @@
 <div class="card"><h3><a href="gameobjects-components.html">GameObject &amp; Component</a></h3><p>Hierarchy of objects; components get lifecycle callbacks (attach, enable, update, disable, destroy).</p></div>
 <div class="card"><h3><a href="transforms.html">Transforms</a></h3><p><code>Positionable</code>: local and world position, rotation, scale; tells physics when it moves.</p></div>
 <div class="card"><h3><a href="coroutines.html">Coroutines</a></h3><p>Per-scene scheduler for <code>std::generator</code>-based coroutines with Unity-style waits.</p></div>
+<div class="card"><h3><a href="physics2d.html">2D physics</a></h3><p>Rigid bodies, colliders, triggers, events and queries on Box2D v3, with the same layers and event rules as 3D. A game that does not use it can leave it out.</p></div>
 <div class="card"><h3><a href="physics.html">Physics</a></h3><p><code>IPhysicsBackend</code> with a PhysX and a Jolt implementation (Jolt also saves, restores and hashes its state, for rollback); Rigidbody and collider components; collision and trigger events; raycasts.</p></div>
 <div class="card"><h3><a href="input.html">Input</a></h3><p>Action maps with typed actions and bindings; owned by the window, updated as events are polled. Mouse picking and the <code>OnMouse*</code> callbacks.</p></div>
 <div class="card"><h3><a href="audio.html">Audio</a></h3><p>OpenAL-based <code>AudioSystem</code>: sources, one-shots, mixer groups and a listener.</p></div>
