@@ -576,6 +576,15 @@ RewriteRule ^(.*\.(js|wasm|data|html))$ $1.gz [L]
 </div>
 <p>Against master before the module (<code>e3e48dc2</code>), the default package grew by 224,306 raw and 75,855 brotli in the size profile, and by 347,114 raw and 97,374 brotli in the speed profile. No budget was raised. The components that stay in a build without Box2D account for about 18,000 of those raw bytes in the size profile. Lua bindings are not in these numbers.</p>
 
+<h2 id="download-cache">Dawn downloads in CI <span class="badge">PR #__N__</span></h2>
+<p>The web build fetches Dawn's emdawnwebgpu remote port at configure time, and emcc fetches the port's package at the first compile. The native WebGPU harness fetches the prebuilt Dawn. All three come from Dawn's GitHub releases, which have failed CI with HTTP errors.</p>
+<ul>
+<li><strong>Retries:</strong> <code>cmake/N2Download.cmake</code> tries a failed download twice more, after 10 and 30 seconds.</li>
+<li><strong>Cache:</strong> with the environment variable <code>N2_DOWNLOAD_CACHE</code> set to a folder, a file there with the pinned SHA-256 is used instead of the network, and a new download is put there. The web and webgpu jobs set it and keep the folder, and emcc's <code>ports</code> folder, in the Actions cache, keyed by the pins.</li>
+<li><strong>Hashes:</strong> every file is checked against its pinned SHA-256, wherever it came from. A cached file with a wrong hash is ignored and downloaded again.</li>
+</ul>
+<p>A local build sets nothing and downloads as before, with the retries. Pull requests read the cache that <code>master</code> saved, so the first run after this change still downloads.</p>
+
 <h2 id="size-report">The size report and budgets</h2>
 <p><code>scripts/web-size-report.sh [dir]</code> (default <code>build/bin</code>) lists every <code>.wasm</code> and <code>.js</code> file under the directory (and, for a web package, its <code>.data</code> and <code>.html</code> files) with its raw and <code>gzip -9</code> size, prints a table, and appends it to the GitHub job summary when <code>GITHUB_STEP_SUMMARY</code> is set. It only reports (exit 1 only when it finds no files); until stage 3 it also took budgets from environment variables and CMake cache variables, which are removed: the budgets are in one place now.</p>
 <p><strong>The budgets are in <code>web/budgets.json</code></strong> <span class="badge">PR #174</span>, one set per profile, and nowhere else. <code>scripts/web-budget-check.mjs &lt;package folder&gt; &lt;profile&gt;</code> reads the package's <code>manifest.json</code>, prints a table (measured, limit, headroom) to the log and the job summary, and exits 1 when any budget is exceeded or a budgeted number is missing. The web CI job runs it for the <code>dev</code>, <code>size</code> and <code>speed</code> packages, so an exceeded budget fails the job. A budget key is <code>&lt;kind&gt;.&lt;size&gt;</code>: kind is <code>wasm</code>, <code>js</code>, <code>data</code> or <code>initial</code> (every file of the package, that is what a first visit downloads); size is <code>raw</code>, <code>gzip</code> or <code>brotli</code>. Values are bytes.</p>
