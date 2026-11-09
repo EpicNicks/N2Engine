@@ -1187,13 +1187,28 @@ namespace
         rb->SetLinearVelocity(Vector2(2.0f, 0.0f));
         Step(5);
 
-        platform->GetPositionable()->SetPosition(Vector3(10.0f, 0.0f, 0.0f));
+        const float target = PositionOf(platform).x + 1.0f;
+        platform->GetPositionable()->SetPosition(Vector3(target, 0.0f, 0.0f));
         Step();
-        EXPECT_NEAR(PositionOf(platform).x, 10.0f, 0.01f);
+        EXPECT_NEAR(PositionOf(platform).x, target, 0.01f);
         EXPECT_FLOAT_EQ(rb->GetLinearVelocity().x, 2.0f);
 
         Step(50);
-        EXPECT_NEAR(PositionOf(platform).x, 12.0f, 0.05f);
+        EXPECT_NEAR(PositionOf(platform).x, target + 2.0f, 0.05f);
+    }
+
+    TEST_F(Physics2DTest, AKinematicMoveBeyondTheSpeedLimitStillArrives)
+    {
+        // 400 units per second is 8 units in one 0.02 s step: Box2D would stop a target move short of 100 units
+        auto platform = Make("Platform", 0.0f, 0.0f);
+        auto *rb = MakeBody(platform, BodyType2D::Kinematic);
+        platform->AddComponent<BoxCollider2D>();
+        Step();
+
+        platform->GetPositionable()->SetPosition(Vector3(100.0f, 0.0f, 0.0f));
+        Step();
+        EXPECT_NEAR(PositionOf(platform).x, 100.0f, 0.01f);
+        EXPECT_FLOAT_EQ(rb->GetLinearVelocity().x, 0.0f);
     }
 
     TEST_F(Physics2DTest, ARicochetFromAHitPointFindsTheNextSurface)

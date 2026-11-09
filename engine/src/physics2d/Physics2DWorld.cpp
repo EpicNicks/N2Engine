@@ -273,6 +273,7 @@ namespace N2Engine::Physics2D
                 def.workerCount = 1;
                 def.enqueueTask = nullptr;
                 def.finishTask = nullptr;
+                _maxLinearSpeed = def.maximumLinearSpeed;
                 _world = b2CreateWorld(&def);
                 LiveWorlds().push_back(this);
             }
@@ -335,7 +336,13 @@ namespace N2Engine::Physics2D
                         continue;
                     }
                     const b2Rot rotation = ToRot(positionable->GetRotation());
-                    if (body.type == BodyType2D::Kinematic && deltaTime > 0.0f)
+                    // Box2D caps a body's speed, so a target further than one step at that speed would fall short, and the sync after
+                    // the step would then pull the object back short of where the game put it. That move is a teleport instead.
+                    const b2Pos current = b2Body_GetPosition(body.id);
+                    const float moveX = position.x - static_cast<float>(current.x);
+                    const float moveY = position.y - static_cast<float>(current.y);
+                    const float reach = _maxLinearSpeed * deltaTime;
+                    if (body.type == BodyType2D::Kinematic && deltaTime > 0.0f && moveX * moveX + moveY * moveY < reach * reach)
                     {
                         // The target replaces the velocity for one step; Step puts the game's velocity back
                         _targeted.push_back({handle, b2Body_GetLinearVelocity(body.id), b2Body_GetAngularVelocity(body.id)});
@@ -719,6 +726,9 @@ namespace N2Engine::Physics2D
                 b2World_OverlapShape(_world, ToPos(origin.x, origin.y), &proxy, MakeQueryFilter(layerMask), &CollectOverlap, &context);
                 // A point on a surface (the last hit of a ricochet) counts as overlapping, so it must also still be inside just along the ray
                 const b2Pos ahead = ToPos(origin.x + sweep.direction.x * kInsideProbe, origin.y + sweep.direction.y * kInsideProbe);
+                // Box2D's ray reports that same surface too, at fraction 0
+                std::erase_if(context.hits, [&ahead](const RawHit &raw)
+                              { return !(raw.distance > 0.0f) && !b2Shape_TestPoint(b2LoadShapeId(raw.shape), ahead); });
                 for (const ShapeKey shape : context.overlaps)
                 {
                     if (!b2Shape_TestPoint(b2LoadShapeId(shape), ahead))
@@ -1304,6 +1314,7 @@ namespace N2Engine::Physics2D
             }
 
             b2WorldId _world{};
+            float _maxLinearSpeed = 0.0f;
             // std::map: these are iterated, and that order must depend only on handles and ids, never on addresses or hashing
             std::map<PhysicsBodyHandle, BodyRecord, HandleLess> _bodies;
             std::map<ShapeKey, ShapeRecord> _shapes;

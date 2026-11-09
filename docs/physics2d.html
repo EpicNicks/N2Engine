@@ -110,7 +110,7 @@
 <table>
 <thead><tr><th>Changing a transform on a</th><th>Does</th></tr></thead>
 <tbody>
-<tr><td>Kinematic body</td><td>Moves there in one step, with velocity, so it carries what stands on it. Then the velocity the game set applies again.</td></tr>
+<tr><td>Kinematic body</td><td>Moves there in one step, with velocity, so it carries what stands on it. Then the velocity the game set applies again. A move too far for one step at Box2D's speed limit (400 units per second, so 8 units in a 0.02 s step) teleports instead.</td></tr>
 <tr><td>Dynamic or static body</td><td><strong>Teleports,</strong> and wakes the body and what touches it. This differs from 3D, where a dynamic body ignores it. A touch that really ends gets its Exit in that step.</td></tr>
 </tbody>
 </table>
