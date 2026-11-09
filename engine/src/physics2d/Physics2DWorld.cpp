@@ -79,6 +79,8 @@ namespace N2Engine::Physics2D
         constexpr int kSubSteps = 4;
         /// Every query and cast is clamped to this (QueryRules::kMaxSweepDistance): a longer translation loses Box2D's precision
         constexpr float kMaxDistance = Physics::QueryRules::kMaxSweepDistance;
+        /// How far along a ray a start must still be inside a shape to count as started inside: above Box2D's 0.005 linear slop
+        constexpr float kInsideProbe = 0.01f;
 
         using ShapeKey = ContactTracker2D::ShapeKey;
 
@@ -183,6 +185,38 @@ namespace N2Engine::Physics2D
         }
 
         bool IsPositiveFinite(const float value) { return value > 0.0f && std::isfinite(value); }
+        bool IsFinite(const Math::Vector2 &v) { return std::isfinite(v.x) && std::isfinite(v.y); }
+
+        /// `value`, or `fallback` with a warning: Box2D refuses negative and non-finite settings, and returns null ids for them
+        float NonNegative(const float value, const float fallback, const char *what)
+        {
+            if (value >= 0.0f && std::isfinite(value))
+            {
+                return value;
+            }
+            Logger::Warn(std::format("2D physics: {} must be finite and not negative, not {}; using {}", what, value, fallback));
+            return fallback;
+        }
+
+        float Finite(const float value, const float fallback, const char *what)
+        {
+            if (std::isfinite(value))
+            {
+                return value;
+            }
+            Logger::Warn(std::format("2D physics: {} must be finite; using {}", what, fallback));
+            return fallback;
+        }
+
+        Math::Vector2 Finite(const Math::Vector2 &value, const char *what)
+        {
+            if (IsFinite(value))
+            {
+                return value;
+            }
+            Logger::Warn(std::format("2D physics: {} must be finite; using zero", what));
+            return Math::Vector2();
+        }
 
         struct RawHit
         {
@@ -249,7 +283,18 @@ namespace N2Engine::Physics2D
                 b2DestroyWorld(_world);
             }
 
-            void SetWorldGravity(const Math::Vector2 &gravity) { b2World_SetGravity(_world, ToB2(gravity)); }
+            void SetWorldGravity(const Math::Vector2 &gravity)
+            {
+                b2World_SetGravity(_world, ToB2(gravity));
+                // Sleeping bodies would ignore it until something else woke them
+                for (const auto &[handle, body] : _bodies)
+                {
+                    if (body.enabled && body.type == BodyType2D::Dynamic)
+                    {
+                        b2Body_SetAwake(body.id, true);
+                    }
+                }
+            }
 
             void RefreshMatrix()
             {
@@ -284,19 +329,32 @@ namespace N2Engine::Physics2D
                         continue;
                     }
                     const Math::Vector3 position = positionable->GetPosition();
+                    if (!std::isfinite(position.x) || !std::isfinite(position.y))
+                    {
+                        Logger::Warn(std::format("2D physics: '{}' has a position that is not finite; its body stays where it is", body.owner->GetName()));
+                        continue;
+                    }
                     const b2Rot rotation = ToRot(positionable->GetRotation());
                     if (body.type == BodyType2D::Kinematic && deltaTime > 0.0f)
                     {
+                        // The target replaces the velocity for one step; Step puts the game's velocity back
+                        _targeted.push_back({handle, b2Body_GetLinearVelocity(body.id), b2Body_GetAngularVelocity(body.id)});
                         // A velocity that reaches the pose in one step, so it carries what stands on it
                         b2WorldTransform target{};
                         target.p = ToPos(position.x, position.y);
                         target.q = rotation;
                         b2Body_SetTargetTransform(body.id, target, deltaTime, true);
-                        _targeted.push_back(handle);
                     }
                     else
                     {
+                        // b2Body_SetTransform wakes nothing: a sleeping body would hang where it was put, and one resting on a
+                        // moved static body would float. Woken bodies also notice the contacts that this ended.
+                        WakeBodiesTouching(body.id);
                         b2Body_SetTransform(body.id, ToPos(position.x, position.y), rotation);
+                        if (body.type == BodyType2D::Dynamic)
+                        {
+                            b2Body_SetAwake(body.id, true);
+                        }
                     }
                 }
             }
@@ -310,12 +368,12 @@ namespace N2Engine::Physics2D
                 b2World_Step(_world, deltaTime, kSubSteps);
 
                 // The target's velocity lasts one step, or the body would carry on past its pose
-                for (const PhysicsBodyHandle handle : _targeted)
+                for (const Targeted &targeted : _targeted)
                 {
-                    if (const auto it = _bodies.find(handle); it != _bodies.end())
+                    if (const auto it = _bodies.find(targeted.body); it != _bodies.end())
                     {
-                        b2Body_SetLinearVelocity(it->second.id, b2Vec2_zero);
-                        b2Body_SetAngularVelocity(it->second.id, 0.0f);
+                        b2Body_SetLinearVelocity(it->second.id, targeted.linearVelocity);
+                        b2Body_SetAngularVelocity(it->second.id, targeted.angularVelocity);
                     }
                 }
                 _targeted.clear();
@@ -334,19 +392,25 @@ namespace N2Engine::Physics2D
                     if (const Positionable *positionable = desc.owner->GetPositionable())
                     {
                         const Math::Vector3 position = positionable->GetPosition();
-                        def.position = ToPos(position.x, position.y);
+                        const Math::Vector2 start = Finite(Math::Vector2(position.x, position.y), "a body's position");
+                        def.position = ToPos(start.x, start.y);
                         def.rotation = ToRot(positionable->GetRotation());
                     }
                 }
-                def.linearVelocity = ToB2(desc.linearVelocity);
-                def.angularVelocity = desc.angularVelocity;
-                def.linearDamping = desc.linearDamping;
-                def.angularDamping = desc.angularDamping;
-                def.gravityScale = desc.gravityScale;
+                def.linearVelocity = ToB2(Finite(desc.linearVelocity, "linear velocity"));
+                def.angularVelocity = Finite(desc.angularVelocity, 0.0f, "angular velocity");
+                def.linearDamping = NonNegative(desc.linearDamping, 0.0f, "linear damping");
+                def.angularDamping = NonNegative(desc.angularDamping, 0.0f, "angular damping");
+                def.gravityScale = Finite(desc.gravityScale, 1.0f, "gravity scale");
                 def.motionLocks = MakeLocks(desc.fixedRotation);
                 def.isBullet = desc.bullet;
                 def.isEnabled = desc.enabled;
                 const b2BodyId id = b2CreateBody(_world, &def);
+                if (!b2Body_IsValid(id))
+                {
+                    Logger::Warn("2D physics: Box2D refused to create a body");
+                    return Physics::INVALID_PHYSICS_HANDLE;
+                }
                 const PhysicsBodyHandle handle = ToHandle(id);
 
                 BodyRecord record;
@@ -377,7 +441,7 @@ namespace N2Engine::Physics2D
                     }
                 }
                 b2DestroyBody(it->second.id);
-                std::erase(_targeted, handle);
+                std::erase_if(_targeted, [handle](const Targeted &targeted) { return targeted.body == handle; });
                 _bodies.erase(it);
             }
 
@@ -391,6 +455,7 @@ namespace N2Engine::Physics2D
                 body->enabled = enabled;
                 if (enabled)
                 {
+                    _resyncTriggers = true;
                     // Back at its GameObject's current pose; pairs that still overlap start again with an Enter
                     if (const Positionable *positionable = body->owner ? body->owner->GetPositionable() : nullptr)
                     {
@@ -414,7 +479,10 @@ namespace N2Engine::Physics2D
                 }
             }
 
-            [[nodiscard]] bool IsSyncingTransforms() const override { return _syncing; }
+            [[nodiscard]] bool IsSyncingTransforms(const PhysicsBodyHandle handle) const override
+            {
+                return _syncing && _syncingBody == handle;
+            }
 
             void SetBodyType(const PhysicsBodyHandle handle, const BodyType2D type) override
             {
@@ -430,7 +498,7 @@ namespace N2Engine::Physics2D
             {
                 if (const BodyRecord *body = Find(handle))
                 {
-                    b2Body_SetLinearVelocity(body->id, ToB2(velocity));
+                    b2Body_SetLinearVelocity(body->id, ToB2(Finite(velocity, "linear velocity")));
                 }
             }
 
@@ -444,7 +512,7 @@ namespace N2Engine::Physics2D
             {
                 if (const BodyRecord *body = Find(handle))
                 {
-                    b2Body_SetAngularVelocity(body->id, radiansPerSecond);
+                    b2Body_SetAngularVelocity(body->id, Finite(radiansPerSecond, 0.0f, "angular velocity"));
                 }
             }
 
@@ -458,8 +526,8 @@ namespace N2Engine::Physics2D
             {
                 if (const BodyRecord *body = Find(handle))
                 {
-                    b2Body_SetLinearDamping(body->id, linear);
-                    b2Body_SetAngularDamping(body->id, angular);
+                    b2Body_SetLinearDamping(body->id, NonNegative(linear, 0.0f, "linear damping"));
+                    b2Body_SetAngularDamping(body->id, NonNegative(angular, 0.0f, "angular damping"));
                 }
             }
 
@@ -467,7 +535,7 @@ namespace N2Engine::Physics2D
             {
                 if (const BodyRecord *body = Find(handle))
                 {
-                    b2Body_SetGravityScale(body->id, scale);
+                    b2Body_SetGravityScale(body->id, Finite(scale, 1.0f, "gravity scale"));
                 }
             }
 
@@ -492,7 +560,7 @@ namespace N2Engine::Physics2D
             {
                 if (const BodyRecord *body = Find(handle))
                 {
-                    b2Body_ApplyForceToCenter(body->id, ToB2(force), true);
+                    b2Body_ApplyForceToCenter(body->id, ToB2(Finite(force, "a force")), true);
                 }
             }
 
@@ -500,7 +568,7 @@ namespace N2Engine::Physics2D
             {
                 if (const BodyRecord *body = Find(handle))
                 {
-                    b2Body_ApplyLinearImpulseToCenter(body->id, ToB2(impulse), true);
+                    b2Body_ApplyLinearImpulseToCenter(body->id, ToB2(Finite(impulse, "an impulse")), true);
                 }
             }
 
@@ -508,7 +576,7 @@ namespace N2Engine::Physics2D
             {
                 if (const BodyRecord *body = Find(handle))
                 {
-                    b2Body_ApplyTorque(body->id, torque, true);
+                    b2Body_ApplyTorque(body->id, Finite(torque, 0.0f, "a torque"), true);
                 }
             }
 
@@ -516,7 +584,7 @@ namespace N2Engine::Physics2D
             {
                 if (const BodyRecord *body = Find(handle))
                 {
-                    b2Body_ApplyAngularImpulse(body->id, impulse, true);
+                    b2Body_ApplyAngularImpulse(body->id, Finite(impulse, 0.0f, "an angular impulse"), true);
                 }
             }
 
@@ -565,7 +633,7 @@ namespace N2Engine::Physics2D
 
                 b2ShapeDef def = b2DefaultShapeDef();
                 def.material = MakeMaterial(desc);
-                def.density = desc.isTrigger ? 0.0f : desc.density; // triggers add no mass, as in 3D
+                def.density = desc.isTrigger ? 0.0f : NonNegative(desc.density, 1.0f, "density"); // triggers add no mass, as in 3D
                 def.filter = MakeFilter(desc.layer);
                 def.isSensor = desc.isTrigger;
                 def.enableSensorEvents = true;
@@ -573,9 +641,15 @@ namespace N2Engine::Physics2D
                 def.updateBodyMass = false;
                 const b2ShapeId id = geometry.isCircle ? b2CreateCircleShape(body->id, &def, &geometry.circle)
                                                        : b2CreatePolygonShape(body->id, &def, &geometry.polygon);
+                if (!b2Shape_IsValid(id))
+                {
+                    Logger::Warn("2D physics: Box2D refused to create a shape");
+                    return false;
+                }
                 const ShapeKey key = b2StoreShapeId(id);
 
                 ShapeRecord shape;
+                shape.geometry = desc;
                 shape.id = id;
                 shape.collider = collider;
                 shape.body = handle;
@@ -643,8 +717,14 @@ namespace N2Engine::Physics2D
                 const b2Vec2 point{0.0f, 0.0f};
                 const b2ShapeProxy proxy = b2MakeProxy(&point, 1, 0.0f);
                 b2World_OverlapShape(_world, ToPos(origin.x, origin.y), &proxy, MakeQueryFilter(layerMask), &CollectOverlap, &context);
+                // A point on a surface (the last hit of a ricochet) counts as overlapping, so it must also still be inside just along the ray
+                const b2Pos ahead = ToPos(origin.x + sweep.direction.x * kInsideProbe, origin.y + sweep.direction.y * kInsideProbe);
                 for (const ShapeKey shape : context.overlaps)
                 {
+                    if (!b2Shape_TestPoint(b2LoadShapeId(shape), ahead))
+                    {
+                        continue;
+                    }
                     std::erase_if(context.hits, [shape](const RawHit &raw) { return raw.shape == shape; });
                     context.hits.push_back({shape, origin, Math::Vector2(-sweep.direction.x, -sweep.direction.y), 0.0f});
                 }
@@ -733,6 +813,14 @@ namespace N2Engine::Physics2D
                 bool isCircle = false;
                 int layer = 0;
                 std::uint64_t maskBits = 0;
+                ShapeDesc2D geometry; // the description it was last given, to tell whether its geometry changed
+            };
+
+            struct Targeted
+            {
+                PhysicsBodyHandle body;
+                b2Vec2 linearVelocity{};
+                float angularVelocity = 0.0f;
             };
 
             struct Geometry
@@ -753,12 +841,42 @@ namespace N2Engine::Physics2D
                 return it == _bodies.end() ? nullptr : &it->second;
             }
 
+            static bool SameGeometry(const ShapeDesc2D &a, const ShapeDesc2D &b)
+            {
+                const auto same = [](const Math::Vector2 &x, const Math::Vector2 &y) { return x.x == y.x && x.y == y.y; };
+                return a.kind == b.kind && same(a.offset, b.offset) && same(a.halfExtents, b.halfExtents) && a.radius == b.radius &&
+                       std::ranges::equal(a.vertices, b.vertices, same);
+            }
+
+            void WakeBodiesTouching(const b2BodyId body)
+            {
+                const int capacity = b2Body_GetContactCapacity(body);
+                if (capacity <= 0)
+                {
+                    return;
+                }
+                _contactBuffer.resize(static_cast<std::size_t>(capacity));
+                const int count = b2Body_GetContactData(body, _contactBuffer.data(), capacity);
+                for (int i = 0; i < count; ++i)
+                {
+                    const b2ContactData &contact = _contactBuffer[static_cast<std::size_t>(i)];
+                    for (const b2ShapeId shape : {contact.shapeIdA, contact.shapeIdB})
+                    {
+                        const b2BodyId other = b2Shape_GetBody(shape);
+                        if (b2Body_GetType(other) == b2_dynamicBody)
+                        {
+                            b2Body_SetAwake(other, true);
+                        }
+                    }
+                }
+            }
+
             static b2SurfaceMaterial MakeMaterial(const ShapeDesc2D &desc)
             {
                 b2SurfaceMaterial material = b2DefaultSurfaceMaterial();
-                material.friction = desc.material.dynamicFriction;
-                material.restitution = desc.material.restitution;
-                material.tangentSpeed = desc.surfaceSpeed;
+                material.friction = NonNegative(desc.material.dynamicFriction, material.friction, "friction");
+                material.restitution = NonNegative(desc.material.restitution, material.restitution, "restitution");
+                material.tangentSpeed = Finite(desc.surfaceSpeed, 0.0f, "surface speed");
                 return material;
             }
 
@@ -781,6 +899,11 @@ namespace N2Engine::Physics2D
 
             bool BuildGeometry(const ShapeDesc2D &desc, Geometry &geometry) const
             {
+                if (!IsFinite(desc.offset))
+                {
+                    Logger::Warn("Collider2D: the offset must be finite; it has no shape");
+                    return false;
+                }
                 const b2Vec2 offset = ToB2(desc.offset);
                 switch (desc.kind)
                 {
@@ -812,6 +935,11 @@ namespace N2Engine::Physics2D
                     b2Vec2 points[B2_MAX_POLYGON_VERTICES];
                     for (std::size_t i = 0; i < desc.vertices.size(); ++i)
                     {
+                        if (!IsFinite(desc.vertices[i]))
+                        {
+                            Logger::Warn("PolygonCollider2D: every point must be finite; it has no shape");
+                            return false;
+                        }
                         points[i] = b2Vec2{desc.vertices[i].x + offset.x, desc.vertices[i].y + offset.y};
                     }
                     const b2Hull hull = b2ComputeHull(points, static_cast<int>(desc.vertices.size()));
@@ -829,17 +957,23 @@ namespace N2Engine::Physics2D
 
             void UpdateShape(ShapeRecord &shape, const ShapeDesc2D &desc, const Geometry &geometry)
             {
-                if (geometry.isCircle)
+                // Setting the geometry destroys the shape's contacts, so only when it changed: a new density or surface speed on a
+                // crate at rest must not end its touch
+                if (!SameGeometry(shape.geometry, desc))
                 {
-                    b2Shape_SetCircle(shape.id, &geometry.circle);
+                    if (geometry.isCircle)
+                    {
+                        b2Shape_SetCircle(shape.id, &geometry.circle);
+                    }
+                    else
+                    {
+                        b2Shape_SetPolygon(shape.id, &geometry.polygon);
+                    }
                 }
-                else
-                {
-                    b2Shape_SetPolygon(shape.id, &geometry.polygon);
-                }
+                shape.geometry = desc;
                 const b2SurfaceMaterial material = MakeMaterial(desc);
                 b2Shape_SetSurfaceMaterial(shape.id, &material);
-                b2Shape_SetDensity(shape.id, desc.isTrigger ? 0.0f : desc.density, false);
+                b2Shape_SetDensity(shape.id, desc.isTrigger ? 0.0f : NonNegative(desc.density, 1.0f, "density"), false);
                 const b2Filter filter = MakeFilter(desc.layer);
                 if (desc.layer != shape.layer || filter.maskBits != shape.maskBits)
                 {
@@ -892,6 +1026,7 @@ namespace N2Engine::Physics2D
                     }
                     if (Positionable *positionable = it->second.owner->GetPositionable())
                     {
+                        _syncingBody = it->first;
                         const Math::Vector3 position = positionable->GetPosition();
                         const Math::Vector3 moved(static_cast<float>(move.transform.p.x), static_cast<float>(move.transform.p.y), position.z);
                         positionable->SetPositionAndRotation(moved, it->second.fixedRotation ? positionable->GetRotation() : FromRot(move.transform.q));
@@ -950,15 +1085,46 @@ namespace N2Engine::Physics2D
                 {
                     report(sensors.beginEvents[i].sensorShapeId, sensors.beginEvents[i].visitorShapeId,
                            [this](const PhysicsBodyHandle x, const ShapeKey kx, const bool triggerX, const PhysicsBodyHandle y, const ShapeKey ky, const bool triggerY)
-                           {
-                               // The 3D contract, which Box2D does not share: two triggers raise nothing, and two static bodies never meet
-                               const BodyRecord *a = Find(x), *b = Find(y);
-                               const bool bothStatic = a && b && a->type == BodyType2D::Static && b->type == BodyType2D::Static;
-                               if (!(triggerX && triggerY) && !bothStatic)
-                               {
-                                   _tracker.TriggerBegan(x, kx, y, ky);
-                               }
-                           });
+                           { ReportTriggerBegan(x, kx, triggerX, y, ky, triggerY); });
+                }
+
+                // A body disabled and enabled between two steps ended its pairs here, but Box2D's sensors kept their overlap lists and
+                // so report no new begin. Ask them. A pair the tracker already has is left alone.
+                if (_resyncTriggers)
+                {
+                    _resyncTriggers = false;
+                    for (const auto &[key, shape] : _shapes)
+                    {
+                        if (!shape.isTrigger)
+                        {
+                            continue;
+                        }
+                        const int capacity = b2Shape_GetSensorCapacity(shape.id);
+                        if (capacity <= 0)
+                        {
+                            continue;
+                        }
+                        std::vector<b2ShapeId> visitors(static_cast<std::size_t>(capacity));
+                        const int count = b2Shape_GetSensorData(shape.id, visitors.data(), capacity);
+                        for (int i = 0; i < count; ++i)
+                        {
+                            report(shape.id, visitors[static_cast<std::size_t>(i)],
+                                   [this](const PhysicsBodyHandle x, const ShapeKey kx, const bool triggerX, const PhysicsBodyHandle y, const ShapeKey ky, const bool triggerY)
+                                   { ReportTriggerBegan(x, kx, triggerX, y, ky, triggerY); });
+                        }
+                    }
+                }
+            }
+
+            /// The 3D contract, which Box2D does not share: two triggers raise nothing, and two static bodies never meet
+            void ReportTriggerBegan(const PhysicsBodyHandle x, const ShapeKey kx, const bool triggerX, const PhysicsBodyHandle y, const ShapeKey ky, const bool triggerY)
+            {
+                const BodyRecord *a = Find(x), *b = Find(y);
+                const bool bothStatic = a && b && a->type == BodyType2D::Static && b->type == BodyType2D::Static;
+                const bool bothEnabled = a && b && a->enabled && b->enabled;
+                if (!(triggerX && triggerY) && !bothStatic && bothEnabled)
+                {
+                    _tracker.TriggerBegan(x, kx, y, ky);
                 }
             }
 
@@ -1143,10 +1309,12 @@ namespace N2Engine::Physics2D
             std::map<ShapeKey, ShapeRecord> _shapes;
             // Only ever looked up, never iterated
             std::unordered_map<Collider2D *, ShapeKey> _colliderShapes;
-            std::vector<PhysicsBodyHandle> _targeted;
+            std::vector<Targeted> _targeted;
             std::vector<b2ContactData> _contactBuffer;
             ContactTracker2D _tracker;
             bool _syncing = false;
+            PhysicsBodyHandle _syncingBody;
+            bool _resyncTriggers = false;
         };
     }
 
@@ -1170,6 +1338,11 @@ namespace N2Engine::Physics2D
 
     void Physics2DWorld::SetGravity(const Math::Vector2 &gravity)
     {
+        if (!std::isfinite(gravity.x) || !std::isfinite(gravity.y))
+        {
+            Logger::Warn("Physics2DWorld::SetGravity: gravity must be finite; it was not changed");
+            return;
+        }
         DefaultGravity() = gravity;
         for (Box2DWorld *world : LiveWorlds())
         {

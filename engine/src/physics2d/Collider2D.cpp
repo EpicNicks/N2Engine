@@ -177,7 +177,7 @@ namespace N2Engine::Physics2D
         {
             return;
         }
-        if (const auto world = _world.lock(); world && !world->IsSyncingTransforms())
+        if (const auto world = _world.lock(); world && !world->IsSyncingTransforms(_handle))
         {
             world->MarkTransformDirty(_handle);
         }

@@ -950,6 +950,270 @@ namespace
         Step();
     }
 
+    // ===== Found in review =====
+
+    TEST_F(Physics2DTest, AChildsColliderFollowsAParentMovedByPhysics)
+    {
+        auto parent = Make("Player", 0.0f, 0.0f);
+        auto *rb = MakeBody(parent, BodyType2D::Dynamic, 0.0f);
+        parent->AddComponent<CircleCollider2D>();
+        auto child = GameObject::Create("HitBox");
+        child->CreatePositionable();
+        parent->AddChild(child);
+        child->AddComponent<BoxCollider2D>()->SetIsTrigger(true);
+        rb->SetLinearVelocity(Vector2(5.0f, 0.0f));
+        Step(50);
+
+        const float x = PositionOf(parent).x;
+        ASSERT_GT(x, 4.0f);
+        std::vector<OverlapHit2D> hits;
+        OverlapCircle(Vector2(x, 0.0f), 0.2f, hits);
+        bool foundChild = false;
+        for (const OverlapHit2D &hit : hits)
+        {
+            foundChild = foundChild || hit.gameObject == child.get();
+        }
+        EXPECT_TRUE(foundChild) << "the child's body stayed behind";
+    }
+
+    TEST_F(Physics2DTest, TeleportingASleepingBodyWakesItAndEndsItsContact)
+    {
+        MakeFloor();
+        auto player = Make("Player", 0.0f, 0.5f);
+        MakeBody(player, BodyType2D::Dynamic);
+        player->AddComponent<BoxCollider2D>();
+        auto *recorder = player->AddComponent<Recorder>();
+        Step(200); // long enough to fall asleep
+        ASSERT_EQ(recorder->collisionEnter, 1);
+
+        player->GetPositionable()->SetPosition(Vector3(0.0f, 10.0f, 0.0f));
+        Step(10);
+        EXPECT_LT(PositionOf(player).y, 10.0f) << "it hung in the air";
+        EXPECT_EQ(recorder->collisionExit, 1);
+    }
+
+    TEST_F(Physics2DTest, MovingAStaticColliderWakesWhatRestsOnIt)
+    {
+        auto door = MakeFloor();
+        auto crate = Make("Crate", 0.0f, 0.5f);
+        MakeBody(crate, BodyType2D::Dynamic);
+        crate->AddComponent<BoxCollider2D>();
+        Step(200);
+
+        door->GetPositionable()->SetPosition(Vector3(0.0f, -50.0f, 0.0f));
+        Step(10);
+        EXPECT_LT(PositionOf(crate).y, 0.4f) << "it floated";
+    }
+
+    TEST_F(Physics2DTest, AGravityChangeReachesSleepingBodies)
+    {
+        MakeFloor();
+        auto crate = Make("Crate", 0.0f, 0.5f);
+        MakeBody(crate, BodyType2D::Dynamic);
+        crate->AddComponent<BoxCollider2D>();
+        Step(200);
+
+        Physics2DWorld::SetGravity(Vector2(0.0f, 9.81f));
+        Step(20);
+        EXPECT_GT(PositionOf(crate).y, 0.6f);
+    }
+
+    TEST_F(Physics2DTest, ChangingNonGeometrySettingsWhileTouchingDoesNotEndTheTouch)
+    {
+        auto floor = MakeFloor();
+        auto *floorCollider = floor->GetComponent<BoxCollider2D>();
+        auto crate = Make("Crate", 0.0f, 0.5f);
+        MakeBody(crate, BodyType2D::Dynamic);
+        auto *crateCollider = crate->AddComponent<BoxCollider2D>();
+        auto *recorder = crate->AddComponent<Recorder>();
+        Step(10);
+        ASSERT_EQ(recorder->collisionEnter, 1);
+
+        floorCollider->SetSurfaceSpeed(1.0f);
+        crateCollider->SetDensity(3.0f);
+        Physics::PhysicsMaterial material = Physics::PhysicsMaterial::Default();
+        material.restitution = 0.0f;
+        crateCollider->SetMaterial(material);
+        Step(5);
+
+        EXPECT_EQ(recorder->collisionExit, 0);
+        EXPECT_EQ(recorder->collisionEnter, 1);
+    }
+
+    TEST_F(Physics2DTest, TheLastEventIsNeverExitWhileStillTouching)
+    {
+        // Geometry does reset a shape's contacts, which end and begin again
+        auto floor = MakeFloor();
+        auto crate = Make("Crate", 0.0f, 0.5f);
+        MakeBody(crate, BodyType2D::Dynamic);
+        auto *collider = crate->AddComponent<BoxCollider2D>();
+        auto *recorder = crate->AddComponent<Recorder>();
+        Step(10);
+
+        collider->SetHalfExtents(Vector2(0.6f, 0.5f));
+        Step(10);
+
+        EXPECT_EQ(recorder->collisionEnter - recorder->collisionExit, 1) << "Enter and Exit are balanced while it touches";
+        ASSERT_FALSE(recorder->order.empty());
+        EXPECT_EQ(recorder->order.back(), "collisionStay");
+    }
+
+    class RemovesOtherColliderOnEnter final : public Component
+    {
+    public:
+        explicit RemovesOtherColliderOnEnter(GameObject &gameObject) : Component(gameObject) {}
+        [[nodiscard]] std::string GetTypeName() const override { return "RemovesOtherCollider2D"; }
+        void OnCollisionEnter2D(const Collision2D &c) override
+        {
+            if (c.otherGameObject)
+            {
+                c.otherGameObject->RemoveComponent<BoxCollider2D>();
+            }
+        }
+    };
+
+    TEST_F(Physics2DTest, ALaterComponentSeesAColliderAnEarlierHandlerRemovedAsNull)
+    {
+        auto floor = MakeFloor();
+        auto ball = Make("Ball", 0.0f, 1.0f);
+        MakeBody(ball, BodyType2D::Dynamic);
+        ball->AddComponent<CircleCollider2D>();
+        ball->AddComponent<RemovesOtherColliderOnEnter>();
+        auto *recorder = ball->AddComponent<Recorder>(); // runs after it
+
+        Step(60);
+
+        ASSERT_EQ(recorder->collisionEnter, 1);
+        EXPECT_EQ(recorder->last.otherGameObject, floor.get());
+        EXPECT_EQ(recorder->collisionExit, 1);
+        EXPECT_EQ(recorder->last.otherCollider, nullptr);
+    }
+
+    class RemovesOtherBodyOnTriggerEnter final : public Component
+    {
+    public:
+        explicit RemovesOtherBodyOnTriggerEnter(GameObject &gameObject) : Component(gameObject) {}
+        [[nodiscard]] std::string GetTypeName() const override { return "RemovesOtherBody2D"; }
+        void OnTriggerEnter2D(const Trigger2D &t) override
+        {
+            if (t.otherGameObject)
+            {
+                t.otherGameObject->RemoveComponent<Rigidbody2D>();
+            }
+        }
+    };
+
+    TEST_F(Physics2DTest, RemovingTheOtherBodyInAHandlerKeepsEnterAndExitBalanced)
+    {
+        auto zone = Make("Zone", 0.0f, 0.0f);
+        zone->AddComponent<BoxCollider2D>()->SetIsTrigger(true);
+        zone->AddComponent<RemovesOtherBodyOnTriggerEnter>();
+        auto mover = Make("Mover", -2.0f, 0.0f);
+        auto *rb = MakeBody(mover, BodyType2D::Dynamic, 0.0f);
+        mover->AddComponent<BoxCollider2D>();
+        rb->SetLinearVelocity(Vector2(5.0f, 0.0f));
+        auto *recorder = mover->AddComponent<Recorder>();
+
+        Step(60);
+
+        EXPECT_EQ(recorder->triggerEnter, recorder->triggerExit + (recorder->triggerEnter > recorder->triggerExit ? 1 : 0)) << "an Exit never arrives without its Enter";
+        EXPECT_GE(recorder->triggerEnter, recorder->triggerExit);
+    }
+
+    TEST_F(Physics2DTest, ValuesBox2DRefusesAreReplacedNotPassedOn)
+    {
+        const float nan = std::nanf("");
+        auto go = Make("Bad", 0.0f, 0.0f);
+        auto *rb = go->AddComponent<Rigidbody2D>();
+        rb->SetLinearDamping(-1.0f);
+        rb->SetAngularDamping(nan);
+        rb->SetGravityScale(nan);
+        rb->SetLinearVelocity(Vector2(nan, 0.0f));
+        auto *box = go->AddComponent<BoxCollider2D>();
+        box->SetDensity(-1.0f);
+        Physics::PhysicsMaterial material = Physics::PhysicsMaterial::Default();
+        material.restitution = -1.0f;
+        material.dynamicFriction = nan;
+        box->SetMaterial(material);
+        box->SetSurfaceSpeed(nan);
+        auto *second = go->AddComponent<CircleCollider2D>();
+        second->SetOffset(Vector2(nan, 0.0f));
+        go->AddComponent<PolygonCollider2D>()->SetVertices({{0.0f, 0.0f}, {nan, 0.0f}, {0.0f, 1.0f}});
+        Step(3);
+
+        rb->SetLinearDamping(nan);
+        rb->SetAngularVelocity(nan);
+        rb->AddForce(Vector2(nan, nan));
+        rb->AddImpulse(Vector2(nan, nan));
+        rb->AddTorque(nan);
+        rb->AddAngularImpulse(nan);
+        box->SetDensity(nan);
+        Physics2DWorld::SetGravity(Vector2(nan, 0.0f));
+        Step(3);
+
+        const Vector3 position = PositionOf(go);
+        EXPECT_TRUE(std::isfinite(position.x));
+        EXPECT_TRUE(std::isfinite(position.y));
+        EXPECT_TRUE(std::isfinite(rb->GetLinearVelocity().x));
+    }
+
+    TEST_F(Physics2DTest, DisablingAndEnablingBetweenStepsRestartsATriggerPair)
+    {
+        auto zone = Make("Zone", 0.0f, 0.0f);
+        zone->AddComponent<BoxCollider2D>()->SetIsTrigger(true);
+        auto body = Make("Body", 0.0f, 0.0f);
+        auto *rb = MakeBody(body, BodyType2D::Dynamic, 0.0f);
+        body->AddComponent<CircleCollider2D>();
+        auto *recorder = body->AddComponent<Recorder>();
+        Step(3);
+        ASSERT_EQ(recorder->triggerEnter, 1);
+
+        rb->SetActive(false);
+        rb->SetActive(true);
+        Step(1);
+        EXPECT_EQ(recorder->triggerExit, 1);
+        EXPECT_EQ(recorder->triggerEnter, 2) << "it still overlaps";
+
+        const int stays = recorder->triggerStay;
+        Step(2);
+        EXPECT_EQ(recorder->triggerStay, stays + 2);
+    }
+
+    TEST_F(Physics2DTest, ATransformMoveKeepsAKinematicBodysVelocity)
+    {
+        auto platform = Make("Platform", 0.0f, 0.0f);
+        auto *rb = MakeBody(platform, BodyType2D::Kinematic);
+        platform->AddComponent<BoxCollider2D>();
+        rb->SetLinearVelocity(Vector2(2.0f, 0.0f));
+        Step(5);
+
+        platform->GetPositionable()->SetPosition(Vector3(10.0f, 0.0f, 0.0f));
+        Step();
+        EXPECT_NEAR(PositionOf(platform).x, 10.0f, 0.01f);
+        EXPECT_FLOAT_EQ(rb->GetLinearVelocity().x, 2.0f);
+
+        Step(50);
+        EXPECT_NEAR(PositionOf(platform).x, 12.0f, 0.05f);
+    }
+
+    TEST_F(Physics2DTest, ARicochetFromAHitPointFindsTheNextSurface)
+    {
+        auto first = Make("First", 5.0f, 0.0f);
+        first->AddComponent<BoxCollider2D>();
+        auto second = Make("Second", -5.0f, 0.0f);
+        second->AddComponent<BoxCollider2D>();
+        Step();
+
+        RaycastHit2D hit;
+        ASSERT_TRUE(Raycast(Vector2(0.0f, 0.0f), Vector2(1.0f, 0.0f), hit));
+        ASSERT_EQ(hit.gameObject, first.get());
+
+        RaycastHit2D next;
+        ASSERT_TRUE(Raycast(hit.point, Vector2(-1.0f, 0.0f), next));
+        EXPECT_EQ(next.gameObject, second.get());
+        EXPECT_GT(next.distance, 1.0f);
+    }
+
     // ===== Determinism =====
 
     std::uint64_t RunCrates(Scene &scene, const int steps)

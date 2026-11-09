@@ -90,7 +90,7 @@
 <li>X or Y tilt on a rotating body is replaced by a pure z rotation at the first sync. A body with fixed rotation keeps the rotation it has.</li>
 <li>1 unit is 1 metre. Box2D is tuned for moving objects of about 0.1 to 10 units.</li>
 <li>Collider sizes ignore the transform's scale, as <a href="physics.html#shapes">the 3D colliders</a> do.</li>
-<li>Gravity starts at (0, -9.81). <code>Physics2DWorld::SetGravity</code> changes it for every world, live and future. A top-down game sets it to zero.</li>
+<li>Gravity starts at (0, -9.81). <code>Physics2DWorld::SetGravity</code> changes it for every world, live and future, and wakes their dynamic bodies. A top-down game sets it to zero.</li>
 </ul>
 
 <h2 id="world">The world</h2>
@@ -110,8 +110,8 @@
 <table>
 <thead><tr><th>Changing a transform on a</th><th>Does</th></tr></thead>
 <tbody>
-<tr><td>Kinematic body</td><td>Moves there in one step, with velocity, so it carries what stands on it, then stops.</td></tr>
-<tr><td>Dynamic or static body</td><td><strong>Teleports.</strong> This differs from 3D, where a dynamic body ignores it. Box2D ends the body's contacts, so a touching body gets Exit and then Enter.</td></tr>
+<tr><td>Kinematic body</td><td>Moves there in one step, with velocity, so it carries what stands on it. Then the velocity the game set applies again.</td></tr>
+<tr><td>Dynamic or static body</td><td><strong>Teleports,</strong> and wakes the body and what touches it. This differs from 3D, where a dynamic body ignores it. A touch that really ends gets its Exit in that step.</td></tr>
 </tbody>
 </table>
 </div>
@@ -119,12 +119,12 @@
 <h2 id="events">Events</h2>
 <p>Every <code>Component</code> has <code>OnCollisionEnter2D</code>, <code>Stay2D</code> and <code>Exit2D</code> taking <code>const Collision2D &amp;</code>, and <code>OnTriggerEnter2D</code>, <code>Stay2D</code> and <code>Exit2D</code> taking <code>const Trigger2D &amp;</code>. They follow <a href="physics.html#events">the 3D rules</a>:</p>
 <ul>
-<li>Per body pair: Enter on the first touching shape pair, Exit on the last, and Stay every step while touching, including the step of the Enter.</li>
+<li>Per body pair: Enter on the first touching shape pair, Exit on the last, and Stay every step while touching, including the step of the Enter. A pair that ends and begins again within one step, such as a body crossing between two shapes of a compound body, raises neither.</li>
 <li>In order: Exits of removed things, collision Enter, Stay, Exit, then trigger Enter, Stay, Exit. Pairs go in body handle order.</li>
 <li>Both sides receive each event, every component on the object, each from its own point of view. An inactive object gets nothing.</li>
 <li>A contact normal points from the other collider to this one.</li>
 </ul>
-<div class="callout note" id="design-2d-handlers"><p class="callout-title">Design decision: changes inside a handler run immediately</p><p>No engine or game code runs while Box2D is stepping, because no callback that runs inside the step is registered. Events are copied before the first handler, and each delivery checks that both sides still exist. So a handler can create and destroy bodies directly. Queuing those changes would make <code>SetLinearVelocity</code> right after creating a body silently do nothing. <code>GameObject::Destroy</code> stays deferred to the end-of-frame purge, as always.</p></div>
+<div class="callout note" id="design-2d-handlers"><p class="callout-title">Design decision: changes inside a handler run immediately</p><p>No engine or game code runs while Box2D is stepping, because no callback that runs inside the step is registered. Events are copied before the first handler, and each component's data is built just before it is called, so a collider or Rigidbody2D that an earlier handler removed reads as null. A handler that ends a pair before its Enter was delivered cancels that Enter and its Exit. So a handler can create and destroy bodies directly. Queuing those changes would make <code>SetLinearVelocity</code> right after creating a body silently do nothing. <code>GameObject::Destroy</code> stays deferred to the end-of-frame purge, as always.</p></div>
 
 <h3 id="events-which">Which pairs raise events</h3>
 <div class="table-wrap">
@@ -149,6 +149,7 @@
 <li><strong>Toggling a trigger re-creates the shape,</strong> because Box2D cannot change it. Its pairs end with an Exit and start again if still overlapping.</li>
 <li><strong>Material:</strong> <code>dynamicFriction</code> and <code>restitution</code> apply. <code>staticFriction</code> does not, as Box2D has one coefficient. Box2D combines two shapes by the geometric mean of friction and the larger restitution, unlike the 3D average.</li>
 <li><strong>Conveyors:</strong> <code>SetSurfaceSpeed</code> moves what touches the surface. On a shape's top surface, a positive speed moves things toward +x.</li>
+<li><strong>Invalid values</strong> (a negative density, damping, friction or restitution, anything not finite) log a warning and use a safe value, or make no shape for bad geometry.</li>
 <li><strong>Polygons</strong> take 3 to 8 points, wrapped in their convex hull. Geometry Box2D cannot use logs a warning and makes no shape. Vertices save in scenes and prefabs as JSON; the editor has no dedicated list editor for them yet.</li>
 </ul>
 
@@ -159,7 +160,7 @@
 <p><code>Raycast</code>, <code>RaycastAll</code>, <code>CircleCast</code>, <code>BoxCast</code>, <code>OverlapCircle</code> and <code>OverlapBox</code>, on the loaded scene's world, with a layer mask and <code>QueryTriggers</code>. They follow <code>Physics::QueryRules</code>:</p>
 <ul>
 <li>Degenerate input finds nothing, and so does an empty mask or having no world.</li>
-<li>A start inside a collider hits at distance 0, with the normal against the direction and the point at the start.</li>
+<li>A start inside a collider hits at distance 0, with the normal against the direction and the point at the start. For a ray, a start on a surface and pointing away, as in a ricochet, is not inside.</li>
 <li>Nearest first; hits within the tie tolerance go by body handle, then collider order. Overlaps go by body handle, then collider order.</li>
 <li>Triggers are hit by default.</li>
 <li>One difference: every distance is clamped to <code>kMaxSweepDistance</code>, rays included.</li>

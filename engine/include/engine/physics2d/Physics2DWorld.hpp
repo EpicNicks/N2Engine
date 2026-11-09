@@ -83,7 +83,9 @@ namespace N2Engine::Physics2D
         virtual void DestroyBody(PhysicsBodyHandle body) = 0;
         virtual void SetBodyEnabled(PhysicsBodyHandle body, bool enabled) = 0;
         virtual void MarkTransformDirty(PhysicsBodyHandle body) = 0;
-        [[nodiscard]] virtual bool IsSyncingTransforms() const = 0;
+        /// True while this body's own simulated pose is being written to its transform. A child's body moved by that write is not
+        /// exempt: it has to follow.
+        [[nodiscard]] virtual bool IsSyncingTransforms(PhysicsBodyHandle body) const = 0;
 
         virtual void SetBodyType(PhysicsBodyHandle body, BodyType2D type) = 0;
         virtual void SetLinearVelocity(PhysicsBodyHandle body, const Math::Vector2 &velocity) = 0;

@@ -294,7 +294,7 @@ namespace N2Engine::Physics2D
     void Rigidbody2D::OnTransformChanged() const
     {
         Physics2DWorld *world = Live();
-        if (world && !world->IsSyncingTransforms())
+        if (world && !world->IsSyncingTransforms(_handle))
         {
             world->MarkTransformDirty(_handle);
         }

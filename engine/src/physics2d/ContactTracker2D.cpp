@@ -56,6 +56,7 @@ namespace N2Engine::Physics2D
     {
         Event event;
         Normalise(bodyX, shapeX, bodyY, shapeY, event.pair, event.shapes);
+        event.owners = OwnersOf(event.pair); // a handler earlier in the dispatch may remove either body
         if (AddTouch(_collisions, event.pair, event.shapes))
         {
             _newCollisions.push_back(event);
@@ -66,6 +67,7 @@ namespace N2Engine::Physics2D
     {
         Event event;
         Normalise(bodyX, shapeX, bodyY, shapeY, event.pair, event.shapes);
+        event.owners = OwnersOf(event.pair); // a handler earlier in the dispatch may remove either body
         if (RemoveTouch(_collisions, event.pair, event.shapes))
         {
             _endedCollisions.push_back(event);
@@ -76,6 +78,7 @@ namespace N2Engine::Physics2D
     {
         Event event;
         Normalise(bodyX, shapeX, bodyY, shapeY, event.pair, event.shapes);
+        event.owners = OwnersOf(event.pair); // a handler earlier in the dispatch may remove either body
         if (AddTouch(_triggers, event.pair, event.shapes))
         {
             _newTriggers.push_back(event);
@@ -86,6 +89,7 @@ namespace N2Engine::Physics2D
     {
         Event event;
         Normalise(bodyX, shapeX, bodyY, shapeY, event.pair, event.shapes);
+        event.owners = OwnersOf(event.pair); // a handler earlier in the dispatch may remove either body
         if (RemoveTouch(_triggers, event.pair, event.shapes))
         {
             _endedTriggers.push_back(event);
@@ -238,10 +242,17 @@ namespace N2Engine::Physics2D
             collision.impulse = Math::Vector2(data.impulseOnB.x * sign, data.impulseOnB.y * sign);
             return collision;
         };
-        const Collision2D forA = forReceiver(true);
-        DeliverToBody(event.pair.a, event.owners.a, [&](Component &c) { (c.*handler)(forA); });
-        const Collision2D forB = forReceiver(false);
-        DeliverToBody(event.pair.b, event.owners.b, [&](Component &c) { (c.*handler)(forB); });
+        // Built again for every component: a handler can free a collider or Rigidbody2D, and the next component must not see it
+        DeliverToBody(event.pair.a, event.owners.a, [&](Component &c)
+        {
+            const Collision2D collision = forReceiver(true);
+            (c.*handler)(collision);
+        });
+        DeliverToBody(event.pair.b, event.owners.b, [&](Component &c)
+        {
+            const Collision2D collision = forReceiver(false);
+            (c.*handler)(collision);
+        });
     }
 
     void ContactTracker2D::DeliverTrigger(const Event &event, void (Component::*handler)(const Trigger2D &))
@@ -266,10 +277,16 @@ namespace N2Engine::Physics2D
             trigger.otherCollider = receiverIsA ? colliderB : colliderA;
             return trigger;
         };
-        const Trigger2D forA = forReceiver(true);
-        DeliverToBody(event.pair.a, event.owners.a, [&](Component &c) { (c.*handler)(forA); });
-        const Trigger2D forB = forReceiver(false);
-        DeliverToBody(event.pair.b, event.owners.b, [&](Component &c) { (c.*handler)(forB); });
+        DeliverToBody(event.pair.a, event.owners.a, [&](Component &c)
+        {
+            const Trigger2D trigger = forReceiver(true);
+            (c.*handler)(trigger);
+        });
+        DeliverToBody(event.pair.b, event.owners.b, [&](Component &c)
+        {
+            const Trigger2D trigger = forReceiver(false);
+            (c.*handler)(trigger);
+        });
     }
 
     void ContactTracker2D::Dispatch()
@@ -281,14 +298,14 @@ namespace N2Engine::Physics2D
             taken.swap(queue);
             return taken;
         };
-        const auto stayEvents = [](const TouchMap &touches)
+        const auto stayEvents = [this](const TouchMap &touches)
         {
             std::vector<Event> events;
             for (const auto &[pair, shapes] : touches)
             {
                 if (!shapes.empty())
                 {
-                    events.push_back({pair, shapes.front(), {}});
+                    events.push_back({pair, shapes.front(), OwnersOf(pair)});
                 }
             }
             return events;
@@ -308,6 +325,31 @@ namespace N2Engine::Physics2D
             return data;
         };
 
+        // A pair that ended and began again within one step (a contact rebuilt, a body crossing between two shapes of a compound
+        // body) never stopped touching: no Exit and no Enter, or the last event would say separated while it still touches
+        const auto netOut = [](std::vector<Event> &ended, std::vector<Event> &began, const TouchMap &touches)
+        {
+            const auto samePair = [](const BodyPair &x, const BodyPair &y) { return x.a == y.a && x.b == y.b; };
+            std::erase_if(ended, [&](const Event &end)
+            {
+                if (!touches.contains(end.pair))
+                {
+                    return false;
+                }
+                std::erase_if(began, [&](const Event &begin) { return samePair(begin.pair, end.pair); });
+                return true;
+            });
+        };
+        netOut(_endedCollisions, _newCollisions, _collisions);
+        netOut(_endedTriggers, _newTriggers, _triggers);
+
+        // A pair a handler ended before its Enter was delivered: it is queued as an Exit for the next dispatch, which must not arrive
+        // for an Enter nobody received
+        const auto dropForgotten = [](std::vector<Event> &forgotten, const BodyPair &pair)
+        {
+            std::erase_if(forgotten, [&](const Event &event) { return event.pair.a == pair.a && event.pair.b == pair.b; });
+        };
+
         // First, so a collider re-created in the same step reports Exit(old) before Enter(new)
         for (const Event &event : take(_forgottenCollisions))
         {
@@ -323,6 +365,10 @@ namespace N2Engine::Physics2D
             if (stillTouching(_collisions, event))
             {
                 DeliverCollision(event, &Component::OnCollisionEnter2D, readContacts(event));
+            }
+            else
+            {
+                dropForgotten(_forgottenCollisions, event.pair);
             }
         }
         for (const Event &event : stayEvents(_collisions))
@@ -342,6 +388,10 @@ namespace N2Engine::Physics2D
             if (stillTouching(_triggers, event))
             {
                 DeliverTrigger(event, &Component::OnTriggerEnter2D);
+            }
+            else
+            {
+                dropForgotten(_forgottenTriggers, event.pair);
             }
         }
         for (const Event &event : stayEvents(_triggers))
