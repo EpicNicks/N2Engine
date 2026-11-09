@@ -1,5 +1,5 @@
 -- The particle station's behaviour (demo station 8): keys B (burst), P (play / stop), C (clear) and K (cycle the
--- requested backend Auto -> CPU -> PhysX) act only while the camera is at the station, and the signs above the emitters
+-- requested backend Auto -> CPU -> PhysX -> WebGPU) act only while the camera is at the station, and the signs above the emitters
 -- show live which backend each ParticleSystem asked for, which is RUNNING and how many particles are alive.
 -- Changing the backend replaces the emitters, since a system reads its backend when it starts.
 
@@ -29,8 +29,10 @@ local function Running(asked, active)
         return "starting"
     elseif active == "PhysX" then
         return "PhysX GPU"
-    elseif asked == "PhysX" then
-        return "CPU (PhysX asked: fell back)"
+    elseif active == "WebGPU" then
+        return "WebGPU compute"
+    elseif asked == "PhysX" or asked == "WebGPU" then
+        return "CPU (" .. asked .. " asked: fell back)"
     end
     return "CPU"
 end
@@ -150,7 +152,7 @@ function ParticleStation:OnUpdate()
     local fellBack = false
     for _, item in ipairs(self:Items()) do
         local active = item.ps:GetActiveBackend()
-        if asked == "PhysX" and active ~= nil and active ~= "PhysX" then
+        if (asked == "PhysX" or asked == "WebGPU") and active ~= nil and active ~= asked then
             fellBack = true
         end
         local text = string.format("asked: %s\nrunning: %s\nalive: %d", asked, Running(asked, active),
@@ -163,11 +165,14 @@ function ParticleStation:OnUpdate()
 
     if self.info ~= nil then
         local text = string.format("Physics.IsGpuAvailable(): %s   backend asked: %s\n"
-            .. "B burst   P play / stop   C clear   K backend: Auto, CPU, PhysX",
+            .. "B burst   P play / stop   C clear   K backend: Auto, CPU, PhysX, WebGPU",
             tostring(Physics.IsGpuAvailable()), asked)
-        if fellBack then
+        if fellBack and asked == "PhysX" then
             text = text .. "\nPhysX asked but CPU is running: no GPU particle backend here (the log has one warning "
                 .. "per emitter)."
+        elseif fellBack then
+            text = text .. "\nWebGPU asked but CPU is running: the renderer is not WebGPU (run the web build with the "
+                .. "WebGPU renderer; the log has one warning per emitter)."
         end
         if text ~= self.infoText then
             self.infoText = text

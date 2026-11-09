@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 
+#include "../particles/FakeGpuCompute.hpp"
 #include "../particles/FakePhysicsBackend.hpp"
 #include "engine/physics/GpuStatus.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
@@ -27,7 +28,7 @@ namespace
 TEST(SoftBodySelectionTest, TheBackendEnumSerialisesAsAutoPhysXCpu)
 {
     EXPECT_EQ(N2EnumOptions(static_cast<const SoftBodyBackend *>(nullptr)),
-              (std::vector<std::string>{"Auto", "PhysX", "CPU"}));
+              (std::vector<std::string>{"Auto", "PhysX", "CPU", "WebGPU"}));
     EXPECT_EQ(static_cast<int>(SoftBodyBackend::Auto), 0) << "Auto is the default";
 }
 
@@ -110,6 +111,56 @@ TEST(SoftBodySelectionTest, PhysXWithNoPhysicsBackendAtAllFallsBackToo)
     EXPECT_NE(selection.reason.find("there is no physics backend"), std::string::npos) << selection.reason;
 }
 
+TEST(SoftBodySelectionTest, WebGpuTakesTheRenderersComputeAndFallsBackWithoutIt)
+{
+    TestSupport::FakeGpuCompute compute;
+    TestSupport::FakePhysicsBackend physics(false, Status(Physics::GpuState::Ready, "fake"));
+    physics.withGpuSoftBodies = true;
+    const SoftBodyBackendSelection selection = SelectSoftBodyBackend(SoftBodyBackend::WebGPU, &physics, &compute, false);
+    EXPECT_EQ(selection.compute, &compute) << "an explicit request ignores PhysX and physics.gpu";
+    EXPECT_EQ(selection.gpu, nullptr);
+    EXPECT_FALSE(selection.fellBack);
+
+    const SoftBodyBackendSelection none = SelectSoftBodyBackend(SoftBodyBackend::WebGPU, nullptr, nullptr, true);
+    EXPECT_EQ(none.compute, nullptr);
+    EXPECT_TRUE(none.fellBack);
+    EXPECT_NE(none.reason.find("backend is WebGPU"), std::string::npos) << none.reason;
+    EXPECT_NE(none.reason.find("CPU backend"), std::string::npos) << none.reason;
+}
+
+TEST(SoftBodySelectionTest, AutoPrefersPhysXThenTheRenderersComputeWhenAllowed)
+{
+    TestSupport::FakeGpuCompute compute;
+    TestSupport::FakePhysicsBackend physics(false, Status(Physics::GpuState::Ready, "fake"));
+    physics.withGpuSoftBodies = true;
+    EXPECT_EQ(SelectSoftBodyBackend(SoftBodyBackend::Auto, &physics, &compute, true).gpu, &physics.softGpu);
+
+    TestSupport::FakePhysicsBackend off(false, Status(Physics::GpuState::Disabled, "physics.gpu is off"));
+    const SoftBodyBackendSelection webGpu = SelectSoftBodyBackend(SoftBodyBackend::Auto, &off, &compute, true);
+    EXPECT_EQ(webGpu.compute, &compute);
+    EXPECT_FALSE(webGpu.fellBack);
+
+    const SoftBodyBackendSelection notAllowed = SelectSoftBodyBackend(SoftBodyBackend::Auto, &off, &compute, false);
+    EXPECT_EQ(notAllowed.compute, nullptr);
+    EXPECT_FALSE(notAllowed.fellBack) << "Auto on the CPU is never a fallback to warn about";
+
+    TestSupport::FakeGpuCompute lost(false);
+    EXPECT_EQ(SelectSoftBodyBackend(SoftBodyBackend::Auto, nullptr, &lost, true).compute, nullptr);
+    EXPECT_EQ(SelectSoftBodyBackend(SoftBodyBackend::CPU, nullptr, &compute, true).compute, nullptr);
+}
+
+TEST(SoftBodySelectionTest, AutoStaysOnTheCpuOnASoftwareDeviceButWebGpuStillTakesIt)
+{
+    // A fallback adapter (SwiftShader in a browser) is the CPU emulating a GPU: the CPU backend is faster there
+    TestSupport::FakeGpuCompute compute;
+    compute.software = true;
+    const SoftBodyBackendSelection automatic = SelectSoftBodyBackend(SoftBodyBackend::Auto, nullptr, &compute, true);
+    EXPECT_EQ(automatic.compute, nullptr);
+    EXPECT_FALSE(automatic.fellBack) << "Auto on the CPU is never a fallback to warn about";
+    const SoftBodyBackendSelection explicitly = SelectSoftBodyBackend(SoftBodyBackend::WebGPU, nullptr, &compute, false);
+    EXPECT_EQ(explicitly.compute, &compute) << "asked for by name, it runs there anyway";
+}
+
 TEST(SoftBodySelectionTest, TheFakeBackendsDefaultsMatchTheRealOnes)
 {
     // No soft-body backend unless asked for, and a Ready scene is then not Ready for soft bodies
@@ -122,6 +173,26 @@ TEST(SoftBodySelectionTest, TheFakeBackendsDefaultsMatchTheRealOnes)
 }
 
 // ---------------------------------------------------------------- the SoftBodies health row's usage text
+
+TEST(SoftBodyUsageTest, CountsTheWebGpuBackendOnItsOwn)
+{
+    const int cpu = SoftBodyUsage::GetCount(false);
+    const int gpu = SoftBodyUsage::GetCount(true);
+    const int webGpu = SoftBodyUsage::GetWebGpuCount();
+    SoftBodyUsage::AddWebGpu();
+    EXPECT_EQ(SoftBodyUsage::GetWebGpuCount(), webGpu + 1);
+    EXPECT_EQ(SoftBodyUsage::GetCount(false), cpu);
+    EXPECT_EQ(SoftBodyUsage::GetCount(true), gpu);
+    if (cpu == 0 && gpu == 0 && webGpu == 0)
+    {
+        EXPECT_EQ(SoftBodyUsage::Describe(), "SoftBodies: 1 WebGPU");
+        SoftBodyUsage::Add(true);
+        EXPECT_EQ(SoftBodyUsage::Describe(), "SoftBodies: 1 PhysX, 1 WebGPU");
+        SoftBodyUsage::Remove(true);
+    }
+    SoftBodyUsage::RemoveWebGpu();
+    EXPECT_EQ(SoftBodyUsage::GetWebGpuCount(), webGpu);
+}
 
 TEST(SoftBodyUsageTest, DescribesTheLiveBodiesPerBackend)
 {

@@ -12,7 +12,8 @@
 --   7 Screen UI     a screen-space Canvas on the right of the window (shown only here, or with U): a sprite Image,
 --                   UIText alignment and wrapping, Buttons with a counter
 -- and four demo stations after them, on keys 8, 9, 0 and - (scripts/DemoStations.lua):
---   8 Particles     a water fountain, a sand burst and a smoke column, with the active backend on each sign
+--   8 Particles     a water fountain, a sand burst and a smoke column, with the active backend on each sign (Auto:
+--                   PhysX GPU on a CUDA desktop, WebGPU compute in a browser on the WebGPU renderer, else CPU)
 --   9 World canvas  a world-space panel whose buttons sit behind a trigger volume and behind a solid collider
 --  10 Text passes   TextRenderer:AddEffectPass: outline, shadow, glow, and pass order before and after
 --  11 Soft bodies   SoftBody: cubes of three stiffnesses, two dampings and a robot body dropped on a floor, with the
@@ -450,7 +451,7 @@ do
     local x0 = Emitters.CENTER_X
     DemoTitle(1, Vector3(x0 - 8.0, 6.9, 0.0))
     -- What the keys do and which backend is asked for; ParticleStation.lua rewrites it
-    WorldText("Particles Info", "B burst   P play / stop   C clear   K backend: Auto, CPU, PhysX",
+    WorldText("Particles Info", "B burst   P play / stop   C clear   K backend: Auto, CPU, PhysX, WebGPU",
         Vector3(x0 - 8.0, 6.2, 0.0), 0.2, CAPTION)
     local ground = ColouredCube("Particles Ground", Color.new(0.35, 0.35, 0.4, 1.0),
         Vector3(x0, Emitters.GROUND_Y - 0.17, 0.0), Vector3(17.0, 0.3, 3.0))
@@ -576,7 +577,7 @@ do
     local x0 = SoftBodies.CENTER_X
     DemoTitle(4, Vector3(x0 - 9.0, 8.2, 0.0))
     -- What the keys do and which backend is asked for; SoftBodyStation.lua rewrites it
-    WorldText("Soft Bodies Info", "R drop again   J backend: Auto, CPU, PhysX   V push up",
+    WorldText("Soft Bodies Info", "R drop again   J backend: Auto, CPU, PhysX, WebGPU   V push up",
         Vector3(x0 - 9.0, 7.5, 0.0), 0.2, CAPTION)
     -- The floor top is the plane the CPU backend rests on (SetGround); the PhysX backend collides with the scene's
     -- colliders instead, so the floor is a static collider too

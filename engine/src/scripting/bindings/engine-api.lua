@@ -988,17 +988,17 @@ function ParticleSystem:IsPlaying() end
 ---@return integer living particles
 function ParticleSystem:GetAliveCount() end
 
----The backend that simulates this system: "CPU", or "PhysX" when the GPU particle backend is in use
----@return "CPU"|"PhysX"|nil nil until the system has started (the scene is playing)
+---The backend that simulates this system: "CPU", "PhysX" (the PhysX GPU particle backend) or "WebGPU" (the WebGPU compute backend, on the WebGPU renderer as in the browser)
+---@return "CPU"|"PhysX"|"WebGPU"|nil nil until the system has started (the scene is playing)
 function ParticleSystem:GetActiveBackend() end
 
----@param backend "Auto"|"PhysX"|"CPU" Auto: PhysX when the GPU physics scene is up, else CPU. PhysX falls back to CPU, with one warning, where there is no GPU backend. An unknown name raises an error.
+---@param backend "Auto"|"PhysX"|"CPU"|"WebGPU" Auto: PhysX when the GPU physics scene is up, else WebGPU when the renderer is WebGPU (the browser) and physics.gpu is auto or on (and physics.deterministic off), else CPU. PhysX and WebGPU fall back to CPU, with one warning, where that backend is not there. Read when the system starts. An unknown name raises an error.
 function ParticleSystem:SetBackend(backend) end
 
----@return "Auto"|"PhysX"|"CPU" what was asked for (GetActiveBackend says what is used)
+---@return "Auto"|"PhysX"|"CPU"|"WebGPU" what was asked for (GetActiveBackend says what is used)
 function ParticleSystem:GetBackend() end
 
----@param material "Water"|"Sand"|"Smoke" what the particles are made of on the PhysX backend (a PBD material preset: Water flows and pools, Sand piles up, Smoke drifts); the CPU backend ignores it. Read when the system starts. An unknown name raises an error.
+---@param material "Water"|"Sand"|"Smoke" what the particles are made of on the PhysX and WebGPU backends (a PBD material preset: Water flows and pools, Sand piles up, Smoke drifts); the CPU backend ignores it. Read when the system starts. An unknown name raises an error.
 function ParticleSystem:SetPbdMaterial(material) end
 
 ---@return "Water"|"Sand"|"Smoke"
@@ -1140,13 +1140,13 @@ function SoftBody:AddVelocity(velocity) end
 ---Puts the body back to its rest shape at the object's current pose, at rest (it restarts, so the backend is chosen again)
 function SoftBody:Reset() end
 
----@return string name "CPU" or "PhysX": the backend simulating the body; "" when it is inert (no MeshRenderer, a Rigidbody, a mesh that can't be tetrahedralised) or hasn't started
+---@return string name "CPU", "PhysX" or "WebGPU": the backend simulating the body; "" when it is inert (no MeshRenderer, a Rigidbody, a mesh that can't be tetrahedralised) or hasn't started
 function SoftBody:GetActiveBackendName() end
 
----@param backend "Auto"|"PhysX"|"CPU" Auto: the PhysX GPU backend when there is one, else CPU. Read when the body starts. An unknown name raises an error.
+---@param backend "Auto"|"PhysX"|"CPU"|"WebGPU" Auto: the PhysX GPU backend when there is one, else WebGPU when the renderer is WebGPU (the browser) and physics.gpu is auto or on (and physics.deterministic off), else CPU. PhysX and WebGPU fall back to CPU, with one warning, where that backend is not there. Read when the body starts. An unknown name raises an error.
 function SoftBody:SetBackend(backend) end
 
----@return "Auto"|"PhysX"|"CPU"
+---@return "Auto"|"PhysX"|"CPU"|"WebGPU"
 function SoftBody:GetBackend() end
 
 ---@param resolution integer voxels along the longest axis of the mesh, 2 to 32 (default 10). Read when the body starts.

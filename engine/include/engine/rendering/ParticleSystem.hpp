@@ -27,6 +27,7 @@
 namespace N2Engine::Particles
 {
     class CpuParticleBackend;
+    class WebGpuParticleBackend;
 }
 
 namespace N2Engine::Rendering
@@ -50,12 +51,14 @@ namespace N2Engine::Rendering
      * away. See docs/particles.html.
      *
      * Simulation: a ParticleSystem gets its particles simulated by an IParticleBackend, chosen by `backend`
-     * when the component attaches (Auto, PhysX or CPU, see Particles::SelectParticleBackend). That is the CPU
-     * backend unless the physics backend has a PhysX GPU particle backend (physics.gpu is auto or on and the GPU
-     * works): Auto then uses the GPU one and otherwise the CPU one quietly, PhysX the GPU one and otherwise the CPU one
-     * with one warning. A system on the GPU backend whose backend is replaced or recreated (its handle's generation
-     * no longer matches the backend's) restarts on the CPU with one warning; with the physics backend removed
-     * entirely it is inert. The emitter (rate, burst,
+     * when the component attaches (Auto, PhysX, CPU or WebGPU, see Particles::SelectParticleBackend). Auto takes the
+     * first that is there: the physics backend's PhysX GPU particle backend (physics.gpu is auto or on and the GPU
+     * works), then the WebGPU backend (Particles::WebGpuParticleBackend, on the renderer's compute: the WebGPU renderer,
+     * as in the browser, with physics.gpu auto or on and physics.deterministic off), then quietly the CPU backend. PhysX
+     * and WebGPU ask for that one and otherwise use the CPU one with one warning. A system on the PhysX backend whose
+     * backend is replaced or recreated (its handle's generation no longer matches the backend's) restarts on the CPU
+     * with one warning; with the physics backend removed entirely it is inert. A system on the WebGPU backend whose
+     * renderer goes away, or whose device is lost or fails, restarts empty on the CPU with one warning. The emitter (rate, burst,
      * shape, speed) lives in the component and runs in OnFixedUpdate, once per fixed step, so a system emits and
      * moves the same particles whatever the frame rate; the same seed gives the same particles. Particles are
      * simulated in world space: moving the object moves where new ones start, not those already flying.
@@ -111,7 +114,7 @@ namespace N2Engine::Rendering
         /// Replaces `out` with the living particles, one Vector4 each: x, y, z the world position, w the age as a
         /// fraction of the lifetime (IParticleBackend::CopyPositions). Empty before the system started.
         void GetParticles(std::vector<Math::Vector4> &out) const;
-        /// "CPU" or "PhysX": the backend simulating this system; empty before it started (not attached)
+        /// "CPU", "PhysX" or "WebGPU": the backend simulating this system; empty before it started (not attached)
         [[nodiscard]] std::string_view GetActiveBackendName() const;
 
         /// The simulation settings the current fields give (gravityScale applied to the world gravity)
@@ -179,10 +182,13 @@ namespace N2Engine::Rendering
     private:
         void ReleaseSystem();
         /// A PhysX-backed system whose physics backend was replaced drops its stale handle and restarts on the CPU
-        /// backend with one warning; true when it did
+        /// backend with one warning, and so does a WebGPU-backed one whose backend stopped working (the renderer or
+        /// its device went away); true when it did
         bool RecoverFromReplacedBackend();
-        /// The backend simulating this system: the CPU one this component owns, or the physics backend's GPU one,
-        /// asked for each time (it goes away with the physics backend); nullptr when there is none
+        /// What a backend makes the system from: the current fields (maxParticles clamped to the limit)
+        [[nodiscard]] Physics::ParticleSystemDesc BuildDesc() const;
+        /// The backend simulating this system: the CPU or WebGPU one this component owns, or the physics backend's GPU
+        /// one, asked for each time (it goes away with the physics backend); nullptr when there is none
         [[nodiscard]] Physics::IParticleBackend *Backend() const;
         /// Spawns `count` particles from the emitter at the object's current pose; the number that fit
         void Emit(std::uint32_t count);
@@ -193,6 +199,7 @@ namespace N2Engine::Rendering
 
         // The simulation
         std::unique_ptr<Particles::CpuParticleBackend> _cpuBackend; // owned when the CPU backend is the one in use
+        std::unique_ptr<Particles::WebGpuParticleBackend> _webGpuBackend; // owned when the WebGPU backend is in use
         Physics::ParticleSystemHandle _handle = Physics::kInvalidParticleSystem;
         bool _usingGpu = false;
         Particles::ParticleEmitter _emitter;

@@ -1,5 +1,5 @@
 -- The soft-body station's behaviour (demo station 11, key Minus): keys R (drop every body again), J (cycle the
--- requested backend Auto -> CPU -> PhysX) and V (push every body upwards) act only while the camera is at the station,
+-- requested backend Auto -> CPU -> PhysX -> WebGPU) and V (push every body upwards) act only while the camera is at the station,
 -- and the signs under the bodies' titles show live which backend each SoftBody asked for and which is RUNNING.
 -- Changing the backend replaces the bodies, since a SoftBody reads its backend only when it starts.
 
@@ -32,8 +32,10 @@ local function Running(asked, active, age)
         return age < START_SECONDS and "starting" or "inert"
     elseif active == "PhysX" then
         return "PhysX GPU"
-    elseif asked == "PhysX" then
-        return "CPU (PhysX asked: fell back)"
+    elseif active == "WebGPU" then
+        return "WebGPU compute"
+    elseif asked == "PhysX" or asked == "WebGPU" then
+        return "CPU (" .. asked .. " asked: fell back)"
     end
     return "CPU"
 end
@@ -143,7 +145,7 @@ function SoftBodyStation:OnUpdate()
     local fellBack = false
     for _, item in ipairs(self:Items()) do
         local active = item.body:GetActiveBackendName()
-        if asked == "PhysX" and active == "CPU" then
+        if (asked == "PhysX" or asked == "WebGPU") and active == "CPU" then
             fellBack = true
         end
         local text = string.format("asked: %s\nrunning: %s", asked, Running(asked, active, self.clock - item.created))
@@ -155,11 +157,14 @@ function SoftBodyStation:OnUpdate()
 
     if self.info ~= nil then
         local text = string.format("Physics.IsGpuAvailable(): %s   backend asked: %s\n"
-            .. "R drop again   J backend: Auto, CPU, PhysX   V push up",
+            .. "R drop again   J backend: Auto, CPU, PhysX, WebGPU   V push up",
             tostring(Physics.IsGpuAvailable()), asked)
-        if fellBack then
+        if fellBack and asked == "PhysX" then
             text = text .. "\nPhysX asked but CPU is running: there is no PhysX GPU soft-body backend here (the log "
                 .. "has one warning per body)."
+        elseif fellBack then
+            text = text .. "\nWebGPU asked but CPU is running: the renderer is not WebGPU (run the web build with the "
+                .. "WebGPU renderer; the log has one warning per body)."
         end
         if text ~= self.infoText then
             self.infoText = text

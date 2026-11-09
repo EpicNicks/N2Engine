@@ -205,7 +205,7 @@ TEST_F(LuaSoftBodyTest, AnUnknownEnumNameIsAnErrorThatListsTheOptionsAndChangesN
     std::string error = RunExpectingError(R"(lua_body:SetBackend("Gpu"))");
     EXPECT_NE(error.find("SoftBody:SetBackend"), std::string::npos) << error;
     EXPECT_NE(error.find("'Gpu'"), std::string::npos) << error;
-    EXPECT_NE(error.find("Auto, PhysX, CPU"), std::string::npos) << error;
+    EXPECT_NE(error.find("Auto, PhysX, CPU, WebGPU"), std::string::npos) << error;
     EXPECT_EQ(Eval<std::string>("lua_body:GetBackend()"), "Auto");
 
     error = RunExpectingError(R"(lua_body:SetMaterialModel("Stiff"))");

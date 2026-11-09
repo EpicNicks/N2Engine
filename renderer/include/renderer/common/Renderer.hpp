@@ -12,6 +12,7 @@
 
 #include <math/Vector3.hpp>
 
+#include "renderer/common/GpuCompute.hpp"
 #include "renderer/common/RenderTypes.hpp"
 #include "renderer/common/RenderCounters.hpp"
 #include "renderer/common/RenderState.hpp"
@@ -269,6 +270,13 @@ namespace Renderer::Common
         /// Whether this backend counts its draws (GetLastFrameCounters means something). The four backends do (OpenGL,
         /// Vulkan, WebGPU, software); the default (a test fake) does not.
         [[nodiscard]] virtual bool SupportsRenderCounters() const { return false; }
+
+        /**
+         * General-purpose compute on this renderer's device (GpuCompute.hpp), or nullptr for a backend that has none (OpenGL,
+         * Vulkan and software today; the WebGPU renderer has it while initialized). The object belongs to the renderer:
+         * hold it next to GetLifetimeToken and stop calling it once the token has expired.
+         */
+        [[nodiscard]] virtual IGpuCompute* GetCompute() { return nullptr; }
 
     protected:
         /// Expires every token handed out so far: the renderer's resources are gone (Shutdown). Later calls to
