@@ -513,6 +513,11 @@ namespace N2Engine::Rendering
 
     void ParticleSystem::EmitBurst(const int count)
     {
+#ifndef N2ENGINE_PARTICLES_ENABLED
+        // No backend will ever start in this build, so there is nothing to queue the burst for
+        (void)count;
+        return;
+#endif
         if (count <= 0)
         {
             return;

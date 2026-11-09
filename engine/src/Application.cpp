@@ -267,6 +267,23 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         // GetHealth recomposes these two rows from their base details
         _particlesBaseDetail = refusedDetail;
         _softBodiesBaseDetail = refusedDetail;
+        // ...and adds the left-out note to them, so the rows returned now say the same
+        for (SubsystemStatus &row : _health.subsystems)
+        {
+#ifndef N2ENGINE_PARTICLES_ENABLED
+            if (row.name == "Particles")
+            {
+                row.detail += kParticlesLeftOut;
+            }
+#endif
+#ifndef N2ENGINE_SOFTBODIES_ENABLED
+            if (row.name == "SoftBodies")
+            {
+                row.detail += kSoftBodiesLeftOut;
+            }
+#endif
+            (void)row;
+        }
         _health.subsystems.push_back(Network::MakeNetworkStatus(networkSettings, networkValidation));
         _initialized = false;
         return _health;

@@ -55,13 +55,11 @@ namespace N2Engine
 
 namespace N2Engine::Particles
 {
-    class PbdParticleBackend;
     class IPbdDriver;
 }
 
 namespace N2Engine::SoftBodies
 {
-    class DeformableSoftBodyBackend;
     class IDeformableDriver;
 }
 
@@ -126,10 +124,8 @@ namespace N2Engine::Physics
         /// while the GPU scene runs and Physics.IsGpuAvailable does not flip when one feature gives up
         [[nodiscard]] GpuStatus GetGpuStatus() const override { return _gpuStatus; }
         /// The scene status, or this feature's own failure when the scene is Ready (see ComposeFeatureGpuStatus)
-        [[nodiscard]] GpuStatus GetParticlesGpuStatus() const override
-        {
-            return ComposeFeatureGpuStatus(_gpuStatus, _particlesFailure);
-        }
+        /// In a build without the particles module, a Ready scene reports Unavailable, as soft bodies do without their backend
+        [[nodiscard]] GpuStatus GetParticlesGpuStatus() const override;
         /// As GetParticlesGpuStatus, for soft bodies: Running only while the PhysX soft-body backend exists (a Ready
         /// scene without one reports Unavailable, see ComposeSoftBodiesGpuStatus)
         [[nodiscard]] GpuStatus GetSoftBodiesGpuStatus() const override

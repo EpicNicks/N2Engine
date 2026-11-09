@@ -3,6 +3,10 @@
 #include "engine/physics/physx/PhysXLayerFilter.hpp"
 #include "engine/physics/IParticleBackend.hpp"
 #include "engine/physics/ISoftBodyBackend.hpp"
+// The driver interfaces only: InstallParticleDriverForTesting and InstallDeformableDriverForTesting take them by value in every
+// build, and MSVC destroys a by-value parameter in the callee, which needs the complete type
+#include "engine/particles/PbdDriver.hpp"
+#include "engine/softbody/DeformableDriver.hpp"
 // The GPU particle and soft-body backends belong to their modules (N2ENGINE_USE_PARTICLES, N2ENGINE_USE_SOFTBODIES, set on
 // this file by engine/CMakeLists.txt): a build without one never makes that backend and has none of its code
 #ifdef N2ENGINE_PARTICLES_ENABLED
@@ -390,6 +394,18 @@ namespace N2Engine::Physics
         const bool required = _gpuMode == GpuMode::On;
         _gpuStatus = {required ? GpuState::Failed : GpuState::Unavailable, "GPU physics unavailable: " + reason};
         Logger::Warn(std::format("physics.gpu={}: {}; using the CPU scene", ToString(_gpuMode), _gpuStatus.detail));
+    }
+
+    GpuStatus PhysXBackend::GetParticlesGpuStatus() const
+    {
+        GpuStatus status = ComposeFeatureGpuStatus(_gpuStatus, _particlesFailure);
+#ifndef N2ENGINE_PARTICLES_ENABLED
+        if (status.state == GpuState::Ready)
+        {
+            status = {GpuState::Unavailable, "GPU particles unavailable: the particles module is not in this build"};
+        }
+#endif
+        return status;
     }
 
     void PhysXBackend::FailParticles(const std::string &reason)

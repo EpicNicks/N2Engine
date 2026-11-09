@@ -28,7 +28,7 @@ endif()
 
 # A build without the particles or soft-body module (N2ENGINE_USE_PARTICLES, N2ENGINE_USE_SOFTBODIES): the tests of that
 # module's simulation are left out (its code is not in the engine to test), and modules/LeftOutModulesTests.cpp checks what such
-# a build does instead. The tests of what stays (the backend selection, the handles, the health rows' mapping) still run.
+# a build does instead. The tests of what stays (the GPU mode and setting, the health rows' mapping) still run.
 set(N2ENGINE_PARTICLES_TESTS
     particles/ParticleHeadlessTests.cpp
     particles/ParticleSimulationTests.cpp
@@ -52,9 +52,9 @@ set(N2ENGINE_SOFTBODIES_TESTS
     softbody/TetrahedraliserTests.cpp
 )
 # These install fake GPU particle and soft-body drivers into the PhysX backend, which a build without either module refuses
+# (GpuProbeTests.cpp stays in every build: only its cases that install a fake driver need both modules, and it guards them)
 if(N2ENGINE_PHYSX_AVAILABLE)
-    list(APPEND N2ENGINE_PARTICLES_TESTS physics/GpuProbeTests.cpp physics/PhysXSoftBodiesBackendTests.cpp)
-    list(APPEND N2ENGINE_SOFTBODIES_TESTS physics/GpuProbeTests.cpp physics/PhysXSoftBodiesBackendTests.cpp)
+    list(APPEND N2ENGINE_SOFTBODIES_TESTS physics/PhysXSoftBodiesBackendTests.cpp)
 endif()
 foreach(_n2_module PARTICLES SOFTBODIES)
     foreach(_n2_test IN LISTS N2ENGINE_${_n2_module}_TESTS)
