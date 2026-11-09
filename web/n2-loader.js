@@ -533,7 +533,9 @@
           if (expired || !adapter) return software('no WebGPU adapter');
           var device = await adapter.requestDevice();
           if (expired) { device.destroy(); return software('WebGPU timed out'); }
-          return { renderer: 'webgpu', device: device, reason: 'WebGPU ready' };
+          // A fallback adapter is the CPU emulating a GPU (SwiftShader): the engine keeps its Auto simulations off it
+          var fallback = !!((adapter.info && adapter.info.isFallbackAdapter) || adapter.isFallbackAdapter);
+          return { renderer: 'webgpu', device: device, fallback: fallback, reason: 'WebGPU ready' };
         } catch (error) { return software('WebGPU request failed: ' + String(error.message || error)); }
       })();
       var deadline = new Promise(function (resolve) {
@@ -584,7 +586,7 @@
     var closed = false;
     var generation = 0;
     var draw;
-    var session = { device: null, stop: function () {
+    var session = { device: null, fallback: false, stop: function () {
       closed = true;
       state = 0;
       ++generation;
@@ -601,11 +603,12 @@
       state = 0;
       options.onFailure(reason);
     }
-    function attach(device) {
+    function attach(device, fallback) {
       var current = ++generation;
       var errors = 0;
       draw = (options.createPresenter || createGpuPresenter)(device, options.canvas, options.gpu);
       session.device = device;
+      session.fallback = !!fallback;
       device.lost.then(function (info) {
         if (current === generation) recover(info.message || 'graphics device lost');
       });
@@ -625,11 +628,11 @@
       options.probe.acquire().then(function (result) {
         if (closed) { if (result.device) result.device.destroy(); return; }
         if (!result.device) { failed(result.reason); return; }
-        try { attach(result.device); state = 2; }
+        try { attach(result.device, result.fallback); state = 2; }
         catch (error) { result.device.destroy(); failed(String(error.message || error)); }
       }).catch(function (error) { if (!closed) failed(String(error.message || error)); });
     }
-    attach(options.device);
+    attach(options.device, options.fallback);
     return session;
   }
 

@@ -15,6 +15,7 @@
 #include "engine/common/ScriptUtils.hpp"
 #include "engine/particles/CpuParticleBackend.hpp"
 #include "engine/particles/ParticleBillboards.hpp"
+#include "engine/particles/WebGpuParticleBackend.hpp"
 #include "engine/rendering/RenderCamera.hpp"
 #include "engine/serialization/MathSerialization.hpp"
 
@@ -99,6 +100,10 @@ namespace N2Engine::Rendering
         {
             return _cpuBackend.get();
         }
+        if (_webGpuBackend)
+        {
+            return _webGpuBackend.get();
+        }
         if (_usingGpu)
         {
             if (auto *physics = Application::GetInstance().Get3DPhysicsBackend())
@@ -133,7 +138,21 @@ namespace N2Engine::Rendering
         {
             return {};
         }
+        if (_webGpuBackend)
+        {
+            return "WebGPU";
+        }
         return _usingGpu ? "PhysX" : "CPU";
+    }
+
+    Physics::ParticleSystemDesc ParticleSystem::BuildDesc() const
+    {
+        Physics::ParticleSystemDesc desc;
+        desc.maxParticles = static_cast<std::uint32_t>(std::clamp(maxParticles, 0, kMaxParticlesLimit));
+        desc.seed = static_cast<std::uint32_t>(seed) ^ kBackendSeedMix;
+        desc.material = pbdMaterial;
+        desc.params = BuildParams();
+        return desc;
     }
 
     Physics::ParticleParams ParticleSystem::BuildParams() const
@@ -172,8 +191,11 @@ namespace N2Engine::Rendering
             return;
         }
 
-        const Particles::BackendSelection selection =
-            Particles::SelectParticleBackend(backend, Application::GetInstance().Get3DPhysicsBackend());
+        Application &application = Application::GetInstance();
+        std::weak_ptr<const void> computeLifetime;
+        Renderer::Common::IGpuCompute *compute = application.GetGpuCompute(&computeLifetime);
+        const Particles::BackendSelection selection = Particles::SelectParticleBackend(
+            backend, application.Get3DPhysicsBackend(), compute, application.IsGpuSimulationAllowed());
         if (selection.fellBack)
         {
             Logger::Warn(std::format("{} (GameObject '{}')", selection.reason, GetGameObject().GetName()));
@@ -211,7 +233,25 @@ namespace N2Engine::Rendering
                 }
             }
         }
-        if (!_usingGpu)
+        else if (selection.compute)
+        {
+            // The renderer's compute (WebGPU): a backend of this system's own, like the CPU one
+            auto webGpu = std::make_unique<Particles::WebGpuParticleBackend>(selection.compute, computeLifetime);
+            if (webGpu->IsHealthy())
+            {
+                _handle = webGpu->CreateSystem(desc);
+            }
+            if (_handle != Physics::kInvalidParticleSystem)
+            {
+                _webGpuBackend = std::move(webGpu);
+            }
+            else
+            {
+                Logger::Warn(std::format("ParticleSystem on '{}': the WebGPU backend couldn't create the system; using "
+                                         "the CPU backend", GetGameObject().GetName()));
+            }
+        }
+        if (!_usingGpu && !_webGpuBackend)
         {
             _cpuBackend = std::make_unique<Particles::CpuParticleBackend>();
             _handle = _cpuBackend->CreateSystem(desc);
@@ -224,7 +264,14 @@ namespace N2Engine::Rendering
             _usingGpu = false;
             return;
         }
-        Particles::ParticleUsage::Add(_usingGpu);
+        if (_webGpuBackend)
+        {
+            Particles::ParticleUsage::AddWebGpu();
+        }
+        else
+        {
+            Particles::ParticleUsage::Add(_usingGpu);
+        }
 
         _emitter.Reset(static_cast<std::uint32_t>(seed));
         _warnedFull = false;
@@ -248,15 +295,44 @@ namespace N2Engine::Rendering
             {
                 sim->Destroy(_handle);
             }
-            Particles::ParticleUsage::Remove(_usingGpu);
+            if (_webGpuBackend)
+            {
+                Particles::ParticleUsage::RemoveWebGpu();
+            }
+            else
+            {
+                Particles::ParticleUsage::Remove(_usingGpu);
+            }
         }
         _handle = Physics::kInvalidParticleSystem;
         _cpuBackend.reset();
+        _webGpuBackend.reset();
         _usingGpu = false;
     }
 
     bool ParticleSystem::RecoverFromReplacedBackend()
     {
+        // The WebGPU backend stopped working (the renderer shut down or was replaced, the device was lost, a GPU call
+        // failed): its particles can't be read back, so the system restarts empty on the CPU backend
+        if (_webGpuBackend && _handle != Physics::kInvalidParticleSystem && !_webGpuBackend->IsHealthy())
+        {
+            Logger::Warn(std::format("ParticleSystem on '{}': the WebGPU backend stopped working (the renderer or its "
+                                     "device went away), so the system continues on the CPU (its particles are lost)",
+                                     GetGameObject().GetName()));
+            _webGpuBackend->Destroy(_handle);
+            _webGpuBackend.reset();
+            Particles::ParticleUsage::RemoveWebGpu();
+            _cpuBackend = std::make_unique<Particles::CpuParticleBackend>();
+            _handle = _cpuBackend->CreateSystem(BuildDesc());
+            if (_handle == Physics::kInvalidParticleSystem)
+            {
+                _cpuBackend.reset();
+                return true;
+            }
+            Particles::ParticleUsage::Add(false);
+            _warnedFull = false;
+            return true;
+        }
         // With no physics backend at all the system stays inert (documented); only a replacement is recovered from
         if (!_usingGpu || _handle == Physics::kInvalidParticleSystem || !Application::GetInstance().Get3DPhysicsBackend() ||
             Backend())
@@ -271,13 +347,8 @@ namespace N2Engine::Rendering
         Particles::ParticleUsage::Remove(true);
         _usingGpu = false;
 
-        Physics::ParticleSystemDesc desc;
-        desc.maxParticles = static_cast<std::uint32_t>(std::clamp(maxParticles, 0, kMaxParticlesLimit));
-        desc.seed = static_cast<std::uint32_t>(seed) ^ kBackendSeedMix;
-        desc.material = pbdMaterial;
-        desc.params = BuildParams();
         _cpuBackend = std::make_unique<Particles::CpuParticleBackend>();
-        _handle = _cpuBackend->CreateSystem(desc);
+        _handle = _cpuBackend->CreateSystem(BuildDesc());
         if (_handle == Physics::kInvalidParticleSystem)
         {
             _cpuBackend.reset();

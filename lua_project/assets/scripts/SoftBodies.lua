@@ -1,15 +1,16 @@
 -- The soft-body station's bodies (scene.lua builds them, SoftBodyStation.lua rebuilds them when the backend changes:
 -- a SoftBody reads its backend and resolution when it starts, so a new backend means a new body). Each is a
 -- MeshRenderer plus a SoftBody on one object, with no Rigidbody. The CPU backend collides only with the plane
--- y = FLOOR_TOP (SetGround); the PhysX backend collides with the scene's colliders, so scene.lua gives the floor a
--- static BoxCollider at the same height.
+-- y = FLOOR_TOP (SetGround), and so does the WebGPU backend; the PhysX backend collides with the scene's colliders, so
+-- scene.lua gives the floor a static BoxCollider at the same height.
 
 local SoftBodies = {}
 
 SoftBodies.CENTER_X = 210.0
 SoftBodies.FLOOR_TOP = -1.9
--- What J cycles through, as SoftBody:SetBackend names them
-SoftBodies.BACKENDS = { "Auto", "CPU", "PhysX" }
+-- What J cycles through, as SoftBody:SetBackend names them. Auto is resolved at runtime: PhysX GPU on a desktop with
+-- CUDA, WebGPU compute in a browser running the WebGPU renderer, else CPU (project.n2proj sets physics.gpu auto)
+SoftBodies.BACKENDS = { "Auto", "CPU", "PhysX", "WebGPU" }
 
 local ROBOT = "res://models/smoke_robot.gltf"
 local TILT = Quaternion.FromEulerAngles(0.35, 0.0, 0.3) -- the cubes land on a corner, all the same way

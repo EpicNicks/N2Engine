@@ -140,7 +140,7 @@ TEST_F(ParticleSystemTest, IsRegisteredAndDescribesItsFields)
     const FieldInfo *backend = find("backend");
     ASSERT_NE(backend, nullptr) << "the backend choice is an ordinary field";
     EXPECT_EQ(backend->kind, FieldKind::Enum);
-    EXPECT_EQ(backend->enumOptions, (std::vector<std::string>{"Auto", "PhysX", "CPU"}));
+    EXPECT_EQ(backend->enumOptions, (std::vector<std::string>{"Auto", "PhysX", "CPU", "WebGPU"}));
     EXPECT_EQ(schema->defaults.at("backend"), "Auto");
 
     ASSERT_NE(find("shape"), nullptr);

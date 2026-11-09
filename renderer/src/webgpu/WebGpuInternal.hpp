@@ -27,6 +27,7 @@
 #include <math/Vector4.hpp>
 
 #include "renderer/common/BlockMaterial.hpp"
+#include "renderer/common/GpuCompute.hpp"
 #include "renderer/common/GpuLighting.hpp"
 #include "renderer/common/GpuShaderInterface.hpp"
 #include "renderer/common/IMaterial.hpp"
@@ -132,6 +133,8 @@ namespace Renderer::WebGpu
     using CommandEncoderRef = Ref<WGPUCommandEncoder, wgpuCommandEncoderRelease>;
     using CommandBufferRef = Ref<WGPUCommandBuffer, wgpuCommandBufferRelease>;
     using RenderPassRef = Ref<WGPURenderPassEncoder, wgpuRenderPassEncoderRelease>;
+    using ComputePipelineRef = Ref<WGPUComputePipeline, wgpuComputePipelineRelease>;
+    using ComputePassRef = Ref<WGPUComputePassEncoder, wgpuComputePassEncoderRelease>;
 
     /// What the device's two callbacks count into. They may run on any thread, inside any WebGPU call that processes
     /// events: they take only this block's own mutex, never the renderer's
@@ -281,6 +284,34 @@ namespace Renderer::WebGpu
         std::uint64_t lightingOffset = 0;
     };
 
+    // -----------------------------------------------------------------------------------------------------------------
+    // Compute (WebGpuCompute.cpp): the objects behind Common::IGpuCompute's ids
+    // -----------------------------------------------------------------------------------------------------------------
+
+    /// A buffer of CreateBuffer: storage (Storage | CopySrc | CopyDst) or uniform (Uniform | CopyDst)
+    struct ComputeBuffer
+    {
+        BufferRef buffer;
+        std::uint64_t size = 0;
+        Common::GpuBufferUsage usage = Common::GpuBufferUsage::Storage;
+    };
+
+    /// A kernel of CreateKernel: its pipeline, its group-0 layout and the binding kinds the layout was made from
+    struct ComputeKernel
+    {
+        ComputePipelineRef pipeline;
+        BindGroupLayoutRef layout;
+        std::vector<Common::GpuBindingKind> bindings;
+    };
+
+    /// A read of RequestRead: the staging buffer (MapRead | CopyDst) the copy went into and its map's outcome
+    struct ComputeRead
+    {
+        BufferRef staging;
+        std::shared_ptr<MapResult> map;
+        std::uint64_t size = 0;
+    };
+
     /// The renderer's number of built-in shaders and of material textures (base + the four AuxTexture slots)
     inline constexpr std::size_t kShaderCount = ShaderInterface::kBuiltInShaderCount;
     inline constexpr std::size_t kTextureSlots = ShaderInterface::kSamplerCount;
@@ -306,6 +337,10 @@ namespace Renderer::WebGpu
         std::uint32_t maxTextureDimension = 0;
         std::uint64_t maxBufferSize = 0;
         std::uint32_t uniformAlignment = 256; // minUniformBufferOffsetAlignment
+        // Compute limits (CreateDevice reads them with the others)
+        std::uint64_t maxStorageBindingSize = 134217728;  // maxStorageBufferBindingSize
+        std::uint32_t maxWorkgroupsPerDimension = 65535;  // maxComputeWorkgroupsPerDimension
+        std::uint32_t maxStorageBuffersPerStage = 8;      // maxStorageBuffersPerShaderStage
 
         // ---- G3a: resources. The registries own the CPU objects; a pointer that is not a key is not this renderer's, and
         // foreign pointers are only ever compared, never dereferenced
@@ -364,6 +399,17 @@ namespace Renderer::WebGpu
         std::vector<std::uint8_t> lastReadback; // the last completed copy: RGBA8, tightly packed, row 0 the top of the image
         std::uint32_t lastReadbackWidth = 0;
         std::uint32_t lastReadbackHeight = 0;
+
+        // ---- Compute (WebGpuCompute.cpp). Ids come from one counter that never repeats (Shutdown keeps it), so an id made
+        // before a Shutdown names nothing afterwards. Dispatches are recorded into computeEncoder (null when nothing is
+        // recorded) and submitted by Submit, or first thing by any call that must keep the call order (WriteBuffer,
+        // RequestRead)
+        std::unordered_map<std::uint64_t, ComputeBuffer> computeBuffers;
+        std::unordered_map<std::uint64_t, ComputeKernel> computeKernels;
+        std::map<std::string, std::uint64_t> computeKernelCache; // (bindings, entry point, module text) -> kernel id
+        std::unordered_map<std::uint64_t, ComputeRead> computeReads;
+        CommandEncoderRef computeEncoder;
+        std::uint64_t nextComputeId = 1;
     };
 
     /// WebGpuResources.cpp: the texture-making part of CreateTexture, without registering it (CreateTexture registers it; the

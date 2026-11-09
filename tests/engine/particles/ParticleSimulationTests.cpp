@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <numbers>
 #include <string>
 #include <vector>
@@ -15,12 +16,14 @@
 #include <math/Vector3.hpp>
 #include <math/Vector4.hpp>
 
+#include "FakeGpuCompute.hpp"
 #include "FakePhysicsBackend.hpp"
 #include "engine/particles/CpuParticleBackend.hpp"
 #include "engine/particles/ParticleBackendSelection.hpp"
 #include "engine/particles/ParticleBillboards.hpp"
 #include "engine/particles/ParticleEmitter.hpp"
 #include "engine/particles/ParticleRandom.hpp"
+#include "engine/particles/WebGpuParticleBackend.hpp"
 
 // The CPU particle simulation, the emitter that feeds it, backend selection and the billboard mesh builder: all
 // plain data in and out, no window, renderer or scene.
@@ -687,10 +690,101 @@ TEST(ParticleBackendSelectionTest, PhysXWithoutAGpuBackendFallsBackWithAReasonTh
     EXPECT_FALSE(noPhysics.reason.empty());
 }
 
+TEST(ParticleBackendSelectionTest, WebGpuTakesTheRenderersComputeWheneverItIsUsable)
+{
+    TestSupport::FakeGpuCompute compute;
+    TestSupport::FakePhysicsBackend withGpu(true);
+    // An explicit WebGPU request ignores the PhysX GPU backend and the project's physics.gpu (autoUsesCompute false)
+    const BackendSelection selection = SelectParticleBackend(ParticleBackend::WebGPU, &withGpu, &compute, false);
+    EXPECT_EQ(selection.compute, &compute);
+    EXPECT_EQ(selection.gpu, nullptr);
+    EXPECT_FALSE(selection.fellBack);
+    EXPECT_TRUE(selection.reason.empty());
+}
+
+TEST(ParticleBackendSelectionTest, WebGpuWithoutComputeFallsBackToTheCpuWithAReason)
+{
+    TestSupport::FakeGpuCompute lost(false);
+    for (Renderer::Common::IGpuCompute *compute : {static_cast<Renderer::Common::IGpuCompute *>(nullptr),
+                                                   static_cast<Renderer::Common::IGpuCompute *>(&lost)})
+    {
+        const BackendSelection selection = SelectParticleBackend(ParticleBackend::WebGPU, nullptr, compute, true);
+        EXPECT_EQ(selection.compute, nullptr);
+        EXPECT_EQ(selection.gpu, nullptr);
+        EXPECT_TRUE(selection.fellBack);
+        EXPECT_NE(selection.reason.find("backend is WebGPU"), std::string::npos) << selection.reason;
+        EXPECT_NE(selection.reason.find("CPU backend"), std::string::npos) << selection.reason;
+    }
+}
+
+TEST(ParticleBackendSelectionTest, AutoPrefersPhysXThenTheRenderersComputeWhenAllowedThenTheCpu)
+{
+    TestSupport::FakeGpuCompute compute;
+    TestSupport::FakePhysicsBackend withGpu(true);
+    const BackendSelection physx = SelectParticleBackend(ParticleBackend::Auto, &withGpu, &compute, true);
+    EXPECT_EQ(physx.gpu, &withGpu.gpu) << "PhysX first";
+    EXPECT_EQ(physx.compute, nullptr);
+
+    TestSupport::FakePhysicsBackend without(false, {Physics::GpuState::Disabled, "physics.gpu is off"});
+    const BackendSelection webGpu = SelectParticleBackend(ParticleBackend::Auto, &without, &compute, true);
+    EXPECT_EQ(webGpu.gpu, nullptr);
+    EXPECT_EQ(webGpu.compute, &compute) << "then the renderer's compute";
+    EXPECT_FALSE(webGpu.fellBack);
+
+    const BackendSelection noPhysics = SelectParticleBackend(ParticleBackend::Auto, nullptr, &compute, true);
+    EXPECT_EQ(noPhysics.compute, &compute) << "the browser: no physics GPU at all";
+
+    // physics.gpu off (or physics.deterministic on): Auto stays on the CPU, quietly
+    const BackendSelection notAllowed = SelectParticleBackend(ParticleBackend::Auto, &without, &compute, false);
+    EXPECT_EQ(notAllowed.compute, nullptr);
+    EXPECT_EQ(notAllowed.gpu, nullptr);
+    EXPECT_FALSE(notAllowed.fellBack);
+
+    TestSupport::FakeGpuCompute lost(false);
+    const BackendSelection unusable = SelectParticleBackend(ParticleBackend::Auto, &without, &lost, true);
+    EXPECT_EQ(unusable.compute, nullptr);
+    EXPECT_FALSE(unusable.fellBack);
+}
+
+TEST(ParticleBackendSelectionTest, AutoStaysOnTheCpuOnASoftwareDeviceButWebGpuStillTakesIt)
+{
+    // A fallback adapter (SwiftShader in a browser) is the CPU emulating a GPU: the CPU backend is faster there
+    TestSupport::FakeGpuCompute compute;
+    compute.software = true;
+    const BackendSelection automatic = SelectParticleBackend(ParticleBackend::Auto, nullptr, &compute, true);
+    EXPECT_EQ(automatic.compute, nullptr);
+    EXPECT_FALSE(automatic.fellBack) << "Auto on the CPU is never a fallback to warn about";
+    const BackendSelection explicitly = SelectParticleBackend(ParticleBackend::WebGPU, nullptr, &compute, false);
+    EXPECT_EQ(explicitly.compute, &compute) << "asked for by name, it runs there anyway";
+}
+
+TEST(ParticleBackendSelectionTest, PhysXAndCpuNeverTakeTheRenderersCompute)
+{
+    TestSupport::FakeGpuCompute compute;
+    const BackendSelection cpu = SelectParticleBackend(ParticleBackend::CPU, nullptr, &compute, true);
+    EXPECT_EQ(cpu.compute, nullptr);
+    EXPECT_FALSE(cpu.fellBack);
+    const BackendSelection physx = SelectParticleBackend(ParticleBackend::PhysX, nullptr, &compute, true);
+    EXPECT_EQ(physx.compute, nullptr);
+    EXPECT_TRUE(physx.fellBack) << "PhysX asked and not there: the CPU, with a reason";
+}
+
+TEST(ParticleBackendSelectionTest, AWebGpuBackendOnAComputeThatRunsNothingIsNotHealthy)
+{
+    // What the component checks before it uses the backend: a compute whose kernels can't be made gives a backend that
+    // refuses systems, so the system starts on the CPU instead
+    TestSupport::FakeGpuCompute compute;
+    const auto lifetime = std::make_shared<const int>(0);
+    WebGpuParticleBackend backend(&compute, lifetime);
+    EXPECT_FALSE(backend.IsHealthy());
+    EXPECT_EQ(backend.GetName(), "WebGPU");
+    EXPECT_EQ(backend.CreateSystem(ParticleSystemDesc{}), Physics::kInvalidParticleSystem);
+}
+
 TEST(ParticleBackendSelectionTest, TheEnumSavesByName)
 {
     const std::vector<std::string> options = FieldTraits<ParticleBackend>::EnumOptions();
-    const std::vector<std::string> expected = {"Auto", "PhysX", "CPU"};
+    const std::vector<std::string> expected = {"Auto", "PhysX", "CPU", "WebGPU"};
     EXPECT_EQ(options, expected);
     EXPECT_EQ(nlohmann::json(ParticleBackend::PhysX).get<std::string>(), "PhysX");
     EXPECT_EQ(nlohmann::json("CPU").get<ParticleBackend>(), ParticleBackend::CPU);
@@ -719,6 +813,30 @@ TEST(ParticleUsageTest, DescribesTheLiveSystemsPerBackend)
     {
         EXPECT_TRUE(ParticleUsage::Describe().empty());
     }
+}
+
+TEST(ParticleUsageTest, CountsTheWebGpuBackendOnItsOwn)
+{
+    const int cpu = ParticleUsage::GetCount(false);
+    const int gpu = ParticleUsage::GetCount(true);
+    const int webGpu = ParticleUsage::GetWebGpuCount();
+    ParticleUsage::AddWebGpu();
+    ParticleUsage::AddWebGpu();
+    EXPECT_EQ(ParticleUsage::GetWebGpuCount(), webGpu + 2);
+    EXPECT_EQ(ParticleUsage::GetCount(false), cpu) << "not counted as CPU";
+    EXPECT_EQ(ParticleUsage::GetCount(true), gpu) << "not counted as PhysX";
+    const std::string text = ParticleUsage::Describe();
+    EXPECT_NE(text.find("WebGPU"), std::string::npos) << text;
+    if (cpu == 0 && gpu == 0 && webGpu == 0)
+    {
+        EXPECT_EQ(text, "ParticleSystems: 2 WebGPU");
+        ParticleUsage::Add(false);
+        EXPECT_EQ(ParticleUsage::Describe(), "ParticleSystems: 1 CPU, 2 WebGPU");
+        ParticleUsage::Remove(false);
+    }
+    ParticleUsage::RemoveWebGpu();
+    ParticleUsage::RemoveWebGpu();
+    EXPECT_EQ(ParticleUsage::GetWebGpuCount(), webGpu);
 }
 
 // ---------------------------------------------------------------- billboards

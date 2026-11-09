@@ -1,14 +1,16 @@
 -- The particle station's emitters (scene.lua builds them, ParticleStation.lua rebuilds them when the backend changes:
 -- the backend is read when a system starts, so a new backend means a new system). Water, sand and smoke are tuned
 -- with the ParticleSystem fields (rate, shape, speed, size, colour, gravity scale, drag, the ground plane) for the CPU
--- backend, and with pbdMaterial (Water, Sand, Smoke: the PBD preset the PhysX GPU backend uses; the CPU ignores it).
+-- backend, and with pbdMaterial (Water, Sand, Smoke: the PBD preset the PhysX GPU and WebGPU backends use; the CPU
+-- ignores it). The WebGPU backend also keeps to the ground plane, so the same SetGround serves it.
 
 local Emitters = {}
 
 Emitters.CENTER_X = 120.0
 Emitters.GROUND_Y = -1.9
--- What K cycles through, as ParticleSystem:SetBackend names them
-Emitters.BACKENDS = { "Auto", "CPU", "PhysX" }
+-- What K cycles through, as ParticleSystem:SetBackend names them. Auto is resolved at runtime: PhysX GPU on a desktop
+-- with CUDA, WebGPU compute in a browser running the WebGPU renderer, else CPU (project.n2proj sets physics.gpu auto)
+Emitters.BACKENDS = { "Auto", "CPU", "PhysX", "WebGPU" }
 
 Emitters.Specs = {
     {

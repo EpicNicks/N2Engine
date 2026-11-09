@@ -205,6 +205,11 @@ namespace Renderer
             [[nodiscard]] bool SupportsStageDim() const override { return true; }
             /// Counts each indexed draw DrawLocked records
             [[nodiscard]] bool SupportsRenderCounters() const override { return true; }
+            /// General-purpose compute on this renderer's device (WebGpuCompute.cpp; Common::IGpuCompute): non-null while the
+            /// renderer is initialized and its device not lost, nullptr otherwise. The object lives as long as the renderer;
+            /// its ids die with Shutdown. Natively it serves the CI harness's tests; in the browser the engine's WebGPU
+            /// particle and soft-body backends run on it
+            [[nodiscard]] Common::IGpuCompute* GetCompute() override;
             /// The three built-ins; nullptr before Initialize
             [[nodiscard]] Common::IShader* GetStandardUnlitShader() const override;
             [[nodiscard]] Common::IShader* GetStandardLitShader() const override;
@@ -358,6 +363,11 @@ namespace Renderer
             /// Copies `size` bytes of `buffer` (which needs CopySrc) into `bytes`. False on any failure (logged)
             bool CopyBufferToHostLocked(WGPUBuffer buffer, uint64_t size, std::vector<std::uint8_t>& bytes) const;
             void LogOnce(const std::string& message) const;
+            // Compute (WebGpuCompute.cpp)
+            class ComputeFacade; // the Common::IGpuCompute GetCompute returns; it calls back in under _mutex
+            friend class ComputeFacade;
+            /// Releases every compute buffer, kernel, read and the recorded dispatches (device-free: handles only)
+            void DestroyComputeResourcesLocked();
 
             mutable std::mutex _mutex;
             mutable std::mutex _logMutex;
@@ -375,6 +385,9 @@ namespace Renderer
             uint32_t _targetHeight = 0;
             bool _targetFixed = false; // SetRenderTargetSize set the size: Resize and OnResize are ignored
             float _clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+            // Made on the first GetCompute (WebGpuCompute.cpp, where the class is complete); a shared_ptr so this header
+            // can destroy it without seeing the class
+            std::shared_ptr<ComputeFacade> _compute;
         };
     }
 }

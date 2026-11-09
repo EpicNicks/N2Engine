@@ -16,6 +16,7 @@
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/rendering/MeshRenderer.hpp"
 #include "engine/softbody/Tetrahedraliser.hpp"
+#include "engine/softbody/WebGpuSoftBodyBackend.hpp"
 
 namespace N2Engine::Physics
 {
@@ -59,6 +60,10 @@ namespace N2Engine::Physics
         {
             return _cpuBackend.get();
         }
+        if (_webGpuBackend)
+        {
+            return _webGpuBackend.get();
+        }
         if (_usingGpu)
         {
             if (auto *physics = Application::GetInstance().Get3DPhysicsBackend())
@@ -77,6 +82,10 @@ namespace N2Engine::Physics
         if (_handle == kInvalidSoftBody)
         {
             return {};
+        }
+        if (_webGpuBackend)
+        {
+            return "WebGPU";
         }
         return _usingGpu ? "PhysX" : "CPU";
     }
@@ -177,8 +186,11 @@ namespace N2Engine::Physics
         _tetMesh = tets.mesh;
 
         // 2. The backend
-        const SoftBodies::SoftBodyBackendSelection selection =
-            SoftBodies::SelectSoftBodyBackend(backend, Application::GetInstance().Get3DPhysicsBackend());
+        Application &application = Application::GetInstance();
+        std::weak_ptr<const void> computeLifetime;
+        Renderer::Common::IGpuCompute *compute = application.GetGpuCompute(&computeLifetime);
+        const SoftBodies::SoftBodyBackendSelection selection = SoftBodies::SelectSoftBodyBackend(
+            backend, application.Get3DPhysicsBackend(), compute, application.IsGpuSimulationAllowed());
         if (selection.fellBack)
         {
             Logger::Warn(std::format("{} (GameObject '{}')", selection.reason, name));
@@ -206,7 +218,25 @@ namespace N2Engine::Physics
                 }
             }
         }
-        if (!_usingGpu)
+        else if (selection.compute)
+        {
+            // The renderer's compute (WebGPU): a backend of this body's own, like the CPU one
+            auto webGpu = std::make_unique<SoftBodies::WebGpuSoftBodyBackend>(selection.compute, computeLifetime);
+            if (webGpu->IsHealthy())
+            {
+                _handle = webGpu->CreateBody(desc);
+            }
+            if (_handle != kInvalidSoftBody)
+            {
+                _webGpuBackend = std::move(webGpu);
+            }
+            else
+            {
+                Logger::Warn(std::format("SoftBody on '{}': the WebGPU backend couldn't create the body; using the CPU "
+                                         "backend", name));
+            }
+        }
+        if (!_usingGpu && !_webGpuBackend)
         {
             _cpuBackend = std::make_unique<CpuSoftBodyBackend>();
             _handle = _cpuBackend->CreateBody(desc);
@@ -233,7 +263,14 @@ namespace N2Engine::Physics
             return false;
         }
         renderer->SetDeformedMesh(_runtimeMesh);
-        SoftBodies::SoftBodyUsage::Add(_usingGpu);
+        if (_webGpuBackend)
+        {
+            SoftBodies::SoftBodyUsage::AddWebGpu();
+        }
+        else
+        {
+            SoftBodies::SoftBodyUsage::Add(_usingGpu);
+        }
         return true;
     }
 
@@ -248,7 +285,14 @@ namespace N2Engine::Physics
             // A body that never got as far as drawing counts nowhere (Start counts it last)
             if (_runtimeMesh)
             {
-                SoftBodies::SoftBodyUsage::Remove(_usingGpu);
+                if (_webGpuBackend)
+                {
+                    SoftBodies::SoftBodyUsage::RemoveWebGpu();
+                }
+                else
+                {
+                    SoftBodies::SoftBodyUsage::Remove(_usingGpu);
+                }
             }
         }
         if (touchRenderer && _runtimeMesh)
@@ -261,6 +305,7 @@ namespace N2Engine::Physics
         }
         _handle = kInvalidSoftBody;
         _cpuBackend.reset();
+        _webGpuBackend.reset();
         _usingGpu = false;
         _tetMesh.reset();
         _runtimeMesh.reset();
@@ -270,6 +315,38 @@ namespace N2Engine::Physics
 
     bool SoftBody::RecoverFromReplacedBackend()
     {
+        // The WebGPU backend stopped working (the renderer shut down or was replaced, the device was lost, a GPU call
+        // failed): the body restarts at rest on the CPU backend
+        if (_webGpuBackend && _handle != kInvalidSoftBody && !_webGpuBackend->IsHealthy())
+        {
+            Logger::Warn(std::format("SoftBody on '{}': the WebGPU backend stopped working (the renderer or its device "
+                                     "went away), so the body continues on the CPU (it restarts at rest)",
+                                     GetGameObject().GetName()));
+            _webGpuBackend->Destroy(_handle);
+            _webGpuBackend.reset();
+            if (_runtimeMesh)
+            {
+                SoftBodies::SoftBodyUsage::RemoveWebGpu();
+            }
+            _cpuBackend = std::make_unique<CpuSoftBodyBackend>();
+            _handle = _cpuBackend->CreateBody(BuildDesc());
+            if (_handle == kInvalidSoftBody)
+            {
+                _cpuBackend.reset();
+                if (auto *renderer = GetGameObject().GetComponent<Rendering::MeshRenderer>();
+                    renderer && renderer->GetDeformedMesh() == _runtimeMesh)
+                {
+                    renderer->ClearDeformedMesh();
+                }
+                _runtimeMesh.reset();
+                return true;
+            }
+            if (_runtimeMesh)
+            {
+                SoftBodies::SoftBodyUsage::Add(false);
+            }
+            return true;
+        }
         // With no physics backend at all the body stays inert (documented); only a replacement is recovered from
         if (!_usingGpu || _handle == kInvalidSoftBody || !Application::GetInstance().Get3DPhysicsBackend() || Backend())
         {

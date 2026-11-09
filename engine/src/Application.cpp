@@ -378,6 +378,9 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         gpuMode = options.physicsGpu ? ReadPhysicsGpuMode(project->settings) : Physics::GpuMode::Off;
         deterministicPhysics = ReadPhysicsDeterministic(project->settings);
     }
+    // The same switch lets Auto particles and soft bodies use the renderer's compute (the WebGPU backends): read from the
+    // project, whatever the physics backend is (Jolt and the web build's PhysX have no GPU of their own)
+    _gpuSimulationAllowed = gpuMode != Physics::GpuMode::Off && !deterministicPhysics;
 
     // A fallback says so on the Physics row: "Jolt (CPU) (physics.backend is physx but this build has no PhysX
     // backend: fell back to Jolt)"
@@ -983,6 +986,25 @@ const EngineHealth& Application::GetHealth() const
         it->detail = SoftBodies::SoftBodyUsage::Compose(baseDetail);
     }
     return _health;
+}
+
+Renderer::Common::IGpuCompute* Application::GetGpuCompute(std::weak_ptr<const void>* lifetime)
+{
+    Renderer::Common::IRenderer* renderer = _window.GetRenderer();
+    if (!renderer)
+    {
+        return nullptr;
+    }
+    Renderer::Common::IGpuCompute* compute = renderer->GetCompute();
+    if (!compute || !compute->IsUsable())
+    {
+        return nullptr;
+    }
+    if (lifetime)
+    {
+        *lifetime = renderer->GetLifetimeToken();
+    }
+    return compute;
 }
 
 Physics::IPhysicsBackend* Application::Get3DPhysicsBackend() const

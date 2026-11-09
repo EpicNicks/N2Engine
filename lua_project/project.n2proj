@@ -4,6 +4,10 @@
   "name": "lua_project",
   "projectId": "a01472da-2084-4520-94d2-834aa42201d3",
   "scenes": [],
-  "settings": {},
+  "settings": {
+    "physics": {
+      "gpu": "auto"
+    }
+  },
   "startupScene": ""
 }

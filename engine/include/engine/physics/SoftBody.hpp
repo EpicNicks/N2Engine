@@ -14,6 +14,11 @@
 #include "engine/serialization/ComponentSerializer.hpp"
 #include "engine/softbody/SoftBodyBackendSelection.hpp"
 
+namespace N2Engine::SoftBodies
+{
+    class WebGpuSoftBodyBackend;
+}
+
 namespace N2Engine::Physics
 {
     class CpuSoftBodyBackend;
@@ -29,11 +34,14 @@ namespace N2Engine::Physics
      * (SoftBodies::TetCache), so a large mesh can stall entering play.
      *
      * Simulation: a SoftBody gets its body simulated by an ISoftBodyBackend, chosen by `backend` when the component
-     * attaches (Auto, PhysX or CPU, see SoftBodies::SelectSoftBodyBackend, which mirrors the particles' selection).
-     * That is the CPU backend (Physics::CpuSoftBodyBackend, XPBD) unless the physics backend has a PhysX GPU
-     * soft-body backend (deformable volumes, SoftBodies::DeformableSoftBodyBackend: only with physics.gpu auto or on,
-     * a working GPU and a Windows build with the GPU library): Auto then uses the GPU one and otherwise the CPU one
-     * quietly, PhysX the GPU one and otherwise the CPU one with one warning. The GPU body behaves differently from
+     * attaches (Auto, PhysX, CPU or WebGPU, see SoftBodies::SelectSoftBodyBackend, which mirrors the particles'
+     * selection). Auto takes the first that is there: the physics backend's PhysX GPU soft-body backend (deformable
+     * volumes, SoftBodies::DeformableSoftBodyBackend: only with physics.gpu auto or on, a working GPU and a Windows build
+     * with the GPU library), then the WebGPU backend (SoftBodies::WebGpuSoftBodyBackend, the CPU backend's XPBD on the
+     * renderer's compute: the WebGPU renderer, as in the browser, with physics.gpu auto or on and physics.deterministic
+     * off), then quietly the CPU backend (Physics::CpuSoftBodyBackend, XPBD). PhysX and WebGPU ask for that one and
+     * otherwise use the CPU one with one warning. A body on the WebGPU backend whose renderer goes away, or whose device
+     * is lost or fails, restarts at rest on the CPU with one warning. The GPU body behaves differently from
      * the CPU one (a different solver, collision with the scene's colliders instead of the ground plane, the
      * material model and self collision), see docs/soft-bodies.html. A body whose GPU backend refuses it, or gives
      * up later, restarts on the CPU with one warning. A body on the GPU backend whose backend is replaced or
@@ -71,7 +79,7 @@ namespace N2Engine::Physics
         /// Puts the body back to its rest shape at the object's current pose, at rest (restarting it, so the
         /// backend is chosen again). Does nothing before the component attached.
         void Reset();
-        /// "CPU" or "PhysX": the backend simulating this body; empty when it is inert or before it started
+        /// "CPU", "PhysX" or "WebGPU": the backend simulating this body; empty when it is inert or before it started
         [[nodiscard]] std::string_view GetActiveBackendName() const;
         /// The tetrahedral mesh in use (nullptr when inert), and the runtime mesh the MeshRenderer draws
         [[nodiscard]] const std::shared_ptr<const TetMeshData> &GetTetMesh() const { return _tetMesh; }
@@ -117,16 +125,18 @@ namespace N2Engine::Physics
         bool Start();
         void ReleaseSim(bool touchRenderer);
         /// A PhysX-backed body whose physics backend was replaced drops its stale handle and restarts on the CPU
-        /// backend with one warning; true when it did
+        /// backend with one warning, and so does a WebGPU-backed one whose backend stopped working (the renderer or its
+        /// device went away); true when it did
         bool RecoverFromReplacedBackend();
-        /// The backend simulating this body: the CPU one this component owns, or the physics backend's GPU one,
-        /// asked for each time (it goes away with the physics backend); nullptr when there is none
+        /// The backend simulating this body: the CPU or WebGPU one this component owns, or the physics backend's GPU
+        /// one, asked for each time (it goes away with the physics backend); nullptr when there is none
         [[nodiscard]] ISoftBodyBackend *Backend() const;
         [[nodiscard]] SoftBodyDesc BuildDesc() const;
         /// Writes the backend's positions and recomputed normals into the runtime mesh
         void UpdateRuntimeMesh();
 
         std::unique_ptr<CpuSoftBodyBackend> _cpuBackend; // owned when the CPU backend is the one in use
+        std::unique_ptr<SoftBodies::WebGpuSoftBodyBackend> _webGpuBackend; // owned when the WebGPU backend is in use
         SoftBodyHandle _handle = kInvalidSoftBody;
         bool _usingGpu = false;
         bool _attached = false;
