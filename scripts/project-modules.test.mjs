@@ -167,7 +167,7 @@ test('the command line exits 0 when clean, 1 on a conflict and 2 on bad use', ()
   const conflicted = makeProject({ name: 'p', build: { modules: { physics3d: 'none' } } }, { 'assets/scene.lua': 'Physics.Raycast(a, b)' });
   const result = run(conflicted);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /CONFLICT: assets\/scene\.lua:1 uses Physics\.R/);
+  assert.match(result.stderr, /CONFLICT: assets\/scene\.lua:1 uses Physics\.Raycast,/);
 
   assert.equal(run().status, 2);
   assert.equal(run(clean, '--nonsense').status, 2);

@@ -18,11 +18,11 @@ import { pathToFileURL } from 'node:url';
 export const MODULES = {
   physics3d: {
     components: ['Rigidbody', 'BoxCollider', 'SphereCollider', 'CapsuleCollider', 'CharacterController'],
-    luaPatterns: [/\bPhysics\.[A-Za-z]/, /\bOn(Collision|Trigger)(Enter|Stay|Exit)\b/, /\bBodyType\./],
+    luaPatterns: [/\bPhysics\.[A-Za-z]\w*/, /\bOn(Collision|Trigger)(Enter|Stay|Exit)\b/, /\bBodyType\./],
   },
   physics2d: {
     components: ['Rigidbody2D', 'BoxCollider2D', 'CircleCollider2D', 'PolygonCollider2D'],
-    luaPatterns: [/\bPhysics2D\.[A-Za-z]/, /\bOn(Collision|Trigger)(Enter|Stay|Exit)2D\b/, /\bBodyType2D\./],
+    luaPatterns: [/\bPhysics2D\.[A-Za-z]\w*/, /\bOn(Collision|Trigger)(Enter|Stay|Exit)2D\b/, /\bBodyType2D\./],
   },
 };
 
