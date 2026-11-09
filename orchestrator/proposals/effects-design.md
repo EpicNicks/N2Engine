@@ -5,7 +5,7 @@ Written 2026-11-09 against `master` at `66a49038`. It builds on `Sprite2D` (PR #
 yet). Gap 3 of the Triangle-Like plan (`E:/Code/Projects/Triangle-Like N2Engine/PLAN.md`): "Glow, outline, rainbow and glitch
 can be material or quad tricks; grayscale and time-stop need a full-screen pass."
 
-**Status: waiting for the user's decisions in section 5. Nothing is built.**
+**Status: approved by the user on 2026-11-09, with every recommendation in section 5 (A to H) accepted.** E2 starts first, from master: saturation only, since whether time-stop also inverts colours (section 2) still has to be checked in Unity by eye. E1 starts after #318 merges.
 
 ## 1. Summary
 
