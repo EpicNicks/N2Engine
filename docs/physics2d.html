@@ -77,7 +77,7 @@
 <table>
 <thead><tr><th>Component</th><th>What it does</th></tr></thead>
 <tbody>
-<tr><td><code>Rigidbody2D</code> <span class="badge">PR #BOX2DPR</span></td><td>A body: <code>Static</code>, <code>Dynamic</code> or <code>Kinematic</code>; linear and angular velocity; damping; gravity scale; fixed rotation; bullet; mass; forces and impulses.</td></tr>
+<tr><td><code>Rigidbody2D</code> <span class="badge">PR #313</span></td><td>A body: <code>Static</code>, <code>Dynamic</code> or <code>Kinematic</code>; linear and angular velocity; damping; gravity scale; fixed rotation; bullet; mass; forces and impulses.</td></tr>
 <tr><td><code>BoxCollider2D</code>, <code>CircleCollider2D</code>, <code>PolygonCollider2D</code></td><td>One shape each, on the object's <code>Rigidbody2D</code>, or on a static body of its own when it has none. Each has an offset, trigger flag, <code>PhysicsMaterial</code>, density and surface speed.</td></tr>
 </tbody>
 </table>
@@ -177,7 +177,7 @@
 <p>Compiled in but unused costs a null check per step and per transform change, and no Box2D allocation. The linker cannot remove the module by itself, because <code>RegisterBuiltinComponents</code> names every component type. Sizes are in <a href="web-build.html#box2d-size">the web build page</a>.</p>
 
 <div class="page-footer">
-<span>Describes master through PR #BOX2DPR.</span>
+<span>Describes master through PR #313.</span>
 <a href="index.html">Back to overview</a>
 </div>
 

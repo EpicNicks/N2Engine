@@ -606,7 +606,7 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <li><code>backend-&gt;Update(Time::GetFixedDeltaTime())</code>: simulate.</li>
 <li><code>backend-&gt;SyncTransforms()</code>: write simulated poses back to GameObjects.</li>
 <li><code>backend-&gt;ProcessCollisionCallbacks()</code>: dispatch collision and trigger events.</li>
-<li>When the scene has a <a href="physics2d.html#step">2D world</a>: simulate it, sync it and deliver its events. Its pending changes are applied just after step 1 <span class="badge">PR #BOX2DPR</span>.</li>
+<li>When the scene has a <a href="physics2d.html#step">2D world</a>: simulate it, sync it and deliver its events. Its pending changes are applied just after step 1 <span class="badge">PR #313</span>.</li>
 </ol>
 <p>Without a backend (PhysX failed, disabled, or not built), a step is just <code>scene.FixedUpdate()</code> and the 2D world, if any. See <a href="physics.html">Physics</a> for the backend side.</p>
 <p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Run</code>, <code>Application::PhysicsUpdate</code></p>
