@@ -6,8 +6,8 @@
   "requiresDocs": true,
   "name": "engine-stripping",
   "branch": "feat-engine-stripping",
-  "title": "Engine stripping: build a game's player without the engine modules it does not use (3D physics backends, 2D physics first)",
-  "issue": "User request, 2026-11-08: 'make engine stripping when engines are not used, for example if a game doesn't use physics or doesn't use 2D physics in particular'. Design first: orchestrator/proposals/engine-stripping-design.md, which has the open decisions. Implements J10 of the physics plan as part of it.",
+  "title": "Engine stripping: build a game without the engine modules it does not use, every module, on web and native (six stages; stage 1 is the mechanism and physics)",
+  "issue": "User request, 2026-11-08: 'make engine stripping when engines are not used, for example if a game doesn't use physics or doesn't use 2D physics in particular'. User decisions the same day: an explicit per-project module list with a scan that suggests and checks it; web and native; all modules; after Physics2D stage 2. Design and stage table: orchestrator/proposals/engine-stripping-design.md. Stage 1 implements J10 of the physics plan. Split into one item per stage before launching.",
   "allowedPaths": [
     "^engine/",
     "^CMakeLists\\.txt$",
@@ -20,11 +20,11 @@
     "^orchestrator/proposals/engine-stripping-design\\.md$"
   ],
   "acceptance": [
-    "A web package can be built with each listed module left out; each configuration is built and smoke-tested in CI",
-    "A stripped player given a scene that needs a stripped module fails with a clear message at package time, and at run time if it gets that far",
+    "For each stage's modules, a game can be built with the module left out, on the web and natively; CI builds one configuration per module off and one minimal configuration with all off",
+    "A stripped build given a scene that needs a stripped module fails with a clear message at package or build time, and at run time if it gets that far",
     "The measured size of each configuration is recorded; the full build's behaviour and budgets are unchanged"
   ],
-  "gate": "user decisions in engine-stripping-design.md; after box2d-p2-module",
+  "gate": "box2d-p2-module merged, then the user's go per stage",
   "approved": false,
   "notes": "Reviewer: a stripped module leaves no symbols behind, a full build is unchanged, and the network fingerprint is defined for a stripped player."
 }
