@@ -313,7 +313,7 @@ sb:Reset()                              -- back to the rest shape at the current
 <p><code>MeshRenderer:GetMesh()</code> still names the saved mesh while a body runs; <code>MeshRenderer:GetBounds()</code> follows the drawn (deformed) mesh.</p>
 <p class="src">Source: <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code> (<code>SoftBody</code>), <code>engine-api.lua</code>; tests: <code>LuaSoftBodyTest.*</code> (<code>tests/engine/scripting/LuaSoftBodyTests.cpp</code>)</p>
 
-<h2 id="leaving-it-out">Leaving it out of a game <span class="badge">PR #TBD</span></h2>
+<h2 id="leaving-it-out">Leaving it out of a game <span class="badge">PR #321</span></h2>
 <p>A game that has no soft bodies can build with <code>-DN2ENGINE_USE_SOFTBODIES=OFF</code>, or list <code>"softbodies": false</code> in its project (<a href="project-modules.html">Project modules</a>):</p>
 <ul>
 <li>None of the simulation is compiled: the CPU, WebGPU and PhysX GPU backends (with the PhysX driver and the deformable cooking) and the tetrahedraliser. A PhysX build never makes its GPU soft-body backend.</li>

@@ -139,7 +139,7 @@ node scripts/project-modules.mjs path/to/game --suggest   # the smallest list th
 </table>
 </div>
 <p>The web job builds and runs this package on every run, and prints both as <code>[MODULES-SIZE]</code> lines. The 2D physics Lua bindings (PR #314) are not in these numbers.</p>
-<p>Since PR #TBD, <code>tests/projects/no_physics</code> also leaves out particles and soft bodies, so its line in the CI log is now the player with no optional module at all, and the numbers above are no longer what that line prints.</p>
+<p>Since PR #321, <code>tests/projects/no_physics</code> also leaves out particles and soft bodies, so its line in the CI log is now the player with no optional module at all, and the numbers above are no longer what that line prints.</p>
 
 <h3 id="size-particles">Particles and soft bodies</h3>
 <p>The web job also builds <code>tests/projects/no_particles_softbodies</code>: the same physics as the full player (PhysX, Jolt and Box2D), without the particles and soft-body modules. It prints a third <code>[MODULES-SIZE]</code> line, and runs the package smoke on it.</p>
@@ -153,10 +153,10 @@ node scripts/project-modules.mjs path/to/game --suggest   # the smallest list th
 </tbody>
 </table>
 </div>
-<p>The first CI run of PR #TBD fills this table.</p>
+<p>The first CI run of PR #321 fills this table.</p>
 
 <div class="page-footer">
-<span>Describes master through PR #TBD.</span>
+<span>Describes master through PR #321.</span>
 <a href="index.html">Back to overview</a>
 </div>
 
