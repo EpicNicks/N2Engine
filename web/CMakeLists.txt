@@ -38,6 +38,10 @@ set_target_properties(N2WebPlayer PROPERTIES
 # The game folder the player runs, packed into the virtual filesystem (a .data file next to the page): lua_project's
 # assets and project file, mounted at /project (the player's default --project). Its sources, tools and scenes/ stay out.
 set(N2_WEB_PROJECT_DIR "${CMAKE_SOURCE_DIR}/lua_project" CACHE PATH "The project folder the web player packs (needs project.n2proj and assets/)")
+# A game built with its module list packs that game (docs/project-modules.html)
+if(N2ENGINE_PROJECT)
+    set(N2_WEB_PROJECT_DIR "${N2ENGINE_PROJECT}")
+endif()
 if(NOT EXISTS "${N2_WEB_PROJECT_DIR}/assets" OR NOT EXISTS "${N2_WEB_PROJECT_DIR}/project.n2proj")
     message(FATAL_ERROR "N2_WEB_PROJECT_DIR (${N2_WEB_PROJECT_DIR}) needs project.n2proj and assets/")
 endif()
@@ -70,6 +74,7 @@ target_link_options(N2WebPlayer PRIVATE
     "SHELL:--preload-file \"${N2_WEB_PROJECT_DIR}/project.n2proj@/project/project.n2proj\""
     ${N2_WEB_IMPORT_PRELOAD}
 )
+n2_check_project_modules(N2WebPlayer)
 set_property(TARGET N2WebPlayer APPEND PROPERTY LINK_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/shell.html" "${CMAKE_CURRENT_SOURCE_DIR}/webgpu-library.js"
     "${N2_WEB_PROJECT_DIR}/project.n2proj" ${N2_WEB_PROJECT_FILES})

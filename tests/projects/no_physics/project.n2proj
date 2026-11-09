@@ -1,0 +1,15 @@
+{
+  "build": {
+    "modules": {
+      "physics2d": false,
+      "physics3d": "none"
+    }
+  },
+  "engineVersion": "1.0.0",
+  "formatVersion": 1,
+  "name": "no_physics",
+  "projectId": "6b1f8c52-3d0e-4a77-9f25-0c4e7a91d2b6",
+  "scenes": [],
+  "settings": {},
+  "startupScene": ""
+}

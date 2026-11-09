@@ -940,6 +940,16 @@ jobs:
           ./build/bin/jolt_smoke_tests | tee jolt-smoke.log
           { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-DETERMINISM\]' jolt-smoke.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
 
+      # A native build from the same list: the engine with no physics module at all, with its whole test suite
+      - name: Build and test with no physics modules
+        run: |
+          set -e -o pipefail
+          cmake -S . -B build-nophysics -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DN2ENGINE_RENDERER_VULKAN=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DN2ENGINE_PROJECT=tests/projects/no_physics 2>&1 | tee configure-nophysics.log
+          grep -q "PhysX disabled" configure-nophysics.log
+          if grep -q "Jolt Physics (vendored\|Box2D (vendored" configure-nophysics.log; then echo "a physics module was still configured"; exit 1; fi
+          cmake --build build-nophysics --parallel --target engine_tests -- -k 0
+          ./build-nophysics/bin/engine_tests
+
       # The vendored Box2D alone: this leg's [BOX2D-DETERMINISM] line, which must equal every other leg's
       - name: Box2D determinism numbers
         run: |
@@ -1357,6 +1367,7 @@ jobs:
           node scripts/web-loader-test.mjs
           node scripts/web-gpu-test.mjs
           node --test scripts/web-browser-support.test.mjs
+          node --test scripts/project-modules.test.mjs
 
       # Stage 4: the audio unlock of the loader (web/n2-loader.js, createAudioUnlock) under node with a mock AudioContext
       # and a mock document: resume once on the first gesture, listeners removed, failures tolerated, the hidden tab
@@ -1411,6 +1422,24 @@ jobs:
             w="$tree/web-package/index.wasm"
             line="$tree: index.wasm raw $(wc -c < "$w") gzip $(gzip -9 -c "$w" | wc -c)"
             echo "[BOX2D-SIZE] $line"
+            echo "    $line" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      # A game that lists its modules (docs/project-modules.html): a player with no physics at all must build, start and draw, and
+      # this is what leaving physics out saves. Size profile, against the full package just built.
+      - name: Build and run a project with no physics modules
+        run: |
+          set -e -o pipefail
+          . "$HOME/emsdk/emsdk_env.sh"
+          emcmake cmake -S . -B build-web-nophysics -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=size -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_PROJECT=tests/projects/no_physics 2>&1 | tee configure-nophysics.log
+          grep -q "PhysX disabled" configure-nophysics.log
+          if grep -q "Jolt Physics (vendored\|Box2D (vendored" configure-nophysics.log; then echo "a physics module was still configured"; exit 1; fi
+          cmake --build build-web-nophysics --target web-package -- -k 0
+          node scripts/web-package-smoke.mjs build-web-nophysics/web-package 30 320x180 --precompressed
+          for tree in build-web-size build-web-nophysics; do
+            w="$tree/web-package/index.wasm"
+            line="$tree: index.wasm raw $(wc -c < "$w") gzip $(gzip -9 -c "$w" | wc -c) brotli $(wc -c < "$w.br")"
+            echo "[MODULES-SIZE] $line"
             echo "    $line" >> "$GITHUB_STEP_SUMMARY"
           done
 
