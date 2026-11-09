@@ -1,0 +1,27 @@
+{
+  "name": "sprite2d-shapes",
+  "repo": "engine",
+  "branch": "feat-sprite2d-shapes",
+  "title": "Sprite2D: flat shapes (rect, triangle, circle, polygons, outlines) with optional textures, flip, pivot and sorting order, with Lua bindings",
+  "closes": null,
+  "issue": "Phase E2 of the Triangle-Like plan. Design first: orchestrator/proposals/sprite2d-design.md, decisions A to E in section 4. Code only on the user's go.",
+  "allowedPaths": [
+    "^engine/",
+    "^tests/",
+    "^docs/",
+    "^web/budgets\\.json$",
+    "^orchestrator/proposals/sprite2d-design\\.md$"
+  ],
+  "acceptance": [
+    "Sprite2D draws each shape, filled and outlined, with colour, texture region, flip and pivot, on every renderer CI runs; pixel tests on the software renderer",
+    "sortingOrder decides draw order, then depth, deterministically",
+    "Serializes in scenes and prefabs; Lua can use every field through checked handles",
+    "docs/sprite2d.html; web sizes measured, and a 2,000-sprite scene measured"
+  ],
+  "requiresDocs": true,
+  "allowProtocol": false,
+  "gate": "user go on orchestrator/proposals/sprite2d-design.md",
+  "approved": false,
+  "reviewer": "opus",
+  "notes": "Reviewer: no renderer changes, cull and depth state right for flipped sprites, the software renderer's cut-out path, mesh cache keys, sort determinism."
+}

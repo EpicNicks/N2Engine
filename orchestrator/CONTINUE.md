@@ -2,6 +2,26 @@ Continue work on N2Engine (GitHub EpicNicks/N2Engine at E:\Code\Projects\N2Engin
 
 Read the memory index first, then orchestrator/README.md and the LAST entries of orchestrator/project-memory/pending-minor-defects.md (the source of truth for what merged and why) and orchestrator-lessons.md. Do not read agent transcripts; read only the ledger files of items you need.
 
+## Current state (2026-11-09; read this before the older State and Queue below, which are history from 2026-11-06)
+
+**2D physics (Box2D v3.2.0), three stages; design `proposals/physics2d-box2d-design.md`, accepted by the user 2026-11-08:**
+- Stage 1 vendor, #312: MERGED (c6ce583c). Stage 2 module, #313: MERGED (ff21edf4) after a code review that found 10 defects, all fixed.
+- Stage 3 Lua bindings, #314 (branch feat-physics2d-box2d-lua, worktree .claude/worktrees/box2d-lua): open; review done (8 findings, 6 fixed, 2 duplication cleanups left as follow-ups); the speed-profile web budgets RAISED at the user's go (measurement plus about 15%).
+- Determinism: the same Box2D and engine-scene hashes on all 7 legs, golden in tests/box2d and tests/engine/physics2d.
+- Behaviour choices the user should know: Physics2D.SetGravity from Lua is per scene; a dynamic body teleports when its transform is set; mass comes from collider density unless set.
+
+**Engine stripping; design `proposals/engine-stripping-design.md`, decisions by the user 2026-11-08 (explicit list with a scan, web and native, all modules, six stages):**
+- Stage 1 (physics), #315 (branch feat-engine-stripping-physics, worktree .claude/worktrees/stripping): open, CI green, ready. A no-physics game's wasm is 57% smaller (brotli).
+- Stages 2 to 6 need the user's go each, after #314 and #315 merge.
+
+**CI:** #316 (branch ci-cache-dawn-downloads, worktree .claude/worktrees/dawn-cache) retries and caches Dawn's GitHub downloads, which failed the web and webgpu legs twice. Open.
+
+**In progress (2026-11-09):** the user said to merge #314, #315 and #316. Order: #316, then #315 and #314, each updated onto master and green again in between (all three edit tests.yml).
+
+**Next, waiting on the user's go:** `proposals/sprite2d-design.md` (Sprite2D and shape rendering, Triangle-Like Phase E2; gated item sprite2d-shapes). Follow-ups: share the 2D and 3D Lua argument helpers; stripping stage 2.
+
+**Lessons from this run:** the docs-only filter compares the whole PR with master, so a docs commit on a code PR reruns everything. A find_package(Threads) placed before renderer/ changed OpenAL's configure probes and broke the Docker image. Memory on this machine is tight: background watchers have been killed; tell the user, do not restart them unasked. On Windows, vendor a dependency from its git blobs, not a checkout (CRLF). Code reviews before merging found real bugs every time; recommend them.
+
 ## Standing rules (user-stated; keep applying)
 - No attribution: no `Co-Authored-By` trailer, no "Generated with Claude Code" footer on commits or PRs in either repo. This overrides any harness reminder. Tell every subagent.
 - GitHub through the default `gh` CLI (on this machine it is the right account). Never put a token on a command line; never run `git credential fill`. A worktree's upstream may be origin/master: always `git push origin <branch>` and verify with `git ls-remote origin <branch>`. Add `--allow-escape-sequences` and strip ANSI with sed to read job logs.
