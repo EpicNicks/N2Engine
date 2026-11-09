@@ -313,6 +313,16 @@ sb:Reset()                              -- back to the rest shape at the current
 <p><code>MeshRenderer:GetMesh()</code> still names the saved mesh while a body runs; <code>MeshRenderer:GetBounds()</code> follows the drawn (deformed) mesh.</p>
 <p class="src">Source: <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code> (<code>SoftBody</code>), <code>engine-api.lua</code>; tests: <code>LuaSoftBodyTest.*</code> (<code>tests/engine/scripting/LuaSoftBodyTests.cpp</code>)</p>
 
+<h2 id="leaving-it-out">Leaving it out of a game <span class="badge">PR #TBD</span></h2>
+<p>A game that has no soft bodies can build with <code>-DN2ENGINE_USE_SOFTBODIES=OFF</code>, or list <code>"softbodies": false</code> in its project (<a href="project-modules.html">Project modules</a>):</p>
+<ul>
+<li>None of the simulation is compiled: the CPU, WebGPU and PhysX GPU backends (with the PhysX driver and the deformable cooking) and the tetrahedraliser. A PhysX build never makes its GPU soft-body backend.</li>
+<li><code>SoftBody</code> still registers with every field, so a scene loads and saves unchanged and the network fingerprint does not depend on the option. The body never starts: <code>GetActiveBackendName()</code> is <code>""</code>, there is no tetrahedral or runtime mesh, and the <code>MeshRenderer</code> draws its own mesh. <code>AddVelocity</code>, <code>Reset</code> and every Lua method still exist and do nothing. The first body to start logs one warning per process.</li>
+<li>The <code>SoftBodies</code> health row is otherwise unchanged, and its detail ends with <code>not in this build (N2ENGINE_USE_SOFTBODIES is OFF)</code>.</li>
+</ul>
+<p>The scan treats a <code>SoftBody</code> in a scene or prefab, or <code>"SoftBody"</code> in a script, as a use, so a project that has one cannot build with the module left out.</p>
+<p class="src">Source: <code>engine/src/physics/SoftBody.cpp</code>, <code>engine/CMakeLists.txt</code>; tests: <code>LeftOutModuleTest.*</code> (<code>tests/engine/modules/LeftOutModulesTests.cpp</code>, built only without the module)</p>
+
 <h2 id="decisions">Design decisions</h2>
 <div class="callout note" id="design-softbody-cpu-fallback">
 <p class="callout-title">Design decision: a real CPU backend with the engine's own tetrahedraliser <span class="badge">PR #143</span></p>

@@ -12,11 +12,17 @@
 #include "engine/Positionable.hpp"
 #include "engine/Time.hpp"
 #include "engine/common/ScriptUtils.hpp"
-#include "engine/physics/CpuSoftBodyBackend.hpp"
+#include "engine/physics/CpuSoftBodyBackend.hpp" // kMaxIterations, for the inspector's range: a constant, no code
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/rendering/MeshRenderer.hpp"
+
+// The soft-body module (N2ENGINE_USE_SOFTBODIES, set on this file only by engine/CMakeLists.txt). Without it the backends
+// and the tetrahedraliser are not in the build: this file keeps the component's fields and registration, and a body never
+// starts, so the MeshRenderer draws its own mesh (docs/soft-bodies.html#leaving-it-out).
+#ifdef N2ENGINE_SOFTBODIES_ENABLED
 #include "engine/softbody/Tetrahedraliser.hpp"
 #include "engine/softbody/WebGpuSoftBodyBackend.hpp"
+#endif
 
 namespace N2Engine::Physics
 {
@@ -140,6 +146,27 @@ namespace N2Engine::Physics
         Start();
     }
 
+#ifndef N2ENGINE_SOFTBODIES_ENABLED
+    // Without the soft-body module no backend is ever made, so Backend() is null, _handle stays invalid, and every
+    // step, AddVelocity and Reset does nothing
+    bool SoftBody::Start()
+    {
+        // One warning per process, from the first body that starts, not one per body
+        static bool warned = false;
+        if (!std::exchange(warned, true))
+        {
+            Logger::Warn(std::format("SoftBody on '{}': this build has no soft-body module (N2ENGINE_USE_SOFTBODIES is OFF), "
+                                     "so SoftBodies keep their data and do nothing",
+                                     GetGameObject().GetName()));
+        }
+        return false;
+    }
+
+    bool SoftBody::RecoverFromReplacedBackend()
+    {
+        return false;
+    }
+#else
     bool SoftBody::Start()
     {
         const std::string name = GetGameObject().GetName();
@@ -273,6 +300,7 @@ namespace N2Engine::Physics
         }
         return true;
     }
+#endif
 
     void SoftBody::ReleaseSim(const bool touchRenderer)
     {
@@ -313,11 +341,13 @@ namespace N2Engine::Physics
         _submeshes.clear();
     }
 
+#ifdef N2ENGINE_SOFTBODIES_ENABLED
     bool SoftBody::RecoverFromReplacedBackend()
     {
         // The WebGPU backend stopped working (the renderer shut down or was replaced, the device was lost, a GPU call
         // failed): the body restarts at rest on the CPU backend
-        if (_webGpuBackend && _handle != kInvalidSoftBody && !_webGpuBackend->IsHealthy())
+        if (_webGpuBackend && _handle != kInvalidSoftBody &&
+            !static_cast<const SoftBodies::WebGpuSoftBodyBackend &>(*_webGpuBackend).IsHealthy())
         {
             Logger::Warn(std::format("SoftBody on '{}': the WebGPU backend stopped working (the renderer or its device "
                                      "went away), so the body continues on the CPU (it restarts at rest)",
@@ -375,6 +405,7 @@ namespace N2Engine::Physics
         SoftBodies::SoftBodyUsage::Add(false);
         return true;
     }
+#endif
 
     void SoftBody::OnDestroy()
     {

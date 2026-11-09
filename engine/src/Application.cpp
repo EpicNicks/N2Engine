@@ -32,6 +32,15 @@
 
 using namespace N2Engine;
 
+// The Particles and SoftBodies rows of a build without that module (N2ENGINE_USE_PARTICLES, N2ENGINE_USE_SOFTBODIES, set on
+// this file by engine/CMakeLists.txt): the rest of the row is unchanged, and this is added to its detail
+#ifndef N2ENGINE_PARTICLES_ENABLED
+static constexpr std::string_view kParticlesLeftOut = "; not in this build (N2ENGINE_USE_PARTICLES is OFF): ParticleSystems do nothing";
+#endif
+#ifndef N2ENGINE_SOFTBODIES_ENABLED
+static constexpr std::string_view kSoftBodiesLeftOut = "; not in this build (N2ENGINE_USE_SOFTBODIES is OFF): SoftBodies do nothing";
+#endif
+
 Application::Application()
 {
     // UI first: an element under the pointer takes it, and the world pick doesn't run
@@ -553,15 +562,22 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
                                           gpuMode == Physics::GpuMode::Off
                                               ? "physics.gpu is off"
                                               : "GPU physics unavailable: there is no physics backend (see Physics)"};
-    const SubsystemStatus particlesStatus = Physics::MakeParticlesStatus(
+    SubsystemStatus particlesStatus = Physics::MakeParticlesStatus(
         _3DphysicsBackend ? _3DphysicsBackend->GetParticlesGpuStatus() : noBackendGpu);
-    const SubsystemStatus softBodiesStatus = Physics::MakeSoftBodiesStatus(
+    SubsystemStatus softBodiesStatus = Physics::MakeSoftBodiesStatus(
         _3DphysicsBackend ? _3DphysicsBackend->GetSoftBodiesGpuStatus() : noBackendGpu);
+    _particlesBaseDetail = particlesStatus.detail;
+    _softBodiesBaseDetail = softBodiesStatus.detail;
+    // A module left out of this build says so on its row (GetHealth adds the same to the rows it recomposes)
+#ifndef N2ENGINE_PARTICLES_ENABLED
+    particlesStatus.detail += kParticlesLeftOut;
+#endif
+#ifndef N2ENGINE_SOFTBODIES_ENABLED
+    softBodiesStatus.detail += kSoftBodiesLeftOut;
+#endif
 
     _health.subsystems = {windowStatus,    rendererStatus, physicsStatus, particlesStatus,
                           softBodiesStatus, audioStatus,   scriptingStatus, networkStatus};
-    _particlesBaseDetail = particlesStatus.detail;
-    _softBodiesBaseDetail = softBodiesStatus.detail;
     for (const SubsystemStatus &status : _health.subsystems)
     {
         if (status.state == SubsystemState::Failed)
@@ -992,6 +1008,9 @@ const EngineHealth& Application::GetHealth() const
             baseDetail = current.detail;
         }
         it->detail = Particles::ParticleUsage::Compose(baseDetail);
+#ifndef N2ENGINE_PARTICLES_ENABLED
+        it->detail += kParticlesLeftOut;
+#endif
     }
     // The SoftBodies detail names the backends the live SoftBody components use (without any it is the status's own
     // detail, so the row is what Init made), also with no physics backend (every body then runs on the CPU).
@@ -1006,6 +1025,9 @@ const EngineHealth& Application::GetHealth() const
             baseDetail = current.detail;
         }
         it->detail = SoftBodies::SoftBodyUsage::Compose(baseDetail);
+#ifndef N2ENGINE_SOFTBODIES_ENABLED
+        it->detail += kSoftBodiesLeftOut;
+#endif
     }
     return _health;
 }

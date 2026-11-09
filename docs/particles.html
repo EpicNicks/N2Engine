@@ -308,6 +308,16 @@ build\bin\Release\engine_tests.exe --gtest_filter=PhysXGpuParticlesGoldenTest.*<
 <p>A runnable example is the particle demo station of <code>lua_project</code> <span class="badge">PR #137</span> (key <kbd>8</kbd>: <a href="testing.html#gpu-smoke-demo">Demo stations</a>): a fountain, a sand burst and a smoke column, with signs showing <code>GetBackend()</code>, <code>GetActiveBackend()</code> and <code>GetAliveCount()</code> live, and a key (<kbd>K</kbd>) that cycles <code>SetBackend</code> through <code>Auto</code>, <code>CPU</code>, <code>PhysX</code> and <code>WebGPU</code> to compare them; its signs say <code>PhysX GPU</code>, <code>WebGPU compute</code> or <code>CPU</code> for what runs.</p>
 <p class="src">Source: <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code>, <code>engine/src/scripting/bindings/engine-api.lua</code>; tests: <code>LuaParticleSystemTest.*</code></p>
 
+<h2 id="leaving-it-out">Leaving it out of a game <span class="badge">PR #TBD</span></h2>
+<p>A game that has no particles can build with <code>-DN2ENGINE_USE_PARTICLES=OFF</code>, or list <code>"particles": false</code> in its project (<a href="project-modules.html">Project modules</a>):</p>
+<ul>
+<li>None of the simulation is compiled: the CPU, WebGPU and PhysX GPU backends (with the PhysX driver and the presets), the emitter and the billboards. A PhysX build never makes its GPU particle backend.</li>
+<li><code>ParticleSystem</code> still registers with every field, so a scene loads and saves unchanged and the network fingerprint does not depend on the option. It emits and draws nothing: <code>GetAliveCount()</code> is 0 and <code>GetActiveBackend()</code> is nil. <code>Play</code>, <code>Stop</code> and <code>IsPlaying</code> still work, and so does every Lua method. The first system to start logs one warning per process.</li>
+<li>The <code>Particles</code> health row is otherwise unchanged, and its detail ends with <code>not in this build (N2ENGINE_USE_PARTICLES is OFF)</code>.</li>
+</ul>
+<p>The scan treats a <code>ParticleSystem</code> in a scene or prefab, or <code>"ParticleSystem"</code> in a script, as a use, so a project that has one cannot build with the module left out.</p>
+<p class="src">Source: <code>engine/src/rendering/ParticleSystem.cpp</code>, <code>engine/CMakeLists.txt</code>; tests: <code>LeftOutModuleTest.*</code> (<code>tests/engine/modules/LeftOutModulesTests.cpp</code>, built only without the module)</p>
+
 <h2 id="tests">Tests and what is not verified</h2>
 <ul>
 <li>Pure data tests with no window or renderer: the CPU backend (determinism, the cap, lifetimes, gravity, drag, the ground plane, bad parameters), the emitter, backend selection with a fake physics backend that offers a GPU particle backend, the billboard builder.</li>

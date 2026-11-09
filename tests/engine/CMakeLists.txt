@@ -26,12 +26,61 @@ if(N2ENGINE_PLATFORM_WEB)
     endforeach()
 endif()
 
+# A build without the particles or soft-body module (N2ENGINE_USE_PARTICLES, N2ENGINE_USE_SOFTBODIES): the tests of that
+# module's simulation are left out (its code is not in the engine to test), and modules/LeftOutModulesTests.cpp checks what such
+# a build does instead. The tests of what stays (the backend selection, the handles, the health rows' mapping) still run.
+set(N2ENGINE_PARTICLES_TESTS
+    particles/ParticleHeadlessTests.cpp
+    particles/ParticleSimulationTests.cpp
+    particles/ParticleSystemTests.cpp
+    particles/PbdParticleBackendTests.cpp
+    physics/PhysXGpuParticlesTests.cpp
+    rendering/ParticleRendererTests.cpp
+    rendering/SoftwareParticlesGoldenTests.cpp
+    scripting/LuaParticleSystemTests.cpp
+)
+set(N2ENGINE_SOFTBODIES_TESTS
+    physics/DeformableCookingTests.cpp
+    physics/PhysXGpuSoftBodiesTests.cpp
+    scripting/LuaSoftBodyTests.cpp
+    softbody/CpuSoftBodyBackendTests.cpp
+    softbody/DeformableSoftBodyBackendTests.cpp
+    softbody/DeformableSoftBodyComponentTests.cpp
+    softbody/SoftBodyComponentTests.cpp
+    softbody/SoftBodyHeadlessTests.cpp
+    softbody/SoftBodySelectionTests.cpp # its GPU cases use FakePhysicsBackend's soft-body fake, which runs the CPU backend
+    softbody/TetrahedraliserTests.cpp
+)
+# These install fake GPU particle and soft-body drivers into the PhysX backend, which a build without either module refuses
+if(N2ENGINE_PHYSX_AVAILABLE)
+    list(APPEND N2ENGINE_PARTICLES_TESTS physics/GpuProbeTests.cpp physics/PhysXSoftBodiesBackendTests.cpp)
+    list(APPEND N2ENGINE_SOFTBODIES_TESTS physics/GpuProbeTests.cpp physics/PhysXSoftBodiesBackendTests.cpp)
+endif()
+foreach(_n2_module PARTICLES SOFTBODIES)
+    foreach(_n2_test IN LISTS N2ENGINE_${_n2_module}_TESTS)
+        if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_n2_test}")
+            message(FATAL_ERROR "N2ENGINE_${_n2_module}_TESTS names a file that does not exist: ${_n2_test}")
+        endif()
+        if(NOT N2ENGINE_USE_${_n2_module})
+            list(REMOVE_ITEM ENGINE_TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/${_n2_test}")
+        endif()
+    endforeach()
+endforeach()
+
 add_executable(engine_tests ${ENGINE_TEST_SOURCES})
 
 # On this file only, so a build without Box2D recompiles almost nothing else
 if(N2ENGINE_USE_BOX2D)
     set_source_files_properties(physics2d/Physics2DTests.cpp physics2d/LuaPhysics2DTests.cpp PROPERTIES COMPILE_DEFINITIONS N2ENGINE_BOX2D_ENABLED=1)
 endif()
+# The particles and soft-body modules: on the whole program, not per file as Box2D's, because the shared test fakes
+# (particles/FakePhysicsBackend.hpp, included by tests of other subsystems too) run those modules' CPU backends.
+# modules/LeftOutModulesTests.cpp has tests only for a module that is left out.
+foreach(_n2_module PARTICLES SOFTBODIES)
+    if(N2ENGINE_USE_${_n2_module})
+        target_compile_definitions(engine_tests PRIVATE N2ENGINE_${_n2_module}_ENABLED=1)
+    endif()
+endforeach()
 
 target_link_libraries(engine_tests
         PRIVATE

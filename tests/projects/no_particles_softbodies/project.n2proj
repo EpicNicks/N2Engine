@@ -1,0 +1,15 @@
+{
+  "build": {
+    "modules": {
+      "particles": false,
+      "softbodies": false
+    }
+  },
+  "engineVersion": "1.0.0",
+  "formatVersion": 1,
+  "name": "no_particles_softbodies",
+  "projectId": "0d6f3a9e-5c21-4b8e-a7f4-3e9b1c62d8a5",
+  "scenes": [],
+  "settings": {},
+  "startupScene": ""
+}
