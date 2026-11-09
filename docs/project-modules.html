@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project modules · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="physics2d.html">2D physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="particles.html">Particles</a></li>
+<li><a href="soft-bodies.html">Soft bodies</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+<li><a href="netcode.html">Netcode (n2net)</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+<li><a href="editor-extensions.html">Lua editor extensions</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="editor.html">Editor projects</a></li>
+<li><a href="mcp.html">MCP bridge (n2-mcp)</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+<li><a href="web-build.html">Web build</a></li>
+<li><a href="project-modules.html" aria-current="page">Project modules</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Project modules</h1>
+<p class="lead">A game can leave out the engine modules it does not use, so its build is smaller. The project lists its modules, a scan checks the list against what the project uses, and the build compiles the rest out. So far the list covers physics; other modules will follow.</p>
+
+<h2 id="list">The list</h2>
+<p>A project lists its modules in <code>project.n2proj</code>. The editor keeps the key when it saves the file.</p>
+<pre class="lang-json"><code>"build": {
+  "modules": {
+    "physics3d": "none",
+    "physics2d": true
+  }
+}</code></pre>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Module</th><th>Values</th><th>Sets</th></tr></thead>
+<tbody>
+<tr><td><code>physics3d</code></td><td><code>none</code>, <code>physx</code>, <code>jolt</code>, <code>both</code></td><td><code>N2ENGINE_USE_PHYSX</code>, <code>N2ENGINE_USE_JOLT</code></td></tr>
+<tr><td><code>physics2d</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_USE_BOX2D</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>A module the list does not name keeps its usual option. A project with no list builds everything. Unknown modules and values stop the configure with a message.</p>
+
+<div class="callout note" id="design-explicit-list"><p class="callout-title">Design decision: the list is explicit, and the scan only checks it</p><p>Lua can reach a component through a computed name, as in <code>AddComponent(kinds[i])</code>, and no scan can resolve that. Stripping from the scan alone could remove something a script needs, and the game would break only when that line ran. So a person writes the list, and the scan suggests one and checks it.</p></div>
+
+<h2 id="building">Building a game with its list</h2>
+<pre class="lang-shell"><code>cmake -S . -B build-mygame -DN2ENGINE_PROJECT=path/to/game</code></pre>
+<p>The engine is one static library, so the list applies to the whole build tree, and a game gets a tree of its own. An editor's tree never sets it, because a project can use anything while it is being edited.</p>
+<ul>
+<li><strong>Web:</strong> <code>N2ENGINE_PROJECT</code> also picks the project the player packs, in place of <code>N2_WEB_PROJECT_DIR</code>. Build the <code>web-package</code> target as usual (<a href="web-build.html">Web build</a>).</li>
+<li><strong>Native:</strong> a native game is its own executable linking <code>engine</code>, as <code>lua_project</code> is. It can call <code>n2_check_project_modules(&lt;target&gt;)</code> in its <code>CMakeLists.txt</code> to check again each time it links.</li>
+</ul>
+
+<h2 id="scan">The scan</h2>
+<pre class="lang-shell"><code>node scripts/project-modules.mjs path/to/game             # what it uses against its list
+node scripts/project-modules.mjs path/to/game --suggest   # the smallest list the scan can justify</code></pre>
+<p>It reads the component types in scenes and prefabs, and in Lua the module's globals, its event handlers and component names in quotes. Comments do not count. It also reads the project settings: <code>physics.backend</code>, and the deterministic network preset, which needs Jolt.</p>
+<ul>
+<li><strong>A conflict stops the build.</strong> It names the file and line, and runs at configure time, so before anything compiles, and again when the game links.</li>
+<li><strong>A computed name is reported as "could not be checked".</strong> It does not stop the build. Check those by hand.</li>
+<li><strong>Without node</strong> the check is skipped with a warning at configure time.</li>
+</ul>
+
+<h2 id="runtime">What a stripped module does at run time</h2>
+<p>The components stay registered, so a scene that names one still loads and saves without losing data, and the editor still lists it. The registry, and so the network fingerprint, does not depend on the list.</p>
+<ul>
+<li><strong>3D physics:</strong> no backend, as when physics fails to start. Components warn and do nothing (<a href="application.html">Application</a>), and <code>Physics</code> queries find nothing.</li>
+<li><strong>2D physics:</strong> see <a href="physics2d.html#stripping">Leaving it out of a game</a>.</li>
+</ul>
+
+<h2 id="size">What it saves</h2>
+<p>Measured in the web CI job of PR #315: the size profile's <code>index.wasm</code>, the full player against <code>tests/projects/no_physics</code> (no PhysX, Jolt or Box2D).</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Size profile <code>index.wasm</code></th><th>Raw</th><th><code>gzip -9</code></th><th>brotli</th></tr></thead>
+<tbody>
+<tr><td>Every module</td><td>8,431,940</td><td>2,802,626</td><td>1,995,743</td></tr>
+<tr><td>No physics</td><td>4,432,296</td><td>1,207,374</td><td>866,077</td></tr>
+<tr><td>Saved</td><td>3,999,644 (47%)</td><td>1,595,252 (57%)</td><td>1,129,666 (57%)</td></tr>
+</tbody>
+</table>
+</div>
+<p>The web job builds and runs this package on every run, and prints both as <code>[MODULES-SIZE]</code> lines. The 2D physics Lua bindings (PR #314) are not in these numbers.</p>
+
+<div class="page-footer">
+<span>Describes master through PR #315.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>
