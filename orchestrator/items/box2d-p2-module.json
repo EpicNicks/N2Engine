@@ -1,0 +1,32 @@
+{
+  "repo": "engine",
+  "closes": null,
+  "allowProtocol": false,
+  "reviewer": "opus",
+  "requiresDocs": true,
+  "name": "box2d-p2-module",
+  "branch": "feat-physics2d-box2d-module",
+  "title": "Physics2D stage 2: Physics2DWorld, Rigidbody2D, box, circle and polygon colliders, sensors, layers, events, queries, serialization; strippable",
+  "issue": "User's go on the design, 2026-11-08, with decisions G (OnCollisionEnter2D names), H (warn once in Deterministic mode) and I (three PRs). Design: orchestrator/proposals/physics2d-box2d-design.md, sections 5 to 9 and section 13 (stripping). The original brief is box2d-2d-physics.json scope items 3, 4, 5, 7 and 9. Starts after #311 merges (dev wasm.raw budget). No Lua bindings here beyond keeping the engine compiling.",
+  "allowedPaths": [
+    "^engine/",
+    "^CMakeLists\\.txt$",
+    "^cmake/",
+    "^tests/",
+    "^docs/",
+    "^web/budgets\\.json$",
+    "^\\.github/workflows/tests\\.yml$",
+    "^scripts/"
+  ],
+  "acceptance": [
+    "Rigidbody2D and circle, box and polygon colliders with sensors and layer filtering simulate in the engine fixed step and sync transforms; creating and destroying bodies inside event callbacks is safe",
+    "Collision and trigger Enter, Stay and Exit events fire in the documented order; raycast and overlap queries return correct hits",
+    "Components serialize in scenes and prefabs, including overrides",
+    "With N2ENGINE_USE_BOX2D=OFF the engine and player build and run, scenes keep their 2D component data, and no Box2D code is in the wasm; ON and OFF sizes are both measured and recorded",
+    "A project with no 2D component creates no world and pays no per-step cost beyond a null check",
+    "Web package size within budget, or the raise is explained; existing 3D tests unchanged and green; all legs green; same inputs give the same hash"
+  ],
+  "gate": "#311 merged, and box2d-p1-vendor merged",
+  "approved": false,
+  "notes": "Reviewer: that the 3D path is untouched, that event dispatch cannot run user code while Box2D is mid-step (destroy and create are deferred), that layer filtering uses the shared matrix and cannot drift from it, that body and collider lifetimes follow the engine's ownership rules (no dangling handles after scene teardown, Lua handles are checked), that the fixed-step order matches docs/application.html, that nothing in the step depends on wall-clock or thread count, that web size budgets were measured and not guessed, and that the vendored source is pristine apart from documented build glue. Create and destroy inside callbacks run immediately (design section 6), not deferred: check that events are copied before any user code and that each delivery re-checks both sides."
+}

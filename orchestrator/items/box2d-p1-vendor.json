@@ -1,0 +1,34 @@
+{
+  "repo": "engine",
+  "closes": null,
+  "allowProtocol": false,
+  "reviewer": "opus",
+  "requiresDocs": true,
+  "name": "box2d-p1-vendor",
+  "branch": "feat-physics2d-box2d-vendor",
+  "title": "Physics2D stage 1: vendor Box2D v3.2.0, N2ENGINE_USE_BOX2D, smoke test with goldens on every leg; not linked into the engine",
+  "issue": "User's go on the design, 2026-11-08, with decisions G (OnCollisionEnter2D names), H (warn once in Deterministic mode) and I (three PRs). Design: orchestrator/proposals/physics2d-box2d-design.md, section 5 (Vendoring and build) and section 9. No engine code; nothing links the library. Records the design, the item split, the engine-stripping proposal and the progress log in the same PR.",
+  "allowedPaths": [
+    "^external/box2d/",
+    "^cmake/box2d/",
+    "^CMakeLists\\.txt$",
+    "^tests/CMakeLists\\.txt$",
+    "^tests/box2d/",
+    "^scripts/check-box2d-vendor\\.sh$",
+    "^docs/",
+    "^THIRD_PARTY_NOTICES\\.md$",
+    "^\\.github/workflows/tests\\.yml$",
+    "^orchestrator/items/(box2d-|engine-stripping)",
+    "^orchestrator/proposals/(physics2d-box2d-design|engine-stripping-design)\\.md$",
+    "^orchestrator/project-memory/pending-minor-defects\\.md$"
+  ],
+  "acceptance": [
+    "external/box2d is byte-identical to upstream v3.2.0 for the files kept (SHA256SUMS, checked in CI) with the licence and notices; a build needs no network",
+    "box2d_smoke_tests passes on every leg including web under node: upstream's golden and one hard-coded 50 Hz state hash",
+    "Nothing in the engine, player or editor links it; the web package sizes do not change",
+    "All CI checks green; docs verified against code"
+  ],
+  "gate": null,
+  "approved": true,
+  "notes": "Reviewer: tree pristine (hash list and blob comparison), floating-point flags PUBLIC, SIMD off on web only, workerCount 1 in the tests, golden a real cross-leg comparison and skipped on no leg."
+}
