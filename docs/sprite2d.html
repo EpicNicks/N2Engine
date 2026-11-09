@@ -82,17 +82,17 @@
 <tr><td><code>size</code></td><td>(1, 1)</td><td>World units. For a circle or regular polygon, the diameter on each axis, so an ellipse is possible</td></tr>
 <tr><td><code>sides</code></td><td>6</td><td><code>RegularPolygon</code>: 3 to 64, a corner at the top</td></tr>
 <tr><td><code>vertices</code></td><td>none</td><td><code>Polygon</code>: 3 to 64 convex points in units of the size (-0.5 to 0.5 spans it), either winding</td></tr>
-<tr><td><code>outline</code></td><td>0</td><td>0 fills. Above 0, only a border this wide in world units, the same width on every side. A border at least as wide as the shape fills it</td></tr>
+<tr><td><code>outline</code></td><td>0</td><td>0 fills. Above 0, only a border this wide in world units, the same width on every side. Where a corner is sharper than the border, the border narrows there. Only a border so wide that nothing is left inside fills the shape</td></tr>
 <tr><td><code>color</code></td><td>white</td><td>Multiplies the texture</td></tr>
 <tr><td><code>texture</code></td><td>none</td><td>An image asset. Its <code>filter</code> setting (<code>nearest</code> for pixel art) applies</td></tr>
 <tr><td><code>regionOffset</code>, <code>regionSize</code></td><td>(0, 0), (1, 1)</td><td>The part of the texture shown, in uv with v up: one cell of a sprite sheet. The size box maps onto it, so a textured circle shows the middle of its cell</td></tr>
-<tr><td><code>flipX</code>, <code>flipY</code></td><td>false</td><td>Mirror the shape and its texture</td></tr>
+<tr><td><code>flipX</code>, <code>flipY</code></td><td>false</td><td>Mirror the shape and its texture around the object's position, as Unity's <code>flipX</code> does: with the pivot in the middle the sprite stays in place, with it at a corner the sprite turns over onto the other side</td></tr>
 <tr><td><code>pivot</code></td><td>(0.5, 0.5)</td><td>Where the object's position sits within the size: (0, 0) is the lower-left corner</td></tr>
 <tr><td><code>sortingOrder</code></td><td>0</td><td>Lower draws first, so further back</td></tr>
 </tbody>
 </table>
 </div>
-<p>The shape rotates and scales with its transform. Invalid geometry (a size not above zero, sides out of range, a polygon that is not convex) draws nothing and logs one warning per description.</p>
+<p>The shape rotates and scales with its transform. Invalid geometry (a size not above zero, sides out of range, a polygon that is not convex) draws nothing and logs one warning per reason.</p>
 
 <h2 id="order">Draw order</h2>
 <ul>
@@ -104,7 +104,7 @@
 <div class="callout note" id="design-sprite-queue"><p class="callout-title">Design decision: always the Transparent queue</p><p>Only the Transparent queue has a draw order a component can set. An opaque sprite in the Opaque queue would be ordered by depth alone, and two sprites at the same z would fight. The cost is no early depth rejection for sprites, which does not matter at 2D scale.</p></div>
 
 <h2 id="software">On the software renderer</h2>
-<p>The software renderer cannot blend. There a textured sprite's pixels with alpha below 0.5 are not drawn, so a texture's transparent parts are cut out instead of drawn as boxes. Partial transparency, such as a soft edge, is lost there. Solid shapes look the same on every renderer. This uses <code>Material::SetBlendDiscardBelow</code>, which applies only to blended materials and is not saved in <code>.mat</code> files.</p>
+<p>The software renderer cannot blend (<code>IRenderer::SupportsBlending</code> is false). There a textured sprite's pixels whose texture alpha is below 0.5 are not drawn, whatever the sprite's own alpha, so a texture's transparent parts are cut out instead of drawn as boxes. Partial transparency, such as a soft edge, is lost there. Solid shapes look the same on every renderer. This uses <code>Material::SetBlendDiscardBelow</code>, which applies only to blended materials and is not saved in <code>.mat</code> files.</p>
 
 <h2 id="performance">Performance</h2>
 <p>Each sprite is one draw call. Sprites with the same shape, size, outline, region and pivot share one mesh, kept while any sprite uses it. <code>tests/engine/rendering/Sprite2DTests.cpp</code> draws 2,000 circles on the software renderer and prints the time as a <code>[SPRITE2D-PERF]</code> line. Batching many sprites into one draw is not done yet.</p>

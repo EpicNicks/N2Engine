@@ -187,7 +187,7 @@ namespace N2Engine::Rendering
 
         /**
          * Sets the standard shaders' uniforms on a GPU material from this material: uAlbedo (the base colour times
-         * `tint`), uHasTexture (whether `target` has a texture), uAlphaCutoff (the cutoff for Mask, else 0) and,
+         * `tint`), uHasTexture (whether `target` has a texture), uAlphaCutoff (the cutoff for Mask, GetBlendDiscardBelow for Blend, else 0) and,
          * lit, uSmoothness and uMetallic, and the emissive and occlusion inputs: uEmissive (rgb),
          * uHasEmissiveTexture and uHasOcclusionTexture (whether `target` has those textures), and uOcclusionStrength,
          * and the normal map and PBR inputs: uHasNormalTexture, uNormalScale, uPbr (1 for the Pbr shading) and

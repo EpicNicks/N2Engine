@@ -81,6 +81,8 @@ namespace N2Engine::Rendering
         [[nodiscard]] const Math::Vector2 &GetRegionOffset() const { return _regionOffset; }
         [[nodiscard]] const Math::Vector2 &GetRegionSize() const { return _regionSize; }
 
+        /// Mirrors around the object's position (the pivot), as Unity's flipX does: with the pivot in the middle the sprite stays
+        /// in place, with it at a corner the sprite turns over onto the other side
         void SetFlipX(bool flip) { _flipX = flip; }
         [[nodiscard]] bool GetFlipX() const { return _flipX; }
         void SetFlipY(bool flip) { _flipY = flip; }
@@ -119,7 +121,8 @@ namespace N2Engine::Rendering
         int _sortingOrder = 0;
 
         std::shared_ptr<Mesh> _mesh;
-        std::string _meshKey;
+        ShapeDesc2D _meshDesc; // what _mesh was made from
+        bool _meshMade = false;
         std::shared_ptr<Material> _material;
         MeshDrawing::DrawResources _resources;
     };

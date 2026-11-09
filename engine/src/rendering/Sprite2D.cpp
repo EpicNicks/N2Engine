@@ -1,8 +1,7 @@
 #include "engine/rendering/Sprite2D.hpp"
 
-#include <cstring>
+#include <algorithm>
 #include <span>
-#include <string_view>
 #include <utility>
 
 #include "engine/GameObject.hpp"
@@ -11,32 +10,6 @@
 
 namespace N2Engine::Rendering
 {
-    namespace
-    {
-        // The software renderer is the one that cannot blend (SoftwareRenderer::GetRendererName)
-        bool CanBlend(const Renderer::Common::IRenderer &renderer)
-        {
-            return std::string_view(renderer.GetRendererName()) != "Software Rasterizer";
-        }
-
-        // What decides the mesh, so a sprite rebuilds it only when one of these changed
-        std::string KeyOf(const ShapeDesc2D &d)
-        {
-            std::string key(reinterpret_cast<const char *>(&d.shape), 1);
-            for (const float f : {d.size.x, d.size.y, static_cast<float>(d.sides), d.outline, d.regionOffset.x, d.regionOffset.y,
-                                  d.regionSize.x, d.regionSize.y, d.pivot.x, d.pivot.y})
-            {
-                key.append(reinterpret_cast<const char *>(&f), sizeof f);
-            }
-            for (const Math::Vector2 &p : d.vertices)
-            {
-                key.append(reinterpret_cast<const char *>(&p.x), sizeof p.x);
-                key.append(reinterpret_cast<const char *>(&p.y), sizeof p.y);
-            }
-            return key;
-        }
-    }
-
     Sprite2D::Sprite2D(GameObject &gameObject) : IRenderable(gameObject)
     {
         _gameObject.CreatePositionable();
@@ -92,12 +65,16 @@ namespace N2Engine::Rendering
 
     std::shared_ptr<Mesh> Sprite2D::GetMesh()
     {
-        const ShapeDesc2D desc = Describe();
-        std::string key = KeyOf(desc);
-        if (key != _meshKey)
+        const auto same = [](const Math::Vector2 &a, const Math::Vector2 &b) { return a.x == b.x && a.y == b.y; };
+        const ShapeDesc2D &last = _meshDesc;
+        const bool unchanged = _meshMade && last.shape == _shape && same(last.size, _size) && last.sides == _sides &&
+                               std::ranges::equal(last.vertices, _vertices, same) && last.outline == _outline &&
+                               same(last.regionOffset, _regionOffset) && same(last.regionSize, _regionSize) && same(last.pivot, _pivot);
+        if (!unchanged)
         {
-            _mesh = GetShapeMesh2D(desc);
-            _meshKey = std::move(key);
+            _meshDesc = Describe();
+            _mesh = GetShapeMesh2D(_meshDesc);
+            _meshMade = true;
         }
         return _mesh;
     }
@@ -143,7 +120,9 @@ namespace N2Engine::Rendering
         {
             _material->SetBaseColorTexture(_texture);
         }
-        const float discard = (_texture && !CanBlend(renderer)) ? 0.5f : 0.0f;
+        // The test is on the final alpha, the texture's times the colour's: half the colour's alpha cuts out what is under half
+        // opaque in the texture, so fading a sprite does not make it vanish
+        const float discard = (_texture && !renderer.SupportsBlending()) ? 0.5f * std::clamp(_color.a, 0.0f, 1.0f) : 0.0f;
         if (_material->GetBlendDiscardBelow() != discard)
         {
             _material->SetBlendDiscardBelow(discard);

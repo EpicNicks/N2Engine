@@ -226,6 +226,27 @@ TEST(ShapeMesh2DTest, AnOutlineIsARingOfTheGivenWidthAndATooWideOneIsFilled)
     EXPECT_EQ(MakeShapeMesh2D(desc).vertices.size(), 5u);
 }
 
+TEST(ShapeMesh2DTest, AThinOutlineOnALongEllipseStaysARing)
+{
+    // The ends of a 10 x 1 ellipse curve more tightly than 0.1: the ring narrows there instead of the whole shape filling
+    ShapeDesc2D desc;
+    desc.shape = Shape2D::Circle;
+    desc.size = Vector2(10.0f, 1.0f);
+    desc.outline = 0.1f;
+    const auto ring = MakeShapeMesh2D(desc);
+    EXPECT_EQ(ring.vertices.size(), static_cast<std::size_t>(2 * kCircleSegments2D));
+    ExpectCounterClockwise(ring);
+}
+
+TEST(ShapeMesh2DTest, FieldsAShapeDoesNotUseDoNotSplitTheCache)
+{
+    ShapeDesc2D a;
+    ShapeDesc2D b;
+    b.sides = 5;
+    b.vertices = {{0.0f, 0.0f}, {1.0f, 0.0f}, {0.0f, 1.0f}};
+    EXPECT_EQ(GetShapeMesh2D(a), GetShapeMesh2D(b));
+}
+
 TEST(ShapeMesh2DTest, OneDescriptionGivesOneSharedMesh)
 {
     ShapeDesc2D desc;

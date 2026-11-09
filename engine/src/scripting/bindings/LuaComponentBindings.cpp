@@ -421,6 +421,23 @@ namespace N2Engine::Scripting::Bindings
         return FindAccess(typeName).get(gameObject, state);
     }
 
+    std::vector<Math::Vector2> ReadVector2Array(const sol::table &points, const std::string_view caller)
+    {
+        std::vector<Math::Vector2> result;
+        const std::size_t count = points.size();
+        result.reserve(count);
+        for (std::size_t i = 1; i <= count; ++i)
+        {
+            const sol::object point = points[i];
+            if (!point.is<Math::Vector2>())
+            {
+                throw std::runtime_error(std::string(caller) + ": every point must be a Vector2");
+            }
+            result.push_back(point.as<Math::Vector2>());
+        }
+        return result;
+    }
+
     sol::object ComponentToLua(Component &component, lua_State *state)
     {
         for (const auto &access : ComponentTable() | std::views::values)
@@ -526,19 +543,7 @@ namespace N2Engine::Scripting::Bindings
             "GetSides", Forward<Sprite2DRef, &Rendering::Sprite2D::GetSides>(),
             // An array of Vector2 in, a new array of Vector2 out
             "SetVertices", [](const Sprite2DRef &ref, const sol::table &points)
-            {
-                std::vector<Math::Vector2> vertices;
-                for (std::size_t i = 1; i <= points.size(); ++i)
-                {
-                    const sol::object point = points[i];
-                    if (!point.is<Math::Vector2>())
-                    {
-                        throw std::runtime_error("Sprite2D:SetVertices: every point must be a Vector2");
-                    }
-                    vertices.push_back(point.as<Math::Vector2>());
-                }
-                ref.Pin()->SetVertices(vertices);
-            },
+            { ref.Pin()->SetVertices(ReadVector2Array(points, "Sprite2D:SetVertices")); },
             "GetVertices", [](const Sprite2DRef &ref, const sol::this_state state)
             {
                 sol::state_view view(state);

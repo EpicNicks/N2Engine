@@ -1,6 +1,7 @@
 #include "engine/rendering/ShapeMesh2D.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cmath>
 #include <format>
 #include <map>
@@ -124,16 +125,20 @@ namespace N2Engine::Rendering
             add(&shape, 1);
             add(&desc.size.x, 4);
             add(&desc.size.y, 4);
-            add(&desc.sides, 4);
+            const int sides = desc.shape == Shape2D::RegularPolygon ? desc.sides : 0;
+            add(&sides, 4);
             add(&desc.outline, 4);
             for (const float f : {desc.regionOffset.x, desc.regionOffset.y, desc.regionSize.x, desc.regionSize.y, desc.pivot.x, desc.pivot.y})
             {
                 add(&f, 4);
             }
-            for (const Vector2 &p : desc.vertices)
+            if (desc.shape == Shape2D::Polygon)
             {
-                add(&p.x, 4);
-                add(&p.y, 4);
+                for (const Vector2 &p : desc.vertices)
+                {
+                    add(&p.x, 4);
+                    add(&p.y, 4);
+                }
             }
             return key;
         }
@@ -184,49 +189,102 @@ namespace N2Engine::Rendering
         };
         const std::size_t count = outer.size();
 
-        // The ring's inner edge: each side moved inward by the width, corners where neighbouring sides meet. Where a side would
-        // turn round (the width reaches past the middle), the shape is filled instead.
+        // The ring's inner edge. The exact inner boundary is the intersection of the sides moved inward by the width (Sutherland-
+        // Hodgman clipping of the shape by each moved side). Each corner's mitre point is kept when it lies inside that boundary and
+        // moved to the nearest point on it otherwise, so a sharp corner or a short side narrows the ring there instead of folding it.
+        // Only an outline so wide that nothing is left inside fills the shape.
         std::vector<Vector2> inner;
         if (desc.outline > 0.0f && std::isfinite(desc.outline))
         {
-            inner.resize(count);
-            bool fits = true;
-            for (std::size_t i = 0; i < count && fits; ++i)
+            const auto inwardNormal = [](const Vector2 &p, const Vector2 &q)
             {
-                const Vector2 &prev = outer[(i + count - 1) % count];
-                const Vector2 &here = outer[i];
-                const Vector2 &next = outer[(i + 1) % count];
-                const auto inwardNormal = [](const Vector2 &a, const Vector2 &b)
+                const float dx = q.x - p.x, dy = q.y - p.y;
+                const float length = std::sqrt(dx * dx + dy * dy);
+                return Vector2(-dy / length, dx / length); // left of a counter-clockwise edge is inside
+            };
+            std::vector<Vector2> core = outer;
+            for (std::size_t i = 0; i < count && !core.empty(); ++i)
+            {
+                const Vector2 &p = outer[i];
+                const Vector2 n = inwardNormal(p, outer[(i + 1) % count]);
+                const float limit = n.x * p.x + n.y * p.y + desc.outline;
+                const auto side = [&](const Vector2 &v) { return n.x * v.x + n.y * v.y - limit; };
+                std::vector<Vector2> clipped;
+                for (std::size_t j = 0; j < core.size(); ++j)
                 {
-                    const float dx = b.x - a.x, dy = b.y - a.y;
-                    const float length = std::sqrt(dx * dx + dy * dy);
-                    return Vector2(-dy / length, dx / length); // left of a counter-clockwise edge is inside
+                    const Vector2 &u = core[j];
+                    const Vector2 &v = core[(j + 1) % core.size()];
+                    const float su = side(u), sv = side(v);
+                    if (su >= 0.0f)
+                    {
+                        clipped.push_back(u);
+                    }
+                    if ((su >= 0.0f) != (sv >= 0.0f))
+                    {
+                        const float t = su / (su - sv);
+                        clipped.emplace_back(u.x + (v.x - u.x) * t, u.y + (v.y - u.y) * t);
+                    }
+                }
+                core = std::move(clipped);
+            }
+            float coreArea = 0.0f;
+            for (std::size_t j = 0; j < core.size(); ++j)
+            {
+                const Vector2 &u = core[j], &v = core[(j + 1) % core.size()];
+                coreArea += u.x * v.y - v.x * u.y;
+            }
+            if (core.size() >= 3 && coreArea > 1e-8f)
+            {
+                const auto inside = [&core](const Vector2 &point)
+                {
+                    for (std::size_t j = 0; j < core.size(); ++j)
+                    {
+                        if (Cross(core[j], core[(j + 1) % core.size()], point) < 0.0f)
+                        {
+                            return false;
+                        }
+                    }
+                    return true;
                 };
-                const Vector2 n1 = inwardNormal(prev, here);
-                const Vector2 n2 = inwardNormal(here, next);
-                const float denominator = 1.0f + n1.x * n2.x + n1.y * n2.y;
-                if (!(denominator > 1e-4f))
+                const auto nearestOnCore = [&core](const Vector2 &point)
                 {
-                    fits = false;
-                    break;
-                }
-                // The mitre: the corner moves along the bisector so both sides end up `outline` away
-                const float scale = desc.outline / denominator;
-                inner[i] = Vector2(here.x + (n1.x + n2.x) * scale, here.y + (n1.y + n2.y) * scale);
-            }
-            for (std::size_t i = 0; i < count && fits; ++i)
-            {
-                // A side of the inner edge that points the other way than its outer side means the ring has folded over
-                const Vector2 &a = outer[i], &b = outer[(i + 1) % count];
-                const Vector2 &c = inner[i], &d = inner[(i + 1) % count];
-                if ((b.x - a.x) * (d.x - c.x) + (b.y - a.y) * (d.y - c.y) <= 0.0f)
+                    Vector2 best = core[0];
+                    float bestDistance = -1.0f;
+                    for (std::size_t j = 0; j < core.size(); ++j)
+                    {
+                        const Vector2 &u = core[j], &v = core[(j + 1) % core.size()];
+                        const float ex = v.x - u.x, ey = v.y - u.y;
+                        const float lengthSquared = ex * ex + ey * ey;
+                        float t = lengthSquared > 0.0f ? ((point.x - u.x) * ex + (point.y - u.y) * ey) / lengthSquared : 0.0f;
+                        t = std::clamp(t, 0.0f, 1.0f);
+                        const Vector2 candidate(u.x + ex * t, u.y + ey * t);
+                        const float dx = point.x - candidate.x, dy = point.y - candidate.y;
+                        const float distance = dx * dx + dy * dy;
+                        if (bestDistance < 0.0f || distance < bestDistance)
+                        {
+                            bestDistance = distance;
+                            best = candidate;
+                        }
+                    }
+                    return best;
+                };
+                inner.resize(count);
+                for (std::size_t i = 0; i < count; ++i)
                 {
-                    fits = false;
+                    const Vector2 &prev = outer[(i + count - 1) % count];
+                    const Vector2 &here = outer[i];
+                    const Vector2 &next = outer[(i + 1) % count];
+                    const Vector2 n1 = inwardNormal(prev, here);
+                    const Vector2 n2 = inwardNormal(here, next);
+                    const float denominator = 1.0f + n1.x * n2.x + n1.y * n2.y;
+                    Vector2 mitre = here;
+                    if (denominator > 1e-4f)
+                    {
+                        const float scale = desc.outline / denominator;
+                        mitre = Vector2(here.x + (n1.x + n2.x) * scale, here.y + (n1.y + n2.y) * scale);
+                    }
+                    inner[i] = inside(mitre) ? mitre : nearestOnCore(mitre);
                 }
-            }
-            if (!fits)
-            {
-                inner.clear();
             }
         }
 
@@ -270,6 +328,7 @@ namespace N2Engine::Rendering
         // Weak entries: a mesh lives as long as a sprite holds it. Expired entries are swept as the map grows.
         static std::map<std::string, std::weak_ptr<Mesh>> cache;
         static std::set<std::string> warned;
+        static std::size_t sweepAt = 256;
         const std::string key = KeyOf(desc);
         if (const auto it = cache.find(key); it != cache.end())
         {
@@ -282,16 +341,18 @@ namespace N2Engine::Rendering
         Renderer::Common::MeshData data = MakeShapeMesh2D(desc, &error);
         if (data.vertices.empty())
         {
-            if (warned.insert(key).second)
+            // One warning per reason, so a size animated through bad values logs once, not every frame
+            if (warned.insert(error).second)
             {
                 Logger::Warn("Sprite2D: " + error + "; it draws nothing");
             }
             return nullptr;
         }
         std::shared_ptr<Mesh> mesh = Mesh::Create(std::move(data));
-        if (cache.size() > 256)
+        if (cache.size() > sweepAt)
         {
             std::erase_if(cache, [](const auto &entry) { return entry.second.expired(); });
+            sweepAt = std::max<std::size_t>(256, cache.size() * 2); // amortised: a full sweep at most once per doubling
         }
         cache[key] = mesh;
         return mesh;
