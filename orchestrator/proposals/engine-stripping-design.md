@@ -3,7 +3,7 @@
 Item: `orchestrator/items/engine-stripping.json` (gated). Requested by the user on 2026-11-08: "make engine stripping when
 engines are not used, for example if a game doesn't use physics or doesn't use 2D physics in particular".
 
-**Status: decided by the user on 2026-11-08 (section 5). Starts after Physics2D stage 2.** No code has changed for this.
+**Status: decided by the user on 2026-11-08 (section 5). Stage 1 is in progress (`engine-stripping-p1-physics`).**
 
 ## 1. Why it is worth doing
 

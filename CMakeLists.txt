@@ -21,6 +21,9 @@ if(MSVC)
     add_compile_definitions(_ENABLE_EXTENDED_ALIGNED_STORAGE)
 endif()
 
+# A game's list of engine modules decides the options below (docs/project-modules.html)
+include(cmake/N2EngineModules.cmake)
+
 option(N2ENGINE_BUILD_TESTS "Build unit tests" ON)
 option(N2ENGINE_USE_PHYSX "Use PhysX physics backend" ON)
 # ON builds the vendored Jolt Physics (external/JoltPhysics) as the static library Jolt::Jolt, always cross-platform
