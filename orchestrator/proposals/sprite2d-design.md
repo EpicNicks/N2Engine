@@ -6,7 +6,7 @@ Written 2026-11-09 against `master` at `ff21edf4`. Phase E2 of the Triangle-Like
 outline): color, optional texture, sorting order, flip, Blend alpha. Most of the game art is basic geometry, so shapes first,
 PNGs where needed."
 
-**Status: waiting for the user's go on section 4.** No code has changed.
+**Status: approved by the user on 2026-11-09, with all five recommendations in section 4 (A to E) accepted.**
 
 ## 1. Summary
 

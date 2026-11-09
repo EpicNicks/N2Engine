@@ -18,7 +18,7 @@ Read the memory index first, then orchestrator/README.md and the LAST entries of
 
 **In progress (2026-11-09):** the user said to merge #314, #315 and #316. Order: #316, then #315 and #314, each updated onto master and green again in between (all three edit tests.yml).
 
-**Next, waiting on the user's go:** `proposals/sprite2d-design.md` (Sprite2D and shape rendering, Triangle-Like Phase E2; gated item sprite2d-shapes). Follow-ups: share the 2D and 3D Lua argument helpers; stripping stage 2.
+**Next:** Sprite2D and shape rendering (`proposals/sprite2d-design.md`, Triangle-Like Phase E2, item sprite2d-shapes): design accepted by the user 2026-11-09 (A to E as recommended); implementation started on branch feat-sprite2d-shapes. Follow-ups: share the 2D and 3D Lua argument helpers; stripping stage 2.
 
 **Lessons from this run:** the docs-only filter compares the whole PR with master, so a docs commit on a code PR reruns everything. A find_package(Threads) placed before renderer/ changed OpenAL's configure probes and broke the Docker image. Memory on this machine is tight: background watchers have been killed; tell the user, do not restart them unasked. On Windows, vendor a dependency from its git blobs, not a checkout (CRLF). Code reviews before merging found real bugs every time; recommend them.
 

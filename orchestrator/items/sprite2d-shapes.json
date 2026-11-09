@@ -4,7 +4,7 @@
   "branch": "feat-sprite2d-shapes",
   "title": "Sprite2D: flat shapes (rect, triangle, circle, polygons, outlines) with optional textures, flip, pivot and sorting order, with Lua bindings",
   "closes": null,
-  "issue": "Phase E2 of the Triangle-Like plan. Design first: orchestrator/proposals/sprite2d-design.md, decisions A to E in section 4. Code only on the user's go.",
+  "issue": "User's go on 2026-11-09 with decisions A to E as recommended. Design: orchestrator/proposals/sprite2d-design.md. Phase E2 of the Triangle-Like plan.",
   "allowedPaths": [
     "^engine/",
     "^tests/",
@@ -20,8 +20,8 @@
   ],
   "requiresDocs": true,
   "allowProtocol": false,
-  "gate": "user go on orchestrator/proposals/sprite2d-design.md",
-  "approved": false,
+  "gate": null,
+  "approved": true,
   "reviewer": "opus",
   "notes": "Reviewer: no renderer changes, cull and depth state right for flipped sprites, the software renderer's cut-out path, mesh cache keys, sort determinism."
 }
