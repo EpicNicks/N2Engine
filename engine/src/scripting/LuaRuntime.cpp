@@ -594,6 +594,7 @@ namespace N2Engine::Scripting
 
         // Gameplay systems
         Bindings::BindPhysics(*this);
+        Bindings::BindPhysics2D(*this);
         Bindings::BindNetworkInterest(*this);
         Bindings::BindAudio(*this);
 

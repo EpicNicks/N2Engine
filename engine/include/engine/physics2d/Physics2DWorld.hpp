@@ -64,7 +64,8 @@ namespace N2Engine::Physics2D
         [[nodiscard]] static std::shared_ptr<Physics2DWorld> Create();
         /// Re-reads Layers' collision matrix into every shape of every live world. Layers calls it when the matrix changes.
         static void RefreshAllCollisionMatrices();
-        /// The gravity new worlds start with, and every live world's from now on
+        /// The gravity new worlds start with, and every live world's from now on. Process-wide: nothing resets it. Scripts use a
+        /// scene's own gravity instead (SetWorldGravity), which ends with the scene.
         static void SetGravity(const Math::Vector2 &gravity);
         [[nodiscard]] static Math::Vector2 GetGravity();
 
@@ -76,6 +77,10 @@ namespace N2Engine::Physics2D
         /// Simulates, writes moved bodies back to their transforms, then delivers events. No engine or game code runs while
         /// Box2D is stepping; events are copied before the first handler runs.
         virtual void Step(float deltaTime) = 0;
+
+        /// This world's gravity only; a non-finite value is refused with a warning. Wakes its dynamic bodies.
+        virtual void SetWorldGravity(const Math::Vector2 &gravity) = 0;
+        [[nodiscard]] virtual Math::Vector2 GetWorldGravity() const = 0;
 
         // ===== Bodies =====
         virtual PhysicsBodyHandle CreateBody(const BodyDesc2D &desc) = 0;
