@@ -16,7 +16,7 @@ Every game's web package is the same player, carrying both 3D physics backends. 
 | Jolt (PR #205) | 978,104 | 272,325 | 14% |
 | Box2D, library only (probe, 2026-11-08) | 168,629 | 63,853 | 3% |
 
-These are historic deltas that have not been re-measured, and shared code means they will not add up exactly. Even so, a
+**Measured in PR #315:** leaving out all three physics modules cuts the size-profile wasm from 1,995,743 to 866,077 bytes brotli (57%) and from 8,431,940 to 4,432,296 raw. The rows above are historic deltas that were not re-measured, and shared code means they will not add up exactly. Even so, a
 2D game could plausibly lose around half its wasm by dropping the 3D backends. That is far more than Box2D itself costs,
 so **the 3D backends are where the benefit is, and 2D is the smaller part.**
 

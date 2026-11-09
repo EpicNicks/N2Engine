@@ -120,7 +120,18 @@ node scripts/project-modules.mjs path/to/game --suggest   # the smallest list th
 </ul>
 
 <h2 id="size">What it saves</h2>
-<p>PROJECT_MODULES_SIZE_PLACEHOLDER</p>
+<p>Measured in the web CI job of PR #315: the size profile's <code>index.wasm</code>, the full player against <code>tests/projects/no_physics</code> (no PhysX, Jolt or Box2D).</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Size profile <code>index.wasm</code></th><th>Raw</th><th><code>gzip -9</code></th><th>brotli</th></tr></thead>
+<tbody>
+<tr><td>Every module</td><td>8,431,940</td><td>2,802,626</td><td>1,995,743</td></tr>
+<tr><td>No physics</td><td>4,432,296</td><td>1,207,374</td><td>866,077</td></tr>
+<tr><td>Saved</td><td>3,999,644 (47%)</td><td>1,595,252 (57%)</td><td>1,129,666 (57%)</td></tr>
+</tbody>
+</table>
+</div>
+<p>The web job builds and runs this package on every run, and prints both as <code>[MODULES-SIZE]</code> lines. The 2D physics Lua bindings (PR #314) are not in these numbers.</p>
 
 <div class="page-footer">
 <span>Describes master through PR #315.</span>
