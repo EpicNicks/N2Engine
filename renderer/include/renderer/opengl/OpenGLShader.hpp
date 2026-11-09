@@ -18,6 +18,10 @@ namespace Renderer::OpenGL
         GLint colorLoc = -1;
         /// uStageDim (RenderState::dim), declared by the built-in fragment shaders
         GLint stageDimLoc = -1;
+        /// uTintSaturation, uTintInside and uTintCircle (RenderState::tint), declared by the built-in fragment shaders
+        GLint tintSaturationLoc = -1;
+        GLint tintInsideLoc = -1;
+        GLint tintCircleLoc = -1;
     };
 
     class OpenGLShader : public Common::IShader

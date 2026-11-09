@@ -4,6 +4,8 @@
 #include <memory>
 #include <optional>
 
+#include <renderer/common/RenderState.hpp>
+
 #include "engine/config/ApplicationOptions.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/Window.hpp"
@@ -80,6 +82,8 @@ namespace N2Engine
         std::function<void(double)> _fixedTickDriver;
         // Where each Tick's time goes (EN5): off until a host asks (the editor's GetEngineStats)
         Diagnostics::FrameStats _frameStats;
+        // The screen tint of the game's scene pass (SetScreenTint): none by default
+        Renderer::Common::ScreenTint _screenTint{};
 
     private:
         /// Installs the UI hit provider (UI::UISystem) on the pointer dispatcher
@@ -210,6 +214,19 @@ namespace N2Engine
         [[nodiscard]] static bool IsScriptQuitAllowed();
         /// What the Lua binding of Application.Quit calls: Quit() if scripts may quit, else one warning
         static void QuitFromScript();
+
+        /**
+         * The screen tint (Renderer::Common::ScreenTint: a saturation inside or outside a circle on the screen; the
+         * time-stop and full-screen grey effects, effects design stage E2). Render draws the scene with it
+         * (IRenderer::SetScreenTint) and clears it on the renderer before the screen-space UI pass, so the HUD stays in
+         * colour. The clear colour is tinted too when the tint covers the whole frame (ScreenTint::CoversWholeTarget);
+         * a circle that covers only part of the frame leaves the bare clear colour as it is. Taken through
+         * ScreenTint::Sanitized. Stays until changed or cleared; Shutdown clears it. Lua: Screen.SetTint, Screen.ClearTint.
+         * RenderEditorFrame(camera) shares Render's scene pass and so draws it too; the prefab stage's frame does not.
+         */
+        void SetScreenTint(const Renderer::Common::ScreenTint &tint);
+        void ClearScreenTint() { _screenTint = Renderer::Common::ScreenTint{}; }
+        [[nodiscard]] const Renderer::Common::ScreenTint& GetScreenTint() const { return _screenTint; }
 
         [[nodiscard]] Camera* GetMainCamera() const;
         Window& GetWindow();

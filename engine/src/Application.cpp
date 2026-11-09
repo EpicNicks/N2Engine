@@ -840,7 +840,14 @@ void Application::Shutdown()
     // A network preset's simulation mode ends with the project that selected it: the next Init (a project with no
     // network preset does not touch the mode) must start in the offline loop
     SetSimulationMode(SimulationMode::None);
+    // A screen tint is the game's, like the mode: the next project starts in colour
+    ClearScreenTint();
     _initialized = false;
+}
+
+void Application::SetScreenTint(const Renderer::Common::ScreenTint &tint)
+{
+    _screenTint = Renderer::Common::ScreenTint::Sanitized(tint);
 }
 
 void Application::Render()
@@ -858,7 +865,28 @@ void Application::Render(const Camera &camera, const bool screenSpaceUI)
         return;
     }
 
-    _window.Clear();
+    // The screen tint is a frame-scoped modifier of the renderer, like the stage dim: set for the scene pass only and
+    // never left on, whatever throws
+    struct ResetScreenTint
+    {
+        Renderer::Common::IRenderer *renderer;
+        ~ResetScreenTint() { renderer->SetScreenTint(Renderer::Common::ScreenTint{}); }
+    } resetScreenTint{renderer};
+
+    // The clear colour is no draw, so no shader tints it: when the tint covers the whole frame it is tinted here, as
+    // the scene's draws are (a partial circle leaves it as it is)
+    const Vector2i frameSize = _window.GetRenderDimensions();
+    if (_screenTint.CoversWholeTarget(static_cast<float>(frameSize[0]), static_cast<float>(frameSize[1])))
+    {
+        const Common::Color &clearColor = _window.clearColor;
+        float r = clearColor.r, g = clearColor.g, b = clearColor.b;
+        Renderer::Common::ScreenTint::Saturated(r, g, b, _screenTint.saturation);
+        renderer->Clear(r, g, b, clearColor.a);
+    }
+    else
+    {
+        _window.Clear();
+    }
     renderer->BeginFrame();
 
     if (SceneManager::GetCurSceneIndex() != -1)
@@ -871,7 +899,11 @@ void Application::Render(const Camera &camera, const bool screenSpaceUI)
         const Renderer::Common::SceneLightingData sceneLightingData = curScene.CollectLighting();
         renderer->UpdateSceneLighting(sceneLightingData, camera.GetPosition());
 
+        renderer->SetScreenTint(_screenTint);
         curScene.Render(renderer, camera);
+        // The screen tint is the scene's: the UI is drawn over it in its own colours (in Unity, overlay UI is drawn after
+        // the full-screen passes)
+        renderer->SetScreenTint(Renderer::Common::ScreenTint{});
         // The UI pass, over the scene: canvases in sort order, in window coordinates (the cursor's space), or
         // over the frame's own size when Window::SetRenderSize set one (the editor's viewport)
         if (screenSpaceUI)

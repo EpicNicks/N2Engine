@@ -554,10 +554,13 @@ namespace
                 return true;
             }
         }
-        // uStageDim (the prefab stage's RenderState::dim) is a loose uniform in GL and a per-draw block member here
+        // uStageDim (the prefab stage's RenderState::dim) and the screen tint's uniforms (RenderState::tint) are loose
+        // uniforms in GL and per-draw block members here
         for (const Vk::Uniform& uniform : Vk::kPerDraw)
         {
-            if (uniform.name == name && uniform.block == Vk::Block::PerDraw && uniform.name == "uStageDim")
+            if (uniform.name == name && uniform.block == Vk::Block::PerDraw &&
+                (uniform.name == "uStageDim" || uniform.name == "uTintSaturation" || uniform.name == "uTintInside" ||
+                 uniform.name == "uTintCircle"))
             {
                 return true;
             }
@@ -609,6 +612,8 @@ TEST(VulkanShaderParityTest, EveryBlockDeclaresTheTablesMembersAtTheStd140Offset
 
         ExpectBlockMatchesTable(fragment, "Material", 1, 0, Vk::MaterialUniforms(files.shader),
                                 std::string(files.label) + " fragment");
+        // The fragment stage reads the screen tint from the per-draw block, declared exactly as the vertex stage does
+        ExpectBlockMatchesTable(fragment, "PerDraw", 0, 0, Vk::kPerDraw, std::string(files.label) + " fragment");
 
         if (files.shader == Vk::BuiltInShader::Lit)
         {
@@ -619,7 +624,7 @@ TEST(VulkanShaderParityTest, EveryBlockDeclaresTheTablesMembersAtTheStd140Offset
             EXPECT_EQ(fragment.Block("Lighting"), nullptr) << files.label << " has no lighting block";
         }
         // Nothing else is a block: every non-opaque uniform is in one of them
-        EXPECT_EQ(fragment.blocks.size(), files.shader == Vk::BuiltInShader::Lit ? 2u : 1u) << files.label;
+        EXPECT_EQ(fragment.blocks.size(), files.shader == Vk::BuiltInShader::Lit ? 3u : 2u) << files.label;
         EXPECT_EQ(vertex.blocks.size(), 1u) << files.label;
     }
 }

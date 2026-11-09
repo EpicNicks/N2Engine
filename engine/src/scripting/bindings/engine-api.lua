@@ -3000,6 +3000,35 @@ function Window.SetMode(mode) end
 ---@param color Color
 function Window.SetClearColor(color) end
 
+-- ===== SCREEN =====
+
+---The screen tint: a saturation change inside (or outside) a circle on the screen, applied to the scene and not to the
+---screen-space UI (the HUD stays in colour). For the time-stop effect (animate `radius` from 0 to 2.5 and back with
+---`saturation = 0.2`) and full-screen grey (`saturation = 0` with no radius). Every renderer draws it (OpenGL, Vulkan,
+---WebGPU and software). The clear colour is tinted only when the tint covers the whole screen: draw a background as a
+---sprite to have it tinted by a partial circle.
+---@class ScreenTint
+---@field saturation number 0 (grey) to 1 (no tint)
+---@field centre Vector2 the circle's centre, 0 to 1 of the screen from the bottom left (default (0.5, 0.5))
+---@field radius number the circle's radius in half screen heights: 1 reaches the top and bottom edges from the middle (default: covers the screen)
+---@field inside boolean true (the default): the tint applies inside the circle; false: outside it
+
+---@class Screen
+Screen = {}
+
+---Set the screen tint for every frame drawn from now on, until it is changed or cleared. `saturation` is required; the other fields
+---are optional and take their defaults on every call (not the previous tint's values). A field of the wrong type, out of
+---range (saturation outside 0..1, a negative radius) or unknown is an error, and the tint is left as it was.
+---@param tint ScreenTint
+function Screen.SetTint(tint) end
+
+---Remove the screen tint
+function Screen.ClearTint() end
+
+---The screen tint as it is now (saturation 1 when there is none)
+---@return ScreenTint
+function Screen.GetTint() end
+
 -- ===== CAMERA =====
 
 ---@enum OrthographicResizeMode

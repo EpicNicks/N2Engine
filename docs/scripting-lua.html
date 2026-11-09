@@ -1144,12 +1144,37 @@ self.gameObject:SetLayer(Layers.NameToLayer("Player"))
 <tr><td><code>Time</code></td><td>object with properties</td><td><code>deltaTime</code>, <code>time</code>, <code>fixedDeltaTime</code>, unscaled variants; read-only integer <code>tick</code> (the fixed ticks begun; 0 before the first, N inside tick N's <code>OnFixedUpdate</code>) <span class="badge">PR #186</span>; writable <code>timeScale</code></td><td><code>LuaTimeBindings.cpp</code></td></tr>
 <tr><td><code>Application</code></td><td>table</td><td><code>Quit</code> (a request honoured at end of frame), <code>GetPlatform</code>, <code>GetCamera</code></td><td><code>LuaApplicationBindings.cpp</code></td></tr>
 <tr><td><code>Window</code>, <code>WindowMode</code></td><td>table / enum</td><td><code>Get</code>, <code>GetWidth/Height</code>, <code>SetTitle</code>, <code>SetMode</code>, <code>SetClearColor</code></td><td><code>LuaWindowBindings.cpp</code></td></tr>
+<tr><td><code>Screen</code> (effects stage E2)</td><td>table</td><td><code>SetTint</code>, <code>ClearTint</code>, <code>GetTint</code>: the <a href="#screen">screen tint</a></td><td><code>LuaScreenBindings.cpp</code></td></tr>
 <tr><td><code>Camera</code>, <code>BoundingBox</code>, <code>Frustum</code>, <code>Ray</code>, <code>OrthographicResizeMode</code></td><td>raw / values / enum</td><td><code>Camera.Main()</code>, position/rotation, projection, matrices, frustum, <code>ScreenPointToRay</code> <span class="badge">PR #48</span>, <code>LookAt</code> (points the camera's −Z at the target) and <code>GetForward</code>/<code>GetUp</code>/<code>GetRight</code> <span class="badge">PR #63</span> (see <a href="math.html#camera-conventions">camera conventions</a>)</td><td><code>LuaCameraBindings.cpp</code></td></tr>
 <tr><td><code>Debug</code></td><td>table</td><td><code>Log</code>, <code>Warn</code>, <code>Error</code> (to the engine <code>Logger</code>); no draw functions</td><td><code>LuaDebugBindings.cpp</code></td></tr>
 </tbody>
 </table>
 </div>
 <p>There is no <code>Log</code> global (use <code>Debug</code>) and no <code>Events</code> global.</p>
+
+<h3 id="screen">The screen tint: <code>Screen</code> (effects stage E2)</h3>
+<p><code>Screen.SetTint{saturation = s, centre = Vector2(x, y), radius = r, inside = b}</code> greys the scene inside (or, with <code>inside = false</code>, outside) a circle on the screen, for every frame drawn from then on, until <code>Screen.ClearTint()</code>. <code>saturation</code> is required: 0 is grey, 1 no tint. <code>centre</code> is 0 to 1 of the screen from the bottom left (default (0.5, 0.5)); <code>radius</code> is in half screen heights, so 1 reaches the top and bottom edges from the middle (default: the whole screen); <code>inside</code> defaults to true. The optional fields take their defaults on every call, not the previous tint's values. Every field is checked: a field of the wrong type, a value out of range (saturation outside 0..1, a negative radius, a value that is not finite) or an unknown field (<code>center</code> is one) is a Lua error and the tint stays as it was. <code>Screen.GetTint()</code> returns the tint as a table with the same fields (saturation 1 when there is none). The screen-space UI is drawn over the tinted scene in its own colours. The clear colour is tinted only when the tint covers the whole screen; draw the background as a sprite to have it tinted by a partial circle. How it is drawn: <a href="application.html#screen-tint">Application, screen tint</a>.</p>
+<pre class="lang-lua"><code>-- TimeStop.lua: a grey circle grows from the middle of the screen to cover it and shrinks back, over about 3 seconds
+local TimeStop = {}
+TimeStop.__index = TimeStop
+
+function TimeStop:OnAttach()
+    self.t = 0
+end
+
+function TimeStop:OnUpdate()
+    self.t = self.t + Time.deltaTime
+    if self.t &lt; math.pi then
+        Screen.SetTint{saturation = 0.2, centre = Vector2(0.5, 0.5), radius = 2.5 * math.sin(self.t)}
+    else
+        Screen.ClearTint()
+    end
+end
+
+return TimeStop
+
+-- A death screen elsewhere: the whole scene grey, the HUD still in colour
+-- Screen.SetTint{saturation = 0}</code></pre>
 
 <h3 id="engine-api-gaps">Where the file and the bindings differ</h3>
 <ul>

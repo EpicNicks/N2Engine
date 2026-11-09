@@ -8,8 +8,12 @@ struct PerDraw {
     uModel: mat4x4<f32>,
     uView: mat4x4<f32>,
     uProjection: mat4x4<f32>,
-    // RenderState::dim (the prefab stage's dimmed scene); WGSL rounds the struct up to 208 bytes
+    // RenderState::dim (the prefab stage's dimmed scene)
     uStageDim: f32,
+    // RenderState::tint (the screen tint, see screenTinted); WGSL rounds the struct up to 224 bytes
+    uTintSaturation: f32,
+    uTintInside: i32,
+    uTintCircle: vec3<f32>,
 }
 
 // Effects (TextDrawing::EffectUniforms), all 0 when off: distances are in atlas value units. The members take 92 bytes;
@@ -31,6 +35,21 @@ fn stageDimmed(rgb: vec3<f32>) -> vec3<f32> {
     return mix(rgb, vec3<f32>(dot(rgb, vec3<f32>(0.299, 0.587, 0.114)) * 0.45), perDraw.uStageDim);
 }
 
+// RenderState::tint (ScreenTint): the saturation changed inside (uTintInside 1) or outside a circle on the screen.
+// uTintCircle is the centre and radius in framebuffer pixels, row 0 at the top as @builtin(position) counts. Saturation 1
+// is no tint and costs one uniform branch
+fn screenTinted(rgb: vec3<f32>, fragCoord: vec4<f32>) -> vec3<f32> {
+    if (perDraw.uTintSaturation >= 1.0) {
+        return rgb;
+    }
+    let toCentre = fragCoord.xy - perDraw.uTintCircle.xy;
+    let inCircle = dot(toCentre, toCentre) <= perDraw.uTintCircle.z * perDraw.uTintCircle.z;
+    if (inCircle != (perDraw.uTintInside != 0)) {
+        return rgb;
+    }
+    return mix(vec3<f32>(dot(rgb, vec3<f32>(0.299, 0.587, 0.114))), rgb, perDraw.uTintSaturation);
+}
+
 @group(1) @binding(0) var<uniform> material: Material;
 @group(1) @binding(1) var uTexture: texture_2d<f32>;
 @group(1) @binding(6) var uTextureSampler: sampler;
@@ -48,6 +67,8 @@ struct VertexOutput {
 }
 
 struct FragmentInput {
+    // The pixel's framebuffer position, for the screen tint's circle
+    @builtin(position) fragCoord: vec4<f32>,
     @location(0) fragTexCoord: vec2<f32>,
     @location(1) fragColor: vec4<f32>,
 }
@@ -106,5 +127,5 @@ fn fs_main(input: FragmentInput) -> @location(0) vec4<f32> {
     if (result.a < 0.01) {
         discard;
     }
-    return vec4<f32>(stageDimmed(result.rgb), result.a);
+    return vec4<f32>(screenTinted(stageDimmed(result.rgb), input.fragCoord), result.a);
 }
