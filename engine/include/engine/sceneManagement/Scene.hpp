@@ -21,6 +21,11 @@ namespace N2Engine
         class CoroutineScheduler;
     }
 
+    namespace Physics2D
+    {
+        class Physics2DWorld;
+    }
+
     class Camera;
     class Component;
     class GameObject;
@@ -45,6 +50,10 @@ namespace N2Engine
 
         std::unique_ptr<Scheduling::CoroutineScheduler> _coroutineScheduler;
 
+        // Created by the first 2D component that attaches, so a scene without any has none. Components hold weak references:
+        // an object can outlive its scene's world.
+        std::shared_ptr<Physics2D::Physics2DWorld> _physics2DWorld;
+
         std::queue<std::shared_ptr<GameObject>> _markedForDestructionQueue;
         // diagnostics
         mutable bool _hasWarnedNoLights = false;
@@ -66,6 +75,11 @@ namespace N2Engine
         std::string sceneName;
 
     public:
+        /// This scene's 2D physics world, null until a 2D component attaches
+        [[nodiscard]] Physics2D::Physics2DWorld *GetPhysics2DWorld() const { return _physics2DWorld.get(); }
+        /// Creates it if needed; null in a build without Box2D
+        [[nodiscard]] std::shared_ptr<Physics2D::Physics2DWorld> GetOrCreatePhysics2DWorld();
+
         ~Scene() override;
         // Not movable: GameObjects and the coroutine scheduler hold pointers to their Scene, which a
         // move would leave pointing at the moved-from object (scenes live behind unique_ptr instead)

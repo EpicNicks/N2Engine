@@ -85,6 +85,20 @@ if (N2ENGINE_USE_JOLT)
     target_link_libraries(engine PUBLIC Jolt::Jolt)
 endif ()
 
+# Box2D is optional (N2ENGINE_USE_BOX2D): 2D physics, in engine/src/physics2d. Only Physics2DWorld.cpp names Box2D, so only it
+# gets Box2D's headers and floating-point flags; LINK_ONLY keeps those flags off the rest of the engine, whose 3D physics and
+# determinism numbers must not change. Without it that file compiles to a Create that returns null, and no Box2D code is in
+# the binary (docs/physics2d.html#stripping).
+if (N2ENGINE_USE_BOX2D)
+    target_link_libraries(engine PRIVATE $<LINK_ONLY:box2d::box2d>)
+    get_target_property(_n2_box2d_compile_options box2d INTERFACE_COMPILE_OPTIONS)
+    set_source_files_properties(src/physics2d/Physics2DWorld.cpp PROPERTIES
+        COMPILE_DEFINITIONS N2ENGINE_BOX2D_ENABLED=1
+        INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/external/box2d/include"
+        COMPILE_OPTIONS "${_n2_box2d_compile_options}"
+    )
+endif ()
+
 if (WIN32)
     set_target_properties(engine PROPERTIES
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"

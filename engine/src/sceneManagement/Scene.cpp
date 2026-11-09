@@ -6,6 +6,7 @@
 
 #include <math/UUID.hpp>
 
+#include "engine/physics2d/Physics2DWorld.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/scheduling/CoroutineScheduler.hpp"
 #include "engine/Camera.hpp"
@@ -612,6 +613,16 @@ void Scene::ClearImpl(const bool attachedOnly)
     _attachQueue.clear();
     _sceneLights.clear();
     _markedForDestructionQueue = {};
+    _physics2DWorld.reset(); // after every component let go of its body
+}
+
+std::shared_ptr<Physics2D::Physics2DWorld> Scene::GetOrCreatePhysics2DWorld()
+{
+    if (!_physics2DWorld)
+    {
+        _physics2DWorld = Physics2D::Physics2DWorld::Create();
+    }
+    return _physics2DWorld;
 }
 
 void Scene::ProcessDestroyed()

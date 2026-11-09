@@ -22,6 +22,7 @@
 #include "engine/network/NetworkValidation.hpp"
 #include "engine/particles/ParticleBackendSelection.hpp"
 #include "engine/physics/GpuStatus.hpp"
+#include "engine/physics2d/Physics2DWorld.hpp"
 #include "engine/physics/PhysicsBackendKind.hpp"
 #include "engine/physics/jolt/JoltBackend.hpp"
 #include "engine/physics/physx/PhysXBackend.hpp"
@@ -934,6 +935,20 @@ void Application::OnWindowResize(const int width, const int height) const
 
 void Application::PhysicsUpdate(const Scene &scene)
 {
+    // After the 3D step. Looked up each time: FixedUpdate may have created the world, and without a 2D component there is none,
+    // so a 3D game pays a null check. A shared reference, so an event handler that clears the scene cannot free it mid-dispatch.
+    const auto step2D = [&scene]
+    {
+        if (const std::shared_ptr<Physics2D::Physics2DWorld> world = scene._physics2DWorld)
+        {
+            world->Step(Time::GetFixedDeltaTime());
+        }
+    };
+    if (auto *world = scene.GetPhysics2DWorld())
+    {
+        world->ApplyPendingChanges();
+    }
+
     if (_3DphysicsBackend)
     {
         _3DphysicsBackend->ApplyPendingChanges();
@@ -946,10 +961,13 @@ void Application::PhysicsUpdate(const Scene &scene)
         _3DphysicsBackend->SyncTransforms();
         // notify collision events
         _3DphysicsBackend->ProcessCollisionCallbacks();
+        step2D();
     }
     else
     {
         scene.FixedUpdate();
+        const Diagnostics::ScopedFrameSection physicsSection(_frameStats, Diagnostics::FrameSection::Physics);
+        step2D();
     }
 }
 

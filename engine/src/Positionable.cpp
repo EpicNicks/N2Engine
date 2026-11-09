@@ -7,6 +7,9 @@
 
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/ICollider.hpp"
+#include "engine/physics2d/Collider2D.hpp"
+#include "engine/physics2d/Rigidbody2D.hpp"
+#include "engine/sceneManagement/Scene.hpp"
 
 using namespace N2Engine;
 using namespace N2Engine::Math;
@@ -188,6 +191,24 @@ void Positionable::NotifyPhysicsComponents() const
     else
     {
         for (const auto colliders = _gameObject.GetComponents<Physics::ICollider>(); const auto &collider : colliders)
+        {
+            collider->OnTransformChanged();
+        }
+    }
+
+    // Without a 2D world nothing here can have a 2D body, so a 3D game skips these lookups
+    const Scene *scene = _gameObject.GetScene();
+    if (!scene || !scene->GetPhysics2DWorld())
+    {
+        return;
+    }
+    if (const auto *rigidbody = _gameObject.GetComponent<Physics2D::Rigidbody2D>(); rigidbody && !rigidbody->IsDestroyed())
+    {
+        rigidbody->OnTransformChanged();
+    }
+    else
+    {
+        for (const auto colliders = _gameObject.GetComponents<Physics2D::Collider2D>(); const auto &collider : colliders)
         {
             collider->OnTransformChanged();
         }

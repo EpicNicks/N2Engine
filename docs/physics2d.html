@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2D physics · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="physics2d.html" aria-current="page">2D physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="particles.html">Particles</a></li>
+<li><a href="soft-bodies.html">Soft bodies</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+<li><a href="netcode.html">Netcode (n2net)</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+<li><a href="editor-extensions.html">Lua editor extensions</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="editor.html">Editor projects</a></li>
+<li><a href="mcp.html">MCP bridge (n2-mcp)</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+<li><a href="web-build.html">Web build</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>2D physics</h1>
+<p class="lead">2D rigid bodies, colliders, triggers, events and queries on <a href="physics.html#box2d">Box2D v3</a>. It is separate from the <a href="physics.html">3D physics</a> and follows the same rules wherever it can. Lua bindings are not in yet.</p>
+
+<h2 id="components">Components</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Component</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td><code>Rigidbody2D</code> <span class="badge">PR #BOX2DPR</span></td><td>A body: <code>Static</code>, <code>Dynamic</code> or <code>Kinematic</code>; linear and angular velocity; damping; gravity scale; fixed rotation; bullet; mass; forces and impulses.</td></tr>
+<tr><td><code>BoxCollider2D</code>, <code>CircleCollider2D</code>, <code>PolygonCollider2D</code></td><td>One shape each, on the object's <code>Rigidbody2D</code>, or on a static body of its own when it has none. Each has an offset, trigger flag, <code>PhysicsMaterial</code>, density and surface speed.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Include <code>engine/physics2d/Rigidbody2D.hpp</code>, <code>Collider2D.hpp</code> and <code>Physics2DQueries.hpp</code>. The namespace is <code>N2Engine::Physics2D</code>.</p>
+
+<h2 id="plane">The plane and units</h2>
+<ul>
+<li>A body uses the object's world x, y and rotation about z. <strong>z is left alone.</strong></li>
+<li>X or Y tilt on a rotating body is replaced by a pure z rotation at the first sync. A body with fixed rotation keeps the rotation it has.</li>
+<li>1 unit is 1 metre. Box2D is tuned for moving objects of about 0.1 to 10 units.</li>
+<li>Collider sizes ignore the transform's scale, as <a href="physics.html#shapes">the 3D colliders</a> do.</li>
+<li>Gravity starts at (0, -9.81). <code>Physics2DWorld::SetGravity</code> changes it for every world, live and future. A top-down game sets it to zero.</li>
+</ul>
+
+<h2 id="world">The world</h2>
+<p>Each <code>Scene</code> owns one world, created by the first 2D component that attaches, so a scene without 2D components has no world. It is freed when the scene is cleared. The prefab stage's parked scene keeps its own world, so its bodies and the stage's cannot meet, and only the loaded scene steps.</p>
+<p>An object moved to another scene gets a new body in that scene's world, and its velocity is not carried over.</p>
+
+<h2 id="step">The fixed step</h2>
+<ol class="steps">
+<li>3D and then 2D <code>ApplyPendingChanges</code>: transforms changed since the last step reach the bodies.</li>
+<li><code>scene.FixedUpdate()</code>.</li>
+<li>The 3D step, sync and events.</li>
+<li>2D: simulate, write moved bodies back to their transforms, then deliver events.</li>
+</ol>
+<p>It is single-threaded (one worker, no task system), reads no clock that affects the result, and runs with the same fixed delta as 3D. 2D works with no 3D backend. See <a href="application.html#fixed-step">Fixed steps and physics</a>.</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>Changing a transform on a</th><th>Does</th></tr></thead>
+<tbody>
+<tr><td>Kinematic body</td><td>Moves there in one step, with velocity, so it carries what stands on it, then stops.</td></tr>
+<tr><td>Dynamic or static body</td><td><strong>Teleports.</strong> This differs from 3D, where a dynamic body ignores it. Box2D ends the body's contacts, so a touching body gets Exit and then Enter.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="events">Events</h2>
+<p>Every <code>Component</code> has <code>OnCollisionEnter2D</code>, <code>Stay2D</code> and <code>Exit2D</code> taking <code>const Collision2D &amp;</code>, and <code>OnTriggerEnter2D</code>, <code>Stay2D</code> and <code>Exit2D</code> taking <code>const Trigger2D &amp;</code>. They follow <a href="physics.html#events">the 3D rules</a>:</p>
+<ul>
+<li>Per body pair: Enter on the first touching shape pair, Exit on the last, and Stay every step while touching, including the step of the Enter.</li>
+<li>In order: Exits of removed things, collision Enter, Stay, Exit, then trigger Enter, Stay, Exit. Pairs go in body handle order.</li>
+<li>Both sides receive each event, every component on the object, each from its own point of view. An inactive object gets nothing.</li>
+<li>A contact normal points from the other collider to this one.</li>
+</ul>
+<div class="callout note" id="design-2d-handlers"><p class="callout-title">Design decision: changes inside a handler run immediately</p><p>No engine or game code runs while Box2D is stepping, because no callback that runs inside the step is registered. Events are copied before the first handler, and each delivery checks that both sides still exist. So a handler can create and destroy bodies directly. Queuing those changes would make <code>SetLinearVelocity</code> right after creating a body silently do nothing. <code>GameObject::Destroy</code> stays deferred to the end-of-frame purge, as always.</p></div>
+
+<h3 id="events-which">Which pairs raise events</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Pair</th><th>Events</th></tr></thead>
+<tbody>
+<tr><td>Dynamic solid and any solid</td><td>Collision</td></tr>
+<tr><td>Kinematic or static solid and kinematic or static solid</td><td>None; they pass through</td></tr>
+<tr><td>Trigger and a dynamic or kinematic solid, or a moving trigger and a static solid</td><td>Trigger</td></tr>
+<tr><td>Trigger and trigger</td><td>None, as in 3D (Box2D reports these; the engine drops them)</td></tr>
+<tr><td>Two static bodies</td><td>None</td></tr>
+</tbody>
+</table>
+</div>
+<div class="callout warning"><p class="callout-title">Warning: collision data is after the solve</p><p><code>relativeVelocity</code> is this body's velocity minus the other's <em>after</em> the step, so it is not the approach speed. For a mirror, give the shapes restitution 1 and friction 0 instead of reflecting by hand.</p></div>
+<div class="callout warning"><p class="callout-title">Warning: fast projectiles</p><p>A fast moving <em>trigger</em> can miss overlaps. Make a projectile a solid <code>bullet</code> body filtered by layer, or use a shape cast.</p></div>
+
+<h2 id="bodies">Bodies and shapes</h2>
+<ul>
+<li><strong>Mass</strong> comes from the solid colliders' density (default 1) unless <code>SetMass</code> overrides it, which rescales the inertia. In 3D the mass is always authoritative. <code>UseAutoMass</code> goes back.</li>
+<li><strong>Triggers add no mass.</strong> A dynamic body with only triggers gets mass 1, so it still responds to forces.</li>
+<li><strong>Toggling a trigger re-creates the shape,</strong> because Box2D cannot change it. Its pairs end with an Exit and start again if still overlapping.</li>
+<li><strong>Material:</strong> <code>dynamicFriction</code> and <code>restitution</code> apply. <code>staticFriction</code> does not, as Box2D has one coefficient. Box2D combines two shapes by the geometric mean of friction and the larger restitution, unlike the 3D average.</li>
+<li><strong>Conveyors:</strong> <code>SetSurfaceSpeed</code> moves what touches the surface. On a shape's top surface, a positive speed moves things toward +x.</li>
+<li><strong>Polygons</strong> take 3 to 8 points, wrapped in their convex hull. Geometry Box2D cannot use logs a warning and makes no shape. Vertices save in scenes and prefabs as JSON; the editor has no dedicated list editor for them yet.</li>
+</ul>
+
+<h2 id="layers">Layers</h2>
+<p>2D uses <a href="physics.html#layers">the same 32 layers and collision matrix</a>, with no second copy. A shape's category is its object's layer and its mask is that layer's matrix row. A matrix change or <code>GameObject::SetLayer</code> reaches every live world; a pair the matrix now rules out ends with an Exit, and one it now allows starts with an Enter. Triggers obey it too. The matrix does not affect queries, only their layer mask does.</p>
+
+<h2 id="queries">Queries</h2>
+<p><code>Raycast</code>, <code>RaycastAll</code>, <code>CircleCast</code>, <code>BoxCast</code>, <code>OverlapCircle</code> and <code>OverlapBox</code>, on the loaded scene's world, with a layer mask and <code>QueryTriggers</code>. They follow <code>Physics::QueryRules</code>:</p>
+<ul>
+<li>Degenerate input finds nothing, and so does an empty mask or having no world.</li>
+<li>A start inside a collider hits at distance 0, with the normal against the direction and the point at the start.</li>
+<li>Nearest first; hits within the tie tolerance go by body handle, then collider order. Overlaps go by body handle, then collider order.</li>
+<li>Triggers are hit by default.</li>
+<li>One difference: every distance is clamped to <code>kMaxSweepDistance</code>, rays included.</li>
+</ul>
+
+<h2 id="network">Networking</h2>
+<div class="callout warning"><p class="callout-title">Warning: not covered by the network modes</p><p>2D state is not in the desync hash and a rollback does not restore it, so a rollback session would rewind everything except the 2D world. Creating a world in <code>SimulationMode::Deterministic</code> logs one warning. Box2D's results have matched across CI legs (<code>tests/box2d</code>, and the determinism test in <code>tests/engine/physics2d</code>), which is the basis for adding this later.</p></div>
+
+<h2 id="stripping">Leaving it out of a game</h2>
+<p>A game that does not use 2D physics can build with <code>-DN2ENGINE_USE_BOX2D=OFF</code>:</p>
+<ul>
+<li>No Box2D code is in the binary. Only <code>engine/src/physics2d/Physics2DWorld.cpp</code> names Box2D, and without the option it compiles to a <code>Create</code> that returns null.</li>
+<li>The components still register and keep their data, so a scene loads and saves unchanged and the network fingerprint does not depend on the option. They do nothing, with one warning, and queries find nothing.</li>
+</ul>
+<p>Compiled in but unused costs a null check per step and per transform change, and no Box2D allocation. The linker cannot remove the module by itself, because <code>RegisterBuiltinComponents</code> names every component type. Sizes are in <a href="web-build.html#box2d-size">the web build page</a>.</p>
+
+<div class="page-footer">
+<span>Describes master through PR #BOX2DPR.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>

@@ -14,6 +14,7 @@
 #include "engine/Layers.hpp"
 #include "engine/Logger.hpp"
 #include "engine/physics/ICollider.hpp"
+#include "engine/physics2d/Collider2D.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
@@ -878,6 +879,10 @@ void GameObject::SetLayer(const int layer)
         if (auto *collider = dynamic_cast<Physics::ICollider *>(component.get()); collider && !collider->IsDestroyed())
         {
             collider->OnLayerChanged();
+        }
+        else if (auto *collider2D = dynamic_cast<Physics2D::Collider2D *>(component.get()); collider2D && !collider2D->IsDestroyed())
+        {
+            collider2D->OnLayerChanged();
         }
     }
 }

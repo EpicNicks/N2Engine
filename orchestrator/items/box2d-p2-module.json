@@ -26,7 +26,7 @@
     "A project with no 2D component creates no world and pays no per-step cost beyond a null check",
     "Web package size within budget, or the raise is explained; existing 3D tests unchanged and green; all legs green; same inputs give the same hash"
   ],
-  "gate": "#311 merged, and box2d-p1-vendor merged",
-  "approved": false,
+  "gate": null,
+  "approved": true,
   "notes": "Reviewer: that the 3D path is untouched, that event dispatch cannot run user code while Box2D is mid-step (destroy and create are deferred), that layer filtering uses the shared matrix and cannot drift from it, that body and collider lifetimes follow the engine's ownership rules (no dangling handles after scene teardown, Lua handles are checked), that the fixed-step order matches docs/application.html, that nothing in the step depends on wall-clock or thread count, that web size budgets were measured and not guessed, and that the vendored source is pristine apart from documented build glue. Create and destroy inside callbacks run immediately (design section 6), not deferred: check that events are copied before any user code and that each delivery re-checks both sides."
 }

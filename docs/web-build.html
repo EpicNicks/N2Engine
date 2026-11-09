@@ -33,6 +33,7 @@
 <h2>Systems</h2>
 <ul>
 <li><a href="physics.html">Physics</a></li>
+<li><a href="physics2d.html">2D physics</a></li>
 <li><a href="input.html">Input</a></li>
 <li><a href="audio.html">Audio</a></li>
 <li><a href="text.html">Text &amp; fonts</a></li>
@@ -560,6 +561,9 @@ RewriteRule ^(.*\.(js|wasm|data|html))$ $1.gz [L]
 <li>MIME-agnostic and compression-agnostic: it must still load when a host serves <code>.wasm</code> with a wrong type (the loader falls back from streaming instantiation to an <code>ArrayBuffer</code>) and when the host does not compress. The MIME fallback is in <code>n2-loader.js</code> and is exercised by CI under node with a mock fetch (not in a real browser: see the checklist). Precompressed <code>.br</code>/<code>.gz</code> copies are an addition, never a requirement and never a replacement of the plain files.</li>
 <li>Size budgets enforced in CI (next section).</li>
 </ul>
+
+<h2 id="box2d-size">2D physics: measured size <span class="badge">PR #BOX2DPR</span></h2>
+<p>BOX2D_SIZE_PLACEHOLDER</p>
 
 <h2 id="size-report">The size report and budgets</h2>
 <p><code>scripts/web-size-report.sh [dir]</code> (default <code>build/bin</code>) lists every <code>.wasm</code> and <code>.js</code> file under the directory (and, for a web package, its <code>.data</code> and <code>.html</code> files) with its raw and <code>gzip -9</code> size, prints a table, and appends it to the GitHub job summary when <code>GITHUB_STEP_SUMMARY</code> is set. It only reports (exit 1 only when it finds no files); until stage 3 it also took budgets from environment variables and CMake cache variables, which are removed: the budgets are in one place now.</p>

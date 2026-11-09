@@ -319,6 +319,14 @@ the off path cannot rot. Added CI minutes are stated in the PR. Vendored C is co
 
 Merging needs the user's go, as every code PR does.
 
+## Deviations in stage 2
+
+- `Physics2DWorld` is a thin abstract class with one implementation, not the concrete class of decision B. The reason is section
+  13: the Box2D code stays in one file and a stripped build needs no stubs. It is still not a second-backend seam.
+- Prefab overrides: the engine has no override system yet (EN4 is a proposal, `prefab-overrides.md`). Stage 2 tests that a
+  prefab instance with a changed field simulates and keeps the field through a save and load, which is all that exists to test.
+- `docs/physics2d.html` is created in stage 2, because the docs rule needs it in the same PR as the behaviour. Stage 3 adds Lua.
+
 ## 13. Stripping
 
 The user asked (2026-11-08) that a game not using physics, or not using 2D physics, does not carry it. The wider feature

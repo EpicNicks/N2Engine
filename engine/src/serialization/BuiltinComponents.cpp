@@ -15,6 +15,8 @@
 #include "engine/physics/CapsuleCollider.hpp"
 #include "engine/physics/CharacterController.hpp"
 #include "engine/physics/Rigidbody.hpp"
+#include "engine/physics2d/Collider2D.hpp"
+#include "engine/physics2d/Rigidbody2D.hpp"
 #include "engine/physics/SoftBody.hpp"
 #include "engine/physics/SphereCollider.hpp"
 #include "engine/rendering/Light.hpp"
@@ -54,6 +56,11 @@ namespace N2Engine
         Add<Physics::SphereCollider>(registry, "SphereCollider");
         Add<Physics::CapsuleCollider>(registry, "CapsuleCollider");
         Add<Physics::CharacterController>(registry, "CharacterController");
+        // Registered with or without Box2D (N2ENGINE_USE_BOX2D), so a stripped build keeps scene data and the same registry
+        Add<Physics2D::Rigidbody2D>(registry, "Rigidbody2D");
+        Add<Physics2D::BoxCollider2D>(registry, "BoxCollider2D");
+        Add<Physics2D::CircleCollider2D>(registry, "CircleCollider2D");
+        Add<Physics2D::PolygonCollider2D>(registry, "PolygonCollider2D");
         Add<Rendering::Light>(registry, "Light");
         Add<Audio::AudioSource>(registry, "AudioSource");
         Add<Audio::AudioListener>(registry, "AudioListener");
