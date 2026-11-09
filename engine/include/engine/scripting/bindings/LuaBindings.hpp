@@ -35,6 +35,7 @@ namespace N2Engine::Scripting
 
         // Physics
         void BindPhysics(LuaRuntime& runtime);
+        void BindPhysics2D(LuaRuntime& runtime);
         void BindNetworkInterest(LuaRuntime& runtime);
 
         // Audio
@@ -96,6 +97,9 @@ namespace N2Engine::Scripting
         /// The OnCollision*/OnTrigger* argument: a copy whose objects are handles, so a script can keep it
         sol::object CollisionToLua(const Physics::Collision& collision, lua_State* state);
         sol::object TriggerToLua(const Physics::Trigger& trigger, lua_State* state);
+        /// The OnCollision*2D and OnTrigger*2D arguments, the same way
+        sol::object Collision2DToLua(const Physics2D::Collision2D& collision, lua_State* state);
+        sol::object Trigger2DToLua(const Physics2D::Trigger2D& trigger, lua_State* state);
 
         /// Registers a component's Lua type, on ComponentRef<T>: the given members plus Component's own
         template <typename T, typename... Members>

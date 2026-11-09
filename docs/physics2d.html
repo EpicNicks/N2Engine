@@ -70,7 +70,7 @@
 <div class="content">
 
 <h1>2D physics</h1>
-<p class="lead">2D rigid bodies, colliders, triggers, events and queries on <a href="physics.html#box2d">Box2D v3</a>. It is separate from the <a href="physics.html">3D physics</a> and follows the same rules wherever it can. Lua bindings are not in yet.</p>
+<p class="lead">2D rigid bodies, colliders, triggers, events and queries on <a href="physics.html#box2d">Box2D v3</a>. It is separate from the <a href="physics.html">3D physics</a> and follows the same rules wherever it can. Scripts use it through <a href="#lua">the same names</a>.</p>
 
 <h2 id="components">Components</h2>
 <div class="table-wrap">
@@ -166,6 +166,38 @@
 <li>One difference: every distance is clamped to <code>kMaxSweepDistance</code>, rays included.</li>
 </ul>
 
+<h2 id="lua">From Lua <span class="badge">PR #314</span></h2>
+<p>The components have the same method names as in C++, through <code>AddComponent("Rigidbody2D")</code> and the rest, with the same <a href="scripting-lua.html#collisions">checked handles</a> as 3D: using one after its object is gone is a Lua error.</p>
+<pre class="lang-lua"><code>local Crate = {}
+Crate.__index = Crate
+
+function Crate:OnCollisionEnter2D(collision)
+    local contact = collision:GetContact(1)
+    if contact then print(collision.otherGameObject:GetName(), contact.normal.y) end
+end
+
+function Crate:OnTriggerEnter2D(trigger)
+    trigger.otherGameObject:Destroy()
+end
+
+return Crate</code></pre>
+<p>A script handles <code>OnCollisionEnter2D</code>, <code>OnCollisionStay2D</code>, <code>OnCollisionExit2D</code>, <code>OnTriggerEnter2D</code>, <code>OnTriggerStay2D</code> and <code>OnTriggerExit2D</code>. The argument is safe to keep after the callback. It has every member of the 3D <code>Collision</code> and <code>Trigger</code>, and also <code>collider</code> and <code>otherCollider</code>, as their concrete types, and <code>nil</code> when removed.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Call</th><th>Returns</th></tr></thead>
+<tbody>
+<tr><td><code>Physics2D.Raycast(origin, direction, maxDistance?, layerMask?, ignoreTriggers?)</code></td><td>The nearest <code>{point, normal, distance, gameObject, collider, rigidbody}</code>, or <code>nil</code></td></tr>
+<tr><td><code>Physics2D.RaycastAll(...)</code>, same arguments</td><td>An array of those, nearest first</td></tr>
+<tr><td><code>Physics2D.CircleCast(origin, radius, direction, maxDistance?, layerMask?, ignoreTriggers?)</code></td><td>The nearest hit, or <code>nil</code></td></tr>
+<tr><td><code>Physics2D.BoxCast(origin, halfExtents, angle, direction, maxDistance?, layerMask?, ignoreTriggers?)</code></td><td>The nearest hit, or <code>nil</code>. <code>angle</code> is in radians and may be <code>nil</code>.</td></tr>
+<tr><td><code>Physics2D.OverlapCircle(center, radius, layerMask?, ignoreTriggers?)</code></td><td>An array of <code>{gameObject, collider, rigidbody}</code></td></tr>
+<tr><td><code>Physics2D.OverlapBox(center, halfExtents, angle?, layerMask?, ignoreTriggers?)</code></td><td>The same</td></tr>
+<tr><td><code>Physics2D.SetGravity(gravity)</code>, <code>Physics2D.GetGravity()</code></td><td>The loaded scene's gravity, a <code>Vector2</code>. It ends with the scene: the next one starts at the default.</td></tr>
+</tbody>
+</table>
+</div>
+<p>A layer mask is a whole number; <code>-1</code> means every layer, and the default is every layer but Ignore Raycast. An optional argument of the wrong type is a Lua error, not the default. A negative distance finds nothing. <code>BodyType2D.Static</code>, <code>Dynamic</code> and <code>Kinematic</code> are the body types. Annotations are in <code>engine-api.lua</code>.</p>
+
 <h2 id="network">Networking</h2>
 <div class="callout warning"><p class="callout-title">Warning: not covered by the network modes</p><p>2D state is not in the desync hash and a rollback does not restore it, so a rollback session would rewind everything except the 2D world. Creating a world in <code>SimulationMode::Deterministic</code> logs one warning. Box2D's results have matched across CI legs (<code>tests/box2d</code>, and the determinism test in <code>tests/engine/physics2d</code>), which is the basis for adding this later.</p></div>
 
@@ -173,7 +205,7 @@
 <p>A game that does not use 2D physics can build with <code>-DN2ENGINE_USE_BOX2D=OFF</code>:</p>
 <ul>
 <li>No Box2D code is in the binary. Only <code>engine/src/physics2d/Physics2DWorld.cpp</code> names Box2D, and without the option it compiles to a <code>Create</code> that returns null.</li>
-<li>The components still register and keep their data, so a scene loads and saves unchanged and the network fingerprint does not depend on the option. They do nothing, with one warning, and queries find nothing.</li>
+<li>The components still register and keep their data, so a scene loads and saves unchanged and the network fingerprint does not depend on the option. They do nothing, with one warning, and queries find nothing. Scripts keep working: <code>Physics2D</code> and the component types are still there.</li>
 </ul>
 <p>Compiled in but unused costs a null check per step and per transform change, and no Box2D allocation. The linker cannot remove the module by itself, because <code>RegisterBuiltinComponents</code> names every component type. Sizes are in <a href="web-build.html#box2d-size">the web build page</a>.</p>
 
