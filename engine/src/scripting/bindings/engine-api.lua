@@ -807,7 +807,7 @@ function GameObject:Destroy() end
 
 ---Add a component by type name and return it.
 ---Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CharacterController", "CubeRenderer",
----"SphereRenderer", "QuadRenderer", "MeshRenderer", "TextRenderer", "ParticleSystem", "SoftBody", "Light", "AudioSource", "AudioListener",
+---"SphereRenderer", "QuadRenderer", "Sprite2D", "MeshRenderer", "TextRenderer", "ParticleSystem", "SoftBody", "Light", "AudioSource", "AudioListener",
 ---"LuaComponent", "RectTransform", "Canvas", "Image", "UIText", "Button". Unknown names raise an error.
 ---@param typeName string
 ---@return Component
@@ -1961,6 +1961,79 @@ function Physics.OverlapCapsule(point0, point1, radius, layerMask) end
 ---True only when the GPU physics scene is up (physics.gpu is auto or on, and the CUDA probe succeeded).
 ---@return boolean
 function Physics.IsGpuAvailable() end
+
+---@alias Sprite2DShape integer
+---@class Sprite2DShapeValues
+---@field Rect Sprite2DShape
+---@field Triangle Sprite2DShape
+---@field Circle Sprite2DShape
+---@field RegularPolygon Sprite2DShape
+---@field Polygon Sprite2DShape
+Sprite2DShape = {}
+
+---A flat shape in the object's x, y plane (docs/sprite2d.html): filled or outlined, coloured, optionally textured. Lower sorting
+---orders draw first; equal ones back to front by depth.
+---@class Sprite2D : Component
+Sprite2D = {}
+---@param shape Sprite2DShape
+function Sprite2D:SetShape(shape) end
+---@return Sprite2DShape
+function Sprite2D:GetShape() end
+---World units; for a circle or regular polygon, the diameter on each axis
+---@param size Vector2
+function Sprite2D:SetSize(size) end
+---@return Vector2
+function Sprite2D:GetSize() end
+---RegularPolygon: 3 to 64
+---@param sides integer
+function Sprite2D:SetSides(sides) end
+---@return integer
+function Sprite2D:GetSides() end
+---Polygon: 3 to 64 convex points, in units of the size
+---@param vertices Vector2[]
+function Sprite2D:SetVertices(vertices) end
+---@return Vector2[]
+function Sprite2D:GetVertices() end
+---0 fills; above 0, only a border this wide, in world units
+---@param width number
+function Sprite2D:SetOutline(width) end
+---@return number
+function Sprite2D:GetOutline() end
+---@param color Color
+function Sprite2D:SetColor(color) end
+---@return Color
+function Sprite2D:GetColor() end
+---A res:// path to an image, or nil for a plain colour
+---@param path string|nil
+function Sprite2D:SetTexture(path) end
+---@return boolean
+function Sprite2D:HasTexture() end
+---The part of the texture shown, in uv with v up: its lower-left corner and its size
+---@param offset Vector2
+---@param size Vector2
+function Sprite2D:SetRegion(offset, size) end
+---@return Vector2
+function Sprite2D:GetRegionOffset() end
+---@return Vector2
+function Sprite2D:GetRegionSize() end
+---@param flip boolean
+function Sprite2D:SetFlipX(flip) end
+---@return boolean
+function Sprite2D:GetFlipX() end
+---@param flip boolean
+function Sprite2D:SetFlipY(flip) end
+---@return boolean
+function Sprite2D:GetFlipY() end
+---Where the object's position sits within the size: (0.5, 0.5) is the middle
+---@param pivot Vector2
+function Sprite2D:SetPivot(pivot) end
+---@return Vector2
+function Sprite2D:GetPivot() end
+---Lower draws first
+---@param order integer
+function Sprite2D:SetSortingOrder(order) end
+---@return integer
+function Sprite2D:GetSortingOrder() end
 
 ---@class PhysicsMaterial
 ---@field staticFriction number Friction when not moving (0-1)

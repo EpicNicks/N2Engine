@@ -35,6 +35,7 @@
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/SoftBody.hpp"
 #include "engine/physics/SphereCollider.hpp"
+#include "engine/rendering/Sprite2D.hpp"
 #include "engine/io/Resources.hpp"
 #include "engine/rendering/Light.hpp"
 #include "engine/rendering/Material.hpp"
@@ -113,6 +114,7 @@ namespace N2Engine::Scripting::Bindings
                 {"CubeRenderer", MakeAccess<Example::CubeRenderer>()},
                 {"SphereRenderer", MakeAccess<Example::SphereRenderer>()},
                 {"QuadRenderer", MakeAccess<Example::QuadRenderer>()},
+                {"Sprite2D", MakeAccess<Rendering::Sprite2D>()},
                 {"MeshRenderer", MakeAccess<Rendering::MeshRenderer>()},
                 {"TextRenderer", MakeAccess<Rendering::TextRenderer>()},
                 {"ParticleSystem", MakeAccess<Rendering::ParticleSystem>()},
@@ -497,6 +499,74 @@ namespace N2Engine::Scripting::Bindings
             "GetSize", Forward<QuadRendererRef, &Example::QuadRenderer::GetSize>(),
             "SetMaterial", ShapeSetMaterial<QuadRendererRef>(),
             "GetMaterial", ShapeGetMaterial<QuadRendererRef>()
+        );
+
+        // ===== Sprite2D (docs/sprite2d.html) =====
+        lua.new_enum("Sprite2DShape",
+            "Rect", Rendering::Shape2D::Rect,
+            "Triangle", Rendering::Shape2D::Triangle,
+            "Circle", Rendering::Shape2D::Circle,
+            "RegularPolygon", Rendering::Shape2D::RegularPolygon,
+            "Polygon", Rendering::Shape2D::Polygon
+        );
+        using Sprite2DRef = ComponentRef<Rendering::Sprite2D>;
+        BindComponentType<Rendering::Sprite2D>(
+            lua, "Sprite2D",
+            "SetShape", Forward<Sprite2DRef, &Rendering::Sprite2D::SetShape>(),
+            "GetShape", Forward<Sprite2DRef, &Rendering::Sprite2D::GetShape>(),
+            "SetSize", Forward<Sprite2DRef, &Rendering::Sprite2D::SetSize>(),
+            "GetSize", Forward<Sprite2DRef, &Rendering::Sprite2D::GetSize>(),
+            "SetSides", Forward<Sprite2DRef, &Rendering::Sprite2D::SetSides>(),
+            "GetSides", Forward<Sprite2DRef, &Rendering::Sprite2D::GetSides>(),
+            // An array of Vector2 in, a new array of Vector2 out
+            "SetVertices", [](const Sprite2DRef &ref, const sol::table &points)
+            {
+                std::vector<Math::Vector2> vertices;
+                for (std::size_t i = 1; i <= points.size(); ++i)
+                {
+                    const sol::object point = points[i];
+                    if (!point.is<Math::Vector2>())
+                    {
+                        throw std::runtime_error("Sprite2D:SetVertices: every point must be a Vector2");
+                    }
+                    vertices.push_back(point.as<Math::Vector2>());
+                }
+                ref.Pin()->SetVertices(vertices);
+            },
+            "GetVertices", [](const Sprite2DRef &ref, const sol::this_state state)
+            {
+                sol::state_view view(state);
+                sol::table result = view.create_table();
+                const auto sprite = ref.Pin();
+                const auto &vertices = sprite->GetVertices();
+                for (std::size_t i = 0; i < vertices.size(); ++i)
+                {
+                    result[i + 1] = vertices[i];
+                }
+                return result;
+            },
+            "SetOutline", Forward<Sprite2DRef, &Rendering::Sprite2D::SetOutline>(),
+            "GetOutline", Forward<Sprite2DRef, &Rendering::Sprite2D::GetOutline>(),
+            "SetColor", Forward<Sprite2DRef, &Rendering::Sprite2D::SetColor>(),
+            "GetColor", Forward<Sprite2DRef, &Rendering::Sprite2D::GetColor>(),
+            // A res:// path to an image, or nil for none
+            "SetTexture", [](const Sprite2DRef &ref, const sol::optional<std::string> path)
+            {
+                const auto sprite = ref.Pin();
+                sprite->SetTexture(path ? LoadTextureOrThrow(*path, "Sprite2D:SetTexture") : nullptr);
+            },
+            "HasTexture", [](const Sprite2DRef &ref) { return ref.Pin()->GetTexture() != nullptr; },
+            "SetRegion", Forward<Sprite2DRef, &Rendering::Sprite2D::SetRegion>(),
+            "GetRegionOffset", Forward<Sprite2DRef, &Rendering::Sprite2D::GetRegionOffset>(),
+            "GetRegionSize", Forward<Sprite2DRef, &Rendering::Sprite2D::GetRegionSize>(),
+            "SetFlipX", Forward<Sprite2DRef, &Rendering::Sprite2D::SetFlipX>(),
+            "GetFlipX", Forward<Sprite2DRef, &Rendering::Sprite2D::GetFlipX>(),
+            "SetFlipY", Forward<Sprite2DRef, &Rendering::Sprite2D::SetFlipY>(),
+            "GetFlipY", Forward<Sprite2DRef, &Rendering::Sprite2D::GetFlipY>(),
+            "SetPivot", Forward<Sprite2DRef, &Rendering::Sprite2D::SetPivot>(),
+            "GetPivot", Forward<Sprite2DRef, &Rendering::Sprite2D::GetPivot>(),
+            "SetSortingOrder", Forward<Sprite2DRef, &Rendering::Sprite2D::SetSortingOrder>(),
+            "GetSortingOrder", Forward<Sprite2DRef, &Rendering::Sprite2D::GetSortingOrder>()
         );
 
         using MeshRendererRef = ComponentRef<Rendering::MeshRenderer>;

@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sprites and 2D shapes · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="physics2d.html">2D physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="sprite2d.html" aria-current="page">Sprites &amp; 2D shapes</a></li>
+<li><a href="particles.html">Particles</a></li>
+<li><a href="soft-bodies.html">Soft bodies</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+<li><a href="netcode.html">Netcode (n2net)</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+<li><a href="editor-extensions.html">Lua editor extensions</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="editor.html">Editor projects</a></li>
+<li><a href="mcp.html">MCP bridge (n2-mcp)</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+<li><a href="web-build.html">Web build</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Sprites and 2D shapes</h1>
+<p class="lead"><code>Sprite2D</code> draws a flat shape in its object's x, y plane: a rectangle, triangle, circle, regular polygon or convex polygon, filled or outlined, in a colour, optionally textured. For 2D games, with an <a href="application.html">orthographic camera</a> and <a href="physics2d.html">2D physics</a>.</p>
+
+<h2 id="fields">Fields</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Field</th><th>Default</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>shape</code> <span class="badge">PR #SPRITEPR</span></td><td><code>Rect</code></td><td><code>Rect</code>, <code>Triangle</code> (pointing up), <code>Circle</code>, <code>RegularPolygon</code>, <code>Polygon</code></td></tr>
+<tr><td><code>size</code></td><td>(1, 1)</td><td>World units. For a circle or regular polygon, the diameter on each axis, so an ellipse is possible</td></tr>
+<tr><td><code>sides</code></td><td>6</td><td><code>RegularPolygon</code>: 3 to 64, a corner at the top</td></tr>
+<tr><td><code>vertices</code></td><td>none</td><td><code>Polygon</code>: 3 to 64 convex points in units of the size (-0.5 to 0.5 spans it), either winding</td></tr>
+<tr><td><code>outline</code></td><td>0</td><td>0 fills. Above 0, only a border this wide in world units, the same width on every side. A border at least as wide as the shape fills it</td></tr>
+<tr><td><code>color</code></td><td>white</td><td>Multiplies the texture</td></tr>
+<tr><td><code>texture</code></td><td>none</td><td>An image asset. Its <code>filter</code> setting (<code>nearest</code> for pixel art) applies</td></tr>
+<tr><td><code>regionOffset</code>, <code>regionSize</code></td><td>(0, 0), (1, 1)</td><td>The part of the texture shown, in uv with v up: one cell of a sprite sheet. The size box maps onto it, so a textured circle shows the middle of its cell</td></tr>
+<tr><td><code>flipX</code>, <code>flipY</code></td><td>false</td><td>Mirror the shape and its texture</td></tr>
+<tr><td><code>pivot</code></td><td>(0.5, 0.5)</td><td>Where the object's position sits within the size: (0, 0) is the lower-left corner</td></tr>
+<tr><td><code>sortingOrder</code></td><td>0</td><td>Lower draws first, so further back</td></tr>
+</tbody>
+</table>
+</div>
+<p>The shape rotates and scales with its transform. Invalid geometry (a size not above zero, sides out of range, a polygon that is not convex) draws nothing and logs one warning per description.</p>
+
+<h2 id="order">Draw order</h2>
+<ul>
+<li>A sprite always draws in the <a href="application.html#design-render-queue">Transparent queue</a>, with <code>sortingOrder</code> as its sort key.</li>
+<li>Lower orders draw first. Equal orders draw back to front by depth along the camera, then in hierarchy order, so the result is the same every frame.</li>
+<li>Depth tested against opaque 3D geometry, not written: a 3D object in front still hides a sprite.</li>
+<li>Both faces draw, so a flip or a negative scale never hides a sprite.</li>
+</ul>
+<div class="callout note" id="design-sprite-queue"><p class="callout-title">Design decision: always the Transparent queue</p><p>Only the Transparent queue has a draw order a component can set. An opaque sprite in the Opaque queue would be ordered by depth alone, and two sprites at the same z would fight. The cost is no early depth rejection for sprites, which does not matter at 2D scale.</p></div>
+
+<h2 id="software">On the software renderer</h2>
+<p>The software renderer cannot blend. There a textured sprite's pixels with alpha below 0.5 are not drawn, so a texture's transparent parts are cut out instead of drawn as boxes. Partial transparency, such as a soft edge, is lost there. Solid shapes look the same on every renderer. This uses <code>Material::SetBlendDiscardBelow</code>, which applies only to blended materials and is not saved in <code>.mat</code> files.</p>
+
+<h2 id="performance">Performance</h2>
+<p>Each sprite is one draw call. Sprites with the same shape, size, outline, region and pivot share one mesh, kept while any sprite uses it. <code>tests/engine/rendering/Sprite2DTests.cpp</code> draws 2,000 circles on the software renderer and prints the time as a <code>[SPRITE2D-PERF]</code> line. Batching many sprites into one draw is not done yet.</p>
+
+<h2 id="lua">From Lua</h2>
+<pre class="lang-lua"><code>local bullet = GameObject.Create('Bullet')
+local sprite = bullet:AddComponent('Sprite2D')
+sprite:SetShape(Sprite2DShape.Circle)
+sprite:SetSize(Vector2(0.2, 0.2))
+sprite:SetColor(Color.Red)
+sprite:SetSortingOrder(10)
+
+local player = GameObject.Create('Player')
+local body = player:AddComponent('Sprite2D')
+body:SetTexture('res://sprites/player.png')
+body:SetRegion(Vector2(0, 0.5), Vector2(0.25, 0.5)) -- one cell of a 4 x 2 sheet</code></pre>
+<p>Every field has a setter and a getter with the C++ name. <code>SetTexture</code> takes a <code>res://</code> path or <code>nil</code>; <code>SetVertices</code> takes an array of <code>Vector2</code>. Annotations are in <code>engine-api.lua</code>.</p>
+
+<h2 id="not-yet">Not yet</h2>
+<p>Effects (glow, outline glow, grayscale and the rest), sprite animation (a script can change the region), batching, nine-slice, named sorting layers, and editor gizmos.</p>
+
+<div class="page-footer">
+<span>Describes master through PR #SPRITEPR.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>
