@@ -746,6 +746,18 @@ TEST(ParticleBackendSelectionTest, AutoPrefersPhysXThenTheRenderersComputeWhenAl
     EXPECT_FALSE(unusable.fellBack);
 }
 
+TEST(ParticleBackendSelectionTest, AutoStaysOnTheCpuOnASoftwareDeviceButWebGpuStillTakesIt)
+{
+    // A fallback adapter (SwiftShader in a browser) is the CPU emulating a GPU: the CPU backend is faster there
+    TestSupport::FakeGpuCompute compute;
+    compute.software = true;
+    const BackendSelection automatic = SelectParticleBackend(ParticleBackend::Auto, nullptr, &compute, true);
+    EXPECT_EQ(automatic.compute, nullptr);
+    EXPECT_FALSE(automatic.fellBack) << "Auto on the CPU is never a fallback to warn about";
+    const BackendSelection explicitly = SelectParticleBackend(ParticleBackend::WebGPU, nullptr, &compute, false);
+    EXPECT_EQ(explicitly.compute, &compute) << "asked for by name, it runs there anyway";
+}
+
 TEST(ParticleBackendSelectionTest, PhysXAndCpuNeverTakeTheRenderersCompute)
 {
     TestSupport::FakeGpuCompute compute;

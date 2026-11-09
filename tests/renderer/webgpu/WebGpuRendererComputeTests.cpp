@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <span>
 #include <memory>
 #include <string_view>
 #include <utility>
@@ -160,6 +161,59 @@ namespace
             velocities.emplace_back(0.0f, 0.0f, 0.0f);
         }
     }
+
+    /// The renderer's compute with its reads held back while `hold` is set (PollRead answers Pending): a GPU that is
+    /// behind, made deterministic
+    class HeldReadsCompute final : public IGpuCompute
+    {
+    public:
+        explicit HeldReadsCompute(IGpuCompute &inner) : _inner(inner) {}
+        bool hold = true;
+
+        [[nodiscard]] bool IsUsable() const override { return _inner.IsUsable(); }
+        [[nodiscard]] std::string_view GetName() const override { return _inner.GetName(); }
+        [[nodiscard]] bool IsSoftwareDevice() const override { return _inner.IsSoftwareDevice(); }
+        [[nodiscard]] std::uint64_t GetMaxBufferBytes() const override { return _inner.GetMaxBufferBytes(); }
+        [[nodiscard]] Renderer::Common::GpuBufferId CreateBuffer(GpuBufferUsage usage, std::uint64_t bytes) override
+        {
+            return _inner.CreateBuffer(usage, bytes);
+        }
+        void DestroyBuffer(Renderer::Common::GpuBufferId buffer) override { _inner.DestroyBuffer(buffer); }
+        bool WriteBuffer(Renderer::Common::GpuBufferId buffer, std::uint64_t offset, const void *data,
+                         std::uint64_t bytes) override
+        {
+            return _inner.WriteBuffer(buffer, offset, data, bytes);
+        }
+        [[nodiscard]] Renderer::Common::GpuKernelId CreateKernel(std::string_view label, std::string_view wgsl,
+                                                                 std::string_view entry,
+                                                                 std::span<const GpuBindingKind> bindings) override
+        {
+            return _inner.CreateKernel(label, wgsl, entry, bindings);
+        }
+        bool Dispatch(Renderer::Common::GpuKernelId kernel, std::span<const Renderer::Common::GpuBufferId> buffers,
+                      std::uint32_t x, std::uint32_t y, std::uint32_t z) override
+        {
+            ++dispatches;
+            return _inner.Dispatch(kernel, buffers, x, y, z);
+        }
+        bool Submit() override { return _inner.Submit(); }
+        [[nodiscard]] Renderer::Common::GpuReadTicket RequestRead(Renderer::Common::GpuBufferId buffer, std::uint64_t offset,
+                                                                  std::uint64_t bytes) override
+        {
+            return _inner.RequestRead(buffer, offset, bytes);
+        }
+        GpuReadStatus PollRead(Renderer::Common::GpuReadTicket ticket, std::vector<std::uint8_t> &out) override
+        {
+            return hold ? GpuReadStatus::Pending : _inner.PollRead(ticket, out);
+        }
+        void CancelRead(Renderer::Common::GpuReadTicket ticket) override { _inner.CancelRead(ticket); }
+        bool WaitIdleForTest() override { return _inner.WaitIdleForTest(); }
+
+        int dispatches = 0;
+
+    private:
+        IGpuCompute &_inner;
+    };
 }
 
 class WebGpuComputeTest : public WebGpuTest
@@ -328,6 +382,7 @@ namespace
 TEST_F(WebGpuComputeTest, ParticlesFallOntoTheGroundAndStayAboveIt)
 {
     Particles::WebGpuParticleBackend backend(R().GetCompute(), R().GetLifetimeToken());
+    backend.SetMaxStepsInFlight(0); // these checks count steps: none may be skipped
     ASSERT_TRUE(backend.IsHealthy());
     EXPECT_EQ(backend.GetName(), "WebGPU");
     const auto handle = backend.CreateSystem(Desc(Physics::ParticleMaterial::Water, 100.0f));
@@ -378,6 +433,7 @@ TEST_F(WebGpuComputeTest, ParticlesFallOntoTheGroundAndStayAboveIt)
 TEST_F(WebGpuComputeTest, AFluidClumpSpreadsOutInsteadOfStayingPiledUp)
 {
     Particles::WebGpuParticleBackend backend(R().GetCompute(), R().GetLifetimeToken());
+    backend.SetMaxStepsInFlight(0); // these checks count steps: none may be skipped
     ASSERT_TRUE(backend.IsHealthy());
     const auto handle = backend.CreateSystem(Desc(Physics::ParticleMaterial::Water, 100.0f));
     ASSERT_NE(handle, Physics::kInvalidParticleSystem);
@@ -407,6 +463,7 @@ TEST_F(WebGpuComputeTest, AFluidClumpSpreadsOutInsteadOfStayingPiledUp)
 TEST_F(WebGpuComputeTest, SandPilesUpWithoutParticlesInsideEachOther)
 {
     Particles::WebGpuParticleBackend backend(R().GetCompute(), R().GetLifetimeToken());
+    backend.SetMaxStepsInFlight(0); // these checks count steps: none may be skipped
     ASSERT_TRUE(backend.IsHealthy());
     const auto handle = backend.CreateSystem(Desc(Physics::ParticleMaterial::Sand, 100.0f));
     ASSERT_NE(handle, Physics::kInvalidParticleSystem);
@@ -440,6 +497,7 @@ TEST_F(WebGpuComputeTest, SandPilesUpWithoutParticlesInsideEachOther)
 TEST_F(WebGpuComputeTest, ParticlesDieAtTheEndOfTheirLifetimeAndTheirSlotsAreReused)
 {
     Particles::WebGpuParticleBackend backend(R().GetCompute(), R().GetLifetimeToken());
+    backend.SetMaxStepsInFlight(0); // these checks count steps: none may be skipped
     ASSERT_TRUE(backend.IsHealthy());
     auto desc = Desc(Physics::ParticleMaterial::Smoke, 0.1f);
     desc.maxParticles = 8;
@@ -477,6 +535,7 @@ TEST_F(WebGpuComputeTest, ParticleLifetimesMatchTheCpuBackends)
 {
     // The same seed draws the same lifetimes, and the CPU-side count of the WebGPU backend never waits for the GPU
     Particles::WebGpuParticleBackend gpu(R().GetCompute(), R().GetLifetimeToken());
+    gpu.SetMaxStepsInFlight(0); // these checks count steps: none may be skipped
     Particles::CpuParticleBackend cpu;
     auto desc = Desc(Physics::ParticleMaterial::Water, 0.3f);
     desc.params.lifetimeMin = 0.1f;
@@ -531,6 +590,7 @@ TEST_F(WebGpuComputeTest, AParticleBackendStopsWhenItsRendererShutsDown)
 TEST_F(WebGpuComputeTest, ASoftCubeFallsAndRestsOnTheGroundAsOnTheCpu)
 {
     SoftBodies::WebGpuSoftBodyBackend gpu(R().GetCompute(), R().GetLifetimeToken());
+    gpu.SetMaxStepsInFlight(0); // these checks count steps: none may be skipped
     ASSERT_TRUE(gpu.IsHealthy());
     EXPECT_EQ(gpu.GetName(), "WebGPU");
     Physics::CpuSoftBodyBackend cpu;
@@ -581,6 +641,7 @@ TEST_F(WebGpuComputeTest, ASoftCubeFallsAndRestsOnTheGroundAsOnTheCpu)
 TEST_F(WebGpuComputeTest, AddVelocityPushesTheSoftBodyAndDensityChangesTheMass)
 {
     SoftBodies::WebGpuSoftBodyBackend gpu(R().GetCompute(), R().GetLifetimeToken());
+    gpu.SetMaxStepsInFlight(0); // these checks count steps: none may be skipped
     Physics::SoftBodyDesc desc = CubeDesc(0.0f);
     const auto handle = gpu.CreateBody(desc);
     ASSERT_NE(handle, Physics::kInvalidSoftBody);
@@ -613,6 +674,7 @@ TEST_F(WebGpuComputeTest, AddVelocityPushesTheSoftBodyAndDensityChangesTheMass)
 TEST_F(WebGpuComputeTest, TheSoftBodyBackendRefusesWhatTheCpuBackendRefuses)
 {
     SoftBodies::WebGpuSoftBodyBackend gpu(R().GetCompute(), R().GetLifetimeToken());
+    gpu.SetMaxStepsInFlight(0); // these checks count steps: none may be skipped
     Physics::SoftBodyDesc empty;
     EXPECT_EQ(gpu.CreateBody(empty), Physics::kInvalidSoftBody) << "no mesh";
     Physics::SoftBodyDesc badTransform = CubeDesc(0.0f);
@@ -639,4 +701,63 @@ TEST_F(WebGpuComputeTest, ASoftBodyBackendStopsWhenItsRendererShutsDown)
     gpu->CopySurfacePositions(handle, surface);
     EXPECT_EQ(surface.size(), 8u) << "the last known shape";
     gpu.reset();
+}
+
+// ---------------------------------------------------------------- a GPU that is behind
+
+TEST_F(WebGpuComputeTest, AParticleBackendSkipsStepsWhileTheGpuIsBehindAndKeepsItsLifetimesInStep)
+{
+    HeldReadsCompute compute(*R().GetCompute());
+    Particles::WebGpuParticleBackend backend(&compute, R().GetLifetimeToken());
+    ASSERT_TRUE(backend.IsHealthy());
+    backend.SetMaxStepsInFlight(2);
+    auto desc = Desc(Physics::ParticleMaterial::Water, 0.1f);
+    const auto handle = backend.CreateSystem(desc);
+    ASSERT_NE(handle, Physics::kInvalidParticleSystem);
+    const std::vector<Math::Vector3> positions(4, Math::Vector3(0.0f, 1.0f, 0.0f));
+    const std::vector<Math::Vector3> velocities(4, Math::Vector3(0.0f, 0.0f, 0.0f));
+    ASSERT_EQ(backend.Spawn(handle, positions, velocities), 4u);
+
+    // The first step asks for a copy that never lands. Steps run while it was asked for fewer than 2 steps ago (the
+    // first three), then every step is skipped
+    for (int step = 0; step < 10; ++step)
+    {
+        backend.Step(0.02f);
+    }
+    EXPECT_EQ(backend.GetSkippedStepCount(), 7u);
+    EXPECT_EQ(backend.GetAliveCount(handle), 4u) << "0.06 s of a 0.1 s life ran; the skipped steps age nothing";
+
+    // The copy lands (the GPU is idle first, so the next poll finds it): three more steps run, 0.12 s in all
+    ASSERT_TRUE(compute.WaitIdleForTest());
+    compute.hold = false;
+    for (int step = 0; step < 3; ++step)
+    {
+        backend.Step(0.02f);
+    }
+    EXPECT_EQ(backend.GetSkippedStepCount(), 7u);
+    EXPECT_EQ(backend.GetAliveCount(handle), 0u) << "0.12 s of steps that ran";
+    ASSERT_TRUE(backend.SyncForTest());
+}
+
+TEST_F(WebGpuComputeTest, ASoftBodyBackendSkipsStepsWhileTheGpuIsBehindAndKeepsAPushForLater)
+{
+    HeldReadsCompute compute(*R().GetCompute());
+    SoftBodies::WebGpuSoftBodyBackend gpu(&compute, R().GetLifetimeToken());
+    ASSERT_TRUE(gpu.IsHealthy());
+    gpu.SetMaxStepsInFlight(1);
+    const auto handle = gpu.CreateBody(CubeDesc(0.0f));
+    ASSERT_NE(handle, Physics::kInvalidSoftBody);
+    const int before = compute.dispatches;
+    for (int step = 0; step < 5; ++step)
+    {
+        gpu.Step(0.02f);
+    }
+    // The first step asks for the copy; the second runs while it was asked for 0 steps ago; then all are skipped
+    EXPECT_EQ(compute.dispatches - before, 2);
+    EXPECT_EQ(gpu.GetSkippedStepCount(), 3u);
+    ASSERT_TRUE(compute.WaitIdleForTest());
+    compute.hold = false;
+    gpu.Step(0.02f);
+    EXPECT_EQ(compute.dispatches - before, 3) << "the copy landed, so the next step ran";
+    ASSERT_TRUE(gpu.SyncForTest());
 }

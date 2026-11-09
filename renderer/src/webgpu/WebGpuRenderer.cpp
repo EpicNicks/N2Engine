@@ -16,6 +16,7 @@
 
 #ifdef __EMSCRIPTEN__
 extern "C" WGPUDevice n2_webgpu_import_device();
+extern "C" int n2_webgpu_adapter_is_fallback();
 extern "C" void n2_webgpu_present(WGPUTexture texture);
 #endif
 
@@ -713,6 +714,8 @@ namespace Renderer::WebGpu
         {
             return Fail(InitStatus::Failed, "the page supplied no WebGPU device; use --renderer software");
         }
+        // The page knows its adapter (the engine never sees it): a fallback one is the CPU emulating a GPU
+        _state->adapterType = n2_webgpu_adapter_is_fallback() != 0 ? WGPUAdapterType_CPU : WGPUAdapterType_Unknown;
 #else
         // The two callbacks count every error and every loss the renderer did not cause (ErrorCounters). A loss while the
         // renderer destroys its own device is expected (Shutdown sets expectedLoss first)

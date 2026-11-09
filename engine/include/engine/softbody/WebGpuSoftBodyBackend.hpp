@@ -42,6 +42,15 @@ namespace N2Engine::SoftBodies
         static constexpr int kSubSteps = 4;
         static constexpr std::uint32_t kMaxIterations = 32;
 
+        /// The most steps the GPU may run ahead of the positions the CPU has: while the copy in flight was asked for this
+        /// many steps ago or more, Step skips its GPU work (and, for particles, the lifetimes it counts down), so a slow
+        /// GPU slows the simulation down instead of piling work up in its queue. 0: no limit (tests that count steps)
+        static constexpr std::uint32_t kMaxStepsInFlight = 3;
+        void SetMaxStepsInFlight(std::uint32_t steps) { _maxStepsInFlight = steps; }
+        [[nodiscard]] std::uint32_t GetMaxStepsInFlight() const { return _maxStepsInFlight; }
+        /// Steps whose GPU work was skipped because the GPU was behind (since the backend was made)
+        [[nodiscard]] std::uint64_t GetSkippedStepCount() const { return _skippedSteps; }
+
         WebGpuSoftBodyBackend(Renderer::Common::IGpuCompute *compute, std::weak_ptr<const void> lifetime);
         ~WebGpuSoftBodyBackend() override;
         WebGpuSoftBodyBackend(const WebGpuSoftBodyBackend &) = delete;
@@ -100,6 +109,8 @@ namespace N2Engine::SoftBodies
             Renderer::Common::GpuBufferId lambdas = 0;
 
             Renderer::Common::GpuReadTicket ticket = 0;
+            std::uint64_t steps = 0;      // Steps submitted to the GPU
+            std::uint64_t ticketStep = 0; // `steps` when the copy in flight was asked for
             std::vector<Math::Vector3> nodes; // the last copy that landed (the rest shape before the first)
             std::vector<std::uint8_t> readBytes;
         };
@@ -117,6 +128,8 @@ namespace N2Engine::SoftBodies
         std::weak_ptr<const void> _lifetime;
         bool _broken = false;
         Renderer::Common::GpuKernelId _simulate = 0;
+        std::uint32_t _maxStepsInFlight = kMaxStepsInFlight;
+        std::uint64_t _skippedSteps = 0;
         mutable std::map<std::uint32_t, Body> _bodies; // by handle index, so bodies step in creation order
         std::uint32_t _nextIndex = 1;
     };

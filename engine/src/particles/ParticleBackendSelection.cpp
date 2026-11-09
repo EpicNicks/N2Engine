@@ -41,10 +41,11 @@ namespace N2Engine::Particles
         }
 
         // Auto: after PhysX, the renderer's compute when the project lets the GPU simulate (physics.gpu auto or on, not
-        // deterministic), then quietly the CPU backend
+        // deterministic) and the device is a real GPU (a fallback adapter is the CPU emulating one: the CPU backend is
+        // faster there), then quietly the CPU backend
         if (requested == ParticleBackend::Auto)
         {
-            if (autoUsesCompute && computeUsable)
+            if (autoUsesCompute && computeUsable && !compute->IsSoftwareDevice())
             {
                 selection.compute = compute;
             }

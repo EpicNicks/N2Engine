@@ -98,6 +98,12 @@ namespace Renderer::WebGpu
 
         [[nodiscard]] std::string_view GetName() const override { return "WebGPU"; }
 
+        [[nodiscard]] bool IsSoftwareDevice() const override
+        {
+            std::lock_guard lock(_renderer._mutex);
+            return GetState().adapterType == WGPUAdapterType_CPU;
+        }
+
         [[nodiscard]] std::uint64_t GetMaxBufferBytes() const override
         {
             std::lock_guard lock(_renderer._mutex);

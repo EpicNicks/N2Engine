@@ -66,6 +66,9 @@ namespace Renderer::Common
         [[nodiscard]] virtual bool IsUsable() const = 0;
         /// "WebGPU": what health rows and logs call it
         [[nodiscard]] virtual std::string_view GetName() const = 0;
+        /// True when the device is the CPU emulating a GPU (a fallback adapter: SwiftShader in a browser, lavapipe
+        /// natively). Simulations asked for Auto stay on the CPU there, which runs them faster
+        [[nodiscard]] virtual bool IsSoftwareDevice() const = 0;
         /// The largest buffer CreateBuffer accepts (the device's storage-binding limit), 0 when not usable
         [[nodiscard]] virtual std::uint64_t GetMaxBufferBytes() const = 0;
 

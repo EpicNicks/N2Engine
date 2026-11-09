@@ -480,6 +480,13 @@ namespace N2Engine::SoftBodies
         {
             return;
         }
+        if (_maxStepsInFlight != 0 && body.ticket != 0 && body.steps - body.ticketStep >= _maxStepsInFlight)
+        {
+            // The GPU has not caught up with the steps already submitted: skip this one rather than queue more work
+            // behind it (a push waits for the next step that runs)
+            ++_skippedSteps;
+            return;
+        }
         // A body that blew up (a non-finite position in the last copy) restarts from its rest shape, as on the CPU
         float check = 0.0f;
         for (const Math::Vector3 &p : body.nodes)
@@ -531,9 +538,11 @@ namespace N2Engine::SoftBodies
                                                                       body.ranges, body.lambdas};
         bool ok = _compute->WriteBuffer(body.uniform, 0, &block, sizeof(block));
         ok = ok && _compute->Dispatch(_simulate, buffers, 1); // one workgroup runs the body's whole step
+        ++body.steps;
         if (ok && body.ticket == 0)
         {
             body.ticket = _compute->RequestRead(body.positions, 0, std::uint64_t{body.nodeCount} * 16);
+            body.ticketStep = body.steps;
             ok = body.ticket != 0;
         }
         else if (ok)

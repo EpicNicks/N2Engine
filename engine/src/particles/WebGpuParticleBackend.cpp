@@ -520,6 +520,13 @@ namespace N2Engine::Particles
         {
             return;
         }
+        if (_maxStepsInFlight != 0 && system.ticket != 0 && system.steps - system.ticketStep >= _maxStepsInFlight)
+        {
+            // The GPU has not caught up with the steps already submitted: skip this one whole (the lifetimes too, so the
+            // CPU's count stays the GPU's), rather than queue more work behind it
+            ++_skippedSteps;
+            return;
+        }
         const float h = dt / static_cast<float>(kSubSteps);
         const std::uint32_t count = system.highWater; // every slot that may be alive at the start of the step
         if (count > 0)

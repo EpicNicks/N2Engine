@@ -149,6 +149,18 @@ TEST(SoftBodySelectionTest, AutoPrefersPhysXThenTheRenderersComputeWhenAllowed)
     EXPECT_EQ(SelectSoftBodyBackend(SoftBodyBackend::CPU, nullptr, &compute, true).compute, nullptr);
 }
 
+TEST(SoftBodySelectionTest, AutoStaysOnTheCpuOnASoftwareDeviceButWebGpuStillTakesIt)
+{
+    // A fallback adapter (SwiftShader in a browser) is the CPU emulating a GPU: the CPU backend is faster there
+    TestSupport::FakeGpuCompute compute;
+    compute.software = true;
+    const SoftBodyBackendSelection automatic = SelectSoftBodyBackend(SoftBodyBackend::Auto, nullptr, &compute, true);
+    EXPECT_EQ(automatic.compute, nullptr);
+    EXPECT_FALSE(automatic.fellBack) << "Auto on the CPU is never a fallback to warn about";
+    const SoftBodyBackendSelection explicitly = SelectSoftBodyBackend(SoftBodyBackend::WebGPU, nullptr, &compute, false);
+    EXPECT_EQ(explicitly.compute, &compute) << "asked for by name, it runs there anyway";
+}
+
 TEST(SoftBodySelectionTest, TheFakeBackendsDefaultsMatchTheRealOnes)
 {
     // No soft-body backend unless asked for, and a Ready scene is then not Ready for soft bodies

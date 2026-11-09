@@ -29,7 +29,8 @@ namespace N2Engine::Particles
      *   velocity to drag plus the preset's damping, and keeps above the optional ground plane (groundEnabled), off which
      *   it bounces with `bounce` of its speed. No scene colliders: like the CPU backend, the ground plane is the only
      *   collision with the world.
-     * Each Step runs kSubSteps sub-steps of kIterations solver iterations.
+     * Each Step runs kSubSteps sub-steps of kIterations solver iterations, unless the GPU is more than
+     * kMaxStepsInFlight steps behind (then the step is skipped whole, lifetimes included).
      *
      * The CPU keeps the bookkeeping: which slots hold a particle, every particle's lifetime (counted down with the same
      * float arithmetic the GPU uses), so GetAliveCount never waits for the GPU. Positions come back asynchronously: each
@@ -50,6 +51,15 @@ namespace N2Engine::Particles
         static constexpr std::uint32_t kCellCapacity = 16;
         /// The most particles one system may have (the component's own limit is lower)
         static constexpr std::uint32_t kMaxParticlesLimit = 1000000;
+
+        /// The most steps the GPU may run ahead of the positions the CPU has: while the copy in flight was asked for this
+        /// many steps ago or more, Step skips its GPU work (and, for particles, the lifetimes it counts down), so a slow
+        /// GPU slows the simulation down instead of piling work up in its queue. 0: no limit (tests that count steps)
+        static constexpr std::uint32_t kMaxStepsInFlight = 3;
+        void SetMaxStepsInFlight(std::uint32_t steps) { _maxStepsInFlight = steps; }
+        [[nodiscard]] std::uint32_t GetMaxStepsInFlight() const { return _maxStepsInFlight; }
+        /// Steps whose GPU work was skipped because the GPU was behind (since the backend was made)
+        [[nodiscard]] std::uint64_t GetSkippedStepCount() const { return _skippedSteps; }
 
         WebGpuParticleBackend(Renderer::Common::IGpuCompute *compute, std::weak_ptr<const void> lifetime);
         ~WebGpuParticleBackend() override;
@@ -146,6 +156,8 @@ namespace N2Engine::Particles
         Renderer::Common::GpuKernelId _deltas = 0;
         Renderer::Common::GpuKernelId _apply = 0;
         Renderer::Common::GpuKernelId _finalize = 0;
+        std::uint32_t _maxStepsInFlight = kMaxStepsInFlight;
+        std::uint64_t _skippedSteps = 0;
         mutable std::map<std::uint32_t, System> _systems; // by handle index; mutable: CopyPositions lands reads
         std::uint32_t _nextIndex = 1;
     };

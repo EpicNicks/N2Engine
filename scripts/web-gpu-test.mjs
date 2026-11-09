@@ -40,6 +40,22 @@ test('automatic and explicit WebGPU return the acquired device', async () => {
     assert.equal(result.device, acquired);
   }
 });
+test('a fallback adapter is reported with the device, and the session keeps it across a recovery', async () => {
+  const first = device(), second = device();
+  const fallback = { info: { isFallbackAdapter: true }, requestDevice: async () => first };
+  const real = { info: { isFallbackAdapter: false }, requestDevice: async () => second };
+  const legacy = { isFallbackAdapter: true, requestDevice: async () => device() };
+  assert.equal((await probe({ requestAdapter: async () => fallback }).acquire()).fallback, true);
+  assert.equal((await probe({ requestAdapter: async () => real }).acquire()).fallback, false);
+  assert.equal((await probe({ requestAdapter: async () => legacy }).acquire()).fallback, true, 'older browsers: on the adapter');
+  const session = createGpuSession({ device: first, fallback: true, createPresenter: () => () => {},
+    probe: { acquire: async () => ({ renderer: 'webgpu', device: second, fallback: false }) }, onFailure() {} });
+  assert.equal(session.fallback, true);
+  first.lose({ message: 'gone' });
+  await tick(); await tick();
+  assert.equal(session.device, second);
+  assert.equal(session.fallback, false, 'the replacement device has its own adapter');
+});
 test('timeout bounds adapter and device requests and destroys late devices', async () => {
   const adapter = deferred();
   const request = probe({ requestAdapter: () => adapter.promise }, { timeoutMs: 5 }).acquire();

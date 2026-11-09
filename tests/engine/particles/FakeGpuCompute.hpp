@@ -19,6 +19,7 @@ namespace N2Engine::TestSupport
 
         [[nodiscard]] bool IsUsable() const override { return usable; }
         [[nodiscard]] std::string_view GetName() const override { return "WebGPU"; }
+        [[nodiscard]] bool IsSoftwareDevice() const override { return software; }
         [[nodiscard]] std::uint64_t GetMaxBufferBytes() const override { return 0; }
         [[nodiscard]] Renderer::Common::GpuBufferId CreateBuffer(Renderer::Common::GpuBufferUsage, std::uint64_t) override
         {
@@ -53,5 +54,7 @@ namespace N2Engine::TestSupport
         bool WaitIdleForTest() override { return false; }
 
         bool usable = true;
+        /// What IsSoftwareDevice answers (a fallback adapter)
+        bool software = false;
     };
 }

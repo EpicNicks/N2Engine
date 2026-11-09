@@ -184,7 +184,7 @@
       log('renderer: ' + result.reason);
       if (!result.device) return;
       try {
-        gpuSession = N2Loader.createGpuSession({ device: result.device, canvas: canvas, gpu: navigator.gpu,
+        gpuSession = N2Loader.createGpuSession({ device: result.device, fallback: result.fallback, canvas: canvas, gpu: navigator.gpu,
           probe: probe, onFailure: gpuFailure, onEvent: log });
         renderer = 'webgpu';
       } catch (error) {
