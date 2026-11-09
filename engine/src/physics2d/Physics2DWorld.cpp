@@ -284,8 +284,13 @@ namespace N2Engine::Physics2D
                 b2DestroyWorld(_world);
             }
 
-            void SetWorldGravity(const Math::Vector2 &gravity)
+            void SetWorldGravity(const Math::Vector2 &gravity) override
             {
+                if (!IsFinite(gravity))
+                {
+                    Logger::Warn("Physics2D: gravity must be finite; it was not changed");
+                    return;
+                }
                 b2World_SetGravity(_world, ToB2(gravity));
                 // Sleeping bodies would ignore it until something else woke them
                 for (const auto &[handle, body] : _bodies)
@@ -296,6 +301,8 @@ namespace N2Engine::Physics2D
                     }
                 }
             }
+
+            [[nodiscard]] Math::Vector2 GetWorldGravity() const override { return FromB2(b2World_GetGravity(_world)); }
 
             void RefreshMatrix()
             {

@@ -1191,6 +1191,12 @@ namespace N2Engine::Scripting
             _hasOnTriggerEnter = false;
             _hasOnTriggerStay = false;
             _hasOnTriggerExit = false;
+            _hasOnCollisionEnter2D = false;
+            _hasOnCollisionStay2D = false;
+            _hasOnCollisionExit2D = false;
+            _hasOnTriggerEnter2D = false;
+            _hasOnTriggerStay2D = false;
+            _hasOnTriggerExit2D = false;
             _hasOnApplicationQuit = false;
             _hasOnMouseEnter = false;
             _hasOnMouseOver = false;
@@ -1211,6 +1217,12 @@ namespace N2Engine::Scripting
         _hasOnTriggerEnter = HasMethod("OnTriggerEnter");
         _hasOnTriggerStay = HasMethod("OnTriggerStay");
         _hasOnTriggerExit = HasMethod("OnTriggerExit");
+        _hasOnCollisionEnter2D = HasMethod("OnCollisionEnter2D");
+        _hasOnCollisionStay2D = HasMethod("OnCollisionStay2D");
+        _hasOnCollisionExit2D = HasMethod("OnCollisionExit2D");
+        _hasOnTriggerEnter2D = HasMethod("OnTriggerEnter2D");
+        _hasOnTriggerStay2D = HasMethod("OnTriggerStay2D");
+        _hasOnTriggerExit2D = HasMethod("OnTriggerExit2D");
         _hasOnApplicationQuit = HasMethod("OnApplicationQuit");
         _hasOnMouseEnter = HasMethod("OnMouseEnter");
         _hasOnMouseOver = HasMethod("OnMouseOver");
@@ -1342,6 +1354,54 @@ namespace N2Engine::Scripting
         if (_hasOnTriggerExit && !_hasMissingScript)
         {
             CallLuaMethodWithArgument("OnTriggerExit", [&] { return Bindings::TriggerToLua(trigger, _scriptInstance.lua_state()); });
+        }
+    }
+
+    void LuaComponent::OnCollisionEnter2D(const Physics2D::Collision2D &collision)
+    {
+        if (_hasOnCollisionEnter2D && !_hasMissingScript)
+        {
+            CallLuaMethodWithArgument("OnCollisionEnter2D", [&] { return Bindings::Collision2DToLua(collision, _scriptInstance.lua_state()); });
+        }
+    }
+
+    void LuaComponent::OnCollisionStay2D(const Physics2D::Collision2D &collision)
+    {
+        if (_hasOnCollisionStay2D && !_hasMissingScript)
+        {
+            CallLuaMethodWithArgument("OnCollisionStay2D", [&] { return Bindings::Collision2DToLua(collision, _scriptInstance.lua_state()); });
+        }
+    }
+
+    void LuaComponent::OnCollisionExit2D(const Physics2D::Collision2D &collision)
+    {
+        if (_hasOnCollisionExit2D && !_hasMissingScript)
+        {
+            CallLuaMethodWithArgument("OnCollisionExit2D", [&] { return Bindings::Collision2DToLua(collision, _scriptInstance.lua_state()); });
+        }
+    }
+
+    void LuaComponent::OnTriggerEnter2D(const Physics2D::Trigger2D &trigger)
+    {
+        if (_hasOnTriggerEnter2D && !_hasMissingScript)
+        {
+            CallLuaMethodWithArgument("OnTriggerEnter2D", [&] { return Bindings::Trigger2DToLua(trigger, _scriptInstance.lua_state()); });
+        }
+    }
+
+    void LuaComponent::OnTriggerStay2D(const Physics2D::Trigger2D &trigger)
+    {
+        if (_hasOnTriggerStay2D && !_hasMissingScript)
+        {
+            CallLuaMethodWithArgument("OnTriggerStay2D", [&] { return Bindings::Trigger2DToLua(trigger, _scriptInstance.lua_state()); });
+        }
+    }
+
+    void LuaComponent::OnTriggerExit2D(const Physics2D::Trigger2D &trigger)
+    {
+        if (_hasOnTriggerExit2D && !_hasMissingScript)
+        {
+            CallLuaMethodWithArgument("OnTriggerExit2D", [&] { return Bindings::Trigger2DToLua(trigger, _scriptInstance.lua_state()); });
         }
     }
 

@@ -12,9 +12,11 @@ struct lua_State;
 namespace N2Engine::Scripting
 {
     /// The script callbacks a deterministic tick runs (a fixed step and the physics events of its step)
-    inline constexpr std::array<std::string_view, 7> kTickCallbacks = {
+    inline constexpr std::array<std::string_view, 13> kTickCallbacks = {
         "OnFixedUpdate",  "OnCollisionEnter", "OnCollisionStay", "OnCollisionExit",
         "OnTriggerEnter", "OnTriggerStay",    "OnTriggerExit",
+        "OnCollisionEnter2D", "OnCollisionStay2D", "OnCollisionExit2D",
+        "OnTriggerEnter2D",   "OnTriggerStay2D",   "OnTriggerExit2D",
     };
 
     /**

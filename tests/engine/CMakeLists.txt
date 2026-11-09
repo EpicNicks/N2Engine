@@ -30,7 +30,7 @@ add_executable(engine_tests ${ENGINE_TEST_SOURCES})
 
 # On this file only, so a build without Box2D recompiles almost nothing else
 if(N2ENGINE_USE_BOX2D)
-    set_source_files_properties(physics2d/Physics2DTests.cpp PROPERTIES COMPILE_DEFINITIONS N2ENGINE_BOX2D_ENABLED=1)
+    set_source_files_properties(physics2d/Physics2DTests.cpp physics2d/LuaPhysics2DTests.cpp PROPERTIES COMPILE_DEFINITIONS N2ENGINE_BOX2D_ENABLED=1)
 endif()
 
 target_link_libraries(engine_tests

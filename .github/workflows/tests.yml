@@ -528,7 +528,7 @@ jobs:
           cmake -S . -B build-nobox2d -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DN2ENGINE_USE_BOX2D=OFF
           cmake --build build-nobox2d --parallel --target engine_tests -- -k 0
           if grep -q 'libbox2d' build-nobox2d/build.ninja; then echo 'a build without Box2D still links it'; exit 1; fi
-          ./build-nobox2d/bin/engine_tests --gtest_filter='Physics2DStrippedTest.*'
+          ./build-nobox2d/bin/engine_tests --gtest_filter='Physics2DStrippedTest.*:LuaPhysics2DStrippedTest.*'
 
       # The vendored Box2D alone: this leg's [BOX2D-DETERMINISM] line, which must equal every other leg's
       - name: Box2D determinism numbers
