@@ -245,6 +245,16 @@ namespace N2Engine::Scripting::Bindings
                 }
                 text->SetFont(LoadFontOrThrow(*path, "UIText:SetFont"));
             },
+            // Moves character `index` (1-based, in characters of the text) by (x, y) canvas units, +y up (TextMeshPro
+            // vertex effects: wave, shake). Not saved; kept across SetText
+            "SetCharacterOffset", [](const UITextRef &c, const int index, const float x, const float y)
+            {
+                if (index >= 1)
+                {
+                    c.Pin()->SetCharacterOffset(static_cast<std::size_t>(index - 1), Math::Vector2{x, y});
+                }
+            },
+            "ClearCharacterOffsets", [](const UITextRef &c) { c.Pin()->ClearCharacterOffsets(); },
             // The laid-out block in canvas space, in the rect of the last layout: minX, minY, maxX, maxY
             // (all 0 for empty text)
             "GetBounds", [](const UITextRef &c)

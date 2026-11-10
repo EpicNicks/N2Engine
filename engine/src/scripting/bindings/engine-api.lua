@@ -1603,6 +1603,16 @@ function UIText:AddEffectPass(offsetX, offsetY, color, width, softness, order) e
 ---Removes every extra pass; the shadow, outline and softness settings stay.
 function UIText:ClearEffectPasses() end
 
+---Moves character `index` (1-based, in characters of the text) by (x, y) canvas units, +y up (TextMeshPro-style
+---vertex effects: wave, shake). Not saved with the scene; kept across SetText
+---@param index integer
+---@param x number
+---@param y number
+function UIText:SetCharacterOffset(index, x, y) end
+
+---Puts every character back where the layout places it
+function UIText:ClearCharacterOffsets() end
+
 ---@return integer
 function UIText:GetEffectPassCount() end
 
