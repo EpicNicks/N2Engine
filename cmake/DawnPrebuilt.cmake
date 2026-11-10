@@ -17,6 +17,8 @@
 # file you pinned with sha256sum, not from a web page), and set the same tag, commit and hash in
 # scripts/install-wgsl-validators.sh so Tint moves with it. The emdawnwebgpu port (stage G4) pins its own Dawn revision through
 # the Emscripten version: see docs/application.html#bumping-dawn.
+include(${CMAKE_CURRENT_LIST_DIR}/N2Download.cmake)
+
 set(N2_DAWN_TAG "v20261016.190333")
 set(N2_DAWN_COMMIT "67d4d6e64b0755d638f76549794692badfdbc8ab")
 set(N2_DAWN_SHA256 "20ff88448def9645ceeff30911e07295aeb433be23e26180c96019b4300bff5a")
@@ -50,14 +52,8 @@ if(N2_DAWN_STAMP_OK)
 else()
     message(STATUS "Downloading Dawn ${N2_DAWN_TAG} (${N2_DAWN_STEM}.tar.gz, SHA-256 checked)...")
     file(REMOVE_RECURSE "${N2_DAWN_DIR}")
-    file(DOWNLOAD "${N2_DAWN_URL}" "${N2_DAWN_ARCHIVE}"
-         EXPECTED_HASH SHA256=${N2_DAWN_SHA256}
-         TLS_VERIFY ON
-         STATUS N2_DAWN_DOWNLOAD_STATUS)
-    list(GET N2_DAWN_DOWNLOAD_STATUS 0 N2_DAWN_DOWNLOAD_CODE)
-    list(GET N2_DAWN_DOWNLOAD_STATUS 1 N2_DAWN_DOWNLOAD_MESSAGE)
-    if(NOT N2_DAWN_DOWNLOAD_CODE EQUAL 0)
-        file(REMOVE "${N2_DAWN_ARCHIVE}")
+    n2_download(URL "${N2_DAWN_URL}" DEST "${N2_DAWN_ARCHIVE}" SHA256 "${N2_DAWN_SHA256}" RESULT N2_DAWN_DOWNLOAD_MESSAGE)
+    if(N2_DAWN_DOWNLOAD_MESSAGE)
         message(FATAL_ERROR "Could not fetch Dawn ${N2_DAWN_TAG} from ${N2_DAWN_URL}, or its SHA-256 is not the pinned "
                             "${N2_DAWN_SHA256}: ${N2_DAWN_DOWNLOAD_MESSAGE}")
     endif()
