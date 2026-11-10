@@ -597,6 +597,7 @@ namespace N2Engine::Scripting
         Bindings::BindPhysics2D(*this);
         Bindings::BindNetworkInterest(*this);
         Bindings::BindAudio(*this);
+        Bindings::BindSaveData(*this);
 
         // Input & Events
         Bindings::BindInput(*this);

@@ -2734,6 +2734,47 @@ function Audio.IsGroupMuted(group) end
 ---@return boolean
 function Audio.HasGroup(group) end
 
+-- ===== SAVE DATA AND JSON =====
+
+---Small text files in the project's user://saves folder. Names are plain file names (letters, digits, _ - .,
+---at most 64 characters, not starting with '.'); anything else is a Lua error. Files are at most 1 MiB.
+---@class SaveData
+SaveData = {}
+
+---Write the whole file (atomically: a temporary file is renamed over the old one)
+---@param name string
+---@param text string
+---@return boolean ok
+---@return string|nil message
+function SaveData.Write(name, text) end
+
+---@param name string
+---@return string|nil text nil when the file does not exist
+function SaveData.Read(name) end
+
+---@param name string
+---@return boolean
+function SaveData.Exists(name) end
+
+---@param name string
+---@return boolean existed
+function SaveData.Delete(name) end
+
+---@class Json
+Json = {}
+
+---A Lua value as JSON text (a table with keys 1..n is an array; object keys are sorted)
+---@param value any
+---@param pretty boolean|nil indent with two spaces
+---@return string
+function Json.Encode(value, pretty) end
+
+---JSON text as a Lua value (null is nil), or nil and a message
+---@param text string
+---@return any value
+---@return string|nil message
+function Json.Decode(text) end
+
 -- ===== INPUT =====
 
 ---@enum ActionPhase
