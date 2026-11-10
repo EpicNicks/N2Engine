@@ -94,6 +94,12 @@ int main(int argc, char *argv[])
             }
             renderBackend = *parsed;
         }
+        else if (arg == "--console-log")
+        {
+            // Triangle-Like (local, integration branch only): log lines on stdout in a Release build too, which
+            // Application::Init installs only under N2ENGINE_DEBUG. The game's smoke runs read them.
+            Logger::InitializeDebugConsoleHelper();
+        }
         else if (arg.starts_with("--"))
         {
             UsageError(std::format("Unknown option '{}'. Usage: lua_project [project folder] "
