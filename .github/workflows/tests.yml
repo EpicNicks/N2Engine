@@ -1173,7 +1173,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # Since the per-project module builds (#315) a full run takes about 63 minutes: every step passed and the job was cancelled at 60
+    timeout-minutes: 90
     env:
       N2_DOWNLOAD_CACHE: ${{ github.workspace }}/.n2-downloads
       EMSCRIPTEN_VERSION: 4.0.10
