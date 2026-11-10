@@ -263,6 +263,29 @@ namespace Renderer::Common
         [[nodiscard]] virtual bool SupportsBlending() const { return true; }
 
         /**
+         * The screen tint (ScreenTint: a saturation inside or outside a circle on the screen; effects design, stage E2):
+         * every draw recorded from now until the next call carries `tint` in its RenderState::tint, read when the draw is
+         * RECORDED like the stage dim, so it still travels with the draw when a backend reorders draws. Application sets
+         * it for the scene pass only and clears it before the UI pass. Taken through ScreenTint::Sanitized (saturation
+         * clamped to 0..1, a negative radius to 0, a value that is not finite: no tint). The default (ScreenTint{})
+         * tints nothing.
+         */
+        void SetScreenTint(const ScreenTint &tint) { m_screenTint = ScreenTint::Sanitized(tint); }
+        [[nodiscard]] const ScreenTint& GetScreenTint() const { return m_screenTint; }
+        /// `state` as a draw recorded now carries it: WithStageDim, and the screen tint when one is set (a draw's own
+        /// tint stays when none is, taken through ScreenTint::Sanitized like SetScreenTint's, since the backends hand it
+        /// to the shaders as it is)
+        [[nodiscard]] RenderState WithFrameModifiers(const RenderState &state) const
+        {
+            RenderState applied = WithStageDim(state);
+            applied.tint = m_screenTint.IsActive() ? m_screenTint : ScreenTint::Sanitized(state.tint);
+            return applied;
+        }
+        /// Whether this backend's built-in shaders apply RenderState::tint. The four backends do (OpenGL, Vulkan, WebGPU,
+        /// software); the default (a test fake) does not.
+        [[nodiscard]] virtual bool SupportsScreenTint() const { return false; }
+
+        /**
          * What the last finished frame drew (EN5): its draw calls, triangles and vertices, counted between its BeginFrame
          * and EndFrame (RenderCounters). Like the stage dim, the counting is non-virtual state each backend updates where
          * it records a draw (NoteDraw), clears in BeginFrame (ResetRenderCounters) and publishes in EndFrame
@@ -309,6 +332,7 @@ namespace Renderer::Common
     private:
         std::shared_ptr<const int> m_lifetime = std::make_shared<const int>(0);
         float m_stageDim = 0.0f;
+        ScreenTint m_screenTint{};
         RenderCounters m_frameCounters{};
         RenderCounters m_lastFrameCounters{};
     };

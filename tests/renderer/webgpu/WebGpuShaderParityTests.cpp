@@ -658,7 +658,7 @@ TEST(WebGpuShaderParityTest, EveryUniformStructDeclaresTheTablesMembersAtTheOffs
         const std::string label = file.label;
 
         const std::uint32_t perDrawEnd = ExpectBlockMatchesTable(module, 0, 0, Gpu::kPerDraw, label + " per-draw block");
-        EXPECT_EQ(perDrawEnd, Gpu::kPerDrawBlockSize) << label << ": the per-draw block is 3 mat4x4 and uStageDim";
+        EXPECT_EQ(perDrawEnd, Gpu::kPerDrawBlockSize) << label << ": the per-draw block is 3 mat4x4, uStageDim and the screen tint";
 
         const std::uint32_t materialEnd =
             ExpectBlockMatchesTable(module, 1, 0, Gpu::MaterialUniforms(file.shader), label + " material block");
@@ -834,7 +834,22 @@ TEST(WebGpuShaderParityTest, WhatTheVertexStageOutputsIsWhatTheFragmentStageTake
             EXPECT_EQ(in->type, out.type) << file.label << ": @location(" << out.location << ")";
         }
         EXPECT_EQ(positions, 1u) << file.label << ": exactly one @builtin(position) output";
-        EXPECT_EQ(inputs->size(), varyings) << file.label << ": the fragment stage reads everything the vertex stage writes";
+        // Besides the varyings, the fragment stage reads its own framebuffer position (the screen tint's circle test)
+        std::size_t locationInputs = 0;
+        std::size_t positionInputs = 0;
+        for (const Field& in : *inputs)
+        {
+            if (in.builtin.empty())
+            {
+                ++locationInputs;
+                continue;
+            }
+            EXPECT_EQ(in.builtin, "position") << file.label << ": " << in.name;
+            EXPECT_EQ(in.type, "vec4<f32>") << file.label << ": " << in.name;
+            ++positionInputs;
+        }
+        EXPECT_EQ(locationInputs, varyings) << file.label << ": the fragment stage reads everything the vertex stage writes";
+        EXPECT_EQ(positionInputs, 1u) << file.label << ": the fragment position, for the screen tint";
         EXPECT_EQ(module.fragment.resultType, "vec4<f32>") << file.label << ": the colour output at @location(0)";
     }
 }

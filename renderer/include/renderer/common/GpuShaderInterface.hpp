@@ -3,9 +3,11 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
 #include <string_view>
 
+#include "renderer/common/RenderState.hpp"
 #include "renderer/common/RenderTypes.hpp"
 
 // The interface of the three built-in shaders shared by the GPU backends (#43, stage B), as C++: which uniform lives in
@@ -21,8 +23,12 @@
 // Blocks (std140):
 //   set 0, binding 0  PerDraw   (dynamic offset per draw)  uModel, uView, uProjection: row-major matrices, copied as the
 //                                                          engine gives them (the GLSL says row_major), then uStageDim
-//                                                          (RenderState::dim of the draw), 196 bytes (a binding covers
-//                                                          208, the block rounded up to its 16-byte alignment)
+//                                                          (RenderState::dim of the draw) and the screen tint
+//                                                          (RenderState::tint: uTintSaturation, uTintInside, uTintCircle),
+//                                                          220 bytes (a binding covers 224, the block rounded up to its
+//                                                          16-byte alignment). The fragment shaders read the tint members
+//                                                          straight from the block (the stage dim reaches them through the
+//                                                          vertex stage)
 //   set 0, binding 1  Lighting  (dynamic offset per draw)  scene lighting for the lit shader (stage C: UpdateSceneLighting
 //                                                          keeps a CPU copy; the first lit draw after each update copies
 //                                                          it into the frame's ring, see VulkanDraw.cpp)
@@ -86,10 +92,10 @@ namespace Renderer::Gpu::ShaderInterface
     };
 
     // ---- Fixed sizes -------------------------------------------------------------------------------------------------
-    inline constexpr std::uint32_t kPerDrawBlockSize = 196;   // 3 mat4 and a float
+    inline constexpr std::uint32_t kPerDrawBlockSize = 220;   // 3 mat4, two floats, an int and a vec3 (see kPerDraw)
     /// What a per-draw binding covers: the block rounded up to its 16-byte alignment (a WGSL struct's size, which WebGPU
     /// requires a binding to cover)
-    inline constexpr std::uint32_t kPerDrawBindingSize = 208;
+    inline constexpr std::uint32_t kPerDrawBindingSize = 224;
     /// The range every material descriptor covers: at least the largest material block (the lit one is 72 bytes, the
     /// text one 92), so one descriptor set layout serves every shader
     inline constexpr std::uint32_t kMaterialBlockRange = 128;
@@ -121,13 +127,54 @@ namespace Renderer::Gpu::ShaderInterface
     inline constexpr std::array<Attribute, 3> kTextAttributes{kPosition, kTexCoord, kColor};
 
     // ---- Uniforms ---------------------------------------------------------------------------------------------------
-    inline constexpr std::array<Uniform, 4> kPerDraw{{
+    inline constexpr std::array<Uniform, 7> kPerDraw{{
         {"uModel", Block::PerDraw, 0, UniformType::Mat4, 64, 1},
         {"uView", Block::PerDraw, 64, UniformType::Mat4, 64, 1},
         {"uProjection", Block::PerDraw, 128, UniformType::Mat4, 64, 1},
         // The prefab stage's dim (RenderState::dim, IRenderer::SetStageDim): 0 for every other draw
         {"uStageDim", Block::PerDraw, 192, UniformType::Float, 4, 1},
+        // The screen tint (RenderState::tint, IRenderer::SetScreenTint): the saturation (1, no tint, for every other
+        // draw), whether it applies inside the circle (1) or outside (0), and the circle (centre x, centre y, radius) in
+        // the render target's framebuffer pixels (ScreenTint::InPixels: rows count down from the top on Vulkan and WebGPU)
+        {"uTintSaturation", Block::PerDraw, 196, UniformType::Float, 4, 1},
+        {"uTintInside", Block::PerDraw, 200, UniformType::Int, 4, 1},
+        {"uTintCircle", Block::PerDraw, 208, UniformType::Vec3, 12, 1},
     }};
+    static_assert(kPerDraw.back().offset + kPerDraw.back().size == kPerDrawBlockSize);
+    static_assert(kPerDrawBindingSize == (kPerDrawBlockSize + 15) / 16 * 16);
+
+    /// The offset of a per-draw block member, resolved at compile time: a name that is not in the table does not compile
+    [[nodiscard]] consteval std::uint32_t PerDrawOffset(const std::string_view name)
+    {
+        for (const Uniform& uniform : kPerDraw)
+        {
+            if (uniform.name == name)
+            {
+                return uniform.offset;
+            }
+        }
+        throw "not a member of the per-draw block";
+    }
+
+    /**
+     * Fills the per-draw block's members after the matrices for a draw that carries `state` (its dim and tint, as
+     * IRenderer::WithFrameModifiers made them), in a render target of `width` x `height` pixels whose rows count down
+     * from the top (Vulkan's flipped viewport and WebGPU: gl_FragCoord and @builtin(position) start at the top row), and
+     * zeroes the padding up to kPerDrawBindingSize. An inactive tint is written as saturation 1, which the shaders skip.
+     */
+    inline void WritePerDrawEffects(std::uint8_t* block, const Common::RenderState& state, const std::uint32_t width,
+                                    const std::uint32_t height)
+    {
+        std::memset(block + PerDrawOffset("uStageDim"), 0, kPerDrawBindingSize - PerDrawOffset("uStageDim"));
+        const float dim = state.dim;
+        std::memcpy(block + PerDrawOffset("uStageDim"), &dim, sizeof(float));
+        const Common::ScreenTintUniforms tint =
+            state.tint.ToUniforms(static_cast<float>(width), static_cast<float>(height), true);
+        const float circleValues[3] = {tint.circle.centreX, tint.circle.centreY, tint.circle.radius};
+        std::memcpy(block + PerDrawOffset("uTintSaturation"), &tint.saturation, sizeof(float));
+        std::memcpy(block + PerDrawOffset("uTintInside"), &tint.inside, sizeof(std::int32_t));
+        std::memcpy(block + PerDrawOffset("uTintCircle"), circleValues, sizeof(circleValues));
+    }
 
     inline constexpr std::array<Uniform, 3> kUnlitMaterial{{
         {"uAlbedo", Block::Material, 0, UniformType::Vec4, 16, 1},

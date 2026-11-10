@@ -295,6 +295,8 @@ namespace Renderer
             [[nodiscard]] const char* GetRendererName() const override { return "Vulkan Renderer"; }
             /// The per-draw block carries uStageDim (RenderState::dim) to the built-in shaders
             [[nodiscard]] bool SupportsStageDim() const override { return true; }
+            /// The per-draw block carries the screen tint (RenderState::tint) to the built-in fragment shaders
+            [[nodiscard]] bool SupportsScreenTint() const override { return true; }
             /// Counts each vkCmdDrawIndexed DrawLocked records
             [[nodiscard]] bool SupportsRenderCounters() const override { return true; }
 
