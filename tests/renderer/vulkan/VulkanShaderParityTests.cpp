@@ -509,7 +509,26 @@ namespace
         }
         const std::size_t from = start + marker.size();
         const std::size_t end = file.find(")\";", from);
-        return end == std::string::npos ? std::string{} : file.substr(from, end - from);
+        if (end == std::string::npos)
+        {
+            return {};
+        }
+        std::string source = file.substr(from, end - from);
+        // The screen tint's GLSL is one macro joined into each fragment shader as adjacent string literals: put its body
+        // back where the source names it, so its uniforms are checked as the shader's own
+        const std::string macro = "#define N2_GL_SCREEN_TINT R\"(";
+        const std::string join = ")\" N2_GL_SCREEN_TINT R\"(";
+        if (const std::size_t define = file.find(macro); define != std::string::npos)
+        {
+            const std::size_t bodyFrom = define + macro.size();
+            const std::size_t bodyEnd = file.find(")\"", bodyFrom);
+            const std::string body = file.substr(bodyFrom, bodyEnd - bodyFrom);
+            for (std::size_t at = source.find(join); at != std::string::npos; at = source.find(join, at + body.size()))
+            {
+                source.replace(at, join.size(), body);
+            }
+        }
+        return source;
     }
 
     /// The names of the non-sampler uniforms a GL shader declares (a struct array counts by its array's name)
@@ -554,10 +573,13 @@ namespace
                 return true;
             }
         }
-        // uStageDim (the prefab stage's RenderState::dim) is a loose uniform in GL and a per-draw block member here
+        // uStageDim (the prefab stage's RenderState::dim) and the screen tint's uniforms (RenderState::tint) are loose
+        // uniforms in GL and per-draw block members here
         for (const Vk::Uniform& uniform : Vk::kPerDraw)
         {
-            if (uniform.name == name && uniform.block == Vk::Block::PerDraw && uniform.name == "uStageDim")
+            if (uniform.name == name && uniform.block == Vk::Block::PerDraw &&
+                (uniform.name == "uStageDim" || uniform.name == "uTintSaturation" || uniform.name == "uTintInside" ||
+                 uniform.name == "uTintCircle"))
             {
                 return true;
             }
@@ -609,6 +631,8 @@ TEST(VulkanShaderParityTest, EveryBlockDeclaresTheTablesMembersAtTheStd140Offset
 
         ExpectBlockMatchesTable(fragment, "Material", 1, 0, Vk::MaterialUniforms(files.shader),
                                 std::string(files.label) + " fragment");
+        // The fragment stage reads the screen tint from the per-draw block, declared exactly as the vertex stage does
+        ExpectBlockMatchesTable(fragment, "PerDraw", 0, 0, Vk::kPerDraw, std::string(files.label) + " fragment");
 
         if (files.shader == Vk::BuiltInShader::Lit)
         {
@@ -619,7 +643,7 @@ TEST(VulkanShaderParityTest, EveryBlockDeclaresTheTablesMembersAtTheStd140Offset
             EXPECT_EQ(fragment.Block("Lighting"), nullptr) << files.label << " has no lighting block";
         }
         // Nothing else is a block: every non-opaque uniform is in one of them
-        EXPECT_EQ(fragment.blocks.size(), files.shader == Vk::BuiltInShader::Lit ? 2u : 1u) << files.label;
+        EXPECT_EQ(fragment.blocks.size(), files.shader == Vk::BuiltInShader::Lit ? 3u : 2u) << files.label;
         EXPECT_EQ(vertex.blocks.size(), 1u) << files.label;
     }
 }
@@ -750,8 +774,17 @@ TEST(VulkanShaderParityTest, EveryDefaultTheOpenGlRendererGivesAMaterialAndEvery
         ASSERT_FALSE(source.empty()) << gl.glName;
         const std::set<std::string> names = GlUniformNames(source);
         ASSERT_GE(names.size(), 3u) << gl.glName;
+        // The screen tint's uniforms come from the shared snippet, so they must be found here
+        EXPECT_TRUE(names.contains("uTintSaturation")) << gl.glName;
+        EXPECT_TRUE(names.contains("uTintCircle")) << gl.glName;
         for (const std::string& name : names)
         {
+            // OpenGL only: whether GL_FRAMEBUFFER_SRGB encodes the lit shader's output (Vulkan and WebGPU encode in the
+            // shader, before their tint, so they need no such flag)
+            if (name == "uFramebufferEncodes")
+            {
+                continue;
+            }
             EXPECT_TRUE(InTable(gl.shader, name)) << gl.glName << " declares " << name << ", which the Vulkan table lacks";
         }
     }

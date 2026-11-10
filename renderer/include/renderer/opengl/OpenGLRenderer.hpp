@@ -89,6 +89,8 @@ namespace Renderer::OpenGL
         [[nodiscard]] const char* GetRendererName() const override;
         /// The built-in shaders take uStageDim (RenderState::dim)
         [[nodiscard]] bool SupportsStageDim() const override { return true; }
+        /// The built-in shaders take uTintSaturation, uTintInside and uTintCircle (RenderState::tint) and test gl_FragCoord
+        [[nodiscard]] bool SupportsScreenTint() const override { return true; }
         /// Counts each glDrawElements of DrawIndices
         [[nodiscard]] bool SupportsRenderCounters() const override { return true; }
 
