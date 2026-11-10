@@ -131,6 +131,71 @@ namespace N2Engine::UI
         return model;
     }
 
+    void UIText::SetCharacterOffset(const std::size_t index, const Math::Vector2 &offset)
+    {
+        if (index >= _characterOffsets.size())
+        {
+            if (offset.x == 0.0f && offset.y == 0.0f)
+            {
+                return; // already there
+            }
+            _characterOffsets.resize(index + 1, Math::Vector2{0.0f, 0.0f});
+        }
+        Math::Vector2 &slot = _characterOffsets[index];
+        if (slot.x != offset.x || slot.y != offset.y)
+        {
+            slot = offset;
+            _offsetsChanged = true;
+        }
+    }
+
+    void UIText::ClearCharacterOffsets()
+    {
+        if (!_characterOffsets.empty())
+        {
+            _characterOffsets.clear();
+            _offsetsChanged = true;
+        }
+    }
+
+    Text::TextLayout UIText::ApplyCharacterOffsets(const Text::TextLayout &layout, const std::string &text,
+                                                   const std::vector<Math::Vector2> &offsets)
+    {
+        Text::TextLayout result = layout;
+        if (offsets.empty())
+        {
+            return result;
+        }
+        // The character index of each byte: lead bytes start a character, continuation bytes (10xxxxxx) don't
+        std::vector<std::uint32_t> characterOf(text.size() + 1, 0);
+        std::uint32_t character = 0;
+        for (std::size_t i = 0; i < text.size(); ++i)
+        {
+            if (i > 0 && (static_cast<unsigned char>(text[i]) & 0xC0) != 0x80)
+            {
+                ++character;
+            }
+            characterOf[i] = character;
+        }
+        for (Text::GlyphQuad &quad : result.quads)
+        {
+            if (quad.cluster >= text.size())
+            {
+                continue;
+            }
+            const std::uint32_t index = characterOf[quad.cluster];
+            if (index < offsets.size())
+            {
+                const Math::Vector2 &o = offsets[index];
+                quad.position.minX += o.x;
+                quad.position.maxX += o.x;
+                quad.position.minY += o.y;
+                quad.position.maxY += o.y;
+            }
+        }
+        return result;
+    }
+
     void UIText::RenderUI(Renderer::Common::IRenderer *renderer, const Rect &rect,
                           const Renderer::Common::RenderState &state, const Matrix4 &canvasToWorld)
     {
@@ -146,8 +211,21 @@ namespace N2Engine::UI
 
         const Text::TextLayout &layout = GetLayout(rect);
         const Matrix4 model = ComposeModel(canvasToWorld, ModelMatrixFor(GetAnchor(rect)));
-        _resources.Draw(_layoutCache.GetFont(), layout, _layoutCache.GetVersion(), model.Data(), GetDrawColor(),
-                        _effects, state, "UIText");
+        // The mesh follows the layout and the character offsets: a new version for DrawResources when either
+        // changed, the offsets applied to a copy of the layout
+        if (_layoutCache.GetVersion() != _drawnLayoutVersion || _offsetsChanged)
+        {
+            _drawnLayoutVersion = _layoutCache.GetVersion();
+            _offsetsChanged = false;
+            ++_meshVersion;
+            if (!_characterOffsets.empty())
+            {
+                _offsetLayout = ApplyCharacterOffsets(layout, _text, _characterOffsets);
+            }
+        }
+        const Text::TextLayout &drawn = _characterOffsets.empty() ? layout : _offsetLayout;
+        _resources.Draw(_layoutCache.GetFont(), drawn, _meshVersion, model.Data(), GetDrawColor(), _effects, state,
+                        "UIText");
     }
 
     void UIText::OnDestroy()

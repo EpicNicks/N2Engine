@@ -1,8 +1,10 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <math/Matrix.hpp>
 #include <math/Vector2.hpp>
@@ -107,6 +109,22 @@ namespace N2Engine::UI
         /// Removes every extra pass (the shadow, outline and softness settings stay)
         void ClearEffectPasses() { _effects.passes.clear(); }
 
+        /**
+         * Moves single characters away from where the layout put them, by `offset` in canvas units (+y up), as
+         * TextMeshPro scripts do to vertices for waving, shaking or bouncing text. `index` counts characters (code
+         * points) of GetText() from 0, spaces and line breaks included; a character with no glyph (a space) has
+         * nothing to move. Offsets are not saved with the scene and survive SetText: a script that changes the
+         * text sets them again. Changing them rebuilds the text's mesh on the next draw, not its layout.
+         */
+        void SetCharacterOffset(std::size_t index, const Math::Vector2 &offset);
+        /// Every character back where the layout puts it
+        void ClearCharacterOffsets();
+        [[nodiscard]] const std::vector<Math::Vector2> &GetCharacterOffsets() const { return _characterOffsets; }
+        /// `layout` (of `text`) with `offsets` added to the quads of the characters they index (see
+        /// SetCharacterOffset); used by the draw, public for tests
+        [[nodiscard]] static Text::TextLayout ApplyCharacterOffsets(const Text::TextLayout &layout, const std::string &text,
+                                                                    const std::vector<Math::Vector2> &offsets);
+
         /// The layout options the current settings give in a rect of this width (it is the wrap width
         /// with wrap on)
         [[nodiscard]] Text::LayoutOptions GetLayoutOptions(float rectWidth) const;
@@ -144,6 +162,13 @@ namespace N2Engine::UI
         Text::TextEffects _effects;
 
         Rect _lastDrawnRect{};
+
+        // Per-character offsets (runtime only) and the layout they were applied to for the last draw
+        std::vector<Math::Vector2> _characterOffsets;
+        bool _offsetsChanged = false;
+        Text::TextLayout _offsetLayout;
+        std::uint64_t _drawnLayoutVersion = ~std::uint64_t{0}; // the layout version the last mesh came from
+        std::uint64_t _meshVersion = 0;                        // what DrawResources sees: up on any change
 
         // Layout cache and GPU resources, the code TextRenderer uses
         mutable Rendering::TextDrawing::LayoutCache _layoutCache;
