@@ -24,7 +24,7 @@
     "A stripped build given a scene that needs a stripped module fails with a clear message at package or build time, and at run time if it gets that far",
     "The measured size of each configuration is recorded; the full build's behaviour and budgets are unchanged"
   ],
-  "gate": "box2d-p2-module merged, then the user's go per stage",
+  "gate": "split per stage; stage 1 is engine-stripping-p1-physics. Each later stage needs the user's go.",
   "approved": false,
   "notes": "Reviewer: a stripped module leaves no symbols behind, a full build is unchanged, and the network fingerprint is defined for a stripped player."
 }

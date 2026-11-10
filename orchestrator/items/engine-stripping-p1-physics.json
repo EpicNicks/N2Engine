@@ -1,0 +1,32 @@
+{
+  "name": "engine-stripping-p1-physics",
+  "repo": "engine",
+  "branch": "feat-engine-stripping-physics",
+  "title": "Engine stripping stage 1: the per-project module list, the scan and the build check, with 3D and 2D physics as the first modules",
+  "closes": null,
+  "issue": "User's go on 2026-11-09. Design: orchestrator/proposals/engine-stripping-design.md, stage 1 of section 7. Implements J10 of the physics plan.",
+  "allowedPaths": [
+    "^CMakeLists\\.txt$",
+    "^cmake/",
+    "^engine/",
+    "^web/",
+    "^tests/",
+    "^scripts/",
+    "^docs/",
+    "^\\.github/workflows/tests\\.yml$",
+    "^orchestrator/items/engine-stripping",
+    "^orchestrator/proposals/engine-stripping-design\\.md$"
+  ],
+  "acceptance": [
+    "A project's build.modules decides the physics options through -DN2ENGINE_PROJECT, on the web and natively; a project with no list builds everything",
+    "A list that contradicts the project fails at configure time and at link, naming the file and line",
+    "A web package with no physics builds, starts and draws in CI, and the GCC leg runs engine_tests built from the same list",
+    "The measured saving is recorded; the full build's behaviour and budgets are unchanged"
+  ],
+  "requiresDocs": true,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "reviewer": "opus",
+  "notes": "Reviewer: that the options the list sets really win over the cache, that nothing physics-related stays linked, and that a project with no list configures exactly as before."
+}

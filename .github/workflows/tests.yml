@@ -940,6 +940,16 @@ jobs:
           ./build/bin/jolt_smoke_tests | tee jolt-smoke.log
           { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-DETERMINISM\]' jolt-smoke.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
 
+      # A native build from the same list: the engine with no physics module at all, with its whole test suite
+      - name: Build and test with no physics modules
+        run: |
+          set -e -o pipefail
+          cmake -S . -B build-nophysics -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DN2ENGINE_RENDERER_VULKAN=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DN2ENGINE_PROJECT=tests/projects/no_physics 2>&1 | tee configure-nophysics.log
+          grep -q "PhysX disabled" configure-nophysics.log
+          if grep -q "Jolt Physics (vendored\|Box2D (vendored" configure-nophysics.log; then echo "a physics module was still configured"; exit 1; fi
+          cmake --build build-nophysics --parallel --target engine_tests -- -k 0
+          ./build-nophysics/bin/engine_tests
+
       # The vendored Box2D alone: this leg's [BOX2D-DETERMINISM] line, which must equal every other leg's
       - name: Box2D determinism numbers
         run: |
@@ -1165,6 +1175,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
+      N2_DOWNLOAD_CACHE: ${{ github.workspace }}/.n2-downloads
       EMSCRIPTEN_VERSION: 4.0.10
     steps:
       - uses: actions/checkout@v7
@@ -1197,6 +1208,18 @@ jobs:
         with:
           path: external/PhysX/physx/bin/emscripten.wasm32
           key: physx-web-emsdk-${{ env.EMSCRIPTEN_VERSION }}-${{ hashFiles('cmake/PhysXWebPin.cmake', 'scripts/web-build-physx.sh') }}
+
+      # Dawn's GitHub release files (cmake/N2Download.cmake: the remote port here, the prebuilt Dawn in the webgpu job) and the
+      # emdawnwebgpu package emcc fetches at the first compile, from a cache: GitHub has failed this job with HTTP errors. Keyed by
+      # the pins, so a new pin downloads again. Saved right after the step that fills each, so a later failure still keeps them.
+      - name: Restore the Dawn downloads
+        id: dawn-download-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            .n2-downloads
+            ~/emsdk/upstream/emscripten/cache/ports
+          key: dawn-downloads-web-emsdk-${{ env.EMSCRIPTEN_VERSION }}-${{ hashFiles('cmake/EmdawnwebgpuPort.cmake') }}
 
       - name: Configure (dev profile)
         run: |
@@ -1235,6 +1258,15 @@ jobs:
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
           cmake --build build-web --target math_tests text_tests assetimport_tests engine_tests renderer_tests web_tests jolt_smoke_tests box2d_smoke_tests N2WebGpuReadbackTests -- -k 0
+
+      - name: Save the Dawn downloads
+        if: steps.dawn-download-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            .n2-downloads
+            ~/emsdk/upstream/emscripten/cache/ports
+          key: ${{ steps.dawn-download-cache.outputs.cache-primary-key }}
 
       # CMake's Emscripten toolchain sets CMAKE_CROSSCOMPILING_EMULATOR to node, so ctest runs build-web/bin/<name>.js under node
       - name: Test under node
@@ -1335,6 +1367,7 @@ jobs:
           node scripts/web-loader-test.mjs
           node scripts/web-gpu-test.mjs
           node --test scripts/web-browser-support.test.mjs
+          node --test scripts/project-modules.test.mjs
 
       # Stage 4: the audio unlock of the loader (web/n2-loader.js, createAudioUnlock) under node with a mock AudioContext
       # and a mock document: resume once on the first gesture, listeners removed, failures tolerated, the hidden tab
@@ -1389,6 +1422,24 @@ jobs:
             w="$tree/web-package/index.wasm"
             line="$tree: index.wasm raw $(wc -c < "$w") gzip $(gzip -9 -c "$w" | wc -c)"
             echo "[BOX2D-SIZE] $line"
+            echo "    $line" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      # A game that lists its modules (docs/project-modules.html): a player with no physics at all must build, start and draw, and
+      # this is what leaving physics out saves. Size profile, against the full package just built.
+      - name: Build and run a project with no physics modules
+        run: |
+          set -e -o pipefail
+          . "$HOME/emsdk/emsdk_env.sh"
+          emcmake cmake -S . -B build-web-nophysics -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=size -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_PROJECT=tests/projects/no_physics 2>&1 | tee configure-nophysics.log
+          grep -q "PhysX disabled" configure-nophysics.log
+          if grep -q "Jolt Physics (vendored\|Box2D (vendored" configure-nophysics.log; then echo "a physics module was still configured"; exit 1; fi
+          cmake --build build-web-nophysics --target web-package -- -k 0
+          node scripts/web-package-smoke.mjs build-web-nophysics/web-package 30 320x180 --precompressed
+          for tree in build-web-size build-web-nophysics; do
+            w="$tree/web-package/index.wasm"
+            line="$tree: index.wasm raw $(wc -c < "$w") gzip $(gzip -9 -c "$w" | wc -c) brotli $(wc -c < "$w.br")"
+            echo "[MODULES-SIZE] $line"
             echo "    $line" >> "$GITHUB_STEP_SUMMARY"
           done
 
@@ -1623,6 +1674,7 @@ jobs:
       CC: gcc-14
       CXX: g++-14
       CCACHE_DIR: ${{ github.workspace }}/.ccache
+      N2_DOWNLOAD_CACHE: ${{ github.workspace }}/.n2-downloads
       CCACHE_MAXSIZE: 1G
       CCACHE_COMPRESS: "1"
       CCACHE_COMPILERCHECK: content
@@ -1684,8 +1736,24 @@ jobs:
           ccache --zero-stats
           ccache --show-config | grep -E " (cache_dir|max_size|base_dir|hash_dir|compiler_check) = " || true
 
+      # The prebuilt Dawn (cmake/DawnPrebuilt.cmake through cmake/N2Download.cmake) from a cache: GitHub has failed this job with HTTP
+      # errors. Keyed by the pin; saved right after the configure, which is what downloads it.
+      - name: Restore the Dawn download
+        id: dawn-download-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: .n2-downloads
+          key: dawn-downloads-prebuilt-${{ hashFiles('cmake/DawnPrebuilt.cmake') }}
+
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_RENDERER_VULKAN=OFF -DN2ENGINE_RENDERER_WEBGPU=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Save the Dawn download
+        if: steps.dawn-download-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .n2-downloads
+          key: ${{ steps.dawn-download-cache.outputs.cache-primary-key }}
 
       - name: Build
         run: cmake --build build --parallel --target webgpu_tests -- -k 0
