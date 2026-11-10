@@ -12,6 +12,7 @@
 
 #include "engine/input/Mouse.hpp"
 #include "engine/input/Rumble.hpp"
+#include "engine/input/Touchscreen.hpp"
 
 #include <ranges>
 
@@ -177,6 +178,7 @@ void InputSystem::Update()
     _mouse->Update();
     _keyboard->Update();
     Rumble::Update();
+    Touchscreen::Get().Update();
 
     UpdatingScope scope{*this};
 
