@@ -2838,6 +2838,19 @@ function Input.GetMouseButtonDown(button) end
 ---@return boolean
 function Input.GetMouseButtonUp(button) end
 
+---Gamepad rumble (Gamepad.SetMotorSpeeds): low- and high-frequency motors 0..1, for `seconds` of real time (nil or 0:
+---until StopGamepadRumble), on `gamepad` (default 0). False when there is no rumble there (Linux, macOS, no pad)
+---@param low number
+---@param high number
+---@param seconds? number
+---@param gamepad? integer
+---@return boolean
+function Input.SetGamepadRumble(low, high, seconds, gamepad) end
+
+---Stops `gamepad`'s rumble, or every gamepad's without an argument
+---@param gamepad? integer
+function Input.StopGamepadRumble(gamepad) end
+
 ---Whether the pointer was over a UI element (a raycast-target graphic under a canvas) in the last pointer update
 ---@return boolean
 function Input.IsPointerOverUI() end

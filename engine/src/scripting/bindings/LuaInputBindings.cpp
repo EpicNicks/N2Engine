@@ -6,6 +6,7 @@
 #include "engine/Application.hpp"
 #include "engine/input/InputSystem.hpp"
 #include "engine/input/Mouse.hpp"
+#include "engine/input/Rumble.hpp"
 #include "engine/Logger.hpp"
 #include "engine/scripting/LuaJson.hpp"
 #include "engine/scripting/ScriptCallback.hpp"
@@ -221,6 +222,25 @@ namespace N2Engine::Scripting::Bindings
             {
                 const auto *mouse = Input::Mouse::Get();
                 return mouse != nullptr && mouse->GetButtonUp(button);
+            },
+            // Gamepad.SetMotorSpeeds: low- and high-frequency motors 0..1 for `seconds` of real time (0 or nil: until
+            // StopGamepadRumble) on gamepad `gamepad` (default 0). False when there is no rumble there
+            "SetGamepadRumble", [](const float low, const float high, const sol::optional<double> seconds,
+                                   const sol::optional<int> gamepad)
+            {
+                return Input::Rumble::Start(gamepad.value_or(0), low, high, seconds.value_or(0.0));
+            },
+            // Stops gamepad `gamepad`'s rumble, or every gamepad's without an argument
+            "StopGamepadRumble", [](const sol::optional<int> gamepad)
+            {
+                if (gamepad.has_value())
+                {
+                    Input::Rumble::Stop(*gamepad);
+                }
+                else
+                {
+                    Input::Rumble::StopAll();
+                }
             },
             // Whether the pointer is over a UI element (PointerDispatcher::IsPointerOverUI)
             "IsPointerOverUI", []()

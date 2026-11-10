@@ -10,6 +10,7 @@
 #include <GLFW/glfw3.h>
 
 #include "engine/input/Mouse.hpp"
+#include "engine/input/Rumble.hpp"
 
 #include <ranges>
 
@@ -46,7 +47,11 @@ InputSystem::InputSystem(Window &window)
     _mouse = std::make_unique<Mouse>(_window._window);
 }
 
-InputSystem::~InputSystem() = default;
+InputSystem::~InputSystem()
+{
+    // A pad left rumbling would keep going after the game has gone
+    Rumble::StopAll();
+}
 
 ActionMap* InputSystem::CreateActionMapFromJson(const std::string &name, const nlohmann::json &j)
 {
@@ -168,6 +173,7 @@ std::vector<GamepadInfo> InputSystem::GetConnectedGamepads()
 void InputSystem::Update()
 {
     _mouse->Update();
+    Rumble::Update();
 
     UpdatingScope scope{*this};
 
