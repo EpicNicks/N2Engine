@@ -351,6 +351,24 @@ if (input)
 end
 </code></pre>
 <p class="src">Source: <code>engine/include/engine/input/Keyboard.hpp</code>, <code>engine/src/input/Keyboard.cpp</code>; <code>engine/src/input/InputSystem.cpp</code> &mdash; <code>InputSystem::Update</code>; <code>engine/src/scripting/bindings/LuaInputBindings.cpp</code> &mdash; <code>KeyState</code>; tests: <code>KeyboardTest.*</code>, <code>KeyboardLuaTest.UnknownKeyNamesAreLuaErrors</code> (<code>tests/engine/input/KeyboardTests.cpp</code>)</p>
+<h2 id="rumble">Gamepad rumble: <code>Rumble</code> <span class="badge">PR #TBD</span></h2>
+<p>Unity&rsquo;s <code>Gamepad.SetMotorSpeeds</code>: two motors per gamepad, the low-frequency (left, heavy) one and the high-frequency (right, light) one, each 0 to 1. GLFW has no rumble, so <code>Input::Rumble</code> (<code>engine/include/engine/input/Rumble.hpp</code>) writes to the platform directly:</p>
+<table>
+<tr><th>Platform</th><th>Output</th></tr>
+<tr><td>Windows</td><td>XInput: <code>xinput1_4.dll</code>, else <code>xinput9_1_0.dll</code>, loaded on first use (nothing is linked). Gamepad <em>i</em> is the <em>i</em>-th connected XInput controller: GLFW&rsquo;s order for XInput pads, but not guaranteed to match its joystick ids when other joysticks are plugged in.</td></tr>
+<tr><td>Web</td><td>The Gamepad API&rsquo;s <code>vibrationActuator</code> (<code>"dual-rumble"</code>) on <code>navigator.getGamepads()[i]</code>, where the browser has it. The web player has no gamepad <em>input</em> yet; rumble does not depend on it.</td></tr>
+<tr><td>Linux, macOS</td><td>None: <code>Start</code> returns <code>false</code>.</td></tr>
+</table>
+<ul>
+<li><code>Rumble::Start(gamepad, low, high, seconds)</code> sets the motors and returns whether the output took it (false: no rumble on this platform, the gamepad is not there, or the index is outside 0..3). With <code>seconds &gt; 0</code> it stops by itself that much <em>real</em> time later, checked in <code>InputSystem::Update</code> (pause and time scale do not stretch it, as Unity&rsquo;s <code>WaitForSecondsRealtime</code>); with 0 it lasts until <code>Stop</code>. A new <code>Start</code> on the same gamepad replaces the rumble and its timer.</li>
+<li><code>Stop(gamepad)</code>, <code>StopAll()</code>; the input system stops every rumble when it is destroyed, so a pad does not keep shaking after the game has gone.</li>
+<li><code>Rumble::SetOutput</code> installs another <code>RumbleOutput</code> (tests, a host forwarding rumble elsewhere); <code>nullptr</code> goes back to the platform&rsquo;s.</li>
+</ul>
+<p>Lua: <code>Input.SetGamepadRumble(low, high, seconds, gamepad)</code> (seconds and gamepad optional: until stopped, gamepad 0) returns the same boolean; <code>Input.StopGamepadRumble(gamepad)</code> stops one, or every gamepad without an argument.</p>
+<pre class="lang-lua"><code>-- a hit: Triangle-Like&rsquo;s VibrateController
+Input.SetGamepadRumble(0.25, 0.75, 0.2)
+</code></pre>
+<p class="src">Source: <code>engine/src/input/Rumble.cpp</code>; <code>engine/src/input/InputSystem.cpp</code> &mdash; <code>InputSystem::Update</code>; <code>engine/src/scripting/bindings/LuaInputBindings.cpp</code>; tests: <code>RumbleTest.*</code>, <code>RumbleLuaTest.SetAndStopFromLua</code> (<code>tests/engine/input/RumbleTests.cpp</code>). Unverified: XInput on a real pad and the browser actuator were not felt in CI.</p>
 
 <h2 id="mouse">Mouse position, buttons and scroll</h2>
 <p><code>InputSystem</code> owns one <code>Mouse</code>. <code>Mouse::Get()</code> reaches it through <code>Application::GetInstance().GetWindow().GetInputSystem()</code> and returns <code>nullptr</code> when there is no input system (the window failed to open, or after shutdown).</p>
@@ -580,6 +598,7 @@ public:
 <tr><td><code>Input.GetMousePosition()</code> <span class="badge">PR #48</span></td><td>The cursor as a <code>Vector2</code> in window coordinates (top-left origin, y down); <code>(0, 0)</code> without a window.</td></tr>
 <tr><td><code>Input.GetMouseButton(b)</code>, <code>GetMouseButtonDown(b)</code>, <code>GetMouseButtonUp(b)</code> <span class="badge">PR #48</span></td><td>As <code>Mouse::GetButton*</code> (0 left, 1 right, 2 middle); <code>false</code> without a window.</td></tr>
 <tr><td><code>Input.IsPointerOverUI()</code> <span class="badge">PR #48</span></td><td><code>PointerDispatcher::IsPointerOverUI()</code>: whether the pointer was over a UI element (a raycast-target graphic under a canvas) in the last pointer update <span class="badge">PR #50</span>.</td></tr>
+<tr><td><code>Input.SetGamepadRumble(low, high, seconds, gamepad)</code>, <code>Input.StopGamepadRumble(gamepad)</code> <span class="badge">PR #TBD</span></td><td><a href="#rumble"><code>Rumble::Start</code>, <code>Stop</code>/<code>StopAll</code></a>: motors 0..1, real-time duration (optional), gamepad 0 by default; returns whether the platform took it.</td></tr>
 </tbody>
 </table>
 </div>
