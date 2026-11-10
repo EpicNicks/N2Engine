@@ -16,6 +16,13 @@
 #include "engine/physics/IPhysicsBackend.hpp"
 #include "engine/input/PointerDispatcher.hpp"
 
+namespace Renderer::Common
+{
+    class IRenderer;
+    class IMesh;
+    class IMaterial;
+}
+
 namespace N2Engine
 {
     class GameObject;
@@ -84,8 +91,20 @@ namespace N2Engine
         Diagnostics::FrameStats _frameStats;
         // The screen tint of the game's scene pass (SetScreenTint): none by default
         Renderer::Common::ScreenTint _screenTint{};
+        // The screen tint's backdrop (DrawScreenTintBackdrop): a full-screen quad and an unlit material, made on the
+        // renderer that first needs them; the lifetime token tells whether that renderer still exists
+        Renderer::Common::IRenderer *_tintBackdropRenderer = nullptr;
+        std::weak_ptr<const void> _tintBackdropLifetime;
+        Renderer::Common::IMesh *_tintBackdropMesh = nullptr;
+        Renderer::Common::IMaterial *_tintBackdropMaterial = nullptr;
 
     private:
+        /// Under a screen tint that covers only part of the frame, draws the clear colour again as a full-screen quad
+        /// with the tint (depth not tested or written, before any scene draw), so the bare background inside the circle
+        /// is tinted as the scene is. False when the renderer cannot make the quad
+        bool DrawScreenTintBackdrop(Renderer::Common::IRenderer *renderer);
+        /// Frees the backdrop's quad and material, on their renderer only if it still exists
+        void ReleaseScreenTintBackdrop();
         /// Installs the UI hit provider (UI::UISystem) on the pointer dispatcher
         Application();
         void Render();
@@ -219,8 +238,9 @@ namespace N2Engine
          * The screen tint (Renderer::Common::ScreenTint: a saturation inside or outside a circle on the screen; the
          * time-stop and full-screen grey effects, effects design stage E2). Render draws the scene with it
          * (IRenderer::SetScreenTint) and clears it on the renderer before the screen-space UI pass, so the HUD stays in
-         * colour. The clear colour is tinted too when the tint covers the whole frame (ScreenTint::CoversWholeTarget);
-         * a circle that covers only part of the frame leaves the bare clear colour as it is. Taken through
+         * colour. The clear colour is tinted too: on the CPU when the tint covers the whole frame
+         * (ScreenTint::CoversWholeTarget), else by a full-screen quad of the clear colour drawn with the tint before the
+         * scene (DrawScreenTintBackdrop: one more draw while a partial circle is set). Taken through
          * ScreenTint::Sanitized. Stays until changed or cleared; Shutdown clears it. Lua: Screen.SetTint, Screen.ClearTint.
          * RenderEditorFrame(camera) shares Render's scene pass and so draws it too; the prefab stage's frame does not.
          */

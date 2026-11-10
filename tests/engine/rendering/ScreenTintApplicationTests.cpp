@@ -22,7 +22,7 @@
 
 // The screen tint as Application::Render draws it (effects design, stage E2): on the scene pass only, never on the
 // screen-space UI pass after it (in Unity, overlay UI is drawn after the full-screen passes, so the HUD stays in colour),
-// and on the clear colour only when the tint covers the whole frame. A headless software application: no display or GPU.
+// and on the clear colour (on the CPU when the tint covers the whole frame, else by a tinted backdrop quad). A headless software application: no display or GPU.
 
 using namespace N2Engine;
 using Renderer::Common::ScreenTint;
@@ -124,14 +124,30 @@ TEST_F(ScreenTintApplicationTest, AWholeScreenTintGreysTheClearColourButNotTheUi
     EXPECT_FALSE(Application::GetInstance().GetScreenTint() == ScreenTint{}) << "the game's tint stays for the next frame";
 }
 
-TEST_F(ScreenTintApplicationTest, APartialCircleLeavesTheBareClearColourAsItIs)
+TEST_F(ScreenTintApplicationTest, APartialCircleTintsTheBareClearColourInsideItOnly)
 {
+    // A circle of 4 pixels (half a half-height of 16) round the middle (16, 8): the UI image covers x 0 to 15, so the
+    // pixels tested are the bare clear colour, under the backdrop quad Application draws for a partial circle
     ScreenTint circle;
     circle.saturation = 0.0f;
     circle.radius = 0.5f;
     Application::GetInstance().SetScreenTint(circle);
     Application::GetInstance().RenderGameFrame();
-    EXPECT_TRUE(Is(PixelAt(Width / 2, Height / 2), 255, 0, 0)) << "inside the circle, but no draw is there";
+    EXPECT_TRUE(Is(PixelAt(Width / 2 + 1, Height / 2), 76, 76, 76)) << "the clear colour inside the circle";
+    EXPECT_TRUE(Is(PixelAt(RightX, Height / 2), 255, 0, 0)) << "the clear colour outside the circle";
+    EXPECT_TRUE(Is(PixelAt(LeftX, Height / 2), 255, 0, 0)) << "the UI pass is drawn in its own colours";
+}
+
+TEST_F(ScreenTintApplicationTest, ATintOutsideACircleTintsTheClearColourAroundIt)
+{
+    ScreenTint circle;
+    circle.saturation = 0.0f;
+    circle.radius = 0.5f;
+    circle.inside = false;
+    Application::GetInstance().SetScreenTint(circle);
+    Application::GetInstance().RenderGameFrame();
+    EXPECT_TRUE(Is(PixelAt(Width / 2 + 1, Height / 2), 255, 0, 0)) << "inside the circle: as drawn";
+    EXPECT_TRUE(Is(PixelAt(RightX, Height / 2), 76, 76, 76)) << "outside the circle: grey";
 }
 
 TEST_F(ScreenTintApplicationTest, ClearingTheTintBringsTheColourBack)

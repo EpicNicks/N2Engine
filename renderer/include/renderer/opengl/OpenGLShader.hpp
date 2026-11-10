@@ -22,6 +22,8 @@ namespace Renderer::OpenGL
         GLint tintSaturationLoc = -1;
         GLint tintInsideLoc = -1;
         GLint tintCircleLoc = -1;
+        /// uFramebufferEncodes: declared by the built-in lit shader, which tints in sRGB when GL_FRAMEBUFFER_SRGB is on
+        GLint framebufferEncodesLoc = -1;
     };
 
     class OpenGLShader : public Common::IShader

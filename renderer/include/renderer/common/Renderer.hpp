@@ -271,14 +271,12 @@ namespace Renderer::Common
         void SetScreenTint(const ScreenTint &tint) { m_screenTint = ScreenTint::Sanitized(tint); }
         [[nodiscard]] const ScreenTint& GetScreenTint() const { return m_screenTint; }
         /// `state` as a draw recorded now carries it: WithStageDim, and the screen tint when one is set (a draw's own
-        /// tint stays when none is)
+        /// tint stays when none is, taken through ScreenTint::Sanitized like SetScreenTint's, since the backends hand it
+        /// to the shaders as it is)
         [[nodiscard]] RenderState WithFrameModifiers(const RenderState &state) const
         {
             RenderState applied = WithStageDim(state);
-            if (m_screenTint.IsActive())
-            {
-                applied.tint = m_screenTint;
-            }
+            applied.tint = m_screenTint.IsActive() ? m_screenTint : ScreenTint::Sanitized(state.tint);
             return applied;
         }
         /// Whether this backend's built-in shaders apply RenderState::tint. The four backends do (OpenGL, Vulkan, WebGPU,

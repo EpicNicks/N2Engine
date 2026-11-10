@@ -168,14 +168,11 @@ namespace Renderer::Gpu::ShaderInterface
         std::memset(block + PerDrawOffset("uStageDim"), 0, kPerDrawBindingSize - PerDrawOffset("uStageDim"));
         const float dim = state.dim;
         std::memcpy(block + PerDrawOffset("uStageDim"), &dim, sizeof(float));
-        const bool active = state.tint.IsActive();
-        const float saturation = active ? state.tint.saturation : 1.0f;
-        const std::int32_t inside = active && state.tint.inside ? 1 : 0;
-        const Common::ScreenTintPixels circle =
-            active ? state.tint.InPixels(static_cast<float>(width), static_cast<float>(height), true) : Common::ScreenTintPixels{};
-        const float circleValues[3] = {circle.centreX, circle.centreY, circle.radius};
-        std::memcpy(block + PerDrawOffset("uTintSaturation"), &saturation, sizeof(float));
-        std::memcpy(block + PerDrawOffset("uTintInside"), &inside, sizeof(std::int32_t));
+        const Common::ScreenTintUniforms tint =
+            state.tint.ToUniforms(static_cast<float>(width), static_cast<float>(height), true);
+        const float circleValues[3] = {tint.circle.centreX, tint.circle.centreY, tint.circle.radius};
+        std::memcpy(block + PerDrawOffset("uTintSaturation"), &tint.saturation, sizeof(float));
+        std::memcpy(block + PerDrawOffset("uTintInside"), &tint.inside, sizeof(std::int32_t));
         std::memcpy(block + PerDrawOffset("uTintCircle"), circleValues, sizeof(circleValues));
     }
 

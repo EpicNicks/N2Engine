@@ -1153,7 +1153,7 @@ self.gameObject:SetLayer(Layers.NameToLayer("Player"))
 <p>There is no <code>Log</code> global (use <code>Debug</code>) and no <code>Events</code> global.</p>
 
 <h3 id="screen">The screen tint: <code>Screen</code> (effects stage E2)</h3>
-<p><code>Screen.SetTint{saturation = s, centre = Vector2(x, y), radius = r, inside = b}</code> greys the scene inside (or, with <code>inside = false</code>, outside) a circle on the screen, for every frame drawn from then on, until <code>Screen.ClearTint()</code>. <code>saturation</code> is required: 0 is grey, 1 no tint. <code>centre</code> is 0 to 1 of the screen from the bottom left (default (0.5, 0.5)); <code>radius</code> is in half screen heights, so 1 reaches the top and bottom edges from the middle (default: the whole screen); <code>inside</code> defaults to true. The optional fields take their defaults on every call, not the previous tint's values. Every field is checked: a field of the wrong type, a value out of range (saturation outside 0..1, a negative radius, a value that is not finite) or an unknown field (<code>center</code> is one) is a Lua error and the tint stays as it was. <code>Screen.GetTint()</code> returns the tint as a table with the same fields (saturation 1 when there is none). The screen-space UI is drawn over the tinted scene in its own colours. The clear colour is tinted only when the tint covers the whole screen; draw the background as a sprite to have it tinted by a partial circle. How it is drawn: <a href="application.html#screen-tint">Application, screen tint</a>.</p>
+<p><code>Screen.SetTint{saturation = s, centre = Vector2(x, y), radius = r, inside = b}</code> greys the scene inside (or, with <code>inside = false</code>, outside) a circle on the screen, for every frame drawn from then on, until <code>Screen.ClearTint()</code>. <code>saturation</code> is required: 0 is grey, 1 no tint. <code>centre</code> is 0 to 1 of the screen from the bottom left (default (0.5, 0.5)); <code>radius</code> is in half screen heights, so 1 reaches the top and bottom edges from the middle and <code>math.sqrt(aspect * aspect + 1)</code> (aspect = width / height) reaches the corners, about 2.04 at 16:9 and 2.54 at 21:9 (default: the whole screen); <code>inside</code> defaults to true. The optional fields take their defaults on every call, not the previous tint's values. Every field is checked: a field of the wrong type, a value out of range (saturation outside 0..1, a negative radius, a value that is not finite or too large for a float, such as 1e39) or an unknown field (<code>center</code> is one) is a Lua error and the tint stays as it was. <code>Screen.GetTint()</code> returns the tint as a table with the same fields (saturation 1 when there is none). The screen-space UI is drawn over the tinted scene in its own colours. The clear colour is tinted with the scene, inside a partial circle too. How it is drawn: <a href="application.html#screen-tint">Application, screen tint</a>.</p>
 <pre class="lang-lua"><code>-- TimeStop.lua: a grey circle grows from the middle of the screen to cover it and shrinks back, over about 3 seconds
 local TimeStop = {}
 TimeStop.__index = TimeStop
@@ -1164,8 +1164,11 @@ end
 
 function TimeStop:OnUpdate()
     self.t = self.t + Time.deltaTime
+    -- From the middle, the corners are this many half screen heights away (a wider screen needs a bigger circle)
+    local aspect = Window.GetWidth() / Window.GetHeight()
+    local cover = math.sqrt(aspect * aspect + 1)
     if self.t &lt; math.pi then
-        Screen.SetTint{saturation = 0.2, centre = Vector2(0.5, 0.5), radius = 2.5 * math.sin(self.t)}
+        Screen.SetTint{saturation = 0.2, centre = Vector2(0.5, 0.5), radius = cover * math.sin(self.t)}
     else
         Screen.ClearTint()
     end

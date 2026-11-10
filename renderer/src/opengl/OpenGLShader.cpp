@@ -239,6 +239,7 @@ void OpenGLShader::CacheCommonUniforms()
     _commonUniforms.tintSaturationLoc = glGetUniformLocation(_programId, "uTintSaturation");
     _commonUniforms.tintInsideLoc = glGetUniformLocation(_programId, "uTintInside");
     _commonUniforms.tintCircleLoc = glGetUniformLocation(_programId, "uTintCircle");
+    _commonUniforms.framebufferEncodesLoc = glGetUniformLocation(_programId, "uFramebufferEncodes");
 
     // Add to cache to avoid duplicate lookups
     if (_commonUniforms.modelLoc != -1)

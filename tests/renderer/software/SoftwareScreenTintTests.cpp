@@ -272,6 +272,28 @@ TEST(ScreenTintMaths, TheRenderersModifierIsSanitisedAndOnlyAnActiveTintReplaces
     EXPECT_EQ(renderer.WithFrameModifiers(own).tint, grey) << "the frame's tint, while one is set";
     renderer.SetScreenTint(ScreenTint{});
     EXPECT_EQ(renderer.WithFrameModifiers(own).tint, own.tint) << "the draw's own tint, while none is";
+
+    // A draw's own tint reaches the shaders as it is, so it is sanitised like SetScreenTint's
+    RenderState wild;
+    wild.tint = Circle(2.f, 0.5f, 0.5f, 1.f);
+    EXPECT_FLOAT_EQ(renderer.WithFrameModifiers(wild).tint.saturation, 1.f) << "an own saturation above 1 is clamped";
+    wild.tint = Circle(std::numeric_limits<float>::quiet_NaN(), 0.5f, 0.5f, 1.f);
+    EXPECT_EQ(renderer.WithFrameModifiers(wild).tint, ScreenTint{}) << "an own tint that is not finite is no tint";
+}
+
+TEST(ScreenTintMaths, ToUniformsWritesAnInactiveTintAsSaturationOne)
+{
+    const ScreenTintUniforms none = ScreenTint{}.ToUniforms(100.f, 50.f, true);
+    EXPECT_FLOAT_EQ(none.saturation, 1.f);
+    EXPECT_EQ(none.inside, 0);
+    EXPECT_FLOAT_EQ(none.circle.radius, 0.f);
+
+    const ScreenTintUniforms grey = Circle(0.25f, 0.5f, 0.25f, 1.f).ToUniforms(100.f, 50.f, true);
+    EXPECT_FLOAT_EQ(grey.saturation, 0.25f);
+    EXPECT_EQ(grey.inside, 1);
+    EXPECT_FLOAT_EQ(grey.circle.centreX, 50.f);
+    EXPECT_FLOAT_EQ(grey.circle.centreY, 37.5f) << "rows counted down from the top";
+    EXPECT_FLOAT_EQ(grey.circle.radius, 25.f);
 }
 
 // ---- Software pixels ---------------------------------------------------------------------------------------------

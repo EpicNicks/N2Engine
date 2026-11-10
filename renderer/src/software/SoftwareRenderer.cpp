@@ -65,10 +65,10 @@ namespace
     // tint) when its circle selects the pixel whose centre is at (x, y): the same maths as the GPU shaders
     // (RenderState::StageDimmed, then ScreenTint::Saturated), on the colour the draw would write; alpha unchanged. A pixel
     // that neither changes is returned as it is
-    inline uint32_t EffectsPacked(const uint32_t rgba, const float dim, const bool tintActive, const ScreenTint& tint,
+    inline uint32_t EffectsPacked(const uint32_t rgba, const float dim, const ScreenTint& tint,
                                   const ScreenTintPixels& circle, const float x, const float y)
     {
-        const bool tinted = tintActive && tint.Covers(circle, x, y);
+        const bool tinted = tint.IsActive() && tint.Covers(circle, x, y);
         if (dim <= 0.f && !tinted)
         {
             return rgba;
@@ -127,8 +127,7 @@ namespace
         // RenderState::dim of the draw (0: none), applied to every pixel it writes
         float dim = 0.f;
         // RenderState::tint of the draw, applied after the dim to the pixels its circle selects, with the circle in this
-        // frame's pixels (rows up from the bottom, as the pixel loop counts py). Only read when tintActive
-        bool tintActive = false;
+        // frame's pixels (rows up from the bottom, as the pixel loop counts py). ScreenTint{} (inactive) when none
         ScreenTint tint{};
         ScreenTintPixels tintCircle{};
         // The dim or the tint changes some pixel: decided once per draw, so a draw with neither (every draw but the
@@ -1016,7 +1015,7 @@ namespace
                         {
                             if (rs.depthWrite && writesDepth) drow[px] = z;
                             crow[px] = mat.effects
-                                ? EffectsPacked(colOut, mat.dim, mat.tintActive, mat.tint, mat.tintCircle,
+                                ? EffectsPacked(colOut, mat.dim, mat.tint, mat.tintCircle,
                                                 (float)px + 0.5f, (float)py + 0.5f)
                                 : colOut;
                         }
@@ -1483,13 +1482,12 @@ void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, con
     // The prefab stage's dim travels in the draw's own state (recorded at DrawMesh, so a reordered draw keeps it)
     rm.dim = state.dim;
     // The screen tint travels the same way; its circle is placed in this frame's pixels now, once per draw
-    rm.tintActive = state.tint.IsActive();
-    if (rm.tintActive)
+    if (state.tint.IsActive())
     {
         rm.tint = state.tint;
         rm.tintCircle = state.tint.InPixels((float)m_width, (float)m_height, false);
     }
-    rm.effects = rm.dim > 0.f || rm.tintActive;
+    rm.effects = rm.dim > 0.f || rm.tint.IsActive();
     // Vertex colour only matters when some vertex isn't white (see ResolvedMat::vertexColor)
     rm.vertexColor = mesh->hasVertexColors; // found once per CreateMesh/UpdateMesh, not per draw
     const ShadeKind kind = rm.Kind();

@@ -109,6 +109,8 @@ TEST_F(LuaScreenTest, BadArgumentsAreErrorsAndChangeNothing)
         {"Screen.SetTint{saturation = 0/0}", "saturation must be a finite number"},
         {"Screen.SetTint{saturation = 0, radius = -1}", "radius must be 0 or more"},
         {"Screen.SetTint{saturation = 0, radius = math.huge}", "radius must be a finite number"},
+        // Finite as a double but infinite as a float: an error, not a call that silently clears the tint
+        {"Screen.SetTint{saturation = 0, radius = 1e39}", "radius must be a finite number"},
         {"Screen.SetTint{saturation = 0, radius = true}", "radius must be a number"},
         {"Screen.SetTint{saturation = 0, centre = {0.5, 0.5}}", "centre must be a Vector2"},
         {"Screen.SetTint{saturation = 0, centre = Vector3(0.5, 0.5, 0)}", "centre must be a Vector2"},

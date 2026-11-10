@@ -3003,10 +3003,10 @@ function Window.SetClearColor(color) end
 -- ===== SCREEN =====
 
 ---The screen tint: a saturation change inside (or outside) a circle on the screen, applied to the scene and not to the
----screen-space UI (the HUD stays in colour). For the time-stop effect (animate `radius` from 0 to 2.5 and back with
----`saturation = 0.2`) and full-screen grey (`saturation = 0` with no radius). Every renderer draws it (OpenGL, Vulkan,
----WebGPU and software). The clear colour is tinted only when the tint covers the whole screen: draw a background as a
----sprite to have it tinted by a partial circle.
+---screen-space UI (the HUD stays in colour). For the time-stop effect (animate `radius` from 0 to the corner distance and
+---back with `saturation = 0.2`; from the middle the corners are `math.sqrt((Window.GetWidth() / Window.GetHeight())^2 + 1)`
+---half heights away: about 2.04 at 16:9, 2.54 at 21:9) and full-screen grey (`saturation = 0` with no radius). Every
+---renderer draws it (OpenGL, Vulkan, WebGPU and software), and the clear colour is tinted with the scene.
 ---@class ScreenTint
 ---@field saturation number 0 (grey) to 1 (no tint)
 ---@field centre Vector2 the circle's centre, 0 to 1 of the screen from the bottom left (default (0.5, 0.5))

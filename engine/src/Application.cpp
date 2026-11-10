@@ -8,6 +8,10 @@
 #include <math/DeterministicMath.hpp>
 #include <math/FloatEnvironment.hpp>
 #include <math/MathRegistrar.hpp>
+#include <renderer/common/IMaterial.hpp>
+#include <renderer/common/IMesh.hpp>
+#include <renderer/common/RenderTypes.hpp>
+#include <renderer/common/Renderer.hpp>
 
 #include "engine/Application.hpp"
 #include "engine/Time.hpp"
@@ -842,12 +846,91 @@ void Application::Shutdown()
     SetSimulationMode(SimulationMode::None);
     // A screen tint is the game's, like the mode: the next project starts in colour
     ClearScreenTint();
+    ReleaseScreenTintBackdrop();
     _initialized = false;
 }
 
 void Application::SetScreenTint(const Renderer::Common::ScreenTint &tint)
 {
     _screenTint = Renderer::Common::ScreenTint::Sanitized(tint);
+}
+
+void Application::ReleaseScreenTintBackdrop()
+{
+    // A destroyed renderer freed them itself, and its address may now be another renderer's
+    if (_tintBackdropRenderer && !_tintBackdropLifetime.expired())
+    {
+        if (_tintBackdropMesh)
+        {
+            _tintBackdropRenderer->DestroyMesh(_tintBackdropMesh);
+        }
+        if (_tintBackdropMaterial)
+        {
+            _tintBackdropRenderer->DestroyMaterial(_tintBackdropMaterial);
+        }
+    }
+    _tintBackdropMesh = nullptr;
+    _tintBackdropMaterial = nullptr;
+    _tintBackdropRenderer = nullptr;
+    _tintBackdropLifetime.reset();
+}
+
+bool Application::DrawScreenTintBackdrop(Renderer::Common::IRenderer *renderer)
+{
+    if (_tintBackdropRenderer && (_tintBackdropRenderer != renderer || _tintBackdropLifetime.expired()))
+    {
+        ReleaseScreenTintBackdrop(); // another renderer, or a new one at the old one's address
+    }
+    if (!_tintBackdropRenderer)
+    {
+        _tintBackdropRenderer = renderer;
+        _tintBackdropLifetime = renderer->GetLifetimeToken();
+    }
+    if (!_tintBackdropMesh)
+    {
+        // The whole clip space, at depth 0 (inside both OpenGL's -1..1 and Vulkan/WebGPU's 0..1), drawn with identity
+        // matrices; culling is off, so its winding does not matter
+        Renderer::Common::MeshData quad;
+        quad.vertices = {
+            {{-1.0f, -1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}, {1.0f, 1.0f, 1.0f, 1.0f}},
+            {{1.0f, -1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}, {1.0f, 1.0f, 1.0f, 1.0f}},
+            {{1.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f, 1.0f, 1.0f}},
+            {{-1.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}, {1.0f, 1.0f, 1.0f, 1.0f}},
+        };
+        quad.indices = {0, 1, 2, 0, 2, 3};
+        _tintBackdropMesh = renderer->CreateMesh(quad);
+    }
+    if (!_tintBackdropMaterial)
+    {
+        // The renderer owns its standard shader. Unlit output is written as authored in both colour spaces, as the
+        // clear colour is
+        if (Renderer::Common::IShader *shader = renderer->GetStandardUnlitShader())
+        {
+            _tintBackdropMaterial = renderer->CreateMaterial(shader, nullptr);
+        }
+    }
+    if (!_tintBackdropMesh || !_tintBackdropMaterial)
+    {
+        return false;
+    }
+
+    const Common::Color &clearColor = _window.clearColor;
+    _tintBackdropMaterial->SetInt("uHasTexture", 0);
+    _tintBackdropMaterial->SetColor("uAlbedo", clearColor.r, clearColor.g, clearColor.b, clearColor.a);
+
+    static constexpr float Identity[16] = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
+                                           0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+    renderer->SetViewProjection(Identity, Identity);
+    // Neither depth-tested nor written, not blended: it replaces the clear colour where it covers and leaves the depth
+    // buffer cleared. The software renderer keeps such a draw where it was submitted (only depth-writing runs are sorted),
+    // so it stays under the scene there too
+    Renderer::Common::RenderState state;
+    state.depthTest = false;
+    state.depthWrite = false;
+    state.cull = Renderer::Common::CullMode::None;
+    state.blend = false;
+    renderer->DrawMesh(_tintBackdropMesh, Identity, _tintBackdropMaterial, state);
+    return true;
 }
 
 void Application::Render()
@@ -874,9 +957,11 @@ void Application::Render(const Camera &camera, const bool screenSpaceUI)
     } resetScreenTint{renderer};
 
     // The clear colour is no draw, so no shader tints it: when the tint covers the whole frame it is tinted here, as
-    // the scene's draws are (a partial circle leaves it as it is)
+    // the scene's draws are; a partial circle gets a tinted backdrop quad of it in the scene pass (DrawScreenTintBackdrop)
     const Vector2i frameSize = _window.GetRenderDimensions();
-    if (_screenTint.CoversWholeTarget(static_cast<float>(frameSize[0]), static_cast<float>(frameSize[1])))
+    const bool tintCoversFrame =
+        _screenTint.CoversWholeTarget(static_cast<float>(frameSize[0]), static_cast<float>(frameSize[1]));
+    if (tintCoversFrame)
     {
         const Common::Color &clearColor = _window.clearColor;
         float r = clearColor.r, g = clearColor.g, b = clearColor.b;
@@ -893,13 +978,19 @@ void Application::Render(const Camera &camera, const bool screenSpaceUI)
     {
         auto &curScene = SceneManager::GetCurSceneRef();
 
+        renderer->SetScreenTint(_screenTint);
+        if (_screenTint.IsActive() && !tintCoversFrame)
+        {
+            // First, before every scene draw (it sets its own matrices; the camera's are set next)
+            DrawScreenTintBackdrop(renderer);
+        }
+
         const Matrix4 &viewMatrix = camera.GetViewMatrix();
         const Matrix4 &projectionMatrix = camera.GetProjectionMatrix();
         renderer->SetViewProjection(viewMatrix.Data(), projectionMatrix.Data());
         const Renderer::Common::SceneLightingData sceneLightingData = curScene.CollectLighting();
         renderer->UpdateSceneLighting(sceneLightingData, camera.GetPosition());
 
-        renderer->SetScreenTint(_screenTint);
         curScene.Render(renderer, camera);
         // The screen tint is the scene's: the UI is drawn over it in its own colours (in Unity, overlay UI is drawn after
         // the full-screen passes)

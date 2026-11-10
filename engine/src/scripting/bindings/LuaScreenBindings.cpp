@@ -1,5 +1,6 @@
 #include <cmath>
 #include <format>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -24,7 +25,8 @@ namespace N2Engine::Scripting::Bindings
             throw std::runtime_error("Screen.SetTint: " + message);
         }
 
-        /// A finite number field, else a Lua error naming it
+        /// A number field that is finite as a float, else a Lua error naming it (a finite double beyond the float range,
+        /// such as 1e39, would become infinity and then no tint at all)
         float FiniteNumber(const sol::object &value, const std::string &key)
         {
             if (value.get_type() != sol::type::number)
@@ -32,7 +34,7 @@ namespace N2Engine::Scripting::Bindings
                 Fail(std::format("{} must be a number", key));
             }
             const double number = value.as<double>();
-            if (!std::isfinite(number))
+            if (!std::isfinite(number) || std::fabs(number) > static_cast<double>(std::numeric_limits<float>::max()))
             {
                 Fail(std::format("{} must be a finite number", key));
             }

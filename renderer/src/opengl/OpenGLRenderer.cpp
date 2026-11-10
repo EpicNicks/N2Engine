@@ -692,31 +692,35 @@ void OpenGLRenderer::DrawIndices(Common::IMesh *mesh, const float *modelMatrix, 
 
     // The prefab stage's dim (RenderState::dim, raised to SetStageDim's value): a uniform of the built-in shaders; a
     // custom shader that doesn't declare uStageDim draws undimmed
+    // The draw's state with the frame's dim and tint, made once for both
+    const Common::RenderState applied = WithFrameModifiers(state);
     if (uniforms.stageDimLoc != -1)
     {
-        glUniform1f(uniforms.stageDimLoc, WithStageDim(state).dim);
+        glUniform1f(uniforms.stageDimLoc, applied.dim);
     }
     // The screen tint (RenderState::tint, or SetScreenTint's while one is set): the built-in shaders compare gl_FragCoord,
     // which counts rows up from the bottom of the target, with the circle in this frame's target pixels. A custom shader
     // that doesn't declare uTintSaturation is not tinted. An inactive tint is saturation 1, which the shaders skip
     if (uniforms.tintSaturationLoc != -1)
     {
-        const Common::ScreenTint tint = WithFrameModifiers(state).tint;
-        const bool active = tint.IsActive();
         const bool offscreen = m_offscreenFramebuffer != 0;
-        const Common::ScreenTintPixels circle =
-            active ? tint.InPixels(static_cast<float>(offscreen ? m_offscreenWidth : m_width),
-                                   static_cast<float>(offscreen ? m_offscreenHeight : m_height), false)
-                   : Common::ScreenTintPixels{};
-        glUniform1f(uniforms.tintSaturationLoc, active ? tint.saturation : 1.0f);
+        const Common::ScreenTintUniforms tint =
+            applied.tint.ToUniforms(static_cast<float>(offscreen ? m_offscreenWidth : m_width),
+                                    static_cast<float>(offscreen ? m_offscreenHeight : m_height), false);
+        glUniform1f(uniforms.tintSaturationLoc, tint.saturation);
         if (uniforms.tintInsideLoc != -1)
         {
-            glUniform1i(uniforms.tintInsideLoc, active && tint.inside ? 1 : 0);
+            glUniform1i(uniforms.tintInsideLoc, tint.inside);
         }
         if (uniforms.tintCircleLoc != -1)
         {
-            glUniform3f(uniforms.tintCircleLoc, circle.centreX, circle.centreY, circle.radius);
+            glUniform3f(uniforms.tintCircleLoc, tint.circle.centreX, tint.circle.centreY, tint.circle.radius);
         }
+    }
+    // The lit shader tints in sRGB: it must know whether the framebuffer encodes its output (see uFramebufferEncodes)
+    if (uniforms.framebufferEncodesLoc != -1)
+    {
+        glUniform1i(uniforms.framebufferEncodesLoc, encodeOutput ? 1 : 0);
     }
 
     // Draw mesh, with this draw's depth/cull/blend state
@@ -864,6 +868,27 @@ GLenum OpenGLRenderer::GetOpenGLInternalFormat(const uint32_t channels)
     }
 }
 
+// RenderState::tint (ScreenTint) in GLSL, joined into each built-in fragment shader (unlit, lit, text) as adjacent string
+// literals, so the three share one copy: the saturation changed inside (uTintInside 1) or outside a circle on the screen.
+// uTintCircle is the centre and radius in the target's pixels, rows up from the bottom as gl_FragCoord counts. Saturation
+// 1 is no tint and costs one uniform branch
+#define N2_GL_SCREEN_TINT R"(
+        uniform float uTintSaturation;
+        uniform int uTintInside;
+        uniform vec3 uTintCircle;
+        vec3 screenTinted(vec3 rgb) {
+            if (uTintSaturation >= 1.0) {
+                return rgb;
+            }
+            vec2 toCentre = gl_FragCoord.xy - uTintCircle.xy;
+            bool inCircle = dot(toCentre, toCentre) <= uTintCircle.z * uTintCircle.z;
+            if (inCircle != (uTintInside != 0)) {
+                return rgb;
+            }
+            return mix(vec3(dot(rgb, vec3(0.299, 0.587, 0.114))), rgb, uTintSaturation);
+        }
+)"
+
 void OpenGLRenderer::CreateStandardShaders()
 {
     // ================== UNLIT SHADER (Keep as-is) ==================
@@ -907,23 +932,7 @@ void OpenGLRenderer::CreateStandardShaders()
             return mix(rgb, vec3(dot(rgb, vec3(0.299, 0.587, 0.114)) * 0.45), uStageDim);
         }
 
-        // RenderState::tint (ScreenTint): the saturation changed inside (uTintInside 1) or outside a circle on the
-        // screen. uTintCircle is the centre and radius in the target's pixels, rows up from the bottom as gl_FragCoord
-        // counts. Saturation 1 is no tint and costs one uniform branch
-        uniform float uTintSaturation;
-        uniform int uTintInside;
-        uniform vec3 uTintCircle;
-        vec3 screenTinted(vec3 rgb) {
-            if (uTintSaturation >= 1.0) {
-                return rgb;
-            }
-            vec2 toCentre = gl_FragCoord.xy - uTintCircle.xy;
-            bool inCircle = dot(toCentre, toCentre) <= uTintCircle.z * uTintCircle.z;
-            if (inCircle != (uTintInside != 0)) {
-                return rgb;
-            }
-            return mix(vec3(dot(rgb, vec3(0.299, 0.587, 0.114))), rgb, uTintSaturation);
-        }
+)" N2_GL_SCREEN_TINT R"(
 
         void main() {
             vec4 color = uAlbedo;
@@ -1072,23 +1081,7 @@ void OpenGLRenderer::CreateStandardShaders()
             return mix(rgb, vec3(dot(rgb, vec3(0.299, 0.587, 0.114)) * 0.45), uStageDim);
         }
 
-        // RenderState::tint (ScreenTint): the saturation changed inside (uTintInside 1) or outside a circle on the
-        // screen. uTintCircle is the centre and radius in the target's pixels, rows up from the bottom as gl_FragCoord
-        // counts. Saturation 1 is no tint and costs one uniform branch
-        uniform float uTintSaturation;
-        uniform int uTintInside;
-        uniform vec3 uTintCircle;
-        vec3 screenTinted(vec3 rgb) {
-            if (uTintSaturation >= 1.0) {
-                return rgb;
-            }
-            vec2 toCentre = gl_FragCoord.xy - uTintCircle.xy;
-            bool inCircle = dot(toCentre, toCentre) <= uTintCircle.z * uTintCircle.z;
-            if (inCircle != (uTintInside != 0)) {
-                return rgb;
-            }
-            return mix(vec3(dot(rgb, vec3(0.299, 0.587, 0.114))), rgb, uTintSaturation);
-        }
+)" N2_GL_SCREEN_TINT R"(
 
         // ---- PBR (the software renderer's LightingMath.hpp, line for line) ----
         const float PI = 3.14159265358979323846;
@@ -1149,6 +1142,14 @@ void OpenGLRenderer::CreateStandardShaders()
             c = max(c, vec3(0.0));
             return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c));
         }
+        // Its inverse, the sRGB decode
+        vec3 srgbToLinear(vec3 c) {
+            c = max(c, vec3(0.0));
+            return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c));
+        }
+        // 1 when GL_FRAMEBUFFER_SRGB is on for this draw (linear lighting into an sRGB target): the framebuffer, not
+        // this shader, encodes the output
+        uniform int uFramebufferEncodes;
 
         void main() {
             // Base colour: uAlbedo x texture x vertex colour, alpha-tested against uAlphaCutoff
@@ -1330,7 +1331,16 @@ void OpenGLRenderer::CreateStandardShaders()
             if (uEncodeOutput != 0) {
                 color = linearToSrgb(color);
             }
-            FragColor = vec4(screenTinted(stageDimmed(color)), albedo.a);
+            color = stageDimmed(color);
+            // The screen tint works on the colour as it will be shown (sRGB), as every other draw and backend tints it.
+            // When the framebuffer encodes this output (GL_FRAMEBUFFER_SRGB, uFramebufferEncodes set per draw), the
+            // colour is still linear here: encode, tint, decode, so the framebuffer's encode gives the tinted sRGB
+            if (uFramebufferEncodes != 0 && uTintSaturation < 1.0) {
+                color = srgbToLinear(screenTinted(linearToSrgb(color)));
+            } else {
+                color = screenTinted(color);
+            }
+            FragColor = vec4(color, albedo.a);
         }
     )";
 
@@ -1390,23 +1400,7 @@ void OpenGLRenderer::CreateStandardShaders()
             return mix(rgb, vec3(dot(rgb, vec3(0.299, 0.587, 0.114)) * 0.45), uStageDim);
         }
 
-        // RenderState::tint (ScreenTint): the saturation changed inside (uTintInside 1) or outside a circle on the
-        // screen. uTintCircle is the centre and radius in the target's pixels, rows up from the bottom as gl_FragCoord
-        // counts. Saturation 1 is no tint and costs one uniform branch
-        uniform float uTintSaturation;
-        uniform int uTintInside;
-        uniform vec3 uTintCircle;
-        vec3 screenTinted(vec3 rgb) {
-            if (uTintSaturation >= 1.0) {
-                return rgb;
-            }
-            vec2 toCentre = gl_FragCoord.xy - uTintCircle.xy;
-            bool inCircle = dot(toCentre, toCentre) <= uTintCircle.z * uTintCircle.z;
-            if (inCircle != (uTintInside != 0)) {
-                return rgb;
-            }
-            return mix(vec3(dot(rgb, vec3(0.299, 0.587, 0.114))), rgb, uTintSaturation);
-        }
+)" N2_GL_SCREEN_TINT R"(
 
         // a over b, neither premultiplied
         vec4 over(vec4 a, vec4 b) {

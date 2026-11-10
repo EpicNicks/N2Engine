@@ -23,6 +23,15 @@ namespace Renderer::Common
         float radius = 0.0f;
     };
 
+    /// What every GPU backend's shaders receive for a ScreenTint in one render target (ScreenTint::ToUniforms): an
+    /// inactive tint is saturation 1 (which the shaders skip), inside 0 and a zero circle
+    struct ScreenTintUniforms
+    {
+        float saturation = 1.0f;
+        std::int32_t inside = 0;
+        ScreenTintPixels circle{};
+    };
+
     /**
      * A frame-scoped saturation change inside (or outside) a circle on the screen: the time-stop and full-screen grey
      * effects (effects design, stage E2). Set on the renderer with IRenderer::SetScreenTint; every draw recorded while it
@@ -83,6 +92,17 @@ namespace Renderer::Common
             pixels.centreY = yDown ? (1.0f - centreY) * height : centreY * height;
             pixels.radius = radius * 0.5f * height;
             return pixels;
+        }
+
+        /// The shader uniforms for this tint in a `width` x `height` target (`yDown` as for InPixels); the one place
+        /// the encoding of an inactive tint is decided (OpenGL's uniforms and the Vulkan/WebGPU per-draw block)
+        [[nodiscard]] constexpr ScreenTintUniforms ToUniforms(const float width, const float height, const bool yDown) const
+        {
+            if (!IsActive())
+            {
+                return ScreenTintUniforms{};
+            }
+            return ScreenTintUniforms{saturation, inside ? 1 : 0, InPixels(width, height, yDown)};
         }
 
         /// Whether the pixel whose centre is at (x, y), in the coordinates of `circle`, gets the tint
