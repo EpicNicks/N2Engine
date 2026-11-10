@@ -179,6 +179,9 @@ namespace N2Engine::Scripting
         [[nodiscard]] const nlohmann::json& GetScriptData() const { return _scriptData; }
         [[nodiscard]] bool HasMissingScript() const;
         [[nodiscard]] bool HasUnresolvedReferences() const { return _hasUnresolvedReferences; }
+        /// The running script's instance table (the script's `self`): invalid when no script runs (none set, a load
+        /// that failed, DeclarationsOnly). Lua's LuaComponent:GetScript and GameObject:GetScript return it.
+        [[nodiscard]] const sol::table& GetScriptInstance() const { return _scriptInstance; }
 
         template<typename T>
         [[nodiscard]] T GetField(const std::string& fieldName, T defaultValue = T{}) const;

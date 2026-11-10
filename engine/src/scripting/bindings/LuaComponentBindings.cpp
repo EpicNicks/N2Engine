@@ -889,7 +889,18 @@ namespace N2Engine::Scripting::Bindings
                 c.Pin()->SetScript(IO::ResourcePath(path));
             },
             "GetScriptPath", [](const LuaComponentRef &c) { return c.Pin()->GetScriptPath().ToString(); },
-            "HasMissingScript", Forward<LuaComponentRef, &LuaComponent::HasMissingScript>()
+            "HasMissingScript", Forward<LuaComponentRef, &LuaComponent::HasMissingScript>(),
+            // The script's instance table (its `self`), or nil when no script runs: how one script calls another's
+            // functions. The same table each time; see GameObject:GetScript.
+            "GetScript", [](const LuaComponentRef &c) -> sol::object
+            {
+                const sol::table &instance = c.Pin()->GetScriptInstance();
+                if (!instance.valid())
+                {
+                    return sol::lua_nil;
+                }
+                return instance;
+            }
         );
 
         // ===== Model (global): a model file's GameObject hierarchy =====
