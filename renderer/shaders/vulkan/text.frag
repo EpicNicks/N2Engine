@@ -28,6 +28,32 @@ vec3 stageDimmed(vec3 rgb) {
     return mix(rgb, vec3(dot(rgb, vec3(0.299, 0.587, 0.114)) * 0.45), fragStageDim);
 }
 
+// The per-draw block (set 0, binding 0), declared as the vertex shader declares it: this stage reads the screen tint
+layout(set = 0, binding = 0, std140, row_major) uniform PerDraw {
+    mat4 uModel;
+    mat4 uView;
+    mat4 uProjection;
+    float uStageDim;
+    float uTintSaturation;
+    int uTintInside;
+    vec3 uTintCircle;
+};
+
+// RenderState::tint (ScreenTint): the saturation changed inside (uTintInside 1) or outside a circle on the screen.
+// uTintCircle is the centre and radius in framebuffer pixels, row 0 at the top as gl_FragCoord counts here (the flipped
+// viewport). Saturation 1 is no tint and costs one uniform branch
+vec3 screenTinted(vec3 rgb) {
+    if (uTintSaturation >= 1.0) {
+        return rgb;
+    }
+    vec2 offset = gl_FragCoord.xy - uTintCircle.xy;
+    bool inCircle = dot(offset, offset) <= uTintCircle.z * uTintCircle.z;
+    if (inCircle != (uTintInside != 0)) {
+        return rgb;
+    }
+    return mix(vec3(dot(rgb, vec3(0.299, 0.587, 0.114))), rgb, uTintSaturation);
+}
+
 // a over b, neither premultiplied
 vec4 over(vec4 a, vec4 b) {
     float alpha = a.a + b.a * (1.0 - a.a);
@@ -68,5 +94,5 @@ void main() {
     if (result.a < 0.01) {
         discard;
     }
-    FragColor = vec4(stageDimmed(result.rgb), result.a);
+    FragColor = vec4(screenTinted(stageDimmed(result.rgb)), result.a);
 }
