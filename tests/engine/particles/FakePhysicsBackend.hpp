@@ -12,16 +12,26 @@
 #include <math/Quaternion.hpp>
 #include <math/Vector3.hpp>
 
-#include "engine/particles/CpuParticleBackend.hpp"
-#include "engine/physics/CpuSoftBodyBackend.hpp"
 #include "engine/physics/IParticleBackend.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
 #include "engine/physics/ISoftBodyBackend.hpp"
+
+// The fake GPU backends run the engine's own simulations, which a build without the particles or soft-body module does
+// not have (tests/engine/CMakeLists.txt defines N2ENGINE_PARTICLES_ENABLED and N2ENGINE_SOFTBODIES_ENABLED on engine_tests
+// with the modules). Without one, FakePhysicsBackend offers no GPU backend for it, and the tests that use those fakes are
+// left out of the build.
+#ifdef N2ENGINE_PARTICLES_ENABLED
+#include "engine/particles/CpuParticleBackend.hpp"
+#endif
+#ifdef N2ENGINE_SOFTBODIES_ENABLED
+#include "engine/physics/CpuSoftBodyBackend.hpp"
 #include "engine/softbody/DeformableSoftBodyBackend.hpp"
 #include "../softbody/FakeDeformableDriver.hpp"
+#endif
 
 namespace N2Engine::TestSupport
 {
+#ifdef N2ENGINE_SOFTBODIES_ENABLED
     /// A stand-in for the PhysX GPU soft-body backend: the engine's CPU simulation under the name "PhysX", counting
     /// the calls the component makes, so tests can tell that the seam (not the component's own CPU backend) is used
     class FakeGpuSoftBodyBackend final : public Physics::ISoftBodyBackend
@@ -74,7 +84,9 @@ namespace N2Engine::TestSupport
     private:
         Physics::CpuSoftBodyBackend _inner;
     };
+#endif
 
+#ifdef N2ENGINE_PARTICLES_ENABLED
     /// A stand-in for the PhysX GPU particle backend: the engine's CPU simulation under the name "PhysX", counting
     /// the calls the component makes, so tests can tell that the seam (not the component's own CPU backend) is used
     class FakeGpuParticleBackend final : public Physics::IParticleBackend
@@ -126,6 +138,7 @@ namespace N2Engine::TestSupport
     private:
         Particles::CpuParticleBackend _inner;
     };
+#endif
 
     /// A physics backend that does nothing but report a GPU particle backend (or none) and a gravity
     class FakePhysicsBackend final : public Physics::IPhysicsBackend
@@ -139,8 +152,19 @@ namespace N2Engine::TestSupport
         [[nodiscard]] Physics::GpuStatus GetGpuStatus() const override { return _status; }
         [[nodiscard]] Physics::IParticleBackend *GetParticleBackend() override
         {
+#ifdef N2ENGINE_PARTICLES_ENABLED
             return _withGpuParticles ? &gpu : nullptr;
+#else
+            return nullptr;
+#endif
         }
+#ifndef N2ENGINE_SOFTBODIES_ENABLED
+        [[nodiscard]] Physics::ISoftBodyBackend *GetSoftBodyBackend() override { return nullptr; }
+        [[nodiscard]] Physics::GpuStatus GetSoftBodiesGpuStatus() const override
+        {
+            return Physics::ComposeSoftBodiesGpuStatus(GetGpuStatus(), std::nullopt, false);
+        }
+#else
         [[nodiscard]] Physics::ISoftBodyBackend *GetSoftBodyBackend() override
         {
             if (_deformable)
@@ -181,7 +205,6 @@ namespace N2Engine::TestSupport
         }
         FakeDeformableDriver *deformableDriver = nullptr;
 
-        FakeGpuParticleBackend gpu;
         /// Offers softGpu as the GPU soft-body backend (none by default, as every real backend until the PhysX one)
         bool withGpuSoftBodies = false;
         FakeGpuSoftBodyBackend softGpu;
@@ -192,6 +215,10 @@ namespace N2Engine::TestSupport
             softGpu.~FakeGpuSoftBodyBackend();
             new (&softGpu) FakeGpuSoftBodyBackend();
         }
+#endif
+
+#ifdef N2ENGINE_PARTICLES_ENABLED
+        FakeGpuParticleBackend gpu;
 
         /// Destroys the GPU particle backend and constructs a new one in the same place: the same address, a new
         /// backend (and so a new generation). What an allocator can do when a backend is replaced.
@@ -200,6 +227,7 @@ namespace N2Engine::TestSupport
             gpu.~FakeGpuParticleBackend();
             new (&gpu) FakeGpuParticleBackend();
         }
+#endif
         Math::Vector3 gravity{0.0f, -9.81f, 0.0f};
         /// The feature groups it declares (GetImplementedFeatures): none by default, as the interface's default
         Physics::PhysicsFeatureSet implementedFeatures = Physics::PhysicsFeatureSet::None();
@@ -208,11 +236,15 @@ namespace N2Engine::TestSupport
         bool Initialize() override { return true; }
         void Update(const float dt) override
         {
+#ifdef N2ENGINE_SOFTBODIES_ENABLED
             if (_deformable && deformableDriver && !_deformable->HasFailed())
             {
                 deformableDriver->Simulate(dt);
                 _deformable->OnSceneStepped(dt);
             }
+#else
+            static_cast<void>(dt);
+#endif
         }
         void Shutdown() override {}
         void ApplyPendingChanges() override {}
@@ -297,8 +329,10 @@ namespace N2Engine::TestSupport
         }
 
     private:
-        bool _withGpuParticles;
+        [[maybe_unused]] bool _withGpuParticles; // unused in a build without the particles module
         Physics::GpuStatus _status;
+#ifdef N2ENGINE_SOFTBODIES_ENABLED
         std::unique_ptr<SoftBodies::DeformableSoftBodyBackend> _deformable;
+#endif
     };
 }

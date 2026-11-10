@@ -13,6 +13,12 @@ endif()
 # the rest of tests/renderer/webgpu/ (the shader parity test) needs no backend and stays in renderer_tests
 list(FILTER RENDERER_TEST_SOURCES EXCLUDE REGEX "/webgpu/WebGpuRenderer")
 
+# The particle goldens draw a simulated ParticleSystem, which a build without the particles module (N2ENGINE_USE_PARTICLES)
+# does not have
+if(NOT N2ENGINE_USE_PARTICLES)
+    list(FILTER RENDERER_TEST_SOURCES EXCLUDE REGEX "/vulkan/VulkanParticlesGoldenTests\\.cpp$")
+endif()
+
 add_executable(renderer_tests ${RENDERER_TEST_SOURCES})
 
 target_link_libraries(renderer_tests
@@ -63,6 +69,14 @@ add_test(NAME renderer_tests COMMAND renderer_tests)
 # has no WebGPU
 if(N2ENGINE_RENDERER_WEBGPU AND NOT N2ENGINE_PLATFORM_WEB)
     file(GLOB WEBGPU_TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/webgpu/WebGpuRenderer*Tests.cpp")
+    # The compute tests run the engine's WebGPU particle and soft-body backends, and the particle goldens a ParticleSystem:
+    # neither is in a build without those modules
+    if(NOT N2ENGINE_USE_PARTICLES OR NOT N2ENGINE_USE_SOFTBODIES)
+        list(FILTER WEBGPU_TEST_SOURCES EXCLUDE REGEX "/webgpu/WebGpuRendererComputeTests\\.cpp$")
+    endif()
+    if(NOT N2ENGINE_USE_PARTICLES)
+        list(FILTER WEBGPU_TEST_SOURCES EXCLUDE REGEX "/webgpu/WebGpuRendererParticlesGoldenTests\\.cpp$")
+    endif()
     add_executable(webgpu_tests ${WEBGPU_TEST_SOURCES})
     target_link_libraries(webgpu_tests
             PRIVATE
