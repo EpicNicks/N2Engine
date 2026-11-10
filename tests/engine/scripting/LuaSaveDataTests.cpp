@@ -13,6 +13,7 @@
 
 using namespace N2Engine;
 using namespace N2Engine::Scripting;
+using namespace N2Engine::Scripting::Bindings;
 namespace fs = std::filesystem;
 
 // SaveData (user://saves) and Json from Lua
