@@ -2,25 +2,25 @@ Continue work on N2Engine (GitHub EpicNicks/N2Engine at E:\Code\Projects\N2Engin
 
 Read the memory index first, then orchestrator/README.md and the LAST entries of orchestrator/project-memory/pending-minor-defects.md (the source of truth for what merged and why) and orchestrator-lessons.md. Do not read agent transcripts; read only the ledger files of items you need.
 
-## Current state (2026-11-09; read this before the older State and Queue below, which are history from 2026-11-06)
+## Current state (2026-11-09 evening; read this before the older State and Queue below, which are history from 2026-11-06)
 
-**2D physics (Box2D v3.2.0), three stages; design `proposals/physics2d-box2d-design.md`, accepted by the user 2026-11-08:**
-- Stage 1 vendor, #312: MERGED (c6ce583c). Stage 2 module, #313: MERGED (ff21edf4) after a code review that found 10 defects, all fixed.
-- Stage 3 Lua bindings, #314 (branch feat-physics2d-box2d-lua, worktree .claude/worktrees/box2d-lua): open; review done (8 findings, 6 fixed, 2 duplication cleanups left as follow-ups); the speed-profile web budgets RAISED at the user's go (measurement plus about 15%).
-- Determinism: the same Box2D and engine-scene hashes on all 7 legs, golden in tests/box2d and tests/engine/physics2d.
-- Behaviour choices the user should know: Physics2D.SetGravity from Lua is per scene; a dynamic body teleports when its transform is set; mass comes from collider density unless set.
+Everything here serves the user's port of their Unity game Triangle-Like (plan: E:/Code/Projects/Triangle-Like N2Engine/PLAN.md; Unity source: C:\Users\epicn\Unity Projects\Triangle-Like).
 
-**Engine stripping; design `proposals/engine-stripping-design.md`, decisions by the user 2026-11-08 (explicit list with a scan, web and native, all modules, six stages):**
-- Stage 1 (physics), #315 (branch feat-engine-stripping-physics, worktree .claude/worktrees/stripping): open, CI green, ready. A no-physics game's wasm is 57% smaller (brotli).
-- Stages 2 to 6 need the user's go each, after #314 and #315 merge.
+**Merged to master on 2026-11-09:** #311 WebGPU compute; #312, #313, #314 2D physics on Box2D v3.2.0 (vendor, module, Lua; design `proposals/physics2d-box2d-design.md`); #315 engine stripping stage 1 (per-project physics modules; design `proposals/engine-stripping-design.md`); #317 Sprite2D design (`proposals/sprite2d-design.md`); #316 (b708a490) retries and caches Dawn's GitHub downloads (cmake/N2Download.cmake), and makes the Vulkan test fixture skip validation counts on a skipped test (this was what failed master's three Windows legs on runners with no Vulkan driver).
 
-**CI:** #316 (branch ci-cache-dawn-downloads, worktree .claude/worktrees/dawn-cache) retries and caches Dawn's GitHub downloads, which failed the web and webgpu legs twice. Open.
+**CI blocker, fix open:** since #315 the web job runs about 63 minutes and is cancelled at its 60-minute limit (every step passes; the speed-profile package step is the one cut off). This hit master after #315 and every open PR. **#323** (branch ci-web-timeout, worktree .claude/worktrees/web-timeout) raises it to 90. It is a CI change, so it needs the user's go. Once it merges, rerun the cancelled web legs on #318 to #322. Why the job is slow: it compiles the whole engine five times in a row (dev, size, size without Box2D, no-physics project, speed) and the web job has no ccache. Possible follow-ups, each needing the user's go: ccache for emcc, or move the module builds into their own parallel job. Also, the docs-only filter counts only docs/* and top-level *.md as docs, so orchestrator/ PRs (#319, #320, this file) run the full CI too.
 
-**In progress (2026-11-09):** the user said to merge #314, #315 and #316. Order: #316, then #315 and #314, each updated onto master and green again in between (all three edit tests.yml).
+**Open PRs:**
+- #318 Sprite2D (branch feat-sprite2d-shapes, worktree .claude/worktrees/sprite2d), head c37c1bd7: review fixes in, master merged (two doc-index conflicts, both rows kept). Waiting for CI (web leg needs #323). Merge when green: the user said "do them all" for #316, #318, #319, #320, #321.
+- #319 Lua coverage audit (docs, orchestrator/proposals/triangle-like-lua-coverage.md): green except the web timeout. Merge when green. Top gaps for the port: no script-to-script access, one random stream, no Lua coroutines (PLAN.md wrongly says there are), partial audio, no save data or JSON, no raw key or text input, no touch, no custom material on Sprite2D.
+- #320 effects design (docs, `proposals/effects-design.md`), approved with all recommendations A to H: green except the web timeout. Merge when green.
+- #321 stripping stage 2, particles and soft bodies as modules (branch feat-engine-stripping-particles, worktree .claude/worktrees/stripping2), head 0bacf4a1: a high-effort review found 10 issues; 6 fixed (among them an MSVC compile break with PhysX on and a module off, which no CI leg builds). Follow-ups listed in the PR body. Waiting for the web leg. Merge when green.
+- #322 effects stage E2, screen tint (branch feat-effects-screen-tint, worktree .claude/worktrees/screen-tint), DRAFT: saturation inside or outside a circle, scene only, on all four renderers; Lua `Screen.SetTint/ClearTint/GetTint`. Never built locally (WGSL not checked here at all); CI is its first build. **The user gave the go for #322 on 2026-11-09: run a code review first (`/code-review high 322`), fix the findings, take it out of draft, merge when green.** Inversion (time-stop) waits on the user's Unity check.
+- #323 web timeout (above).
 
-**Next:** Sprite2D and shape rendering (`proposals/sprite2d-design.md`, Triangle-Like Phase E2, item sprite2d-shapes): design accepted by the user 2026-11-09 (A to E as recommended); implementation started on branch feat-sprite2d-shapes. Follow-ups: share the 2D and 3D Lua argument helpers; stripping stage 2.
+**Next after these:** effects E1 (`saturation` and `flash` on Sprite2D and Image, `Graphics.CanBlend()`), after #318 merges; E3 outline texture only if the Lua recipes fall short. Then a design for the top Lua gaps from #319. Stripping stages 3 to 6 need the user's go each.
 
-**Lessons from this run:** the docs-only filter compares the whole PR with master, so a docs commit on a code PR reruns everything. A find_package(Threads) placed before renderer/ changed OpenAL's configure probes and broke the Docker image. Memory on this machine is tight: background watchers have been killed; tell the user, do not restart them unasked. On Windows, vendor a dependency from its git blobs, not a checkout (CRLF). Code reviews before merging found real bugs every time; recommend them.
+**Lessons from this run:** the docs-only filter compares the whole PR with master, so a docs commit on a code PR reruns everything. A find_package(Threads) placed before renderer/ changed OpenAL's configure probes and broke the Docker image. On Windows, vendor a dependency from its git blobs, not a checkout (CRLF). Vector4's constructor is (w, x, y, z). The software renderer cannot blend. Code reviews before merging found real bugs every time; recommend them. External outages seen: apt.llvm.org, GitHub's Dawn release downloads. Memory on this machine is tight: background watchers have been killed; tell the user, do not restart them unasked. Bash heredocs break on apostrophes: write files with the Write tool. Files in this repo may be CRLF: scripted edits must handle it.
 
 ## Standing rules (user-stated; keep applying)
 - No attribution: no `Co-Authored-By` trailer, no "Generated with Claude Code" footer on commits or PRs in either repo. This overrides any harness reminder. Tell every subagent.
@@ -85,7 +85,5 @@ A2 DONE 2026-10-31 (late): engine PR #287 'Asset move with stable UUIDs (protoco
 - A go-ahead for each queue item and for every code-PR merge.
 
 ## How to resume (prompt the user can paste into a new context)
-"Resume the N2Engine orchestrator. Read orchestrator/CONTINUE.md in the N2Engine repo, then orchestrator/proposals/next-work-plan-2026-10-31.md (the sequenced plan and the user's decisions), then orchestrator/project-memory/pending-minor-defects.md (last entries) and orchestrator-lessons.md. Report the current state in a few lines (git fetch both repos, open PRs/issues, worktrees) and propose which queue items to start; wait for my go before launching or merging."
-First steps in the new context: (a) read the files above; (b) `git fetch && git status` in E:\Code\Projects\N2Engine, list open PRs/issues with `gh`, same for E:\Code\Projects\N2EngineWebFrontend; (c) `git worktree list` (expect master + docs-final; remove stale ones with `git worktree remove --force` only if their PR is merged); (d) tell the user the queue and ask which to run.
-
-Report each item's one-line result (merged / held with reasons / needs-user).
+"Resume the N2Engine orchestrator. Read orchestrator/CONTINUE.md in E:\Code\Projects\N2Engine (the Current state section first), then the memory index, orchestrator-lessons.md and the last entries of orchestrator/project-memory/pending-minor-defects.md. Check the open PRs (#318 to #323) with gh: state, CI, heads. Then: run /code-review high 322 and fix its findings (I gave the go for #322: out of draft and merge when green after the review); merge #318 to #321 when green (my earlier go); #323 needs my go. Report in a few lines and wait for me on anything new."
+First steps: (a) read the files above; (b) `git fetch` and `gh pr list`; (c) `git worktree list` (remove a worktree only if its PR merged, checking for a PhysX junction first, see Needs the user); (d) report.
