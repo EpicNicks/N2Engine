@@ -19,6 +19,8 @@
 # To bump: take the tag of cmake/DawnPrebuilt.cmake (both move together: the "Dawn, Tint and emdawnwebgpu pins agree" step of
 # the webgpu CI job fails when the tags differ), set N2_EMDAWNWEBGPU_TAG and the SHA-256 of the release's
 # emdawnwebgpu-<tag>.remoteport.py (the release page lists a digest per asset), and run the web CI job.
+include(${CMAKE_CURRENT_LIST_DIR}/N2Download.cmake)
+
 set(N2_EMDAWNWEBGPU_TAG "v20261016.190333")
 set(N2_EMDAWNWEBGPU_SHA256 "725a0174df01e80bab07134ea28c929126a6f7bf41c858ad1702b025fb5e10e4")
 
@@ -37,14 +39,9 @@ endif()
 if(NOT N2_EMDAWNWEBGPU_HAVE)
     message(STATUS "Downloading the emdawnwebgpu remote port of Dawn ${N2_EMDAWNWEBGPU_TAG} (SHA-256 checked)...")
     file(MAKE_DIRECTORY "${N2_EMDAWNWEBGPU_DIR}")
-    file(DOWNLOAD "${N2_EMDAWNWEBGPU_URL}" "${N2_EMDAWNWEBGPU_PORT_FILE}"
-         EXPECTED_HASH SHA256=${N2_EMDAWNWEBGPU_SHA256}
-         TLS_VERIFY ON
-         STATUS N2_EMDAWNWEBGPU_STATUS)
-    list(GET N2_EMDAWNWEBGPU_STATUS 0 N2_EMDAWNWEBGPU_CODE)
-    list(GET N2_EMDAWNWEBGPU_STATUS 1 N2_EMDAWNWEBGPU_MESSAGE)
-    if(NOT N2_EMDAWNWEBGPU_CODE EQUAL 0)
-        file(REMOVE "${N2_EMDAWNWEBGPU_PORT_FILE}")
+    n2_download(URL "${N2_EMDAWNWEBGPU_URL}" DEST "${N2_EMDAWNWEBGPU_PORT_FILE}" SHA256 "${N2_EMDAWNWEBGPU_SHA256}"
+                RESULT N2_EMDAWNWEBGPU_MESSAGE)
+    if(N2_EMDAWNWEBGPU_MESSAGE)
         message(FATAL_ERROR "Could not fetch the emdawnwebgpu remote port from ${N2_EMDAWNWEBGPU_URL}, or its SHA-256 is not "
                             "the pinned ${N2_EMDAWNWEBGPU_SHA256}: ${N2_EMDAWNWEBGPU_MESSAGE}")
     endif()

@@ -1175,6 +1175,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
+      N2_DOWNLOAD_CACHE: ${{ github.workspace }}/.n2-downloads
       EMSCRIPTEN_VERSION: 4.0.10
     steps:
       - uses: actions/checkout@v7
@@ -1207,6 +1208,18 @@ jobs:
         with:
           path: external/PhysX/physx/bin/emscripten.wasm32
           key: physx-web-emsdk-${{ env.EMSCRIPTEN_VERSION }}-${{ hashFiles('cmake/PhysXWebPin.cmake', 'scripts/web-build-physx.sh') }}
+
+      # Dawn's GitHub release files (cmake/N2Download.cmake: the remote port here, the prebuilt Dawn in the webgpu job) and the
+      # emdawnwebgpu package emcc fetches at the first compile, from a cache: GitHub has failed this job with HTTP errors. Keyed by
+      # the pins, so a new pin downloads again. Saved right after the step that fills each, so a later failure still keeps them.
+      - name: Restore the Dawn downloads
+        id: dawn-download-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            .n2-downloads
+            ~/emsdk/upstream/emscripten/cache/ports
+          key: dawn-downloads-web-emsdk-${{ env.EMSCRIPTEN_VERSION }}-${{ hashFiles('cmake/EmdawnwebgpuPort.cmake') }}
 
       - name: Configure (dev profile)
         run: |
@@ -1245,6 +1258,15 @@ jobs:
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
           cmake --build build-web --target math_tests text_tests assetimport_tests engine_tests renderer_tests web_tests jolt_smoke_tests box2d_smoke_tests N2WebGpuReadbackTests -- -k 0
+
+      - name: Save the Dawn downloads
+        if: steps.dawn-download-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            .n2-downloads
+            ~/emsdk/upstream/emscripten/cache/ports
+          key: ${{ steps.dawn-download-cache.outputs.cache-primary-key }}
 
       # CMake's Emscripten toolchain sets CMAKE_CROSSCOMPILING_EMULATOR to node, so ctest runs build-web/bin/<name>.js under node
       - name: Test under node
@@ -1652,6 +1674,7 @@ jobs:
       CC: gcc-14
       CXX: g++-14
       CCACHE_DIR: ${{ github.workspace }}/.ccache
+      N2_DOWNLOAD_CACHE: ${{ github.workspace }}/.n2-downloads
       CCACHE_MAXSIZE: 1G
       CCACHE_COMPRESS: "1"
       CCACHE_COMPILERCHECK: content
@@ -1713,8 +1736,24 @@ jobs:
           ccache --zero-stats
           ccache --show-config | grep -E " (cache_dir|max_size|base_dir|hash_dir|compiler_check) = " || true
 
+      # The prebuilt Dawn (cmake/DawnPrebuilt.cmake through cmake/N2Download.cmake) from a cache: GitHub has failed this job with HTTP
+      # errors. Keyed by the pin; saved right after the configure, which is what downloads it.
+      - name: Restore the Dawn download
+        id: dawn-download-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: .n2-downloads
+          key: dawn-downloads-prebuilt-${{ hashFiles('cmake/DawnPrebuilt.cmake') }}
+
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_RENDERER_VULKAN=OFF -DN2ENGINE_RENDERER_WEBGPU=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Save the Dawn download
+        if: steps.dawn-download-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .n2-downloads
+          key: ${{ steps.dawn-download-cache.outputs.cache-primary-key }}
 
       - name: Build
         run: cmake --build build --parallel --target webgpu_tests -- -k 0
