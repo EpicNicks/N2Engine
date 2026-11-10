@@ -1,0 +1,28 @@
+{
+  "name": "effects",
+  "repo": "engine",
+  "branch": "feat-effects",
+  "title": "Effects for Triangle-Like: per-sprite saturation and flash, a screen tint for time-stop and full-screen grey, and recipes for outline, glow and glitch",
+  "closes": null,
+  "issue": "User's go on 2026-11-09 with decisions A to H as recommended. Design: orchestrator/proposals/effects-design.md. Stages E1 (after #318) and E2 (now, saturation only until the Unity check of time-stop's inversion).",
+  "allowedPaths": [
+    "^engine/",
+    "^renderer/",
+    "^tests/",
+    "^docs/",
+    "^web/budgets\\.json$",
+    "^orchestrator/proposals/effects-design\\.md$"
+  ],
+  "acceptance": [
+    "Sprite2D and UI Image have saturation and flash, drawn the same on OpenGL, Vulkan, WebGPU and software; defaults change no existing golden image",
+    "A screen tint (saturation inside or outside a screen circle) applies to scene draws only, survives the software renderer's reordering, and leaves the UI untouched",
+    "Shader parity tests cover every new uniform; software pixel tests and the Vulkan (lavapipe) tests pass in CI; OpenGL listed as unverified on a GPU",
+    "Lua bindings, serialization with old scenes loading unchanged, docs with the recipes for outline, glow and glitch, and web sizes measured"
+  ],
+  "requiresDocs": true,
+  "allowProtocol": false,
+  "gate": null,
+  "approved": true,
+  "reviewer": "opus",
+  "notes": "Reviewer: the four shader versions match (OpenGL GLSL strings, Vulkan GLSL, WGSL, software C++), the per-draw tint equals a post-pass tint for blended draws, the UI pass is not tinted, the software renderer's branch is per draw not per pixel, web size budgets."
+}

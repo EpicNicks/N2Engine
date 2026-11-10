@@ -164,6 +164,8 @@ namespace Renderer::Software
         const char* GetRendererName() const override { return "Software Rasterizer"; }
         /// Every pixel a draw writes is dimmed by its RenderState::dim (the CPU reference of the GPU shaders)
         [[nodiscard]] bool SupportsStageDim() const override { return true; }
+        /// Blended draws are drawn opaque, without writing depth
+        [[nodiscard]] bool SupportsBlending() const override { return false; }
         /// Counts each draw as RecordDraw queues it (before the depth sort), clipped to the mesh's indices
         [[nodiscard]] bool SupportsRenderCounters() const override { return true; }
 
