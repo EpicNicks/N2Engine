@@ -95,6 +95,12 @@ GLFWscrollfun glfwSetScrollCallback(GLFWwindow *window, GLFWscrollfun callback)
     return NULL;
 }
 
+GLFWcharfun glfwSetCharCallback(GLFWwindow *window, GLFWcharfun callback)
+{
+    (void)window; (void)callback;
+    return NULL;
+}
+
 void glfwSetInputMode(GLFWwindow *window, int mode, int value) { (void)window; (void)mode; (void)value; }
 int glfwGetKey(GLFWwindow *window, int key) { (void)window; (void)key; return GLFW_RELEASE; }
 int glfwGetMouseButton(GLFWwindow *window, int button) { (void)window; (void)button; return GLFW_RELEASE; }

@@ -37,6 +37,7 @@
 #include "engine/Window.hpp"
 #include "engine/input/InputSystem.hpp"
 #include "engine/input/KeySource.hpp"
+#include "engine/input/Keyboard.hpp"
 #include "engine/input/Mouse.hpp"
 #include "engine/io/ProjectFile.hpp"
 #include "engine/io/ResourceLoader.hpp"
@@ -116,6 +117,16 @@ namespace
             return EM_FALSE;
         }
         g_player.keys.SetKey(key, type == EMSCRIPTEN_EVENT_KEYDOWN);
+        if (type == EMSCRIPTEN_EVENT_KEYDOWN)
+        {
+            // Typed text (Keyboard::GetTypedText): the character the key makes, held keys repeating as the browser does
+            const std::string_view text = Web::TypedTextFromKey(event->key, event->ctrlKey || event->metaKey);
+            auto *keyboard = Input::Keyboard::Get();
+            if (!text.empty() && keyboard != nullptr)
+            {
+                keyboard->InjectText(text);
+            }
+        }
         // A key with a browser meaning (scrolling, tabbing) is the game's while it runs, unless a shortcut modifier is held
         const bool shortcut = event->ctrlKey || event->altKey || event->metaKey;
         return Web::SuppressesBrowserDefault(key) && !shortcut ? EM_TRUE : EM_FALSE;
