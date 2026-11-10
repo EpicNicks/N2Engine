@@ -2838,6 +2838,15 @@ function Input.GetMouseButtonDown(button) end
 ---@return boolean
 function Input.GetMouseButtonUp(button) end
 
+---The number of touches this frame (Input.touchCount); 0 on desktop (GLFW has no touch)
+---@return integer
+function Input.GetTouchCount() end
+
+---Touch `index` (1-based) this frame: { id, x, y, phase } with phase "Began", "Moved", "Stationary", "Ended" or "Canceled"; nil past the count
+---@param index integer
+---@return {id: integer, x: number, y: number, phase: string}|nil
+function Input.GetTouch(index) end
+
 ---Whether the pointer was over a UI element (a raycast-target graphic under a canvas) in the last pointer update
 ---@return boolean
 function Input.IsPointerOverUI() end

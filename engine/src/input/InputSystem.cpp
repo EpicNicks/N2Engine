@@ -10,6 +10,7 @@
 #include <GLFW/glfw3.h>
 
 #include "engine/input/Mouse.hpp"
+#include "engine/input/Touchscreen.hpp"
 
 #include <ranges>
 
@@ -168,6 +169,7 @@ std::vector<GamepadInfo> InputSystem::GetConnectedGamepads()
 void InputSystem::Update()
 {
     _mouse->Update();
+    Touchscreen::Get().Update();
 
     UpdatingScope scope{*this};
 

@@ -6,6 +6,7 @@
 #include "engine/Application.hpp"
 #include "engine/input/InputSystem.hpp"
 #include "engine/input/Mouse.hpp"
+#include "engine/input/Touchscreen.hpp"
 #include "engine/Logger.hpp"
 #include "engine/scripting/LuaJson.hpp"
 #include "engine/scripting/ScriptCallback.hpp"
@@ -221,6 +222,21 @@ namespace N2Engine::Scripting::Bindings
             {
                 const auto *mouse = Input::Mouse::Get();
                 return mouse != nullptr && mouse->GetButtonUp(button);
+            },
+            // Unity's Input.touchCount / Input.GetTouch: this frame's touches (Touchscreen), 1-based here
+            "GetTouchCount", []() { return static_cast<int>(Input::Touchscreen::Get().GetTouchCount()); },
+            "GetTouch", [](const int index, const sol::this_state state) -> sol::object
+            {
+                const auto &touches = Input::Touchscreen::Get().GetTouches();
+                if (index < 1 || static_cast<std::size_t>(index) > touches.size())
+                {
+                    return sol::make_object(state, sol::lua_nil);
+                }
+                const Input::Touch &t = touches[static_cast<std::size_t>(index - 1)];
+                sol::state_view lua(state);
+                return sol::make_object(state, lua.create_table_with(
+                    "id", t.id, "x", t.position.x, "y", t.position.y,
+                    "phase", std::string(Input::TouchPhaseName(t.phase))));
             },
             // Whether the pointer is over a UI element (PointerDispatcher::IsPointerOverUI)
             "IsPointerOverUI", []()
