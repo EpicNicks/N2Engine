@@ -180,9 +180,17 @@ namespace VulkanTesting
 
         void TearDown() override
         {
+            // A test that skipped because the machine has no Vulkan driver (HandleInitFailure) has nothing to check: the loader's
+            // own "no drivers" messages are recorded as validation errors, and counting them failed the skipped test on CI
+            // runners whose image has no Vulkan driver
+            const bool skipped = IsSkipped();
             for (auto& renderer : _renderers)
             {
                 renderer->Shutdown(); // the layer reports every undestroyed object here
+                if (skipped)
+                {
+                    continue;
+                }
                 const auto stats = renderer->GetValidationStats();
                 std::ostringstream messages;
                 for (const auto& message : renderer->GetValidationMessages())
