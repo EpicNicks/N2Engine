@@ -23,7 +23,11 @@ namespace N2Engine::Input
         case BindingParseError::InvalidValue: return "unknown key, button or axis name";
         case BindingParseError::InvalidOptionalField:
             return "optional field of the wrong type (gamepadId: non-negative integer, deadzone: number, "
-                   "invertX/invertY: boolean)";
+                   "invertX/invertY: boolean, direction: Both/Positive/Negative, pressPoint: number 0 to 1)";
+        case BindingParseError::MissingChordBinding:
+            return "a Chord needs 'modifier' and 'binding' binding objects";
+        case BindingParseError::ChordTooDeep:
+            return "Chords nest too deeply";
         }
         return "unknown error";
     }
@@ -71,11 +75,26 @@ namespace N2Engine::Input
         {
             return !j.contains(field) || j[field].is_boolean();
         }
-    }
 
-    std::expected<std::unique_ptr<InputBinding>, BindingParseError> CreateBindingFromJson(
+        bool IsValidPressPoint(const nlohmann::json &j)
+        {
+            if (!j.contains("pressPoint"))
+            {
+                return true;
+            }
+            if (!j["pressPoint"].is_number())
+            {
+                return false;
+            }
+            const double value = j["pressPoint"].get<double>();
+            return value >= 0.0 && value <= 1.0;
+        }
+
+    // chordDepth counts the Chords this binding sits inside, so nesting is bounded
+    std::expected<std::unique_ptr<InputBinding>, BindingParseError> CreateBinding(
         GLFWwindow *window,
-        const nlohmann::json &j
+        const nlohmann::json &j,
+        const int chordDepth
     )
     {
         if (!j.contains("type") || !j["type"].is_string())
@@ -109,13 +128,51 @@ namespace N2Engine::Input
                     return std::unexpected(BindingParseError::MissingAxis);
                 if (!AllKnown<GamepadAxis>(j, {"axis"}))
                     return std::unexpected(BindingParseError::InvalidValue);
-                if (!IsValidGamepadId(j))
+                if (!IsValidGamepadId(j) || !IsValidPressPoint(j) ||
+                    (j.contains("direction") && !IsKnownName<AxisDirection>(j["direction"])))
                     return std::unexpected(BindingParseError::InvalidOptionalField);
                 return std::make_unique<AxisBinding>(
                     window,
                     j["axis"].get<GamepadAxis>(),
+                    j.value("gamepadId", 0),
+                    j.contains("direction") ? j["direction"].get<AxisDirection>() : AxisDirection::Both,
+                    j.value("pressPoint", 0.0f)
+                );
+            }
+
+        case BindingType::GamepadButtonComposite:
+            {
+                if (!j.contains("up") || !j.contains("down") ||
+                    !j.contains("left") || !j.contains("right"))
+                    return std::unexpected(BindingParseError::MissingCompositeKeys);
+                if (!AllKnown<GamepadButton>(j, {"up", "down", "left", "right"}))
+                    return std::unexpected(BindingParseError::InvalidValue);
+                if (!IsValidGamepadId(j))
+                    return std::unexpected(BindingParseError::InvalidOptionalField);
+                return std::make_unique<GamepadButtonCompositeBinding>(
+                    window,
+                    j["up"].get<GamepadButton>(),
+                    j["down"].get<GamepadButton>(),
+                    j["left"].get<GamepadButton>(),
+                    j["right"].get<GamepadButton>(),
                     j.value("gamepadId", 0)
                 );
+            }
+
+        case BindingType::Chord:
+            {
+                if (!j.contains("modifier") || !j["modifier"].is_object() ||
+                    !j.contains("binding") || !j["binding"].is_object())
+                    return std::unexpected(BindingParseError::MissingChordBinding);
+                if (chordDepth >= MaxChordDepth)
+                    return std::unexpected(BindingParseError::ChordTooDeep);
+                auto modifier = CreateBinding(window, j["modifier"], chordDepth + 1);
+                if (!modifier)
+                    return std::unexpected(modifier.error());
+                auto binding = CreateBinding(window, j["binding"], chordDepth + 1);
+                if (!binding)
+                    return std::unexpected(binding.error());
+                return std::make_unique<ChordBinding>(window, std::move(*modifier), std::move(*binding));
             }
 
         case BindingType::GamepadStick:
@@ -183,5 +240,14 @@ namespace N2Engine::Input
         }
 
         return std::unexpected(BindingParseError::InvalidType);
+    }
+    }
+
+    std::expected<std::unique_ptr<InputBinding>, BindingParseError> CreateBindingFromJson(
+        GLFWwindow *window,
+        const nlohmann::json &j
+    )
+    {
+        return CreateBinding(window, j, 0);
     }
 }
