@@ -819,6 +819,12 @@ function GameObject:AddComponent(typeName) end
 ---@return Component|nil nil when the object has no component of that type
 function GameObject:GetComponent(typeName) end
 
+---The instance table (self) of the first LuaComponent here whose script runs, or of the first running `path`.
+---How one script calls another: obj:GetScript("res://scripts/Enemy.lua"):Damage(1)
+---@param path string|nil e.g. "res://scripts/Enemy.lua"
+---@return table|nil
+function GameObject:GetScript(path) end
+
 ---A 1 x 1 x 1 cube (the built-in "Cube" mesh), unlit in its colour unless it has a material.
 ---Opaque: a translucent colour doesn't blend; give it a material with alphaMode "blend" for that.
 ---@class CubeRenderer : Component
@@ -1386,6 +1392,11 @@ function LuaComponent:GetScriptPath() end
 ---True when the script is missing, failed to load, or didn't return a table
 ---@return boolean
 function LuaComponent:HasMissingScript() end
+
+---The running script's instance table (its self), or nil when no script runs. The same table each call; once the
+---component is destroyed its gameObject and component fields are nil.
+---@return table|nil
+function LuaComponent:GetScript() end
 
 ---@class Component
 Component = {}
@@ -2645,6 +2656,19 @@ function AudioSource:SetMaxDistance(distance) end
 ---@param factor number
 function AudioSource:SetRolloffFactor(factor) end
 
+---Set the clip by path, loaded through the resource cache; a clip that does not load is a Lua error
+---@param path string e.g. "res://audio/music.ogg"
+function AudioSource:SetClip(path) end
+
+---@return boolean
+function AudioSource:HasClip() end
+
+---@param playOnAwake boolean
+function AudioSource:SetPlayOnAwake(playOnAwake) end
+
+---@return boolean
+function AudioSource:GetPlayOnAwake() end
+
 ---@class AudioListener : Component
 AudioListener = {}
 
@@ -2673,6 +2697,42 @@ function Audio.SetListenerPosition(x, y, z) end
 ---@param uy number Up Y
 ---@param uz number Up Z
 function Audio.SetListenerOrientation(fx, fy, fz, ux, uy, uz) end
+
+---Fire-and-forget playback. Returns a handle id, 0 when the sound was dropped. A clip that does not load is a Lua error.
+---@param path string e.g. "res://audio/shoot.ogg"
+---@param volume number|nil default 1
+---@param pitch number|nil default 1
+---@param group string|nil mixer group, default "SFX"
+---@return integer
+function Audio.PlayOneShot(path, volume, pitch, group) end
+
+---@param id integer a PlayOneShot handle
+function Audio.StopOneShot(id) end
+
+---@param id integer a PlayOneShot handle
+---@return boolean
+function Audio.IsOneShotPlaying(id) end
+
+---Mixer group volume, clamped to 0..1 (groups: Master, Music, SFX, UI, Voice, Ambient). Unknown groups are ignored.
+---@param group string
+---@param volume number
+function Audio.SetGroupVolume(group, volume) end
+
+---@param group string
+---@return number 1 for an unknown group
+function Audio.GetGroupVolume(group) end
+
+---@param group string
+---@param muted boolean
+function Audio.SetGroupMuted(group, muted) end
+
+---@param group string
+---@return boolean
+function Audio.IsGroupMuted(group) end
+
+---@param group string
+---@return boolean
+function Audio.HasGroup(group) end
 
 -- ===== INPUT =====
 
