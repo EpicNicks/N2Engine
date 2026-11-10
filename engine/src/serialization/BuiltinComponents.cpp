@@ -15,6 +15,7 @@
 #include "engine/physics/CapsuleCollider.hpp"
 #include "engine/physics/CharacterController.hpp"
 #include "engine/physics/Rigidbody.hpp"
+#include "engine/rendering/Sprite2D.hpp"
 #include "engine/physics2d/Collider2D.hpp"
 #include "engine/physics2d/Rigidbody2D.hpp"
 #include "engine/physics/SoftBody.hpp"
@@ -67,6 +68,7 @@ namespace N2Engine
         Add<Example::CubeRenderer>(registry, "CubeRenderer");
         Add<Example::SphereRenderer>(registry, "SphereRenderer");
         Add<Example::QuadRenderer>(registry, "QuadRenderer");
+        Add<Rendering::Sprite2D>(registry, "Sprite2D");
         Add<Rendering::MeshRenderer>(registry, "MeshRenderer");
         Add<Rendering::TextRenderer>(registry, "TextRenderer");
         Add<Rendering::ParticleSystem>(registry, "ParticleSystem");

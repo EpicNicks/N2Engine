@@ -259,6 +259,8 @@ namespace Renderer::Common
         /// Whether this backend's built-in shaders apply RenderState::dim. The four backends do (OpenGL, Vulkan, WebGPU,
         /// software); the default (a test fake) does not.
         [[nodiscard]] virtual bool SupportsStageDim() const { return false; }
+        /// Whether blended draws (RenderState::blend) are blended. The software renderer draws them opaque.
+        [[nodiscard]] virtual bool SupportsBlending() const { return true; }
 
         /**
          * The screen tint (ScreenTint: a saturation inside or outside a circle on the screen; effects design, stage E2):
