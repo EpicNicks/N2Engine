@@ -11,6 +11,7 @@
 #include <GLFW/glfw3.h>
 
 #include "engine/input/Mouse.hpp"
+#include "engine/input/Touchscreen.hpp"
 
 #include <ranges>
 
@@ -171,6 +172,7 @@ void InputSystem::Update()
 {
     _mouse->Update();
     _keyboard->Update();
+    Touchscreen::Get().Update();
 
     UpdatingScope scope{*this};
 
