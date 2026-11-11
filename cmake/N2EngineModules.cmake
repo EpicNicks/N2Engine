@@ -10,6 +10,8 @@
 #
 #   "physics3d": "none" | "physx" | "jolt" | "both"   N2ENGINE_USE_PHYSX and N2ENGINE_USE_JOLT
 #   "physics2d": true | false                         N2ENGINE_USE_BOX2D
+#   "particles": true | false                         N2ENGINE_USE_PARTICLES
+#   "softbodies": true | false                        N2ENGINE_USE_SOFTBODIES
 #
 # Normal variables, which win over option() (policy CMP0077) and over a cached value from an earlier configure, so the list is
 # the one thing that decides. scripts/project-modules.mjs checks the list against what the project uses.
@@ -86,19 +88,26 @@ if(N2ENGINE_PROJECT)
             message(STATUS "Engine modules: physics3d ${_n2_physics3d}, from ${N2ENGINE_PROJECT}")
         endif()
 
-        string(JSON _n2_physics2d_type ERROR_VARIABLE _n2_json_error TYPE "${_n2_project_json}" build modules physics2d)
-        if(NOT _n2_json_error)
-            if(NOT _n2_physics2d_type STREQUAL "BOOLEAN")
-                message(FATAL_ERROR "build.modules.physics2d must be true or false")
+        # The modules that are on or off, each with its option
+        foreach(_n2_pair IN ITEMS "physics2d:N2ENGINE_USE_BOX2D" "particles:N2ENGINE_USE_PARTICLES"
+                                  "softbodies:N2ENGINE_USE_SOFTBODIES")
+            string(REPLACE ":" ";" _n2_pair "${_n2_pair}")
+            list(GET _n2_pair 0 _n2_module)
+            list(GET _n2_pair 1 _n2_option)
+            string(JSON _n2_module_type ERROR_VARIABLE _n2_json_error TYPE "${_n2_project_json}" build modules ${_n2_module})
+            if(NOT _n2_json_error)
+                if(NOT _n2_module_type STREQUAL "BOOLEAN")
+                    message(FATAL_ERROR "build.modules.${_n2_module} must be true or false")
+                endif()
+                string(JSON _n2_module_value GET "${_n2_project_json}" build modules ${_n2_module})
+                if(_n2_module_value)
+                    set(${_n2_option} ON)
+                else()
+                    set(${_n2_option} OFF)
+                endif()
+                message(STATUS "Engine modules: ${_n2_module} ${_n2_module_value}, from ${N2ENGINE_PROJECT}")
             endif()
-            string(JSON _n2_physics2d GET "${_n2_project_json}" build modules physics2d)
-            if(_n2_physics2d)
-                set(N2ENGINE_USE_BOX2D ON)
-            else()
-                set(N2ENGINE_USE_BOX2D OFF)
-            endif()
-            message(STATUS "Engine modules: physics2d ${_n2_physics2d}, from ${N2ENGINE_PROJECT}")
-        endif()
+        endforeach()
 
         # Before anything is compiled: a build this long should not end by reporting a mistake it could have reported now
         _n2_find_module_node(_n2_node)

@@ -14,15 +14,8 @@
 #include "engine/serialization/ComponentSerializer.hpp"
 #include "engine/softbody/SoftBodyBackendSelection.hpp"
 
-namespace N2Engine::SoftBodies
-{
-    class WebGpuSoftBodyBackend;
-}
-
 namespace N2Engine::Physics
 {
-    class CpuSoftBodyBackend;
-
     /**
      * Makes the MeshRenderer on the same GameObject a soft body: it squashes and wobbles under gravity. See
      * docs/soft-bodies.html.
@@ -59,6 +52,12 @@ namespace N2Engine::Physics
      * After each step the copy gets the skinned vertex positions and recomputed area-weighted normals (Mesh::SetData,
      * which bumps the version so the GPU copy is re-uploaded in place); tangents, texture coordinates, colours,
      * submeshes and materials stay the rest ones. The renderer is unchanged: whatever draws a mesh draws it.
+     *
+     * Leaving it out: a build with N2ENGINE_USE_SOFTBODIES=OFF (a project's build.modules "softbodies": false, see
+     * docs/project-modules.html) has none of the simulation (the backends and the tetrahedraliser). The component is
+     * still registered with every field, so scenes keep their data and Lua's methods exist, but the body never starts:
+     * the MeshRenderer draws its own mesh, and the first body to start logs one warning per process
+     * (docs/soft-bodies.html#leaving-it-out).
      */
     class SoftBody final : public SerializableComponent
     {
@@ -135,8 +134,10 @@ namespace N2Engine::Physics
         /// Writes the backend's positions and recomputed normals into the runtime mesh
         void UpdateRuntimeMesh();
 
-        std::unique_ptr<CpuSoftBodyBackend> _cpuBackend; // owned when the CPU backend is the one in use
-        std::unique_ptr<SoftBodies::WebGpuSoftBodyBackend> _webGpuBackend; // owned when the WebGPU backend is in use
+        // Held by the interface, so a build without the soft-body module (N2ENGINE_USE_SOFTBODIES=OFF) destroys them
+        // without naming the backends, whose code is not in it
+        std::unique_ptr<ISoftBodyBackend> _cpuBackend; // a CpuSoftBodyBackend, when the CPU backend is in use
+        std::unique_ptr<ISoftBodyBackend> _webGpuBackend; // a WebGpuSoftBodyBackend, when that one is in use
         SoftBodyHandle _handle = kInvalidSoftBody;
         bool _usingGpu = false;
         bool _attached = false;

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,8 @@
 #include "engine/rendering/Sprite2D.hpp"
 #include "engine/rendering/Texture.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
+
+#include <nlohmann/json.hpp>
 
 using namespace N2Engine;
 using namespace N2Engine::Rendering;
@@ -450,6 +453,137 @@ TEST(Sprite2DTest, AScriptCanSetEveryField)
         local ok = pcall(function() s:SetVertices({Vector2(0, 0), 'corner'}) end)
         assert(not ok)
         sprite_go = nil
+    )", sol::script_pass_on_error);
+    if (!result.valid())
+    {
+        const sol::error error = result;
+        FAIL() << error.what();
+    }
+}
+
+// ===== Colour effects (effects design, stage E1) =====
+
+namespace
+{
+    /// Removes every key named `key` from `json`, at any depth: what a scene saved before a field existed looks like
+    void EraseKeyEverywhere(nlohmann::json &json, const std::string &key)
+    {
+        if (json.is_object())
+        {
+            json.erase(key);
+        }
+        if (json.is_object() || json.is_array())
+        {
+            for (auto it = json.begin(); it != json.end(); ++it)
+            {
+                EraseKeyEverywhere(it.value(), key);
+            }
+        }
+    }
+}
+
+TEST(Sprite2DTest, SaturationZeroDrawsTheColourAsItsGreyAndAFlashMixesOverIt)
+{
+    const Frame grey = Draw([](Scene &scene) {
+        AddSprite(scene, "Grey", Vector3(0.0f, 0.0f, 0.0f), Common::Color::Red)->SetSaturation(0.0f);
+    });
+    const Rgb pixel = grey.At(32, 32);
+    EXPECT_NEAR(pixel.r, 76, 1) << "Rec. 601 luma of red: 0.299 x 255";
+    EXPECT_NEAR(pixel.g, 76, 1);
+    EXPECT_NEAR(pixel.b, 76, 1);
+
+    const Frame flashed = Draw([](Scene &scene) {
+        AddSprite(scene, "Hit", Vector3(0.0f, 0.0f, 0.0f), Common::Color::Red)->SetFlash(Common::Color{1.0f, 1.0f, 1.0f, 0.5f});
+    });
+    EXPECT_NEAR(flashed.At(32, 32).r, 255, 1);
+    EXPECT_NEAR(flashed.At(32, 32).g, 128, 1);
+    EXPECT_TRUE(IsBlack(flashed.At(5, 5))) << "the flash keeps the shape: nothing outside the square";
+}
+
+TEST(Sprite2DTest, TheEffectsAreClampedWhenDrawn)
+{
+    const Frame frame = Draw([](Scene &scene) {
+        auto *sprite = AddSprite(scene, "Odd", Vector3(0.0f, 0.0f, 0.0f), Common::Color::Red);
+        sprite->SetSaturation(std::numeric_limits<float>::quiet_NaN());     // 1: no change
+        sprite->SetFlash(Common::Color{0.0f, 1.0f, 0.0f, 7.0f});            // alpha 1: all green
+    });
+    EXPECT_TRUE(IsGreen(frame.At(32, 32)));
+}
+
+TEST(Sprite2DTest, TheEffectsAreStoredClampedSoTheGettersAndTheSavedSceneAgree)
+{
+    const auto go = GameObject::Create("Sprite");
+    go->CreatePositionable();
+    auto *sprite = go->AddComponent<Sprite2D>();
+    sprite->SetSaturation(11.0f);
+    EXPECT_FLOAT_EQ(sprite->GetSaturation(), 4.0f);
+    sprite->SetFlash(Common::Color{2.0f, -1.0f, 0.5f, 7.0f});
+    EXPECT_FLOAT_EQ(sprite->GetFlash().r, 1.0f);
+    EXPECT_FLOAT_EQ(sprite->GetFlash().g, 0.0f);
+    EXPECT_FLOAT_EQ(sprite->GetFlash().a, 1.0f);
+
+    // A NaN would be saved as null, which does not load: it is stored as 1 (no change) instead
+    sprite->SetSaturation(std::numeric_limits<float>::quiet_NaN());
+    sprite->SetFlash(Common::Color{std::numeric_limits<float>::infinity(), 0.0f, 0.0f, 0.5f});
+    EXPECT_FLOAT_EQ(sprite->GetSaturation(), 1.0f);
+    const auto scene = Scene::Create("Sprite2DNonFinite");
+    scene->AddRootGameObject(go);
+    const auto loaded = Scene::FromJSON(scene->Serialize());
+    ASSERT_NE(loaded, nullptr);
+    const auto *copy = loaded->FindGameObject("Sprite")->GetComponent<Sprite2D>();
+    ASSERT_NE(copy, nullptr);
+    EXPECT_FLOAT_EQ(copy->GetSaturation(), 1.0f);
+    EXPECT_FLOAT_EQ(copy->GetFlash().r, 0.0f);
+    EXPECT_FLOAT_EQ(copy->GetFlash().a, 0.5f);
+}
+
+TEST(Sprite2DTest, TheEffectsSurviveASceneLoadAndAnOlderSceneLoadsWithoutThem)
+{
+    const auto go = GameObject::Create("Sprite");
+    go->CreatePositionable();
+    auto *sprite = go->AddComponent<Sprite2D>();
+    sprite->SetSaturation(0.25f);
+    sprite->SetFlash(Common::Color{1.0f, 0.5f, 0.0f, 0.75f});
+    const auto scene = Scene::Create("Sprite2DEffects");
+    scene->AddRootGameObject(go);
+    nlohmann::json json = scene->Serialize();
+
+    const auto loaded = Scene::FromJSON(json);
+    ASSERT_NE(loaded, nullptr);
+    const auto *copy = loaded->FindGameObject("Sprite")->GetComponent<Sprite2D>();
+    ASSERT_NE(copy, nullptr);
+    EXPECT_FLOAT_EQ(copy->GetSaturation(), 0.25f);
+    EXPECT_FLOAT_EQ(copy->GetFlash().g, 0.5f);
+    EXPECT_FLOAT_EQ(copy->GetFlash().a, 0.75f);
+
+    for (const char *key : {"_saturation", "_flash", "saturation", "flash"})
+    {
+        EraseKeyEverywhere(json, key);
+    }
+    const auto older = Scene::FromJSON(json);
+    ASSERT_NE(older, nullptr);
+    const auto *plain = older->FindGameObject("Sprite")->GetComponent<Sprite2D>();
+    ASSERT_NE(plain, nullptr);
+    EXPECT_FLOAT_EQ(plain->GetSaturation(), 1.0f);
+    EXPECT_FLOAT_EQ(plain->GetFlash().a, 0.0f);
+}
+
+TEST(Sprite2DTest, AScriptCanSetTheEffectsAndAskWhetherTheRendererBlends)
+{
+    ASSERT_TRUE(Scripting::LuaRuntime::Instance().Initialize());
+    sol::state &lua = Scripting::LuaRuntime::Instance().GetState();
+    const sol::protected_function_result result = lua.safe_script(R"(
+        local go = GameObject.Create('LuaSpriteEffects')
+        local s = go:AddComponent('Sprite2D')
+        assert(s:GetSaturation() == 1)
+        assert(s:GetFlash().a == 0)
+        s:SetSaturation(0)
+        assert(s:GetSaturation() == 0)
+        s:SetFlash(Color.new(1, 1, 1, 0.5))
+        assert(s:GetFlash().a == 0.5)
+        assert(s:GetFlash().r == 1)
+        -- No window here, so no renderer: nothing is drawn, and CanBlend says true
+        assert(type(Graphics.CanBlend()) == 'boolean')
     )", sol::script_pass_on_error);
     if (!result.valid())
     {

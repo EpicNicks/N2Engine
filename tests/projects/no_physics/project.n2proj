@@ -1,8 +1,10 @@
 {
   "build": {
     "modules": {
+      "particles": false,
       "physics2d": false,
-      "physics3d": "none"
+      "physics3d": "none",
+      "softbodies": false
     }
   },
   "engineVersion": "1.0.0",

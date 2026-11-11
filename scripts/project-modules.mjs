@@ -24,9 +24,20 @@ export const MODULES = {
     components: ['Rigidbody2D', 'BoxCollider2D', 'CircleCollider2D', 'PolygonCollider2D'],
     luaPatterns: [/\bPhysics2D\.[A-Za-z]\w*/, /\bOn(Collision|Trigger)(Enter|Stay|Exit)2D\b/, /\bBodyType2D\./],
   },
+  // Lua reaches these only through the component (no global of their own), so its name is the whole of what a script shows
+  particles: {
+    components: ['ParticleSystem'],
+    luaPatterns: [],
+  },
+  softbodies: {
+    components: ['SoftBody'],
+    luaPatterns: [],
+  },
 };
 
 export const PHYSICS3D_VALUES = ['none', 'physx', 'jolt', 'both'];
+/** The modules a list turns on (true) or off (false) */
+export const BOOLEAN_MODULES = ['physics2d', 'particles', 'softbodies'];
 
 const SCENE_EXTENSIONS = new Set(['.scene', '.prefab', '.json']);
 const SKIPPED_FOLDERS = new Set(['.import', '.n2', '.git', 'node_modules', 'build']);
@@ -155,8 +166,10 @@ export function readModuleList(project) {
   if (modules.physics3d !== undefined && !PHYSICS3D_VALUES.includes(modules.physics3d)) {
     throw new Error(`build.modules.physics3d must be one of ${PHYSICS3D_VALUES.join(', ')}, not ${JSON.stringify(modules.physics3d)}`);
   }
-  if (modules.physics2d !== undefined && typeof modules.physics2d !== 'boolean') {
-    throw new Error(`build.modules.physics2d must be true or false, not ${JSON.stringify(modules.physics2d)}`);
+  for (const module of BOOLEAN_MODULES) {
+    if (modules[module] !== undefined && typeof modules[module] !== 'boolean') {
+      throw new Error(`build.modules.${module} must be true or false, not ${JSON.stringify(modules[module])}`);
+    }
   }
   return modules;
 }
@@ -238,7 +251,11 @@ export function suggestList(scan) {
   } else if (used.has('physics3d') || scan.needsPhysx) {
     physics3d = 'physx';
   }
-  return { physics3d, physics2d: used.has('physics2d') };
+  const list = { physics3d };
+  for (const module of BOOLEAN_MODULES) {
+    list[module] = used.has(module);
+  }
+  return list;
 }
 
 function main(argv) {

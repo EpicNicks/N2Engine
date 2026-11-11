@@ -55,13 +55,11 @@ namespace N2Engine
 
 namespace N2Engine::Particles
 {
-    class PbdParticleBackend;
     class IPbdDriver;
 }
 
 namespace N2Engine::SoftBodies
 {
-    class DeformableSoftBodyBackend;
     class IDeformableDriver;
 }
 
@@ -126,10 +124,8 @@ namespace N2Engine::Physics
         /// while the GPU scene runs and Physics.IsGpuAvailable does not flip when one feature gives up
         [[nodiscard]] GpuStatus GetGpuStatus() const override { return _gpuStatus; }
         /// The scene status, or this feature's own failure when the scene is Ready (see ComposeFeatureGpuStatus)
-        [[nodiscard]] GpuStatus GetParticlesGpuStatus() const override
-        {
-            return ComposeFeatureGpuStatus(_gpuStatus, _particlesFailure);
-        }
+        /// In a build without the particles module, a Ready scene reports Unavailable, as soft bodies do without their backend
+        [[nodiscard]] GpuStatus GetParticlesGpuStatus() const override;
         /// As GetParticlesGpuStatus, for soft bodies: Running only while the PhysX soft-body backend exists (a Ready
         /// scene without one reports Unavailable, see ComposeSoftBodiesGpuStatus)
         [[nodiscard]] GpuStatus GetSoftBodiesGpuStatus() const override
@@ -313,8 +309,10 @@ namespace N2Engine::Physics
         std::optional<GpuStatus> _softBodiesFailure;
         /// The PhysX soft-body backend: only with a GPU scene (the same condition as the particle backend) and until
         /// the GPU refuses a body or transfer; nullptr otherwise (the SoftBodies then use the CPU backend). Created
-        /// with the scene, released in Shutdown before the scene and the CUDA context.
-        std::unique_ptr<SoftBodies::DeformableSoftBodyBackend> _softBodies;
+        /// with the scene, released in Shutdown before the scene and the CUDA context. A DeformableSoftBodyBackend, held
+        /// by the interface so a build without the soft-body module (N2ENGINE_USE_SOFTBODIES=OFF, where it is never
+        /// made) does not name its code.
+        std::unique_ptr<ISoftBodyBackend> _softBodies;
         // Outside the PhysX guard like _gpuMode: the inline SetRefilterObserver is declared in every build
         std::function<void(const GameObject&)> _refilterObserver;
 
@@ -396,7 +394,9 @@ namespace N2Engine::Physics
         /// Drops the CUDA context, sets Failed (physics.gpu=on) or Unavailable (auto) and logs one warning
         void FailGpu(const std::string& reason);
 
-        std::unique_ptr<Particles::PbdParticleBackend> _particles; // only on a GPU scene
+        // Only on a GPU scene. A PbdParticleBackend, held by the interface so a build without the particles module
+        // (N2ENGINE_USE_PARTICLES=OFF, where it is never made) does not name its code.
+        std::unique_ptr<IParticleBackend> _particles;
         /// The particle backend stopped working (or never could): drops its systems, sets the PARTICLES failure
         /// (Failed with physics.gpu=on, Unavailable with auto) and logs one warning. The scene status and the
         /// GPU scene itself keep going.

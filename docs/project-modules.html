@@ -63,6 +63,7 @@
 <li><a href="testing.html">Testing &amp; CI</a></li>
 <li><a href="web-build.html">Web build</a></li>
 <li><a href="project-modules.html" aria-current="page">Project modules</a></li>
+<li><a href="build-targets.html">Build targets</a></li>
 </ul>
 </div>
 </nav>
@@ -71,14 +72,16 @@
 <div class="content">
 
 <h1>Project modules</h1>
-<p class="lead">A game can leave out the engine modules it does not use, so its build is smaller. The project lists its modules, a scan checks the list against what the project uses, and the build compiles the rest out. So far the list covers physics; other modules will follow.</p>
+<p class="lead">A game can leave out the engine modules it does not use, so its build is smaller. The project lists its modules, a scan checks the list against what the project uses, and the build compiles the rest out. So far the list covers physics, particles and soft bodies; other modules will follow.</p>
 
 <h2 id="list">The list</h2>
 <p>A project lists its modules in <code>project.n2proj</code>. The editor keeps the key when it saves the file.</p>
 <pre class="lang-json"><code>"build": {
   "modules": {
     "physics3d": "none",
-    "physics2d": true
+    "physics2d": true,
+    "particles": true,
+    "softbodies": false
   }
 }</code></pre>
 <div class="table-wrap">
@@ -87,6 +90,8 @@
 <tbody>
 <tr><td><code>physics3d</code></td><td><code>none</code>, <code>physx</code>, <code>jolt</code>, <code>both</code></td><td><code>N2ENGINE_USE_PHYSX</code>, <code>N2ENGINE_USE_JOLT</code></td></tr>
 <tr><td><code>physics2d</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_USE_BOX2D</code></td></tr>
+<tr><td><code>particles</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_USE_PARTICLES</code></td></tr>
+<tr><td><code>softbodies</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_USE_SOFTBODIES</code></td></tr>
 </tbody>
 </table>
 </div>
@@ -105,7 +110,7 @@
 <h2 id="scan">The scan</h2>
 <pre class="lang-shell"><code>node scripts/project-modules.mjs path/to/game             # what it uses against its list
 node scripts/project-modules.mjs path/to/game --suggest   # the smallest list the scan can justify</code></pre>
-<p>It reads the component types in scenes and prefabs, and in Lua the module's globals, its event handlers and component names in quotes. Comments do not count. It also reads the project settings: <code>physics.backend</code>, and the deterministic network preset, which needs Jolt.</p>
+<p>It reads the component types in scenes and prefabs, and in Lua the module's globals, its event handlers and component names in quotes. Particles and soft bodies have no Lua global of their own, so for them it is the component name alone: <code>"ParticleSystem"</code> and <code>"SoftBody"</code>. Comments do not count. It also reads the project settings: <code>physics.backend</code>, and the deterministic network preset, which needs Jolt.</p>
 <ul>
 <li><strong>A conflict stops the build.</strong> It names the file and line, and runs at configure time, so before anything compiles, and again when the game links.</li>
 <li><strong>A computed name is reported as "could not be checked".</strong> It does not stop the build. Check those by hand.</li>
@@ -117,7 +122,10 @@ node scripts/project-modules.mjs path/to/game --suggest   # the smallest list th
 <ul>
 <li><strong>3D physics:</strong> no backend, as when physics fails to start. Components warn and do nothing (<a href="application.html">Application</a>), and <code>Physics</code> queries find nothing.</li>
 <li><strong>2D physics:</strong> see <a href="physics2d.html#stripping">Leaving it out of a game</a>.</li>
+<li><strong>Particles:</strong> a <code>ParticleSystem</code> keeps its settings, plays and stops, and emits and draws nothing (<a href="particles.html#leaving-it-out">Leaving it out</a>).</li>
+<li><strong>Soft bodies:</strong> a <code>SoftBody</code> keeps its settings and never starts, so its <code>MeshRenderer</code> draws the mesh as it is (<a href="soft-bodies.html#leaving-it-out">Leaving it out</a>).</li>
 </ul>
+<p>Particles and soft bodies do not depend on physics: each has a CPU backend, so a game can keep them with <code>"physics3d": "none"</code>. Leaving one out removes all of its backends, the PhysX GPU one included, from a build that keeps PhysX.</p>
 
 <h2 id="size">What it saves</h2>
 <p>Measured in the web CI job of PR #315: the size profile's <code>index.wasm</code>, the full player against <code>tests/projects/no_physics</code> (no PhysX, Jolt or Box2D).</p>
@@ -132,9 +140,24 @@ node scripts/project-modules.mjs path/to/game --suggest   # the smallest list th
 </table>
 </div>
 <p>The web job builds and runs this package on every run, and prints both as <code>[MODULES-SIZE]</code> lines. The 2D physics Lua bindings (PR #314) are not in these numbers.</p>
+<p>Since PR #321, <code>tests/projects/no_physics</code> also leaves out particles and soft bodies, so its line in the CI log is now the player with no optional module at all, and the numbers above are no longer what that line prints.</p>
+
+<h3 id="size-particles">Particles and soft bodies</h3>
+<p>The web job also builds <code>tests/projects/no_particles_softbodies</code>: the same physics as the full player (PhysX, Jolt and Box2D), without the particles and soft-body modules. It prints a third <code>[MODULES-SIZE]</code> line, and runs the package smoke on it.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Size profile <code>index.wasm</code></th><th>Raw</th><th><code>gzip -9</code></th><th>brotli</th></tr></thead>
+<tbody>
+<tr><td>Every module</td><td>not yet measured</td><td>not yet measured</td><td>not yet measured</td></tr>
+<tr><td>No particles or soft bodies</td><td>not yet measured</td><td>not yet measured</td><td>not yet measured</td></tr>
+<tr><td>No optional module (<code>no_physics</code>)</td><td>not yet measured</td><td>not yet measured</td><td>not yet measured</td></tr>
+</tbody>
+</table>
+</div>
+<p>The first CI run of PR #321 fills this table.</p>
 
 <div class="page-footer">
-<span>Describes master through PR #315.</span>
+<span>Describes master through PR #321.</span>
 <a href="index.html">Back to overview</a>
 </div>
 
