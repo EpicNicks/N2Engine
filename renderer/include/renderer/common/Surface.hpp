@@ -44,6 +44,12 @@ namespace Renderer::Common
         /// Shows the frame drawn into the context
         std::function<void()> swapBuffers;
 
+        // ---- A CPU frame (the software renderer's present per platform)
+        /// Shows a finished frame from the CPU: RGBA8, width x height, rows bottom to top (ReadFramebuffer's layout). Set
+        /// where copying pixels into the window is the way to present (Android's ANativeWindow buffer); the software
+        /// renderer then uses it instead of an OpenGL context. Empty: present through OpenGL, or not at all.
+        std::function<void(const std::uint8_t *rgba, int width, int height)> presentPixels;
+
         // ---- Vulkan
         /// The instance extensions the window system needs (VK_KHR_surface and the platform's own)
         std::function<std::vector<const char *>()> vulkanInstanceExtensions;

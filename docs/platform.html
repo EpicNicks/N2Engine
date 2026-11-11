@@ -111,6 +111,7 @@
 <thead><tr><th>Operation</th><th>Who uses it</th><th>desktop-glfw supplies</th></tr></thead>
 <tbody>
 <tr><td><code>makeContextCurrent</code>, <code>getProcAddress</code>, <code>swapBuffers</code></td><td>The OpenGL renderer; the software renderer presents its frame through the same context</td><td><code>glfwMakeContextCurrent</code>, <code>glfwGetProcAddress</code>, <code>glfwSwapBuffers</code> (only for a window made with an OpenGL context)</td></tr>
+<tr><td><code>presentPixels</code></td><td>The software renderer, on a platform that shows a CPU frame by copying it into the window (Android&rsquo;s <code>ANativeWindow</code> buffer): no OpenGL context is needed. RGBA8, rows bottom to top, as <code>ReadFramebuffer</code> returns them</td><td>Nothing: the desktop presents through OpenGL</td></tr>
 <tr><td><code>vulkanInstanceExtensions</code>, <code>createVulkanSurface</code></td><td>The Vulkan renderer</td><td><code>glfwGetRequiredInstanceExtensions</code> (empty when <code>glfwVulkanSupported</code> is false: the renderer refuses the window), <code>glfwCreateWindowSurface</code></td></tr>
 <tr><td><code>framebufferSize</code></td><td>Vulkan's swapchain after a resize (0 x 0 while minimised)</td><td><code>glfwGetFramebufferSize</code></td></tr>
 </tbody>
