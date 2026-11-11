@@ -82,6 +82,7 @@
 <li><a href="#where">Build trees and packages</a></li>
 <li><a href="#player">The desktop player</a></li>
 <li><a href="#physics">The physics check per target</a></li>
+<li><a href="#settings">Per-target settings in the project</a></li>
 <li><a href="#descriptors">Target descriptors</a></li>
 <li><a href="#json">JSON output</a></li>
 <li><a href="#not-yet">Not done yet</a></li>
@@ -167,6 +168,39 @@ node tools/n2build/n2build.mjs run    --target web --project path/to/game   # bu
 <h2 id="physics">The physics check per target</h2>
 <p>A target lists the 3D physics values it can build (<code>physics3d</code> in its descriptor). A project whose <code>build.modules.physics3d</code> asks for one the target cannot build fails before configuring, with the target's list. A project without a list gets every backend the target has. Today all three targets build PhysX; the check matters for the mobile targets, which will build Jolt and Box2D only (decision D8). Test: <code>build refuses a project whose physics the target cannot build, before compiling anything</code>.</p>
 
+<h2 id="settings">Per-target settings in the project <span class="badge">protocol 1.29.0</span></h2>
+<p>A project keeps its settings for each target in <code>project.n2proj</code>, under <code>build.targets</code>, beside <code>build.modules</code>. The editor writes them with <code>SetBuildTargets</code> (<a href="editor.html#project-commands">Project commands</a>); the Build Settings panel (stage 3) is where a person edits them.</p>
+<pre class="lang-json"><code>"build": {
+  "modules": { "physics3d": "none", "physics2d": true },
+  "targets": {
+    "windows": { "enabled": true, "displayName": "Triangle-Like", "version": "1.0.0", "buildNumber": 3, "renderer": "opengl" },
+    "web":     { "enabled": true, "modules": { "physics2d": true } },
+    "android": { "appId": "com.example.trianglelike", "orientation": "landscape", "signing": { "profile": "release" } }
+  }
+}</code></pre>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Key</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td><code>enabled</code></td><td><code>true</code> or <code>false</code>: whether the editor offers the target</td></tr>
+<tr><td><code>displayName</code></td><td>The game's name on that platform: 1 to 64 characters, no control characters</td></tr>
+<tr><td><code>appId</code></td><td>The reverse-domain id stores use, such as <code>com.example.game</code>: two or more segments of letters, digits and <code>_</code>, each starting with a letter; at most 150 characters</td></tr>
+<tr><td><code>version</code></td><td><code>major.minor.patch</code>, each part 1 to 5 digits</td></tr>
+<tr><td><code>buildNumber</code></td><td>A whole number from 1 to 2,100,000,000 (Android's <code>versionCode</code> range)</td></tr>
+<tr><td><code>orientation</code></td><td><code>any</code>, <code>landscape</code> or <code>portrait</code></td></tr>
+<tr><td><code>renderer</code></td><td><code>auto</code>, <code>software</code>, <code>opengl</code>, <code>vulkan</code> or <code>webgpu</code></td></tr>
+<tr><td><code>config</code></td><td>The default configuration: <code>debug</code> or <code>release</code></td></tr>
+<tr><td><code>icon</code></td><td>A <code>res://</code> path to a <code>.png</code> inside the assets folder</td></tr>
+<tr><td><code>modules</code></td><td>The engine modules for this target, over <code>build.modules</code>: the same keys and values (<a href="project-modules.html">Project modules</a>)</td></tr>
+<tr><td><code>signing</code></td><td><code>{"profile": "&lt;name&gt;"}</code> only: the name of a signing profile kept in the user's own <code>n2build.json</code>, 1 to 64 letters, digits, <code>.</code>, <code>_</code> or <code>-</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Target names follow the descriptor rule (a lowercase letter, then lowercase letters, digits and <code>-</code>, at most 32), and a name need not be a target this machine knows, so a private target's settings can live in a shared project. At most 32 targets and 64 KiB of settings. A key this version does not know is kept, so a newer editor's setting survives an older one.</p>
+<div class="callout guarantee" id="design-no-secrets"><p class="callout-title">Guarantee: no signing secret is ever stored in the project</p><p>Project files are committed and shared, so a target refers to its signing material only by a profile's name. <code>SetBuildTargets</code> refuses, at any depth of a target, a key whose name looks like a secret (it contains <code>password</code>, <code>passwd</code>, <code>passphrase</code>, <code>secret</code>, <code>token</code>, <code>privatekey</code>, <code>credential</code>, <code>apikey</code>, <code>storepass</code>, <code>keypass</code> or <code>certificatedata</code>, ignoring case, <code>_</code>, <code>-</code>, <code>.</code> and spaces) and any string holding a PEM block (<code>-----BEGIN</code>). The error names the key and never echoes the value. Tests: <code>BuildTargetsTest.NoSecretCanBeStoredAtAnyDepth</code>, <code>EditorProjectTest.SetBuildTargetsRefusesBadSettingsAndSecretsAndSavesNothing</code>.</p></div>
+<div class="callout note"><p class="callout-title">Not used by n2build yet</p><p>The settings are stored and checked; <code>n2build</code> does not read them yet (the per-target module list, names and versions come with the stages that need them). A project whose <code>build.targets</code> was hand-edited into something refused still opens; the host logs a warning and <code>SetBuildTargets</code> refuses to save until a patch fixes it.</p></div>
+<p class="src">Source: <code>engine/src/io/BuildTargets.cpp</code>, <code>editor-server/src/EditorServer.cpp</code> — <code>HandleSetBuildTargets</code>; tests: <code>tests/engine/io/BuildTargetsTests.cpp</code>, <code>EditorProjectTest.SetBuildTargets*</code></p>
+
 <h2 id="descriptors">Target descriptors</h2>
 <p>A target is data, not code: <code>targets/&lt;name&gt;/target.json</code>. n2build has no code path named after a target. More folders of descriptors come from <code>"targetFolders"</code> in the user's <code>n2build.json</code> (<code>%APPDATA%\N2Engine\n2build.json</code>, else <code>$XDG_DATA_HOME/n2engine/</code> or <code>~/.local/share/n2engine/</code>), from <code>N2BUILD_TARGET_DIRS</code>, and from <code>--targets-dir</code>. That is where a private target lives (a console SDK under NDA). A name defined twice is an error naming both files, so a private target can never silently replace a public one.</p>
 <div class="table-wrap">
@@ -207,7 +241,7 @@ node tools/n2build/n2build.mjs run    --target web --project path/to/game   # bu
 
 <h2 id="not-yet">Not done yet</h2>
 <ul>
-<li><strong>The editor.</strong> Target settings in <code>project.n2proj</code> (stage 2) and the Build Settings panel (stage 3).</li>
+<li><strong>The editor.</strong> The Build Settings panel (stage 3). The per-target settings exist (<a href="#settings">above</a>) but n2build does not use them yet.</li>
 <li><strong>Packs.</strong> A package carries the game's folder as it is; zip and 7z packs come in stage 4.</li>
 <li><strong>CI</strong> builds and runs the Linux package through n2build. The Windows and web packages are built through n2build locally only; CI still builds those with CMake directly.</li>
 <li><strong>Package size on Windows.</strong> A build with PhysX ships <code>PhysXGpu_64.dll</code> (about 360 MB of the 374 MB <code>lua_project</code> package, measured 2026-11-10), because the engine's PhysX build always lists it. A game that does not use GPU physics (<code>physics.gpu</code>) does not need it; leaving it out is a follow-up. A project with <code>"physics3d": "none"</code> or <code>"jolt"</code> ships no PhysX at all.</li>
@@ -215,7 +249,7 @@ node tools/n2build/n2build.mjs run    --target web --project path/to/game   # bu
 </ul>
 
 <div class="page-footer">
-<span>Describes master through PR #327.</span>
+<span>Describes master through PR #328.</span>
 <a href="index.html">Back to overview</a>
 </div>
 

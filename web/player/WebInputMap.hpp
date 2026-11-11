@@ -23,6 +23,11 @@ namespace N2Engine::Web
     /// its browser meaning.
     [[nodiscard]] bool SuppressesBrowserDefault(Input::Key key);
 
+    /// The text a keydown types, from its KeyboardEvent.key: the key itself when it is one character ("a", "A", "é",
+    /// " "), nothing for a named key ("Enter", "Shift", "ArrowUp", "Dead") or while Ctrl or Meta is held (a shortcut).
+    /// The browser's stand-in for GLFW's character callback, which the web build does not have.
+    [[nodiscard]] std::string_view TypedTextFromKey(std::string_view key, bool ctrlOrMeta);
+
     /// A pointer coordinate in render pixels: `client` is the event's viewport coordinate, `origin` the canvas's edge on
     /// that axis, `cssExtent` the canvas's size on that axis as shown (CSS pixels) and `renderExtent` the size the game
     /// renders at on it. 0 when the canvas has no size. Not clamped: a pointer dragged off the canvas reads outside it.

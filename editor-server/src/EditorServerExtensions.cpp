@@ -94,6 +94,8 @@ namespace N2Engine::Editor
             {CommandType::GetProjectInfo, false},
             {CommandType::SetProjectSettings, false},
             {CommandType::SetStartupScene, false},
+            // 1.29.0: the project's build settings are the person's to change, not an extension's
+            {CommandType::SetBuildTargets, false},
             // The history: an extension's step is one group, made by the host; it may not undo, redo or group on its own
             {CommandType::Undo, false},
             {CommandType::Redo, false},
