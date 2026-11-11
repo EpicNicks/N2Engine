@@ -511,6 +511,25 @@ end</code></pre>
 <p><code>engine/CMakeLists.txt</code> defines <code>SOL_ALL_SAFETIES_ON=1</code> as a PUBLIC compile definition on the <code>engine</code> target. sol therefore type-checks arguments in every build configuration, not only Debug. A wrong argument (nil where a GameObject is expected, a handle of the wrong type, <code>rb.SetMass(5)</code> with <code>.</code> instead of <code>:</code>) becomes a Lua error at the call site rather than undefined behaviour in Release builds.</p>
 <p class="src">Source: <code>engine/CMakeLists.txt</code>; tests: <code>LuaHandleTest.BadArgumentsAreCleanErrors</code></p>
 
+<h2 id="save-data">Save data and JSON <span class="badge">PR #TBD</span></h2>
+<p>Scripts keep small text files in the project's user data folder, under <code>user://saves</code> (the folder <code>ProjectFile::UserDataPath</code> gives the project; a folder run without a project file uses the shared one). <code>io</code> and <code>os</code> stay closed: these four calls are the only file access a script has.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Call</th><th>Does</th></tr></thead>
+<tbody>
+<tr><td><code>SaveData.Write(name, text)</code></td><td>Writes the whole file: to <code>name.tmp</code> first, then renamed over the old file, so a crash never leaves half a save. Returns <code>true</code>, or <code>false</code> and a message (text over 1 MiB, a folder that cannot be written).</td></tr>
+<tr><td><code>SaveData.Read(name)</code></td><td>The file's text, or <code>nil</code> when it does not exist, cannot be read or is over 1 MiB (with a warning).</td></tr>
+<tr><td><code>SaveData.Exists(name)</code>, <code>SaveData.Delete(name)</code></td><td>Whether the file exists; removes it and returns whether it existed.</td></tr>
+<tr><td><code>Json.Encode(value [, pretty])</code></td><td>JSON text. A table whose keys are exactly 1..n is an array, any other table an object with its keys sorted; whole numbers stay integers; functions, userdata and cycles become <code>null</code> (<code>LuaToJson</code>). <code>pretty</code> indents with two spaces.</td></tr>
+<tr><td><code>Json.Decode(text)</code></td><td>A Lua value: objects and arrays as tables (arrays 1-based), integers as Lua integers, <code>null</code> as <code>nil</code>. Text that is not JSON returns <code>nil</code> and a message. Nesting deeper than 100 is a Lua error.</td></tr>
+</tbody></table></div>
+<p>A save name is a plain file name: letters, digits, <code>_</code>, <code>-</code> and <code>.</code>, 1 to 64 characters, not starting with <code>.</code>. Anything else (a path, <code>..</code>, a space) is a Lua error, so a script cannot reach a file outside <code>user://saves</code>.</p>
+<pre class="lang-lua"><code>SaveData.Write("save.json", Json.Encode({ version = 1, unlocked = { 1, 3, 4 } }))
+local text = SaveData.Read("save.json")
+local save = text and Json.Decode(text) or { version = 1, unlocked = {} }
+</code></pre>
+<div class="callout note"><p class="callout-title">Note</p><p>On the web build <code>user://</code> is in the page's in-memory file system, so saves do not survive a reload (not persisted to IndexedDB yet).</p></div>
+<p class="src">Source: <code>engine/src/scripting/bindings/LuaSaveDataBindings.cpp</code> (<code>BindSaveData</code>, <code>JsonToLua</code>); <code>engine/src/scripting/LuaJson.cpp</code> (<code>LuaToJson</code>); limits <code>SaveDataMaxNameLength</code>, <code>SaveDataMaxBytes</code>, <code>JsonMaxDepth</code> in <code>LuaBindings.hpp</code>; tests: <code>LuaSaveDataTest.*</code> (<code>tests/engine/scripting/LuaSaveDataTests.cpp</code>)</p>
+
 <h2 id="modules">Modules and <code>require</code></h2>
 <p><code>Initialize</code> replaces the global <code>require</code> with an engine version:</p>
 <ol class="steps">
