@@ -1163,11 +1163,10 @@ void VulkanRenderer::DrawLocked(IMesh* mesh, const float* modelMatrix, IMaterial
     std::memcpy(perDraw, modelMatrix, 64);
     std::memcpy(perDraw + 64, draw.view, 64);
     std::memcpy(perDraw + 128, draw.projection, 64);
-    // The prefab stage's dim, as this draw carries it (RenderState::dim raised to SetStageDim's value), then the block's
-    // padding up to its 16-byte alignment
-    const float stageDim = WithStageDim(state).dim;
-    std::memcpy(perDraw + 192, &stageDim, sizeof(float));
-    std::memset(perDraw + 196, 0, kPerDrawBindingSize - 196);
+    // The prefab stage's dim and the screen tint, as this draw carries them (raised to SetStageDim's and SetScreenTint's
+    // values), then the block's padding up to its 16-byte alignment. The flipped viewport puts gl_FragCoord's row 0 at the
+    // top, so the tint's circle is given in rows counted down
+    WritePerDrawEffects(perDraw, WithFrameModifiers(state), _targetWidth, _targetHeight);
     std::memcpy(chunk.mapped + offset + perDrawBytes, snapshot.block.data(), snapshot.block.size());
     if (copyLighting)
     {

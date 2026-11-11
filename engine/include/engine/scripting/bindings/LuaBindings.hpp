@@ -61,6 +61,8 @@ namespace N2Engine::Scripting
         void BindDebug(LuaRuntime& runtime);
         void BindApplication(LuaRuntime& runtime);
         void BindWindow(LuaRuntime& runtime);
+        // Screen.SetTint, Screen.ClearTint and Screen.GetTint: the screen tint of the scene pass (Application::SetScreenTint)
+        void BindScreen(LuaRuntime& runtime);
         void BindCamera(LuaRuntime& runtime);
 
         // Components that scripts can add to GameObjects by name (renderers, physics, audio, LuaComponent)

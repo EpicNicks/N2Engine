@@ -24,12 +24,6 @@
 #include "engine/rendering/GpuCache.hpp"
 #include "engine/rendering/Texture.hpp"
 
-namespace N2Engine::Particles
-{
-    class CpuParticleBackend;
-    class WebGpuParticleBackend;
-}
-
 namespace N2Engine::Rendering
 {
     /// How a ParticleSystem's billboards combine with what is behind them
@@ -74,6 +68,11 @@ namespace N2Engine::Rendering
      * capacity, so a steady system allocates nothing. Needs a renderer that creates meshes and materials (OpenGL,
      * the software renderer and the Vulkan renderer); where the renderer has no unlit shader (a Vulkan build without the
      * built-in shaders) nothing is drawn and one warning is logged per process.
+     *
+     * Leaving it out: a build with N2ENGINE_USE_PARTICLES=OFF (a project's build.modules "particles": false, see
+     * docs/project-modules.html) has none of the simulation (the backends, the emitter, the billboards). The component
+     * is still registered with every field, so scenes keep their data and Lua's methods exist, but it emits and draws
+     * nothing and the first one to start logs one warning per process (docs/particles.html#leaving-it-out).
      */
     class ParticleSystem final : public IRenderable
     {
@@ -197,9 +196,10 @@ namespace N2Engine::Rendering
         [[nodiscard]] bool HoldsRenderer(const Renderer::Common::IRenderer *renderer) const;
         void BindRenderer(Renderer::Common::IRenderer *renderer);
 
-        // The simulation
-        std::unique_ptr<Particles::CpuParticleBackend> _cpuBackend; // owned when the CPU backend is the one in use
-        std::unique_ptr<Particles::WebGpuParticleBackend> _webGpuBackend; // owned when the WebGPU backend is in use
+        // The simulation. Held by the interface, so a build without the particles module (N2ENGINE_USE_PARTICLES=OFF)
+        // destroys them without naming the backends, whose code is not in it.
+        std::unique_ptr<Physics::IParticleBackend> _cpuBackend; // a CpuParticleBackend, when the CPU backend is in use
+        std::unique_ptr<Physics::IParticleBackend> _webGpuBackend; // a WebGpuParticleBackend, when that one is in use
         Physics::ParticleSystemHandle _handle = Physics::kInvalidParticleSystem;
         bool _usingGpu = false;
         Particles::ParticleEmitter _emitter;

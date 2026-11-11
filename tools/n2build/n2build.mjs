@@ -1,0 +1,262 @@
+#!/usr/bin/env node
+// n2build: builds an N2Engine game for a target (build targets stage 1; docs/build-targets.html).
+//
+//   node tools/n2build/n2build.mjs list
+//   node tools/n2build/n2build.mjs doctor --target <name> [--project DIR]
+//   node tools/n2build/n2build.mjs build  --target <name> --project DIR [--config debug|release] [--out DIR]
+//                                         [--build-dir DIR] [--archive zip|7z] [--jobs N] [--dry-run]
+//   node tools/n2build/n2build.mjs run    --target <name> --project DIR [--config ...] [--no-build] [--frames N] [--port N]
+//
+// Common: --json (one JSON event per line on stdout, for the editor), --targets-dir DIR (more target descriptors; also
+// N2BUILD_TARGET_DIRS and "targetFolders" in the user's n2build.json).
+//
+// The final game is always a full build from source (decision D3): the target's player is compiled with the project's
+// module list in a build tree kept per target, configuration and list, then packaged with the game's data.
+//
+// Exit codes: 0 done, 1 the build or a check failed, 2 wrong usage.
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import {
+  archivePackage, checkPhysics, engineRevision, needsConfigure, packageDesktop, packageWeb, planBuild,
+  preparePackageDir, readMarker, readProject, recordConfigure, runProcess, writeMarker,
+} from './lib/build.mjs';
+import { findTarget, loadDescriptors, readUserSettings, userSettingsFile } from './lib/descriptors.mjs';
+import { BuildError, Reporter } from './lib/report.mjs';
+import { serveFolder } from './lib/serve.mjs';
+import { checkToolchains, findOnPath, systemProbe } from './lib/toolchains.mjs';
+
+export const ENGINE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const COMMANDS = ['list', 'doctor', 'build', 'run'];
+const VALUE_OPTIONS = new Set(['--target', '--project', '--config', '--out', '--build-dir', '--archive', '--jobs', '--frames', '--port', '--targets-dir']);
+const FLAG_OPTIONS = new Set(['--json', '--dry-run', '--no-build', '--help']);
+
+export const USAGE = `Usage: n2build <command> [options]
+  list                         the targets, and which build on this machine
+  doctor --target T            what target T needs and whether this machine has it
+  build  --target T --project DIR [--config debug|release] [--out DIR] [--build-dir DIR]
+         [--archive zip|7z] [--jobs N] [--dry-run]
+  run    --target T --project DIR [--config debug|release] [--no-build] [--frames N] [--port N]
+Common: --json (JSON lines for the editor), --targets-dir DIR (more targets)`;
+
+export class UsageError extends Error {}
+
+/** argv -> {command, options}; repeated --targets-dir accumulate */
+export function parseArguments(argv) {
+  const [command, ...rest] = argv;
+  if (command === undefined || command === '--help' || command === '-h') return { command: 'help', options: {} };
+  if (!COMMANDS.includes(command)) throw new UsageError(`Unknown command '${command}'`);
+  const options = { targetsDir: [] };
+  for (let i = 0; i < rest.length; ++i) {
+    let arg = rest[i];
+    let value;
+    const eq = arg.indexOf('=');
+    if (arg.startsWith('--') && eq > 0) {
+      value = arg.slice(eq + 1);
+      arg = arg.slice(0, eq);
+    }
+    if (FLAG_OPTIONS.has(arg)) {
+      if (value !== undefined) throw new UsageError(`${arg} takes no value`);
+      options[camel(arg)] = true;
+    } else if (VALUE_OPTIONS.has(arg)) {
+      if (value === undefined) {
+        if (i + 1 >= rest.length) throw new UsageError(`${arg} needs a value`);
+        value = rest[++i];
+      }
+      if (arg === '--targets-dir') options.targetsDir.push(value);
+      else options[camel(arg)] = value;
+    } else {
+      throw new UsageError(`Unknown option '${arg}'`);
+    }
+  }
+  options.config ??= 'release';
+  for (const [name, key] of [['--jobs', 'jobs'], ['--frames', 'frames'], ['--port', 'port']]) {
+    if (options[key] !== undefined) {
+      const number = Number(options[key]);
+      const min = key === 'port' ? 0 : 1;
+      if (!Number.isInteger(number) || number < min || number > 65535 * (key === 'port' ? 1 : 1000)) {
+        throw new UsageError(`${name} needs a whole number${key === 'port' ? ' from 0 to 65535' : ', 1 or more'}`);
+      }
+      options[key] = number;
+    }
+  }
+  if (options.archive !== undefined && !['zip', '7z'].includes(options.archive)) throw new UsageError('--archive must be zip or 7z');
+  if (command !== 'list' && !options.target) throw new UsageError(`${command} needs --target`);
+  if ((command === 'build' || command === 'run') && !options.project) throw new UsageError(`${command} needs --project`);
+  return { command, options };
+}
+
+function camel(flag) {
+  return flag.replace(/^--/, '').replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+}
+
+/** The extra target folders: user settings, then N2BUILD_TARGET_DIRS, then --targets-dir */
+export function extraTargetFolders(options, env, platform) {
+  const settings = readUserSettings(userSettingsFile(env, platform));
+  const fromEnv = (env.N2BUILD_TARGET_DIRS ?? '').split(path.delimiter).filter(Boolean);
+  return [...(settings.targetFolders ?? []), ...fromEnv, ...options.targetsDir].map((f) => path.resolve(f));
+}
+
+function doctorReport(descriptor, toolchains, platform, physicsProblem) {
+  const hostOk = descriptor.hostSystems.includes(platform);
+  const checks = [
+    { id: 'host', title: `Host system (${platform})`, required: true, ok: hostOk, version: null,
+      detail: hostOk ? '' : `${descriptor.name} builds on ${descriptor.hostSystems.join(', ')} only`, fix: hostOk ? null : `Build on ${descriptor.hostSystems.join(' or ')}` },
+    ...toolchains.checks,
+  ];
+  if (physicsProblem !== undefined) {
+    checks.push({ id: 'physics', title: 'Project physics modules', required: true, ok: physicsProblem === null, version: null, detail: physicsProblem ?? '', fix: physicsProblem ? 'Edit build.modules in project.n2proj' : null });
+  }
+  return { target: descriptor.name, displayName: descriptor.displayName, ok: checks.every((c) => c.ok || !c.required), checks };
+}
+
+async function build(descriptor, options, ctx, reporter) {
+  const projectDir = path.resolve(options.project);
+  const project = readProject(projectDir);
+  const physicsProblem = checkPhysics(project.modules, descriptor);
+  const toolchains = checkToolchains(descriptor, ctx);
+  const report = doctorReport(descriptor, toolchains, ctx.platform, physicsProblem);
+  if (!report.ok || options.json) reporter.doctor(report);
+  for (const check of toolchains.checks) {
+    if (!check.ok && !check.required) reporter.warning(`${check.title}: ${check.detail}. ${check.fix ?? ''}`.trim());
+  }
+  if (!report.ok && !options.dryRun) {
+    throw new BuildError(physicsProblem ?? `This machine cannot build the ${descriptor.name} target yet (see above, or run n2build doctor --target ${descriptor.name})`);
+  }
+
+  const plan = planBuild({
+    engineRoot: ENGINE_ROOT, projectDir, descriptor, config: options.config, modules: project.modules,
+    present: toolchains.present, toolchainFile: toolchains.toolchainFile ?? (options.dryRun ? '<Emscripten.cmake from emsdk>' : null),
+    buildRoot: options.buildDir ? path.resolve(options.buildDir) : null, outDir: options.out,
+    jobs: options.jobs ?? os.availableParallelism(), gameName: project.name,
+  });
+  if (options.dryRun) {
+    reporter.step('plan', `Plan for ${descriptor.name} (${options.config})`);
+    reporter.log('stdout', `build tree: ${plan.treeDir}`);
+    reporter.log('stdout', `cmake ${plan.configureArgs.join(' ')}`);
+    reporter.log('stdout', `cmake ${plan.buildArgs.join(' ')}`);
+    reporter.log('stdout', `package: ${plan.packageDir}`);
+    return { ok: report.ok, dryRun: true, output: plan.packageDir, treeDir: plan.treeDir, ...(report.ok ? {} : { error: 'Not ready (see the doctor report)' }) };
+  }
+
+  const cmake = findOnPath('cmake', toolchains.env, ctx) ?? 'cmake';
+  if (needsConfigure(plan.treeDir, plan.configureArgs)) {
+    reporter.step('configure', `Configuring ${descriptor.displayName} (${options.config}) in ${plan.treeDir}`);
+    const code = await runProcess(cmake, plan.configureArgs, { env: toolchains.env, cwd: ENGINE_ROOT, reporter });
+    if (code !== 0) throw new BuildError(`CMake could not configure the ${descriptor.name} build (exit code ${code}; see the log above)`);
+    recordConfigure(plan.treeDir, plan.configureArgs);
+  }
+  reporter.step('compile', `Building ${descriptor.cmake.target}`);
+  const code = await runProcess(cmake, plan.buildArgs, { env: toolchains.env, cwd: ENGINE_ROOT, reporter });
+  if (code !== 0) throw new BuildError(`The ${descriptor.name} build failed (exit code ${code}; see the log above)`);
+
+  reporter.step('package', `Packaging into ${plan.packageDir}`);
+  preparePackageDir(plan.packageDir);
+  const entry = descriptor.package.kind === 'desktop'
+    ? packageDesktop({ treeDir: plan.treeDir, descriptor, projectDir, packageDir: plan.packageDir, gameName: project.name, platform: ctx.platform })
+    : packageWeb({ treeDir: plan.treeDir, descriptor, packageDir: plan.packageDir });
+  writeMarker(plan.packageDir, {
+    // No local paths: a web package is uploaded as it is, marker included
+    target: descriptor.name, config: options.config, entry, game: project.name,
+    engine: engineRevision(ENGINE_ROOT), builtAt: new Date().toISOString(),
+  });
+  let archive;
+  if (options.archive) {
+    reporter.step('archive', `Writing a .${options.archive} archive`);
+    archive = archivePackage({ packageDir: plan.packageDir, format: options.archive, cmake, env: toolchains.env });
+  }
+  return { ok: true, output: plan.packageDir, entry, ...(archive ? { archive } : {}) };
+}
+
+async function run(descriptor, options, ctx, reporter) {
+  let packageDir;
+  if (options.noBuild) {
+    const projectDir = path.resolve(options.project);
+    const project = readProject(projectDir);
+    const toolchains = { present: new Set(descriptor.toolchains.optional) };
+    packageDir = options.out ? path.resolve(options.out) : planBuild({
+      engineRoot: ENGINE_ROOT, projectDir, descriptor, config: options.config, modules: project.modules,
+      present: toolchains.present, toolchainFile: '-', gameName: project.name,
+    }).packageDir;
+  } else {
+    const built = await build(descriptor, { ...options, archive: undefined }, ctx, reporter);
+    packageDir = built.output;
+  }
+  const marker = readMarker(packageDir);
+  if (marker.target !== descriptor.name) throw new BuildError(`${packageDir} holds a ${marker.target} package, not ${descriptor.name}`);
+
+  if (descriptor.run.kind === 'executable') {
+    const executable = path.join(packageDir, marker.entry);
+    const args = ['--console-log', ...(options.frames ? ['--frames', String(options.frames)] : [])];
+    reporter.step('run', `Running ${executable}`);
+    const code = await runProcess(executable, args, { env: ctx.env, cwd: packageDir, reporter });
+    if (code !== 0) throw new BuildError(`The game exited with code ${code}`);
+    return { ok: true, output: packageDir };
+  }
+
+  if (options.frames) {
+    // Headless: the web package smoke test runs the package under node for N frames (scripts/web-package-smoke.mjs)
+    reporter.step('run', `Running ${packageDir} under node for ${options.frames} frames`);
+    const smoke = path.join(ENGINE_ROOT, 'scripts', 'web-package-smoke.mjs');
+    // The size and speed profiles add .br/.gz copies, which the smoke test checks only when told to expect them
+    const precompressed = fs.existsSync(path.join(packageDir, 'index.wasm.br')) ? ['--precompressed'] : [];
+    const code = await runProcess(process.execPath, [smoke, packageDir, String(options.frames), '320x180', ...precompressed], { env: ctx.env, cwd: ENGINE_ROOT, reporter });
+    if (code !== 0) throw new BuildError(`The web package smoke run failed (exit code ${code})`);
+    return { ok: true, output: packageDir };
+  }
+  const { url } = await serveFolder(packageDir, options.port ?? 8080);
+  reporter.step('serve', `Serving ${packageDir}; open ${url} in a browser, Ctrl+C to stop`);
+  reporter.result({ ok: true, output: packageDir, url, serving: true });
+  await new Promise(() => {});
+  return null;
+}
+
+export async function main(argv, { ctx = systemProbe(), reporter } = {}) {
+  let parsed;
+  try {
+    parsed = parseArguments(argv);
+  } catch (error) {
+    if (!(error instanceof UsageError)) throw error;
+    const r = reporter ?? new Reporter({ json: argv.includes('--json') });
+    r.result({ ok: false, error: `${error.message}\n${USAGE}` });
+    return 2;
+  }
+  const { command, options } = parsed;
+  const r = reporter ?? new Reporter({ json: Boolean(options.json) });
+  if (command === 'help' || options.help) {
+    r.out(USAGE);
+    return 0;
+  }
+  try {
+    const descriptors = loadDescriptors(ENGINE_ROOT, extraTargetFolders(options, ctx.env, ctx.platform));
+    if (command === 'list') {
+      r.targets([...descriptors.values()].map((d) => ({
+        name: d.name, displayName: d.displayName, hostSystems: d.hostSystems, buildableHere: d.hostSystems.includes(ctx.platform), source: d.source,
+      })));
+      r.result({ ok: true });
+      return 0;
+    }
+    const descriptor = findTarget(descriptors, options.target);
+    if (command === 'doctor') {
+      let physicsProblem;
+      if (options.project) physicsProblem = checkPhysics(readProject(path.resolve(options.project)).modules, descriptor);
+      const report = doctorReport(descriptor, checkToolchains(descriptor, ctx), ctx.platform, physicsProblem);
+      r.doctor(report);
+      r.result({ ok: report.ok, ...(report.ok ? {} : { error: `Not ready to build ${descriptor.name}` }) });
+      return report.ok ? 0 : 1;
+    }
+    const result = command === 'build' ? await build(descriptor, options, ctx, r) : await run(descriptor, options, ctx, r);
+    if (result) r.result(result);
+    return result && !result.ok ? 1 : 0;
+  } catch (error) {
+    if (!(error instanceof BuildError)) throw error;
+    r.result({ ok: false, error: error.message });
+    return 1;
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  process.exitCode = await main(process.argv.slice(2));
+}

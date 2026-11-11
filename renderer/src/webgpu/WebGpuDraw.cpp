@@ -797,11 +797,10 @@ namespace Renderer::WebGpu
         WriteTransposed(perDraw, modelMatrix);
         WriteTransposed(perDraw + 64, state.view);
         WriteTransposed(perDraw + 128, state.projection);
-        // The prefab stage's dim, as this draw carries it (RenderState::dim raised to SetStageDim's value), then the
-        // struct's padding: WGSL rounds PerDraw up to 208 bytes
-        const float stageDim = WithStageDim(renderState).dim;
-        std::memcpy(perDraw + 192, &stageDim, sizeof(float));
-        std::memset(perDraw + 196, 0, kPerDrawBindingSize - 196);
+        // The prefab stage's dim and the screen tint, as this draw carries them (raised to SetStageDim's and
+        // SetScreenTint's values), then the struct's padding: WGSL rounds PerDraw up to 224 bytes. @builtin(position)
+        // counts rows down from the top, so the tint's circle is given that way
+        ShaderInterface::WritePerDrawEffects(perDraw, WithFrameModifiers(renderState), _targetWidth, _targetHeight);
         std::memcpy(perDraw + perDrawBytes, snapshot.block.data(), snapshot.block.size());
         if (copyLighting)
         {
