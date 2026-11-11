@@ -8,6 +8,16 @@ console toolchains in the future like switch".
 physics per target, remote hosts, saved key codes, web size). The user decided D1 to D8 the same day (section 6) and approved
 every stage. Stages still run in the order of section 5, each after the stages it depends on.**
 
+**Progress** (updated by each stage's PR):
+
+- Stage 1 merged (PR #328): n2build, the Windows, Linux and web targets, `players/desktop`, the CI job.
+- Stage 2 merged (PR #329): `build.targets`, `SetBuildTargets` (protocol 1.29.0).
+- Stage 3, engine half (n2build reads `build.targets`): `displayName`, `version`/`buildNumber` in the marker, `config` as
+  the default, `modules` per target through `-DN2ENGINE_TARGET` (`cmake/N2EngineModules.cmake` reads
+  `build.targets.<target>.modules` over `build.modules`, key by key), and `scripts/project-modules.mjs --target`. The frontend
+  half (the Build Settings panel) is a frontend PR.
+- The Triangle-Like input branches (needed by stage 5): #330 and #331 merged; #332 to #336 in review.
+
 ## 1. Goal
 
 From the editor, a user picks a target (Windows, Linux, Android, iOS, web; later a console) and presses Build, or Build and Run.

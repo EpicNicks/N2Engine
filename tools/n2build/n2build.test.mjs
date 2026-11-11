@@ -10,13 +10,13 @@ import test from 'node:test';
 
 import {
   archivePackage, buildKey, checkPhysics, needsConfigure, packageDesktop, packageWeb, planBuild, preparePackageDir,
-  readProject, recordConfigure, resolveOptions, safeName, writeMarker, PACKAGE_MARKER,
+  readProject, readTargetSettings, recordConfigure, resolveOptions, safeName, writeMarker, PACKAGE_MARKER,
 } from './lib/build.mjs';
 import { loadDescriptors, readUserSettings, userSettingsFile, validateDescriptor } from './lib/descriptors.mjs';
 import { BuildError, Reporter } from './lib/report.mjs';
 import { resolveRequest } from './lib/serve.mjs';
 import { applyEnv, checkToolchains, findOnPath, parseVersion, versionAtLeast } from './lib/toolchains.mjs';
-import { ENGINE_ROOT, main, parseArguments, UsageError } from './n2build.mjs';
+import { ENGINE_ROOT, main, markerInfo, parseArguments, resolveConfig, UsageError } from './n2build.mjs';
 
 const tmp = (prefix) => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 
@@ -196,6 +196,7 @@ test('planBuild: the commands for a desktop and a web target', () => {
   assert.ok(desktop.configureArgs.includes(`-DN2ENGINE_PROJECT=${path.resolve(projectDir)}`));
   assert.ok(desktop.configureArgs.includes('-DCMAKE_BUILD_TYPE=Release'));
   assert.ok(desktop.configureArgs.includes('-DN2ENGINE_RENDERER_VULKAN=OFF'));
+  assert.ok(desktop.configureArgs.includes('-DN2ENGINE_TARGET=windows'), "the tree reads the target's own module list");
   assert.deepEqual(desktop.buildArgs.slice(2), ['--target', 'n2player', '-j', '4']);
   assert.equal(desktop.treeDir, path.join(projectDir, '.n2', 'build', desktop.key));
   assert.equal(desktop.packageDir, path.join(projectDir, '.n2', 'out', 'windows-release', 'Tri'));
@@ -404,13 +405,13 @@ test('arguments', () => {
   assert.equal(command, 'build');
   assert.equal(options.target, 'web');
   assert.equal(options.project, 'game');
-  assert.equal(options.config, 'release');
+  assert.equal(options.config, undefined, 'left to the project, then release (resolveConfig)');
   assert.equal(options.archive, '7z');
   assert.equal(options.jobs, 8);
   assert.equal(options.json, true);
   assert.deepEqual(options.targetsDir, ['a', 'b']);
   assert.equal(parseArguments([]).command, 'help');
-  for (const bad of [['explode'], ['build', '--project', 'p'], ['build', '--target', 'web'], ['doctor', '--target'], ['build', '--target', 'w', '--project', 'p', '--archive', 'rar'], ['run', '--target', 'w', '--project', 'p', '--frames', '0'], ['list', '--json=yes'], ['list', '--colour']]) {
+  for (const bad of [['explode'], ['build', '--project', 'p'], ['build', '--target', 'web'], ['doctor', '--target'], ['build', '--target', 'w', '--project', 'p', '--archive', 'rar'], ['run', '--target', 'w', '--project', 'p', '--frames', '0'], ['list', '--json=yes'], ['list', '--colour'], ['build', '--target', 'w', '--project', 'p', '--config', 'Release; rm']]) {
     assert.throws(() => parseArguments(bad), UsageError, JSON.stringify(bad));
   }
 });
@@ -467,4 +468,75 @@ test('usage errors exit 2 with the usage', async () => {
   const { reporter, lines } = capture();
   assert.equal(await main(['build', '--json'], { ctx: fakeProbe(), reporter }), 2);
   assert.match(lines.at(-1).error, /needs --target/);
+});
+
+// --- build.targets in the project (build targets stage 3) ----------------------------------------------------------
+
+test("a target's modules are laid over build.modules, key by key", () => {
+  const projectDir = makeProject({
+    name: 'G',
+    build: {
+      modules: { physics3d: 'both', physics2d: true, particles: false },
+      targets: { android: { modules: { physics3d: 'jolt', particles: true } }, web: { enabled: true } },
+    },
+  });
+  assert.deepEqual(readProject(projectDir, 'android').modules, { physics3d: 'jolt', physics2d: true, particles: true });
+  assert.deepEqual(readProject(projectDir, 'web').modules, { physics3d: 'both', physics2d: true, particles: false });
+  assert.deepEqual(readProject(projectDir).modules, { physics3d: 'both', physics2d: true, particles: false }, 'no target: build.modules');
+  const onlyTarget = makeProject({ name: 'G', build: { targets: { linux: { modules: { physics3d: 'none' } } } } });
+  assert.deepEqual(readProject(onlyTarget, 'linux').modules, { physics3d: 'none' });
+  assert.equal(readProject(onlyTarget, 'web').modules, null, 'no list anywhere: every module');
+  const bad = makeProject({ name: 'G', build: { targets: { linux: { modules: { physics3d: 'havok' } } } } });
+  assert.throws(() => readProject(bad, 'linux'), /build\.targets\.linux\.modules\.physics3d must be one of/);
+});
+
+test("a target's physics list is what the physics check sees", () => {
+  const nophysx = descriptor({ physics3d: ['none', 'jolt'] });
+  const projectDir = makeProject({ name: 'G', build: { modules: { physics3d: 'physx' }, targets: { fake: { modules: { physics3d: 'jolt' } } } } });
+  assert.equal(checkPhysics(readProject(projectDir, 'fake').modules, nophysx), null);
+  assert.match(checkPhysics(readProject(projectDir).modules, nophysx), /physx/);
+});
+
+test('displayName names the game on that target; version and buildNumber go into the marker', () => {
+  const projectDir = makeProject({ name: 'Tri', build: { targets: { linux: { displayName: 'Triangle-Like', version: '1.2.3', buildNumber: 42 } } } });
+  const project = readProject(projectDir, 'linux');
+  assert.equal(project.name, 'Triangle-Like');
+  assert.equal(readProject(projectDir, 'web').name, 'Tri', 'other targets keep the project name');
+  const marker = markerInfo({ descriptor: { name: 'linux' }, config: 'release', entry: 'Triangle-Like', project, engine: 'abc', builtAt: 'now' });
+  assert.deepEqual(marker, { target: 'linux', config: 'release', entry: 'Triangle-Like', game: 'Triangle-Like', version: '1.2.3', buildNumber: 42, engine: 'abc', builtAt: 'now' });
+  const plain = markerInfo({ descriptor: { name: 'web' }, config: 'debug', entry: 'index.html', project: readProject(projectDir, 'web'), engine: null, builtAt: 'now' });
+  assert.ok(!('version' in plain) && !('buildNumber' in plain));
+});
+
+test("the configuration: --config, else the target's config, else release", () => {
+  assert.equal(resolveConfig({ config: 'debug' }, { config: 'release' }), 'debug');
+  assert.equal(resolveConfig({}, { config: 'debug' }), 'debug');
+  assert.equal(resolveConfig({}, {}), 'release');
+});
+
+test("target settings n2build reads are checked by the editor's rules", () => {
+  const settings = (s) => readTargetSettings({ build: { targets: { linux: s } } }, 'linux');
+  assert.deepEqual(readTargetSettings({}, 'linux'), {});
+  assert.deepEqual(settings({ displayName: 'G', unknownLater: { x: 1 } }), { displayName: 'G', unknownLater: { x: 1 } });
+  assert.throws(() => settings({ displayName: '' }), /displayName/);
+  assert.throws(() => settings({ displayName: 'a\nb' }), /displayName/);
+  assert.throws(() => settings({ version: '1.2' }), /version/);
+  assert.throws(() => settings({ buildNumber: 0 }), /buildNumber/);
+  assert.throws(() => settings({ buildNumber: 2100000001 }), /buildNumber/);
+  assert.throws(() => settings({ config: 'profile' }), /config/);
+  assert.throws(() => settings({ enabled: 'yes' }), /enabled/);
+  assert.throws(() => readTargetSettings({ build: { targets: [] } }, 'linux'), /build\.targets must be an object/);
+});
+
+test("build --dry-run uses the target's config and name, and warns when the target is turned off", async () => {
+  const projectDir = makeProject({ name: 'Tri', build: { targets: { linux: { enabled: false, config: 'debug', displayName: 'Tri Linux' } } } });
+  const { reporter, lines } = capture();
+  const ctx = fakeProbe({ files: ['/usr/bin/cmake', '/usr/bin/ninja', '/usr/bin/c++'], env: { HOME: tmp('n2build-home-') }, commands: { cmake: 'cmake version 3.30.0', ninja: '1.12', 'c++': 'g++ 14.2.0' } });
+  const code = await main(['build', '--target', 'linux', '--project', projectDir, '--dry-run', '--json'], { ctx, reporter });
+  assert.equal(code, 0);
+  assert.ok(lines.some((l) => l.type === 'warning' && /turned off/.test(JSON.stringify(l))), JSON.stringify(lines));
+  const logs = lines.filter((l) => l.type === 'log').map((l) => l.text);
+  assert.ok(logs.some((t) => t.includes('-DCMAKE_BUILD_TYPE=Debug')), logs.join('\n'));
+  assert.ok(logs.some((t) => t.includes('-DN2ENGINE_TARGET=linux')));
+  assert.equal(lines.at(-1).output, path.join(projectDir, '.n2', 'out', 'linux-debug', 'Tri Linux'));
 });

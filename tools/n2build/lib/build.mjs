@@ -15,8 +15,12 @@ import { BuildError } from './report.mjs';
 export const PACKAGE_MARKER = '.n2build-package.json';
 export const ARCHIVE_FORMATS = { zip: 'zip', '7z': '7zip' };
 
-/** project.n2proj, parsed, with its module list checked as a build would check it */
-export function readProject(projectDir) {
+/**
+ * project.n2proj, parsed, with its module list checked as a build would check it. With a target, the list is that
+ * target's (build.targets.<target>.modules over build.modules) and settings is build.targets.<target>, checked for the
+ * keys n2build reads (displayName, version, buildNumber, config, enabled); name is the game's name on that target.
+ */
+export function readProject(projectDir, target) {
   const file = path.join(projectDir, 'project.n2proj');
   if (!fs.existsSync(file)) throw new BuildError(`${projectDir} is not a project folder: it has no project.n2proj`);
   let project;
@@ -26,13 +30,53 @@ export function readProject(projectDir) {
     throw new BuildError(`${file}: not valid JSON (${error.message})`);
   }
   let modules;
+  let settings;
   try {
-    modules = readModuleList(project);
+    modules = readModuleList(project, target);
+    settings = target ? readTargetSettings(project, target) : {};
   } catch (error) {
     throw new BuildError(`${file}: ${error.message}`);
   }
   if (!fs.existsSync(path.join(projectDir, 'assets'))) throw new BuildError(`${projectDir} has no assets folder`);
-  return { file, project, modules, name: typeof project.name === 'string' ? project.name : '' };
+  const projectName = typeof project.name === 'string' ? project.name : '';
+  return { file, project, modules, settings, name: settings.displayName ?? projectName };
+}
+
+const VERSION_PATTERN = /^\d{1,5}\.\d{1,5}\.\d{1,5}$/;
+export const MAX_BUILD_NUMBER = 2100000000;
+
+/**
+ * build.targets.<target> (an empty object when absent), with the keys n2build acts on checked by the rules
+ * IO::BuildTargets applies when the editor writes them (engine/include/engine/io/BuildTargets.hpp). Other keys are the
+ * editor's and the later stages' and pass through unread. Throws an Error naming the key.
+ */
+export function readTargetSettings(project, target) {
+  const targets = project?.build?.targets;
+  if (targets === undefined) return {};
+  if (!targets || typeof targets !== 'object' || Array.isArray(targets)) throw new Error('build.targets must be an object');
+  const settings = targets[target];
+  if (settings === undefined) return {};
+  const where = `build.targets.${target}`;
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error(`${where} must be an object`);
+  if (settings.enabled !== undefined && typeof settings.enabled !== 'boolean') throw new Error(`${where}.enabled must be true or false`);
+  if (settings.displayName !== undefined) {
+    const name = settings.displayName;
+    // eslint-disable-next-line no-control-regex
+    if (typeof name !== 'string' || name.length < 1 || name.length > 64 || /[\u0000-\u001f\u007f]/.test(name)) {
+      throw new Error(`${where}.displayName must be 1 to 64 characters with no control characters`);
+    }
+  }
+  if (settings.version !== undefined && (typeof settings.version !== 'string' || !VERSION_PATTERN.test(settings.version))) {
+    throw new Error(`${where}.version must be "major.minor.patch", each part 1 to 5 digits`);
+  }
+  if (settings.buildNumber !== undefined
+    && !(Number.isInteger(settings.buildNumber) && settings.buildNumber >= 1 && settings.buildNumber <= MAX_BUILD_NUMBER)) {
+    throw new Error(`${where}.buildNumber must be a whole number from 1 to ${MAX_BUILD_NUMBER}`);
+  }
+  if (settings.config !== undefined && !['debug', 'release'].includes(settings.config)) {
+    throw new Error(`${where}.config must be "debug" or "release"`);
+  }
+  return settings;
 }
 
 /**
@@ -85,7 +129,9 @@ export function planBuild({ engineRoot, projectDir, descriptor, config, modules,
   const key = buildKey({ projectDir, target: descriptor.name, config, modules, options });
   const treeDir = path.join(buildRoot ?? path.join(projectDir, '.n2', 'build'), key);
   const packageDir = outDir ? path.resolve(outDir) : path.join(projectDir, '.n2', 'out', `${descriptor.name}-${config}`, safeName(gameName));
-  const configureArgs = ['-S', engineRoot, '-B', treeDir, '-G', descriptor.cmake.generator, `-DN2ENGINE_PROJECT=${path.resolve(projectDir)}`];
+  // N2ENGINE_TARGET: cmake/N2EngineModules.cmake reads build.targets.<target>.modules over build.modules
+  const configureArgs = ['-S', engineRoot, '-B', treeDir, '-G', descriptor.cmake.generator, `-DN2ENGINE_PROJECT=${path.resolve(projectDir)}`,
+    `-DN2ENGINE_TARGET=${descriptor.name}`];
   if (descriptor.cmake.toolchain === 'emsdk') {
     if (!toolchainFile) throw new BuildError('The Emscripten toolchain file was not found (see n2build doctor)');
     configureArgs.push(`-DCMAKE_TOOLCHAIN_FILE=${toolchainFile}`);
