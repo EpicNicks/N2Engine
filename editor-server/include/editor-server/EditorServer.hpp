@@ -1206,6 +1206,8 @@ namespace N2Engine::Editor
         void HandleDiscardAutosave(int clientSocket);
         void HandleSetProjectSettings(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleSetStartupScene(int clientSocket, const std::vector<uint8_t> &payload);
+        /// SetBuildTargets (1.29.0): merge-patches build.targets, checked by IO::BuildTargets::Validate, and saves
+        void HandleSetBuildTargets(int clientSocket, const std::vector<uint8_t> &payload);
 
         /// Answers a scene-file operation: SceneInfo, or Error with its message
         void SendSceneInfo(int clientSocket, const std::expected<OpenSceneInfo, std::string> &info);

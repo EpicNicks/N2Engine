@@ -308,7 +308,9 @@ namespace N2Engine::Input
         GamepadAxis,
         GamepadStick,
         Vector2Composite,
-        MouseButton
+        MouseButton,
+        GamepadButtonComposite, // four gamepad buttons as a Vector2 (D-pad, face buttons)
+        Chord                   // a binding that counts only while a modifier binding is held
     };
 
     NLOHMANN_JSON_SERIALIZE_ENUM(BindingType, {
@@ -317,6 +319,23 @@ namespace N2Engine::Input
         {BindingType::GamepadAxis, "GamepadAxis"},
         {BindingType::GamepadStick, "GamepadStick"},
         {BindingType::Vector2Composite, "Vector2Composite"},
-        {BindingType::MouseButton, "MouseButton"}
+        {BindingType::MouseButton, "MouseButton"},
+        {BindingType::GamepadButtonComposite, "GamepadButtonComposite"},
+        {BindingType::Chord, "Chord"}
+    })
+
+    /// Which half of a GamepadAxis binding counts: Both (the default) keeps the signed value; Positive or
+    /// Negative keep one half as a 0..1 magnitude (a stick pushed left as a button, say)
+    enum class AxisDirection
+    {
+        Both,
+        Positive,
+        Negative
+    };
+
+    NLOHMANN_JSON_SERIALIZE_ENUM(AxisDirection, {
+        {AxisDirection::Both, "Both"},
+        {AxisDirection::Positive, "Positive"},
+        {AxisDirection::Negative, "Negative"}
     })
 }

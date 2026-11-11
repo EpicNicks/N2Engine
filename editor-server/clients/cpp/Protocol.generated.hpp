@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.28.0";
+inline constexpr const char *ProtocolVersion = "1.29.0";
 
 enum class CommandType : uint8_t
 {
@@ -69,6 +69,7 @@ enum class CommandType : uint8_t
     GetProjectInfo = 0x70,
     SetProjectSettings = 0x71,
     SetStartupScene = 0x72,
+    SetBuildTargets = 0x73,
     ListEditorExtensions = 0x80,
     GetEditorUi = 0x81,
     ReloadEditorExtensions = 0x84,
@@ -439,6 +440,11 @@ struct SetProjectSettingsCmd
 struct SetStartupSceneCmd
 {
     std::string path;
+};
+
+struct SetBuildTargetsCmd
+{
+    std::string targets; // JSON: any
 };
 
 struct InvokeMenuItemCmd

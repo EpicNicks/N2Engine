@@ -1,3 +1,4 @@
+#include "engine/input/Keyboard.hpp"
 #include "engine/input/InputSystem.hpp"
 #include "engine/input/ActionMap.hpp"
 #include "engine/input/InputBinding.hpp"
@@ -10,6 +11,8 @@
 #include <GLFW/glfw3.h>
 
 #include "engine/input/Mouse.hpp"
+#include "engine/input/Touchscreen.hpp"
+#include "engine/input/Rumble.hpp"
 
 #include <ranges>
 
@@ -44,9 +47,14 @@ InputSystem::InputSystem(Window &window)
     // it with the Mouse, so resizing called Window::OnWindowResize on a Mouse). The Mouse's scroll
     // callback reaches it through the Window instead.
     _mouse = std::make_unique<Mouse>(_window._window);
+    _keyboard = std::make_unique<Keyboard>(_window._window);
 }
 
-InputSystem::~InputSystem() = default;
+InputSystem::~InputSystem()
+{
+    // A pad left rumbling would keep going after the game has gone
+    Rumble::StopAll();
+}
 
 ActionMap* InputSystem::CreateActionMapFromJson(const std::string &name, const nlohmann::json &j)
 {
@@ -168,6 +176,9 @@ std::vector<GamepadInfo> InputSystem::GetConnectedGamepads()
 void InputSystem::Update()
 {
     _mouse->Update();
+    _keyboard->Update();
+    Touchscreen::Get().Update();
+    Rumble::Update();
 
     UpdatingScope scope{*this};
 

@@ -552,6 +552,17 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    struct SetBuildTargetsCmd
+    {
+        /// A JSON merge patch (RFC 7386) for the project file's build.targets object (since 1.29.0)
+        nlohmann::json targets;
+
+        static SetBuildTargetsCmd Deserialize(BufferReader &r)
+        {
+            return {ReadBoundedJson(r)};
+        }
+    };
+
     struct SetStartupSceneCmd
     {
         /// A res:// path to an existing .scene file, or empty for none
