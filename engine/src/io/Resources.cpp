@@ -9,6 +9,7 @@
 #include "engine/audio/AudioClip.hpp"
 #include "engine/Application.hpp"
 #include "engine/Logger.hpp"
+#include "engine/io/Vfs.hpp"
 
 namespace N2Engine::IO
 {
@@ -95,28 +96,15 @@ namespace N2Engine::IO
         auto vertexShaderPathLocal = ResolvePath(vertexShaderPath);
         auto fragmentShaderPathLocal = ResolvePath(fragmentShaderPath);
 
-        if (!std::filesystem::exists(vertexShaderPathLocal) ||
-            !std::filesystem::exists(fragmentShaderPathLocal))
+        // Through the virtual filesystem: a folder, or a pack
+        auto vertexRead = Vfs::Instance().ReadText(vertexShaderPathLocal);
+        auto fragmentRead = Vfs::Instance().ReadText(fragmentShaderPathLocal);
+        if (!vertexRead || !fragmentRead)
         {
             return nullptr;
         }
-
-        std::ifstream vertexFile{vertexShaderPathLocal};
-        std::ifstream fragmentFile{fragmentShaderPathLocal};
-
-        if (!vertexFile.is_open() || !fragmentFile.is_open())
-        {
-            return nullptr;
-        }
-
-        std::string vertexSource{
-            std::istreambuf_iterator<char>(vertexFile),
-            std::istreambuf_iterator<char>()
-        };
-        std::string fragmentSource{
-            std::istreambuf_iterator<char>(fragmentFile),
-            std::istreambuf_iterator<char>()
-        };
+        std::string vertexSource = std::move(*vertexRead);
+        std::string fragmentSource = std::move(*fragmentRead);
 
         // No renderer (RenderBackend::NONE, a dedicated server): there is no program to make
         Renderer::Common::IRenderer *renderer = Application::GetInstance().GetWindow().GetRenderer();

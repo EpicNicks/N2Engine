@@ -14,6 +14,7 @@
 #include "engine/Logger.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/Resources.hpp"
+#include "engine/io/Vfs.hpp"
 
 namespace N2Engine::Rendering
 {
@@ -31,24 +32,14 @@ namespace N2Engine::Rendering
 
         std::optional<std::vector<std::uint8_t>> ReadImageFile(const std::filesystem::path &path)
         {
-            std::ifstream file(path, std::ios::binary | std::ios::ate);
-            if (!file.is_open())
+            // Through the virtual filesystem (a folder or a pack). The decoder takes at most 2 GiB; anything larger is
+            // refused before it's read
+            auto bytes = IO::Vfs::Instance().ReadBytesCapped(path, static_cast<std::uint64_t>(std::numeric_limits<int>::max()));
+            if (!bytes)
             {
                 return std::nullopt;
             }
-            const std::streamsize size = file.tellg();
-            // The decoder takes at most 2 GiB; anything larger is refused before it's read
-            if (size < 0 || static_cast<unsigned long long>(size) > static_cast<unsigned long long>(std::numeric_limits<int>::max()))
-            {
-                return std::nullopt;
-            }
-            std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
-            file.seekg(0);
-            if (size > 0 && !file.read(reinterpret_cast<char *>(bytes.data()), size))
-            {
-                return std::nullopt;
-            }
-            return bytes;
+            return std::move(*bytes);
         }
 
         // A project texture's settings come from its .meta; anything else (or a file outside the project) uses

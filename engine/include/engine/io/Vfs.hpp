@@ -98,6 +98,9 @@ namespace N2Engine::IO
 
         [[nodiscard]] std::expected<VfsBytes, std::string> ReadBytes(const std::filesystem::path &path) const;
         [[nodiscard]] std::expected<std::string, std::string> ReadText(const std::filesystem::path &path) const;
+        /// ReadBytes, refused without reading when the file is larger than maxBytes
+        [[nodiscard]] std::expected<VfsBytes, std::string> ReadBytesCapped(const std::filesystem::path &path,
+                                                                           std::uint64_t maxBytes) const;
 
         /// The files (not folders) in directory, recursively unless told otherwise, paths relative to it, sorted
         [[nodiscard]] std::vector<VfsEntry> ListFiles(const std::filesystem::path &directory, bool recursive = true) const;

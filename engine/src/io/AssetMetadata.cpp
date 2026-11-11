@@ -1,6 +1,7 @@
 #include "engine/io/AssetMetadata.hpp"
 #include "engine/Logger.hpp"
 #include "engine/io/ProjectFile.hpp"
+#include "engine/io/Vfs.hpp"
 #include "engine/serialization/MathSerialization.hpp"
 #include <fstream>
 
@@ -8,14 +9,14 @@ namespace N2Engine::IO
 {
     AssetMetadata AssetMetadata::FromFile(const std::filesystem::path& metaPath)
     {
-        std::ifstream file(metaPath);
-        if (!file.is_open())
+        // Through the virtual filesystem: a project folder's .import, or a pack's
+        const auto text = Vfs::Instance().ReadText(metaPath);
+        if (!text)
         {
             throw std::runtime_error("Failed to open metadata file: " + metaPath.string());
         }
-        
-        nlohmann::json j;
-        file >> j;
+
+        nlohmann::json j = nlohmann::json::parse(*text);
         
         AssetMetadata meta;
         meta.uuid = j["uuid"].get<Math::UUID>();

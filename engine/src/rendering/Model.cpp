@@ -19,6 +19,7 @@
 #include "engine/Positionable.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/Resources.hpp"
+#include "engine/io/Vfs.hpp"
 #include "engine/prefabs/PrefabManager.hpp"
 #include "engine/rendering/MeshRenderer.hpp"
 
@@ -41,6 +42,17 @@ namespace N2Engine::Rendering
 
         std::optional<std::vector<std::uint8_t>> ReadModelFile(const std::filesystem::path &path, std::string &error)
         {
+            // A model in a pack (docs/packs.html): read through the mount, with the same size limit
+            if (IO::Vfs::Instance().IsMounted(path))
+            {
+                auto bytes = IO::Vfs::Instance().ReadBytesCapped(path, AssetImport::kMaxModelFileBytes);
+                if (!bytes)
+                {
+                    error = bytes.error();
+                    return std::nullopt;
+                }
+                return std::move(*bytes);
+            }
             std::ifstream file(path, std::ios::binary | std::ios::ate);
             if (!file.is_open())
             {
@@ -347,7 +359,17 @@ namespace N2Engine::Rendering
             }
             importer = &gltf;
         }
-        auto imported = importer->Import(fileBytes, baseDirectory, ToImportSettings(settings));
+        AssetImport::ModelImportSettings importSettings = ToImportSettings(settings);
+        // A model in a pack finds the .bin and images it names in the same pack
+        if (IO::Vfs::Instance().IsMounted(baseDirectory))
+        {
+            importSettings.readFile = [](const std::filesystem::path &path, const std::size_t maxBytes)
+                -> std::expected<std::vector<std::uint8_t>, std::string>
+            {
+                return IO::Vfs::Instance().ReadBytesCapped(path, maxBytes);
+            };
+        }
+        auto imported = importer->Import(fileBytes, baseDirectory, importSettings);
         if (!imported)
         {
             Logger::Error(std::format("Cannot load model {}: {} ({})", debugName, imported.error().message,

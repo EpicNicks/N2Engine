@@ -364,6 +364,21 @@ namespace N2Engine::IO
         return DiskRead(path);
     }
 
+    std::expected<VfsBytes, std::string> Vfs::ReadBytesCapped(const std::filesystem::path &path, const std::uint64_t maxBytes) const
+    {
+        const auto entry = Stat(path);
+        if (!entry || entry->directory)
+        {
+            return std::unexpected(PathToUtf8(path) + " was not found");
+        }
+        if (entry->size > maxBytes)
+        {
+            return std::unexpected(PathToUtf8(path) + " is " + std::to_string(entry->size) + " bytes, over the " +
+                                   std::to_string(maxBytes) + "-byte limit");
+        }
+        return ReadBytes(path);
+    }
+
     std::expected<std::string, std::string> Vfs::ReadText(const std::filesystem::path &path) const
     {
         auto bytes = ReadBytes(path);

@@ -5,6 +5,27 @@
 
 namespace N2Engine::Player
 {
+    GameLocation ResolveGame(const std::filesystem::path &folderOrPack,
+                             const std::function<bool(const std::filesystem::path &)> &isDirectory,
+                             const std::function<bool(const std::filesystem::path &)> &isFile)
+    {
+        if (folderOrPack.extension() == PackExtension && isFile(folderOrPack))
+        {
+            // game.n2pack: mounted where its folder would be ("game" beside it)
+            return {folderOrPack.parent_path() / folderOrPack.stem(), folderOrPack};
+        }
+        if (!isDirectory(folderOrPack))
+        {
+            std::filesystem::path pack = folderOrPack;
+            pack += PackExtension;
+            if (isFile(pack))
+            {
+                return {folderOrPack, pack};
+            }
+        }
+        return {folderOrPack, {}};
+    }
+
     namespace
     {
         std::optional<RenderBackend> ParseRenderBackend(const std::string_view name)

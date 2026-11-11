@@ -19,6 +19,7 @@
 
 #include "engine/Logger.hpp"
 #include "engine/io/Resources.hpp"
+#include "engine/io/Vfs.hpp"
 #include "engine/serialization/MathSerialization.hpp"
 
 namespace N2Engine::Rendering
@@ -539,8 +540,9 @@ namespace N2Engine::Rendering
 
     bool Material::Load(const std::filesystem::path &path)
     {
-        std::ifstream file(path);
-        if (!file.is_open())
+        // Through the virtual filesystem: a folder, or a pack (docs/packs.html)
+        const auto text = IO::Vfs::Instance().ReadText(path);
+        if (!text)
         {
             Logger::Error(std::format("Cannot read material file {}", path.string()));
             return false;
@@ -548,7 +550,7 @@ namespace N2Engine::Rendering
         nlohmann::json json;
         try
         {
-            json = nlohmann::json::parse(file);
+            json = nlohmann::json::parse(*text);
         }
         catch (const std::exception &e)
         {

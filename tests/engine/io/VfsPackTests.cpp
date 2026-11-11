@@ -11,10 +11,13 @@
 
 #include <engine/io/Vfs.hpp>
 
+#include "TestZip.hpp"
+
 // The virtual filesystem and its packs (build targets stage 4; docs/packs.html): zip (stored and deflate) and 7z (non-solid
 // and solid) read the same bytes; a pack whose names could leave it, or whose data is damaged, is refused; mounts serve
 // their paths and everything else is the disk.
 using namespace N2Engine::IO;
+using N2Engine::Tests::MakeZip;
 namespace fs = std::filesystem;
 
 namespace
@@ -40,102 +43,13 @@ namespace
         return {
             {"project.n2proj", "{\"formatVersion\":1,\"name\":\"Pack Sample\"}\n"},
             {"assets/scripts/main.lua", script},
-            {"assets/sub/notes.txt", "\xc3\xbcn\xc3\xafc\xc3\xb6\x64\xc3\xa9 text\n"},
+            {"assets/sub/notes.txt", "\xc3\xbc" "n" "\xc3\xaf" "c" "\xc3\xb6" "d" "\xc3\xa9" " text\n"},
             {"assets/data.bin", data},
             {"assets/empty.txt", ""},
         };
     }
 
     std::string AsText(const VfsBytes &bytes) { return {reinterpret_cast<const char *>(bytes.data()), bytes.size()}; }
-
-    std::uint32_t Crc32(const std::string &data)
-    {
-        std::uint32_t crc = 0xffffffffu;
-        for (const unsigned char c : data)
-        {
-            crc ^= c;
-            for (int k = 0; k < 8; ++k)
-            {
-                crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
-            }
-        }
-        return ~crc;
-    }
-
-    void Put16(std::string &out, const std::uint32_t v)
-    {
-        out += static_cast<char>(v & 0xff);
-        out += static_cast<char>((v >> 8) & 0xff);
-    }
-    void Put32(std::string &out, const std::uint32_t v)
-    {
-        Put16(out, v & 0xffff);
-        Put16(out, v >> 16);
-    }
-
-    struct FakeEntry
-    {
-        std::string name;
-        std::string data;
-        std::uint32_t crcOverride = 0; ///< non-zero: the CRC written instead of the real one
-        std::uint32_t declaredSize = 0xffffffffu; ///< not 0xffffffff: the size written instead of the real one
-    };
-
-    /// A stored-only zip, with whatever names and lies a test wants
-    std::string MakeZip(const std::vector<FakeEntry> &entries)
-    {
-        std::string out;
-        std::string directory;
-        for (const FakeEntry &e : entries)
-        {
-            const auto offset = static_cast<std::uint32_t>(out.size());
-            const std::uint32_t crc = e.crcOverride ? e.crcOverride : Crc32(e.data);
-            const std::uint32_t size = e.declaredSize != 0xffffffffu ? e.declaredSize : static_cast<std::uint32_t>(e.data.size());
-            Put32(out, 0x04034b50);
-            Put16(out, 20);
-            Put16(out, 0);
-            Put16(out, 0); // stored
-            Put16(out, 0);
-            Put16(out, 0);
-            Put32(out, crc);
-            Put32(out, size);
-            Put32(out, size);
-            Put16(out, static_cast<std::uint32_t>(e.name.size()));
-            Put16(out, 0);
-            out += e.name;
-            out += e.data;
-
-            Put32(directory, 0x02014b50);
-            Put16(directory, 20);
-            Put16(directory, 20);
-            Put16(directory, 0);
-            Put16(directory, 0);
-            Put16(directory, 0);
-            Put16(directory, 0);
-            Put32(directory, crc);
-            Put32(directory, size);
-            Put32(directory, size);
-            Put16(directory, static_cast<std::uint32_t>(e.name.size()));
-            Put16(directory, 0);
-            Put16(directory, 0);
-            Put16(directory, 0);
-            Put16(directory, 0);
-            Put32(directory, 0);
-            Put32(directory, offset);
-            directory += e.name;
-        }
-        const auto directoryOffset = static_cast<std::uint32_t>(out.size());
-        out += directory;
-        Put32(out, 0x06054b50);
-        Put16(out, 0);
-        Put16(out, 0);
-        Put16(out, static_cast<std::uint32_t>(entries.size()));
-        Put16(out, static_cast<std::uint32_t>(entries.size()));
-        Put32(out, static_cast<std::uint32_t>(directory.size()));
-        Put32(out, directoryOffset);
-        Put16(out, 0);
-        return out;
-    }
 
     class VfsPackTest : public ::testing::Test
     {
