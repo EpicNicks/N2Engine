@@ -71,6 +71,9 @@ set_target_properties(engine PROPERTIES
     CXX_EXTENSIONS OFF
 )
 
+# The pack readers (engine/src/io/Pack*.cpp; docs/packs.html): zip inflate and the 7z decoder, private to the engine
+target_link_libraries(engine PRIVATE n2_miniz n2_lzma7z)
+
 # The engine version (engine/Version.hpp): the root project's (engine declares no project of its own)
 target_compile_definitions(engine PRIVATE N2ENGINE_VERSION="${PROJECT_VERSION}")
 
