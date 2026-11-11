@@ -96,8 +96,8 @@ namespace Renderer::Gpu::ShaderInterface
     /// What a per-draw binding covers: the block rounded up to its 16-byte alignment (a WGSL struct's size, which WebGPU
     /// requires a binding to cover)
     inline constexpr std::uint32_t kPerDrawBindingSize = 224;
-    /// The range every material descriptor covers: at least the largest material block (the lit one is 72 bytes, the
-    /// text one 92), so one descriptor set layout serves every shader
+    /// The range every material descriptor covers: at least the largest material block (unlit 48 bytes, lit 72, text
+    /// 92), so one descriptor set layout serves every shader
     inline constexpr std::uint32_t kMaterialBlockRange = 128;
     inline constexpr std::uint32_t kLightingBlockSize = 752;  // see the Lighting table
     inline constexpr std::uint32_t kSamplerCount = 5;         // base + 4 AuxTexture slots
@@ -176,10 +176,13 @@ namespace Renderer::Gpu::ShaderInterface
         std::memcpy(block + PerDrawOffset("uTintCircle"), circleValues, sizeof(circleValues));
     }
 
-    inline constexpr std::array<Uniform, 3> kUnlitMaterial{{
+    /// uSaturation and uFlash are the unlit colour effects (Common::ColorEffects; Sprite2D and the UI Image set them)
+    inline constexpr std::array<Uniform, 5> kUnlitMaterial{{
         {"uAlbedo", Block::Material, 0, UniformType::Vec4, 16, 1},
         {"uHasTexture", Block::Material, 16, UniformType::Int, 4, 1},
         {"uAlphaCutoff", Block::Material, 20, UniformType::Float, 4, 1},
+        {"uSaturation", Block::Material, 24, UniformType::Float, 4, 1},
+        {"uFlash", Block::Material, 32, UniformType::Vec4, 16, 1},
     }};
 
     inline constexpr std::array<Uniform, 13> kLitMaterial{{
@@ -306,9 +309,11 @@ namespace Renderer::Gpu::ShaderInterface
         std::array<float, 4> values;
     };
 
-    inline constexpr std::array<MaterialDefault, 2> kUnlitMaterialDefaults{{
+    inline constexpr std::array<MaterialDefault, 4> kUnlitMaterialDefaults{{
         {"uAlbedo", {1.0f, 1.0f, 1.0f, 1.0f}},
         {"uAlphaCutoff", {0.0f, 0.0f, 0.0f, 0.0f}},
+        {"uSaturation", {1.0f, 0.0f, 0.0f, 0.0f}},
+        {"uFlash", {0.0f, 0.0f, 0.0f, 0.0f}},
     }};
 
     inline constexpr std::array<MaterialDefault, 12> kLitMaterialDefaults{{

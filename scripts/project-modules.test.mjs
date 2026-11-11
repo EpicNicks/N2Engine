@@ -154,10 +154,52 @@ test('generated and hidden folders are not scanned, and a broken scene is report
 
 test('the suggestion is the smallest list the scan can justify', () => {
   const suggest = (project, files) => suggestList(scanProject(makeProject({ name: 'p', ...project }, files)));
-  assert.deepEqual(suggest({}, {}), { physics3d: 'none', physics2d: false });
-  assert.deepEqual(suggest({}, { 'assets/a.lua': 'Physics2D.Raycast(a, b)' }), { physics3d: 'none', physics2d: true });
-  assert.deepEqual(suggest({}, { 'assets/a.lua': 'Physics.Raycast(a, b)' }), { physics3d: 'physx', physics2d: false });
-  assert.deepEqual(suggest({ settings: { network: { preset: 'deterministic' } } }, {}), { physics3d: 'jolt', physics2d: false });
+  const none = { physics3d: 'none', physics2d: false, particles: false, softbodies: false };
+  assert.deepEqual(suggest({}, {}), none);
+  assert.deepEqual(suggest({}, { 'assets/a.lua': 'Physics2D.Raycast(a, b)' }), { ...none, physics2d: true });
+  assert.deepEqual(suggest({}, { 'assets/a.lua': 'Physics.Raycast(a, b)' }), { ...none, physics3d: 'physx' });
+  assert.deepEqual(suggest({ settings: { network: { preset: 'deterministic' } } }, {}), { ...none, physics3d: 'jolt' });
+  assert.deepEqual(suggest({}, { 'assets/a.lua': 'go:AddComponent("ParticleSystem")' }), { ...none, particles: true });
+  assert.deepEqual(suggest({}, { 'scenes/a.scene': sceneWith('MeshRenderer', 'SoftBody') }), { ...none, softbodies: true });
+});
+
+test('particles and soft bodies are found by component name in scenes, prefabs and Lua', () => {
+  const modules = (source) => scanLua(source).uses.map((use) => use.module);
+  assert.deepEqual(modules('go:AddComponent("ParticleSystem")'), ['particles']);
+  assert.deepEqual(modules("local ps = go:GetComponent('ParticleSystem')"), ['particles']);
+  assert.deepEqual(modules('go:AddComponent("SoftBody")'), ['softbodies']);
+  // A name that only starts with one, a script path, a comment, or a bare word is not a use
+  assert.deepEqual(modules('go:AddComponent("SoftBodyStation")'), []);
+  assert.deepEqual(modules('local path = "res://scripts/ParticleSystems.lua"'), []);
+  assert.deepEqual(modules('-- go:AddComponent("ParticleSystem")\nlocal SoftBody = 1'), []);
+
+  const scene = makeProject({ name: 'p', build: { modules: { particles: false } } }, { 'scenes/fx.scene': sceneWith('ParticleSystem') });
+  assert.match(findConflicts(scanProject(scene))[0], /scenes\/fx\.scene uses ParticleSystem, but the list leaves particles out/);
+  const prefab = makeProject({ name: 'p', build: { modules: { softbodies: false } } }, { 'assets/jelly.prefab': sceneWith('MeshRenderer', 'SoftBody') });
+  assert.match(findConflicts(scanProject(prefab))[0], /assets\/jelly\.prefab uses SoftBody, but the list leaves softbodies out/);
+  const script = makeProject({ name: 'p', build: { modules: { softbodies: false } } }, { 'assets/a.lua': '\n\ngo:AddComponent("SoftBody")' });
+  assert.match(findConflicts(scanProject(script))[0], /assets\/a\.lua:3 uses SoftBody/);
+});
+
+test('particles and soft bodies that are kept, or not listed, are not a conflict, and need no physics', () => {
+  const kept = makeProject({ name: 'p', build: { modules: { physics3d: 'none', particles: true, softbodies: true } } }, {
+    'scenes/a.scene': sceneWith('ParticleSystem', 'SoftBody', 'MeshRenderer'),
+  });
+  assert.deepEqual(findConflicts(scanProject(kept)), []);
+  const unlisted = makeProject({ name: 'p', build: { modules: { physics2d: false } } }, { 'scenes/a.scene': sceneWith('ParticleSystem', 'SoftBody') });
+  assert.deepEqual(findConflicts(scanProject(unlisted)), []);
+  // Leaving them out conflicts with nothing else the project uses
+  const other = makeProject({ name: 'p', build: { modules: { particles: false, softbodies: false } } }, {
+    'scenes/a.scene': sceneWith('Rigidbody', 'BoxCollider2D', 'MeshRenderer'),
+  });
+  assert.deepEqual(findConflicts(scanProject(other)), []);
+});
+
+test('particles and softbodies must be true or false', () => {
+  assert.deepEqual(readModuleList({ build: { modules: { particles: false, softbodies: true } } }), { particles: false, softbodies: true });
+  assert.throws(() => readModuleList({ build: { modules: { particles: 'off' } } }), /particles must be true or false/);
+  assert.throws(() => readModuleList({ build: { modules: { softbodies: 0 } } }), /softbodies must be true or false/);
+  assert.throws(() => readModuleList({ build: { modules: { softbody: false } } }), /unknown module "softbody"/);
 });
 
 test('the command line exits 0 when clean, 1 on a conflict and 2 on bad use', () => {
@@ -179,10 +221,42 @@ test('--suggest prints a block that can be pasted, and --json the whole report',
   const folder = makeProject({ name: 'p' }, { 'assets/a.lua': 'Physics2D.Raycast(a, b)\ngo:AddComponent(kind)' });
   const suggested = run(folder, '--suggest');
   assert.equal(suggested.status, 0);
-  assert.deepEqual(JSON.parse(suggested.stdout), { build: { modules: { physics3d: 'none', physics2d: true } } });
+  assert.deepEqual(JSON.parse(suggested.stdout), {
+    build: { modules: { physics3d: 'none', physics2d: true, particles: false, softbodies: false } },
+  });
   assert.match(suggested.stderr, /computed name/);
 
   const report = JSON.parse(run(folder, '--json').stdout);
   assert.equal(report.unresolved.length, 1);
   assert.deepEqual(report.conflicts, []);
+});
+
+test("a target's list is laid over build.modules, key by key (build targets stage 3)", () => {
+  const project = {
+    build: {
+      modules: { physics3d: 'both', physics2d: true },
+      targets: { android: { modules: { physics3d: 'jolt', particles: false } }, web: { enabled: true } },
+    },
+  };
+  assert.deepEqual(readModuleList(project, 'android'), { physics3d: 'jolt', physics2d: true, particles: false });
+  assert.deepEqual(readModuleList(project, 'web'), { physics3d: 'both', physics2d: true });
+  assert.deepEqual(readModuleList(project), { physics3d: 'both', physics2d: true }, 'without a target: build.modules alone');
+  assert.deepEqual(readModuleList({ build: { targets: { ios: { modules: { physics3d: 'none' } } } } }, 'ios'), { physics3d: 'none' });
+  assert.equal(readModuleList({ build: { targets: { ios: { modules: { physics3d: 'none' } } } } }, 'web'), null);
+  assert.throws(() => readModuleList({ build: { targets: { ios: { modules: { physics2d: 'no' } } } } }, 'ios'),
+    /build\.targets\.ios\.modules\.physics2d must be true or false/);
+  assert.throws(() => readModuleList({ build: { targets: { ios: { modules: [] } } } }, 'ios'), /build\.targets\.ios\.modules must be an object/);
+});
+
+test('--target checks the target\'s list against the project', () => {
+  const folder = makeProject(
+    { name: 'p', build: { modules: { physics3d: 'physx' }, targets: { android: { modules: { physics3d: 'none' } } } } },
+    { 'assets/scene.lua': 'go:AddComponent("Rigidbody")' },
+  );
+  assert.equal(run(folder).status, 0, 'build.modules keeps PhysX');
+  const forAndroid = run(folder, '--target', 'android');
+  assert.equal(forAndroid.status, 1);
+  assert.match(forAndroid.stderr, /leaves physics3d out/);
+  assert.equal(run(folder, '--target=android').status, 1);
+  assert.equal(run(folder, '--target').status, 2, 'a missing value is wrong usage');
 });

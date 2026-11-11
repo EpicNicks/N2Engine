@@ -11,8 +11,8 @@
 #include <GLFW/glfw3.h>
 
 #include "engine/input/Mouse.hpp"
-#include "engine/input/Rumble.hpp"
 #include "engine/input/Touchscreen.hpp"
+#include "engine/input/Rumble.hpp"
 
 #include <ranges>
 
@@ -177,8 +177,8 @@ void InputSystem::Update()
 {
     _mouse->Update();
     _keyboard->Update();
-    Rumble::Update();
     Touchscreen::Get().Update();
+    Rumble::Update();
 
     UpdatingScope scope{*this};
 

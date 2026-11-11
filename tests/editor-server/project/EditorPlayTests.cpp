@@ -651,7 +651,7 @@ TEST_F(EditorPlayTest, APlayHostRefusesTheCommandsThatWriteTheProjectOrSwapTheSc
                                    CommandType::SetPhysicsBackend, CommandType::SetNetworkSettings,
                                    CommandType::MoveAsset, CommandType::OpenPrefabStage,
                                    CommandType::SetPrefabStageMode, CommandType::SavePrefabStage,
-                                   CommandType::ClosePrefabStage})
+                                   CommandType::ClosePrefabStage, CommandType::SetBuildTargets})
     {
         EXPECT_TRUE(EditorServer::IsEditOnlyCommand(static_cast<uint8_t>(type))) << static_cast<int>(type);
         const Frame response = Execute(*play, type);

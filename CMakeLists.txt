@@ -35,6 +35,13 @@ option(N2ENGINE_USE_JOLT "Build the vendored Jolt Physics library and the engine
 # the engine (2D physics, engine/src/physics2d) and, with the tests, builds its smoke test (tests/box2d). OFF leaves Box2D
 # out of the binary: 2D components keep their data and do nothing, for a game that does not use 2D physics.
 option(N2ENGINE_USE_BOX2D "Build the vendored Box2D library" ON)
+# OFF leaves the particle simulation out of the engine (its CPU, WebGPU and PhysX GPU backends, the emitter and the billboards),
+# and OFF for soft bodies their simulation (the CPU, WebGPU and PhysX GPU backends and the tetrahedraliser). ParticleSystem and
+# SoftBody stay registered and keep their data, and do nothing (docs/project-modules.html). A project's build.modules list
+# sets them ("particles", "softbodies").
+option(N2ENGINE_USE_PARTICLES "Build the particle simulation (ParticleSystem)" ON)
+option(N2ENGINE_USE_SOFTBODIES "Build the soft-body simulation (SoftBody)" ON)
+message(STATUS "Engine modules: particles ${N2ENGINE_USE_PARTICLES}, softbodies ${N2ENGINE_USE_SOFTBODIES}")
 # OFF compiles the Vulkan renderer out: the build then needs no Vulkan headers or loader, and --renderer vulkan / the
 # VULKAN render backend fail with a clear message. ON (the default) needs the Vulkan SDK (Windows) or libvulkan-dev (Linux).
 option(N2ENGINE_RENDERER_VULKAN "Build the Vulkan renderer backend" ON)
@@ -381,6 +388,8 @@ endif()
 if(NOT N2ENGINE_PLATFORM_WEB)
 add_subdirectory(test_project)
 add_subdirectory(lua_project)
+# The desktop player that tools/n2build packages for the windows and linux targets (docs/build-targets.html)
+add_subdirectory(players/desktop)
 add_subdirectory(editor-server)
 # The dedicated game server (netcode stage A6): UDP sockets and the crypto library, so not part of the web build
 add_subdirectory(n2server)

@@ -1,0 +1,28 @@
+{
+  "name": "bt3-fe-build-settings",
+  "repo": "frontend",
+  "branch": "feat-bt3-build-settings",
+  "title": "Build targets stage 3 (frontend): Build Settings panel, n2build from the Electron main process, progress, log and doctor results",
+  "closes": null,
+  "issue": "User request, 2026-11-10: 'I would like for the engine to be able to allow the user to select a build target in the engine editor UI like windows, linux, android, ios, web, and maybe other console toolchains in the future like switch'. Design and stage table: orchestrator/proposals/build-targets-design.md. Stage 3 of section 5.",
+  "allowedPaths": [
+    "^engine-ref\\.txt$",
+    "^package\\.json$",
+    "^package-lock\\.json$",
+    "^README\\.md$",
+    "^src/",
+    "^scripts/"
+  ],
+  "acceptance": [
+    "A panel lists targets with doctor status, edits build.targets, and runs Build and Build and Run with progress and log",
+    "A build can be cancelled; a failed build keeps its log; read-only roles cannot change settings",
+    "Unit and DOM tests with a fake n2build; frontend CI green; README updated",
+    "With a remote host (Docker or SSH), the panel says builds need the project on this machine and offers no Build button, or uses the host's build (decision D1)"
+  ],
+  "requiresDocs": false,
+  "allowProtocol": false,
+  "gate": "approved by the user on 2026-11-10 (all stages); depends on bt2-project-targets-protocol",
+  "approved": true,
+  "reviewer": "opus",
+  "notes": "Reviewer: n2build is spawned without a shell, arguments are not built from strings, no secret in logs or storage."
+}

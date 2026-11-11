@@ -1520,6 +1520,18 @@ function Image:SetColor(color) end
 function Image:GetRaycastTarget() end
 ---@param raycastTarget boolean false lets the pointer through to what is underneath
 function Image:SetRaycastTarget(raycastTarget) end
+---@return number
+function Image:GetSaturation() end
+---1 (the default) draws the colour as it is, 0 grey, in between mixes, above 1 strengthens it (stored clamped to 0..4). Saved
+---with the scene.
+---@param saturation number
+function Image:SetSaturation(saturation) end
+---@return Color
+function Image:GetFlash() end
+---A colour mixed over the image by its alpha, after the saturation; Color.new(0, 0, 0, 0) (the default) is none. Saved with
+---the scene.
+---@param flash Color
+function Image:SetFlash(flash) end
 ---Show an image file (PNG, JPEG, TGA or BMP) in the rect, multiplied by the colour; nil clears it. Raises an
 ---error, keeping the current sprite, if the file doesn't load. Saved with the scene.
 ---@param path string|nil e.g. "res://ui/icon.png"
@@ -2259,6 +2271,19 @@ function Sprite2D:GetOutline() end
 function Sprite2D:SetColor(color) end
 ---@return Color
 function Sprite2D:GetColor() end
+---1 (the default) draws the colour as it is, 0 grey (its own luminance), in between mixes, above 1 strengthens it
+---(stored clamped to 0..4). sprite:SetSaturation(0) is a greyed-out icon. Saved with the scene.
+---@param saturation number
+function Sprite2D:SetSaturation(saturation) end
+---@return number
+function Sprite2D:GetSaturation() end
+---A colour mixed over the sprite by its alpha, after the saturation; the sprite's own alpha (its shape) is unchanged.
+---Color.new(1, 1, 1, 0.8) for a few frames is a hit flash; a hue that cycles each frame is a rainbow. Color.new(0, 0, 0, 0) (the
+---default) is none. Saved with the scene.
+---@param flash Color
+function Sprite2D:SetFlash(flash) end
+---@return Color
+function Sprite2D:GetFlash() end
 ---A res:// path to an image, or nil for a plain colour
 ---@param path string|nil
 function Sprite2D:SetTexture(path) end
@@ -2949,6 +2974,15 @@ function Input.GetMouseButtonDown(button) end
 ---@return boolean
 function Input.GetMouseButtonUp(button) end
 
+---The number of touches this frame (Input.touchCount); 0 on desktop (GLFW has no touch)
+---@return integer
+function Input.GetTouchCount() end
+
+---Touch `index` (1-based) this frame: { id, x, y, phase } with phase "Began", "Moved", "Stationary", "Ended" or "Canceled"; nil past the count
+---@param index integer
+---@return {id: integer, x: number, y: number, phase: string}|nil
+function Input.GetTouch(index) end
+
 ---Gamepad rumble (Gamepad.SetMotorSpeeds): low- and high-frequency motors 0..1, for `seconds` of real time (nil or 0:
 ---until StopGamepadRumble), on `gamepad` (default 0). False when there is no rumble there (Linux, macOS, no pad)
 ---@param low number
@@ -2961,15 +2995,6 @@ function Input.SetGamepadRumble(low, high, seconds, gamepad) end
 ---Stops `gamepad`'s rumble, or every gamepad's without an argument
 ---@param gamepad? integer
 function Input.StopGamepadRumble(gamepad) end
-
----The number of touches this frame (Input.touchCount); 0 on desktop (GLFW has no touch)
----@return integer
-function Input.GetTouchCount() end
-
----Touch `index` (1-based) this frame: { id, x, y, phase } with phase "Began", "Moved", "Stationary", "Ended" or "Canceled"; nil past the count
----@param index integer
----@return {id: integer, x: number, y: number, phase: string}|nil
-function Input.GetTouch(index) end
 
 ---Whether the pointer was over a UI element (a raycast-target graphic under a canvas) in the last pointer update
 ---@return boolean
@@ -3255,6 +3280,18 @@ function Screen.ClearTint() end
 ---The screen tint as it is now (saturation 1 when there is none)
 ---@return ScreenTint
 function Screen.GetTint() end
+
+-- ===== GRAPHICS =====
+
+---What the renderer the game runs on can do
+---@class Graphics
+Graphics = {}
+
+---False on the software renderer (the web player's fallback when the browser has no WebGPU), which cannot blend: a
+---half-transparent pixel is drawn opaque or not at all, so a soft glow sprite becomes a hard disc. Skip such sprites
+---when it is false. True on OpenGL, Vulkan and WebGPU, and without a renderer.
+---@return boolean
+function Graphics.CanBlend() end
 
 -- ===== CAMERA =====
 

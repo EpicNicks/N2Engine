@@ -10,6 +10,11 @@
 #
 #   "physics3d": "none" | "physx" | "jolt" | "both"   N2ENGINE_USE_PHYSX and N2ENGINE_USE_JOLT
 #   "physics2d": true | false                         N2ENGINE_USE_BOX2D
+#   "particles": true | false                         N2ENGINE_USE_PARTICLES
+#   "softbodies": true | false                        N2ENGINE_USE_SOFTBODIES
+#
+# With -DN2ENGINE_TARGET=<name> (n2build sets it; build targets stage 3, docs/build-targets.html#settings), the target's own
+# "build.targets.<name>.modules" is read first, key by key, and "build.modules" fills in the keys it does not name.
 #
 # Normal variables, which win over option() (policy CMP0077) and over a cached value from an earlier configure, so the list is
 # the one thing that decides. scripts/project-modules.mjs checks the list against what the project uses.
@@ -19,6 +24,7 @@ get_filename_component(_n2_modules_root "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 set(N2ENGINE_MODULES_SCRIPT "${_n2_modules_root}/scripts/project-modules.mjs" CACHE INTERNAL "")
 
 set(N2ENGINE_PROJECT "" CACHE PATH "A game's project folder: its project.n2proj's build.modules decides which engine modules this tree builds")
+set(N2ENGINE_TARGET "" CACHE STRING "The build target this tree is for (n2build sets it): build.targets.<target>.modules wins over build.modules")
 
 # The node that runs scripts/project-modules.mjs, or empty. The web build has its own (the Emscripten toolchain's), which is known
 # only after the toolchain has run, and that is before this file.
@@ -43,8 +49,12 @@ function(n2_check_project_modules target)
     endif()
     _n2_find_module_node(node)
     if(node)
+        set(target_args "")
+        if(N2ENGINE_TARGET)
+            set(target_args --target "${N2ENGINE_TARGET}")
+        endif()
         add_custom_command(TARGET ${target} PRE_LINK
-            COMMAND ${node} "${N2ENGINE_MODULES_SCRIPT}" "${N2ENGINE_PROJECT}"
+            COMMAND ${node} "${N2ENGINE_MODULES_SCRIPT}" "${N2ENGINE_PROJECT}" ${target_args}
             COMMENT "Checking the project's engine modules against what it uses"
             VERBATIM)
     endif()
@@ -57,17 +67,58 @@ if(N2ENGINE_PROJECT)
     endif()
     file(READ "${N2ENGINE_PROJECT}/project.n2proj" _n2_project_json)
 
+    # Where each key is read from: the target's list first, then build.modules (a missing list is no error: it names nothing)
+    set(_n2_lists "")
+    set(_n2_list_names "")
+    if(N2ENGINE_TARGET)
+        string(JSON _n2_modules_type ERROR_VARIABLE _n2_json_error TYPE "${_n2_project_json}" build targets ${N2ENGINE_TARGET} modules)
+        if(NOT _n2_json_error)
+            if(NOT _n2_modules_type STREQUAL "OBJECT")
+                message(FATAL_ERROR "build.targets.${N2ENGINE_TARGET}.modules in ${N2ENGINE_PROJECT}/project.n2proj must be an object")
+            endif()
+            # '|' between the JSON keys: a CMake list item cannot hold ';'
+            list(APPEND _n2_lists "targets|${N2ENGINE_TARGET}|modules")
+            list(APPEND _n2_list_names "build.targets.${N2ENGINE_TARGET}.modules")
+        endif()
+    endif()
     string(JSON _n2_modules_type ERROR_VARIABLE _n2_json_error TYPE "${_n2_project_json}" build modules)
-    if(_n2_json_error)
-        message(STATUS "Engine modules: ${N2ENGINE_PROJECT} has no build.modules list, so every module is built")
-    else()
+    if(NOT _n2_json_error)
         if(NOT _n2_modules_type STREQUAL "OBJECT")
             message(FATAL_ERROR "build.modules in ${N2ENGINE_PROJECT}/project.n2proj must be an object")
         endif()
+        list(APPEND _n2_lists "modules")
+        list(APPEND _n2_list_names "build.modules")
+    endif()
 
+    # _n2_module_lookup(<key> <found> <value> <where>): the first list naming key wins. Sets _n2_lookup_type to the
+    # value's JSON type; a value that is not a string or boolean reads as "<TYPE>", which the checks below refuse.
+    macro(_n2_module_lookup key found_var value_var where_var)
+        set(${found_var} FALSE)
+        set(_n2_index 0)
+        foreach(_n2_list_path IN LISTS _n2_lists)
+            if(NOT ${found_var})
+                string(REPLACE "|" ";" _n2_path_parts "${_n2_list_path}")
+                string(JSON _n2_lookup_type ERROR_VARIABLE _n2_json_error TYPE "${_n2_project_json}" build ${_n2_path_parts} ${key})
+                if(NOT _n2_json_error)
+                    set(${found_var} TRUE)
+                    list(GET _n2_list_names ${_n2_index} ${where_var})
+                    if(_n2_lookup_type STREQUAL "BOOLEAN" OR _n2_lookup_type STREQUAL "STRING")
+                        string(JSON ${value_var} GET "${_n2_project_json}" build ${_n2_path_parts} ${key})
+                    else()
+                        set(${value_var} "<${_n2_lookup_type}>")
+                    endif()
+                endif()
+            endif()
+            math(EXPR _n2_index "${_n2_index} + 1")
+        endforeach()
+    endmacro()
+
+    if(NOT _n2_lists)
+        message(STATUS "Engine modules: ${N2ENGINE_PROJECT} has no build.modules list, so every module is built")
+    else()
         # physics3d: absent keeps the options as they are, so a list can name only what it strips
-        string(JSON _n2_physics3d ERROR_VARIABLE _n2_json_error GET "${_n2_project_json}" build modules physics3d)
-        if(NOT _n2_json_error)
+        _n2_module_lookup(physics3d _n2_found _n2_physics3d _n2_where)
+        if(_n2_found)
             if(_n2_physics3d STREQUAL "none")
                 set(N2ENGINE_USE_PHYSX OFF)
                 set(N2ENGINE_USE_JOLT OFF)
@@ -81,30 +132,40 @@ if(N2ENGINE_PROJECT)
                 set(N2ENGINE_USE_PHYSX ON)
                 set(N2ENGINE_USE_JOLT ON)
             else()
-                message(FATAL_ERROR "build.modules.physics3d must be none, physx, jolt or both, not '${_n2_physics3d}'")
+                message(FATAL_ERROR "${_n2_where}.physics3d must be none, physx, jolt or both, not '${_n2_physics3d}'")
             endif()
-            message(STATUS "Engine modules: physics3d ${_n2_physics3d}, from ${N2ENGINE_PROJECT}")
+            message(STATUS "Engine modules: physics3d ${_n2_physics3d}, from ${_n2_where} in ${N2ENGINE_PROJECT}")
         endif()
 
-        string(JSON _n2_physics2d_type ERROR_VARIABLE _n2_json_error TYPE "${_n2_project_json}" build modules physics2d)
-        if(NOT _n2_json_error)
-            if(NOT _n2_physics2d_type STREQUAL "BOOLEAN")
-                message(FATAL_ERROR "build.modules.physics2d must be true or false")
+        # The modules that are on or off, each with its option
+        foreach(_n2_pair IN ITEMS "physics2d:N2ENGINE_USE_BOX2D" "particles:N2ENGINE_USE_PARTICLES"
+                                  "softbodies:N2ENGINE_USE_SOFTBODIES")
+            string(REPLACE ":" ";" _n2_pair "${_n2_pair}")
+            list(GET _n2_pair 0 _n2_module)
+            list(GET _n2_pair 1 _n2_option)
+            _n2_module_lookup(${_n2_module} _n2_found _n2_module_value _n2_where)
+            if(_n2_found)
+                if(NOT _n2_lookup_type STREQUAL "BOOLEAN")
+                    message(FATAL_ERROR "${_n2_where}.${_n2_module} must be true or false")
+                endif()
+                if(_n2_module_value)
+                    set(${_n2_option} ON)
+                else()
+                    set(${_n2_option} OFF)
+                endif()
+                message(STATUS "Engine modules: ${_n2_module} ${_n2_module_value}, from ${_n2_where} in ${N2ENGINE_PROJECT}")
             endif()
-            string(JSON _n2_physics2d GET "${_n2_project_json}" build modules physics2d)
-            if(_n2_physics2d)
-                set(N2ENGINE_USE_BOX2D ON)
-            else()
-                set(N2ENGINE_USE_BOX2D OFF)
-            endif()
-            message(STATUS "Engine modules: physics2d ${_n2_physics2d}, from ${N2ENGINE_PROJECT}")
-        endif()
+        endforeach()
 
         # Before anything is compiled: a build this long should not end by reporting a mistake it could have reported now
         _n2_find_module_node(_n2_node)
+        set(_n2_target_args "")
+        if(N2ENGINE_TARGET)
+            set(_n2_target_args --target "${N2ENGINE_TARGET}")
+        endif()
         if(_n2_node)
             execute_process(
-                COMMAND ${_n2_node} "${N2ENGINE_MODULES_SCRIPT}" "${N2ENGINE_PROJECT}"
+                COMMAND ${_n2_node} "${N2ENGINE_MODULES_SCRIPT}" "${N2ENGINE_PROJECT}" ${_n2_target_args}
                 RESULT_VARIABLE _n2_check_result)
             if(NOT _n2_check_result EQUAL 0)
                 message(FATAL_ERROR "The engine modules in ${N2ENGINE_PROJECT}/project.n2proj do not fit the project (see above). "
