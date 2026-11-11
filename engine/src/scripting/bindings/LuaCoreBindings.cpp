@@ -1,4 +1,5 @@
 #include "engine/scripting/bindings/LuaBindings.hpp"
+#include "engine/scripting/LuaComponent.hpp"
 #include "engine/scripting/LuaPrefab.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
@@ -165,6 +166,24 @@ namespace N2Engine::Scripting::Bindings
             "GetComponent", [](const GameObjectRef &go, const std::string &typeName, sol::this_state state)
             {
                 return GetComponentByName(*go.Pin(), typeName, state);
+            },
+            // The instance table (`self`) of the first LuaComponent on this object whose script is running, or of the
+            // first running `path` ("res://scripts/Enemy.lua") when given; nil if none. This is how one script calls
+            // another (a projectile calls the enemy's Damage). The table is the same one each time, so it can key a
+            // table; once its component is destroyed its gameObject and component fields are nil.
+            "GetScript", [](const GameObjectRef &go, const sol::optional<std::string> &path) -> sol::object
+            {
+                const std::optional<IO::ResourcePath> wanted =
+                    path ? std::optional(IO::ResourcePath(*path)) : std::nullopt;
+                for (const LuaComponent *component : go.Pin()->GetComponents<LuaComponent>())
+                {
+                    const sol::table &instance = component->GetScriptInstance();
+                    if (instance.valid() && (!wanted || component->GetScriptPath() == *wanted))
+                    {
+                        return instance;
+                    }
+                }
+                return sol::lua_nil;
             }
         );
 

@@ -560,7 +560,18 @@ return Mover                   -- anything other than a table: "Script must retu
 go:AddComponent("LuaComponent"):SetScript("res://scripts/Mover.lua")
 SceneManager.GetCurrentScene():AddRootGameObject(go)
 </code></pre>
-<p>The <code>LuaComponent</code> Lua type has <code>SetScript(path)</code>, <code>GetScriptPath()</code>, <code>HasMissingScript()</code> and the methods every component handle has (<a href="#handles">below</a>).</p>
+<p>The <code>LuaComponent</code> Lua type has <code>SetScript(path)</code>, <code>GetScriptPath()</code>, <code>HasMissingScript()</code>, <code>GetScript()</code> <span class="badge">PR #TBD</span> and the methods every component handle has (<a href="#handles">below</a>).</p>
+<h3 id="script-access">Calling another script: <code>GetScript</code> <span class="badge">PR #TBD</span></h3>
+<p><code>component:GetScript()</code> returns the script's running instance table (its <code>self</code>), or <code>nil</code> when no script runs (none set, a load that failed, or the editor's DeclarationsOnly policy). <code>gameObject:GetScript([path])</code> returns the instance of the first <code>LuaComponent</code> on that object whose script is running, or of the first one running <code>path</code> (a resource path such as <code>"res://scripts/Enemy.lua"</code>, compared as <code>ResourcePath</code>s); <code>nil</code> when none matches. This is how a projectile calls the <code>Damage</code> of the enemy it hit, without a global registry.</p>
+<p>The table is the same one each call, so it can key a table. It is the script's own table, not a copy: fields set on it are the script's fields. When its component is destroyed or its script is replaced, the table stays a plain Lua table but its <code>gameObject</code> and <code>component</code> fields are <code>nil</code> (see <a href="#replacing">Replacing a script instance</a>), so a kept instance should be checked with <code>instance.gameObject ~= nil</code> before use. The component handle itself raises "attempt to use a destroyed LuaComponent" as every handle does.</p>
+<pre class="lang-lua"><code>function Bullet:OnTriggerEnter2D(trigger)
+    local enemy = trigger.otherGameObject:GetScript("res://scripts/Enemy.lua")
+    if enemy ~= nil then
+        enemy:Damage(self.damage)
+    end
+end
+</code></pre>
+<p class="src">Source: <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code> (<code>LuaComponent:GetScript</code>), <code>engine/src/scripting/bindings/LuaCoreBindings.cpp</code> (<code>GameObject:GetScript</code>), <code>LuaComponent::GetScriptInstance</code>; tests: <code>LuaScriptAccessTest.*</code> (<code>tests/engine/scripting/LuaScriptAccessTests.cpp</code>)</p>
 <p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::SetScript</code>, <code>LuaComponent::CreateScriptInstance</code>, <code>LuaComponent::LoadScriptInstance</code>, <code>LuaComponent::CacheLifecycleMethods</code>; <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code> — <code>BindComponents</code>; tests: <code>LuaScriptTest.ComponentRunsLifecycleMethods</code>, <code>LuaScriptTest.InstancesDoNotShareState</code>, <code>LuaScriptTest.ScriptMustReturnATable</code>, <code>LuaScriptTest.SyntaxErrorIsReportedAsMissing</code>, <code>LuaScriptTest.MissingScriptIsReportedAndSafe</code></p>
 
 <h3 id="releasescript">ReleaseScript</h3>
