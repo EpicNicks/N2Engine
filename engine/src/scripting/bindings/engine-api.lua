@@ -819,6 +819,12 @@ function GameObject:AddComponent(typeName) end
 ---@return Component|nil nil when the object has no component of that type
 function GameObject:GetComponent(typeName) end
 
+---The instance table (self) of the first LuaComponent here whose script runs, or of the first running `path`.
+---How one script calls another: obj:GetScript("res://scripts/Enemy.lua"):Damage(1)
+---@param path string|nil e.g. "res://scripts/Enemy.lua"
+---@return table|nil
+function GameObject:GetScript(path) end
+
 ---A 1 x 1 x 1 cube (the built-in "Cube" mesh), unlit in its colour unless it has a material.
 ---Opaque: a translucent colour doesn't blend; give it a material with alphaMode "blend" for that.
 ---@class CubeRenderer : Component
@@ -1387,6 +1393,11 @@ function LuaComponent:GetScriptPath() end
 ---@return boolean
 function LuaComponent:HasMissingScript() end
 
+---The running script's instance table (its self), or nil when no script runs. The same table each call; once the
+---component is destroyed its gameObject and component fields are nil.
+---@return table|nil
+function LuaComponent:GetScript() end
+
 ---@class Component
 Component = {}
 
@@ -1603,6 +1614,16 @@ function UIText:AddEffectPass(offsetX, offsetY, color, width, softness, order) e
 
 ---Removes every extra pass; the shadow, outline and softness settings stay.
 function UIText:ClearEffectPasses() end
+
+---Moves character `index` (1-based, in characters of the text) by (x, y) canvas units, +y up (TextMeshPro-style
+---vertex effects: wave, shake). Not saved with the scene; kept across SetText
+---@param index integer
+---@param x number
+---@param y number
+function UIText:SetCharacterOffset(index, x, y) end
+
+---Puts every character back where the layout places it
+function UIText:ClearCharacterOffsets() end
 
 ---@return integer
 function UIText:GetEffectPassCount() end
@@ -2670,6 +2691,19 @@ function AudioSource:SetMaxDistance(distance) end
 ---@param factor number
 function AudioSource:SetRolloffFactor(factor) end
 
+---Set the clip by path, loaded through the resource cache; a clip that does not load is a Lua error
+---@param path string e.g. "res://audio/music.ogg"
+function AudioSource:SetClip(path) end
+
+---@return boolean
+function AudioSource:HasClip() end
+
+---@param playOnAwake boolean
+function AudioSource:SetPlayOnAwake(playOnAwake) end
+
+---@return boolean
+function AudioSource:GetPlayOnAwake() end
+
 ---@class AudioListener : Component
 AudioListener = {}
 
@@ -2698,6 +2732,83 @@ function Audio.SetListenerPosition(x, y, z) end
 ---@param uy number Up Y
 ---@param uz number Up Z
 function Audio.SetListenerOrientation(fx, fy, fz, ux, uy, uz) end
+
+---Fire-and-forget playback. Returns a handle id, 0 when the sound was dropped. A clip that does not load is a Lua error.
+---@param path string e.g. "res://audio/shoot.ogg"
+---@param volume number|nil default 1
+---@param pitch number|nil default 1
+---@param group string|nil mixer group, default "SFX"
+---@return integer
+function Audio.PlayOneShot(path, volume, pitch, group) end
+
+---@param id integer a PlayOneShot handle
+function Audio.StopOneShot(id) end
+
+---@param id integer a PlayOneShot handle
+---@return boolean
+function Audio.IsOneShotPlaying(id) end
+
+---Mixer group volume, clamped to 0..1 (groups: Master, Music, SFX, UI, Voice, Ambient). Unknown groups are ignored.
+---@param group string
+---@param volume number
+function Audio.SetGroupVolume(group, volume) end
+
+---@param group string
+---@return number 1 for an unknown group
+function Audio.GetGroupVolume(group) end
+
+---@param group string
+---@param muted boolean
+function Audio.SetGroupMuted(group, muted) end
+
+---@param group string
+---@return boolean
+function Audio.IsGroupMuted(group) end
+
+---@param group string
+---@return boolean
+function Audio.HasGroup(group) end
+
+-- ===== SAVE DATA AND JSON =====
+
+---Small text files in the project's user://saves folder. Names are plain file names (letters, digits, _ - .,
+---at most 64 characters, not starting with '.'); anything else is a Lua error. Files are at most 1 MiB.
+---@class SaveData
+SaveData = {}
+
+---Write the whole file (atomically: a temporary file is renamed over the old one)
+---@param name string
+---@param text string
+---@return boolean ok
+---@return string|nil message
+function SaveData.Write(name, text) end
+
+---@param name string
+---@return string|nil text nil when the file does not exist
+function SaveData.Read(name) end
+
+---@param name string
+---@return boolean
+function SaveData.Exists(name) end
+
+---@param name string
+---@return boolean existed
+function SaveData.Delete(name) end
+
+---@class Json
+Json = {}
+
+---A Lua value as JSON text (a table with keys 1..n is an array; object keys are sorted)
+---@param value any
+---@param pretty boolean|nil indent with two spaces
+---@return string
+function Json.Encode(value, pretty) end
+
+---JSON text as a Lua value (null is nil), or nil and a message
+---@param text string
+---@return any value
+---@return string|nil message
+function Json.Decode(text) end
 
 -- ===== INPUT =====
 
@@ -2862,6 +2973,28 @@ function Input.GetMouseButtonDown(button) end
 ---@param button integer
 ---@return boolean
 function Input.GetMouseButtonUp(button) end
+
+---The number of touches this frame (Input.touchCount); 0 on desktop (GLFW has no touch)
+---@return integer
+function Input.GetTouchCount() end
+
+---Touch `index` (1-based) this frame: { id, x, y, phase } with phase "Began", "Moved", "Stationary", "Ended" or "Canceled"; nil past the count
+---@param index integer
+---@return {id: integer, x: number, y: number, phase: string}|nil
+function Input.GetTouch(index) end
+
+---Gamepad rumble (Gamepad.SetMotorSpeeds): low- and high-frequency motors 0..1, for `seconds` of real time (nil or 0:
+---until StopGamepadRumble), on `gamepad` (default 0). False when there is no rumble there (Linux, macOS, no pad)
+---@param low number
+---@param high number
+---@param seconds? number
+---@param gamepad? integer
+---@return boolean
+function Input.SetGamepadRumble(low, high, seconds, gamepad) end
+
+---Stops `gamepad`'s rumble, or every gamepad's without an argument
+---@param gamepad? integer
+function Input.StopGamepadRumble(gamepad) end
 
 ---Whether the pointer was over a UI element (a raycast-target graphic under a canvas) in the last pointer update
 ---@return boolean
