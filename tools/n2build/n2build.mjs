@@ -71,7 +71,11 @@ export function parseArguments(argv) {
       throw new UsageError(`Unknown option '${arg}'`);
     }
   }
-  options.config ??= 'release';
+  // --config left out: the project's build.targets.<target>.config, else release (resolveConfig). A private target may
+  // name other configurations; its descriptor decides which exist (resolveOptions)
+  if (options.config !== undefined && !/^[a-z][a-z0-9-]{0,31}$/.test(options.config)) {
+    throw new UsageError('--config must be a configuration name such as debug or release');
+  }
   for (const [name, key] of [['--jobs', 'jobs'], ['--frames', 'frames'], ['--port', 'port']]) {
     if (options[key] !== undefined) {
       const number = Number(options[key]);
@@ -90,6 +94,19 @@ export function parseArguments(argv) {
 
 function camel(flag) {
   return flag.replace(/^--/, '').replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+}
+
+/** The configuration to build: --config, else the target's settings in the project, else release */
+export function resolveConfig(options, settings) {
+  return options.config ?? settings?.config ?? 'release';
+}
+
+/** The package marker: what was built, for whom, and from which engine. No local paths: a web package is uploaded as it is */
+export function markerInfo({ descriptor, config, entry, project, engine, builtAt }) {
+  const info = { target: descriptor.name, config, entry, game: project.name };
+  if (project.settings?.version !== undefined) info.version = project.settings.version;
+  if (project.settings?.buildNumber !== undefined) info.buildNumber = project.settings.buildNumber;
+  return { ...info, engine, builtAt };
 }
 
 /** The extra target folders: user settings, then N2BUILD_TARGET_DIRS, then --targets-dir */
@@ -114,7 +131,11 @@ function doctorReport(descriptor, toolchains, platform, physicsProblem) {
 
 async function build(descriptor, options, ctx, reporter) {
   const projectDir = path.resolve(options.project);
-  const project = readProject(projectDir);
+  const project = readProject(projectDir, descriptor.name);
+  const config = resolveConfig(options, project.settings);
+  if (project.settings.enabled === false) {
+    reporter.warning(`The ${descriptor.name} target is turned off in this project (build.targets.${descriptor.name}.enabled); building it anyway`);
+  }
   const physicsProblem = checkPhysics(project.modules, descriptor);
   const toolchains = checkToolchains(descriptor, ctx);
   const report = doctorReport(descriptor, toolchains, ctx.platform, physicsProblem);
@@ -127,13 +148,13 @@ async function build(descriptor, options, ctx, reporter) {
   }
 
   const plan = planBuild({
-    engineRoot: ENGINE_ROOT, projectDir, descriptor, config: options.config, modules: project.modules,
+    engineRoot: ENGINE_ROOT, projectDir, descriptor, config: config, modules: project.modules,
     present: toolchains.present, toolchainFile: toolchains.toolchainFile ?? (options.dryRun ? '<Emscripten.cmake from emsdk>' : null),
     buildRoot: options.buildDir ? path.resolve(options.buildDir) : null, outDir: options.out,
     jobs: options.jobs ?? os.availableParallelism(), gameName: project.name,
   });
   if (options.dryRun) {
-    reporter.step('plan', `Plan for ${descriptor.name} (${options.config})`);
+    reporter.step('plan', `Plan for ${descriptor.name} (${config})`);
     reporter.log('stdout', `build tree: ${plan.treeDir}`);
     reporter.log('stdout', `cmake ${plan.configureArgs.join(' ')}`);
     reporter.log('stdout', `cmake ${plan.buildArgs.join(' ')}`);
@@ -143,7 +164,7 @@ async function build(descriptor, options, ctx, reporter) {
 
   const cmake = findOnPath('cmake', toolchains.env, ctx) ?? 'cmake';
   if (needsConfigure(plan.treeDir, plan.configureArgs)) {
-    reporter.step('configure', `Configuring ${descriptor.displayName} (${options.config}) in ${plan.treeDir}`);
+    reporter.step('configure', `Configuring ${descriptor.displayName} (${config}) in ${plan.treeDir}`);
     const code = await runProcess(cmake, plan.configureArgs, { env: toolchains.env, cwd: ENGINE_ROOT, reporter });
     if (code !== 0) throw new BuildError(`CMake could not configure the ${descriptor.name} build (exit code ${code}; see the log above)`);
     recordConfigure(plan.treeDir, plan.configureArgs);
@@ -157,11 +178,9 @@ async function build(descriptor, options, ctx, reporter) {
   const entry = descriptor.package.kind === 'desktop'
     ? packageDesktop({ treeDir: plan.treeDir, descriptor, projectDir, packageDir: plan.packageDir, gameName: project.name, platform: ctx.platform })
     : packageWeb({ treeDir: plan.treeDir, descriptor, packageDir: plan.packageDir });
-  writeMarker(plan.packageDir, {
-    // No local paths: a web package is uploaded as it is, marker included
-    target: descriptor.name, config: options.config, entry, game: project.name,
-    engine: engineRevision(ENGINE_ROOT), builtAt: new Date().toISOString(),
-  });
+  writeMarker(plan.packageDir, markerInfo({
+    descriptor, config, entry, project, engine: engineRevision(ENGINE_ROOT), builtAt: new Date().toISOString(),
+  }));
   let archive;
   if (options.archive) {
     reporter.step('archive', `Writing a .${options.archive} archive`);
@@ -174,10 +193,10 @@ async function run(descriptor, options, ctx, reporter) {
   let packageDir;
   if (options.noBuild) {
     const projectDir = path.resolve(options.project);
-    const project = readProject(projectDir);
+    const project = readProject(projectDir, descriptor.name);
     const toolchains = { present: new Set(descriptor.toolchains.optional) };
     packageDir = options.out ? path.resolve(options.out) : planBuild({
-      engineRoot: ENGINE_ROOT, projectDir, descriptor, config: options.config, modules: project.modules,
+      engineRoot: ENGINE_ROOT, projectDir, descriptor, config: resolveConfig(options, project.settings), modules: project.modules,
       present: toolchains.present, toolchainFile: '-', gameName: project.name,
     }).packageDir;
   } else {
@@ -241,7 +260,7 @@ export async function main(argv, { ctx = systemProbe(), reporter } = {}) {
     const descriptor = findTarget(descriptors, options.target);
     if (command === 'doctor') {
       let physicsProblem;
-      if (options.project) physicsProblem = checkPhysics(readProject(path.resolve(options.project)).modules, descriptor);
+      if (options.project) physicsProblem = checkPhysics(readProject(path.resolve(options.project), descriptor.name).modules, descriptor);
       const report = doctorReport(descriptor, checkToolchains(descriptor, ctx), ctx.platform, physicsProblem);
       r.doctor(report);
       r.result({ ok: report.ok, ...(report.ok ? {} : { error: `Not ready to build ${descriptor.name}` }) });

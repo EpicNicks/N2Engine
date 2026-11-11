@@ -198,7 +198,22 @@ node tools/n2build/n2build.mjs run    --target web --project path/to/game   # bu
 </div>
 <p>Target names follow the descriptor rule (a lowercase letter, then lowercase letters, digits and <code>-</code>, at most 32), and a name need not be a target this machine knows, so a private target's settings can live in a shared project. At most 32 targets and 64 KiB of settings. A key this version does not know is kept, so a newer editor's setting survives an older one.</p>
 <div class="callout guarantee" id="design-no-secrets"><p class="callout-title">Guarantee: no signing secret is ever stored in the project</p><p>Project files are committed and shared, so a target refers to its signing material only by a profile's name. <code>SetBuildTargets</code> refuses, at any depth of a target, a key whose name looks like a secret (it contains <code>password</code>, <code>passwd</code>, <code>passphrase</code>, <code>secret</code>, <code>token</code>, <code>privatekey</code>, <code>credential</code>, <code>apikey</code>, <code>storepass</code>, <code>keypass</code> or <code>certificatedata</code>, ignoring case, <code>_</code>, <code>-</code>, <code>.</code> and spaces) and any string holding a PEM block (<code>-----BEGIN</code>). The error names the key and never echoes the value. Tests: <code>BuildTargetsTest.NoSecretCanBeStoredAtAnyDepth</code>, <code>EditorProjectTest.SetBuildTargetsRefusesBadSettingsAndSecretsAndSavesNothing</code>.</p></div>
-<div class="callout note"><p class="callout-title">Not used by n2build yet</p><p>The settings are stored and checked; <code>n2build</code> does not read them yet (the per-target module list, names and versions come with the stages that need them). A project whose <code>build.targets</code> was hand-edited into something refused still opens; the host logs a warning and <code>SetBuildTargets</code> refuses to save until a patch fixes it.</p></div>
+<h3 id="settings-n2build">What n2build reads <span class="badge">stage 3</span></h3>
+<p>A build for target <em>T</em> reads <code>build.targets.<em>T</em></code>; the other targets' settings are not looked at. The rest of the keys (<code>appId</code>, <code>orientation</code>, <code>renderer</code>, <code>icon</code>, <code>signing</code>) belong to the stages that need them (Android, iOS).</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Key</th><th>What n2build does with it</th></tr></thead>
+<tbody>
+<tr><td><code>modules</code></td><td>Laid over <code>build.modules</code> key by key: <code>{"physics3d": "jolt"}</code> over <code>{"physics3d": "both", "physics2d": true}</code> builds Jolt and Box2D. The physics check per target, the build tree's key and the CMake configure all use that list: n2build passes <code>-DN2ENGINE_TARGET=<em>T</em></code>, and <code>cmake/N2EngineModules.cmake</code> reads each module from <code>build.targets.<em>T</em>.modules</code> first, then <code>build.modules</code>. <code>scripts/project-modules.mjs --target <em>T</em></code> checks the same list against what the project uses.</td></tr>
+<tr><td><code>displayName</code></td><td>The game's name for that target: the executable (<code>Triangle-Like.exe</code>), the package folder and <code>game</code> in the marker. Without it, the project's <code>name</code>.</td></tr>
+<tr><td><code>version</code>, <code>buildNumber</code></td><td>Written into the package marker (<code>.n2build-package.json</code>) when set.</td></tr>
+<tr><td><code>config</code></td><td>The configuration when <code>--config</code> is left out; else <code>release</code>. <code>--config</code> always wins.</td></tr>
+<tr><td><code>enabled</code></td><td><code>false</code> hides the target in the editor's Build Settings panel. n2build still builds it when asked by name, with a warning.</td></tr>
+</tbody>
+</table>
+</div>
+<p>n2build checks these five keys by the rules above when it reads them, so a hand-edited mistake fails the build with the key's name instead of producing an odd package. Tests (<code>tools/n2build/n2build.test.mjs</code>): <code>a target's modules are laid over build.modules, key by key</code>, <code>displayName names the game on that target; version and buildNumber go into the marker</code>, <code>the configuration: --config, else the target's config, else release</code>, <code>build --dry-run uses the target's config and name, and warns when the target is turned off</code>; <code>scripts/project-modules.test.mjs</code>: <code>--target checks the target's list against the project</code>.</p>
+<div class="callout note"><p class="callout-title">A hand-edited mistake</p><p>A project whose <code>build.targets</code> was hand-edited into something refused still opens; the host logs a warning and <code>SetBuildTargets</code> refuses to save until a patch fixes it. n2build refuses to build that target until it is fixed.</p></div>
 <p class="src">Source: <code>engine/src/io/BuildTargets.cpp</code>, <code>editor-server/src/EditorServer.cpp</code> — <code>HandleSetBuildTargets</code>; tests: <code>tests/engine/io/BuildTargetsTests.cpp</code>, <code>EditorProjectTest.SetBuildTargets*</code></p>
 
 <h2 id="descriptors">Target descriptors</h2>
@@ -241,7 +256,7 @@ node tools/n2build/n2build.mjs run    --target web --project path/to/game   # bu
 
 <h2 id="not-yet">Not done yet</h2>
 <ul>
-<li><strong>The editor.</strong> The Build Settings panel (stage 3). The per-target settings exist (<a href="#settings">above</a>) but n2build does not use them yet.</li>
+<li><strong>The editor.</strong> The Build Settings panel (stage 3, in the frontend). n2build already reads the per-target settings (<a href="#settings-n2build">above</a>).</li>
 <li><strong>Packs.</strong> A package carries the game's folder as it is; zip and 7z packs come in stage 4.</li>
 <li><strong>CI</strong> builds and runs the Linux package through n2build. The Windows and web packages are built through n2build locally only; CI still builds those with CMake directly.</li>
 <li><strong>Package size on Windows.</strong> A build with PhysX ships <code>PhysXGpu_64.dll</code> (about 360 MB of the 374 MB <code>lua_project</code> package, measured 2026-11-10), because the engine's PhysX build always lists it. A game that does not use GPU physics (<code>physics.gpu</code>) does not need it; leaving it out is a follow-up. A project with <code>"physics3d": "none"</code> or <code>"jolt"</code> ships no PhysX at all.</li>
