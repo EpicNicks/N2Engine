@@ -12,6 +12,7 @@
 
 #include "engine/input/Mouse.hpp"
 #include "engine/input/Touchscreen.hpp"
+#include "engine/input/Rumble.hpp"
 
 #include <ranges>
 
@@ -49,7 +50,11 @@ InputSystem::InputSystem(Window &window)
     _keyboard = std::make_unique<Keyboard>(_window._window);
 }
 
-InputSystem::~InputSystem() = default;
+InputSystem::~InputSystem()
+{
+    // A pad left rumbling would keep going after the game has gone
+    Rumble::StopAll();
+}
 
 ActionMap* InputSystem::CreateActionMapFromJson(const std::string &name, const nlohmann::json &j)
 {
@@ -173,6 +178,7 @@ void InputSystem::Update()
     _mouse->Update();
     _keyboard->Update();
     Touchscreen::Get().Update();
+    Rumble::Update();
 
     UpdatingScope scope{*this};
 
