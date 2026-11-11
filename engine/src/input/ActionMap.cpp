@@ -383,7 +383,7 @@ nlohmann::json InputAction::Serialize() const
 }
 
 std::expected<std::unique_ptr<InputAction>, ActionParseError> InputAction::Deserialize(
-    const nlohmann::json &j, const std::string &actionName, GLFWwindow *window)
+    const nlohmann::json &j, const std::string &actionName, InputDevice *window)
 {
     if (!j.contains("bindings"))
     {
@@ -433,7 +433,7 @@ bool ActionMap::HasValidDisabledField(const nlohmann::json &j)
 }
 
 std::expected<std::unique_ptr<ActionMap>, ActionMapParseError> ActionMap::Deserialize(
-    const nlohmann::json &j, const std::string &mapName, GLFWwindow *window)
+    const nlohmann::json &j, const std::string &mapName, InputDevice *window)
 {
     if (!j.contains("actions"))
     {

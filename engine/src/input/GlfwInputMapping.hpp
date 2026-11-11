@@ -1,9 +1,12 @@
 #pragma once
+// The engine's key, mouse-button and gamepad codes and GLFW's numbers for them (build targets stage 5). Private to the GLFW
+// input device (GlfwInputDevice.cpp): no other engine code sees a GLFW code. Total both ways for what GLFW reports: every
+// engine code has a GLFW number and every GLFW number the engine knows maps back (tests/engine/input/InputDeviceTests.cpp).
 #include <unordered_map>
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
-#include "InputTypes.hpp"
+#include "engine/input/InputTypes.hpp"
 
 namespace N2Engine::Input
 {

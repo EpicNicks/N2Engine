@@ -4,7 +4,10 @@
 #include <string>
 #include <nlohmann/json.hpp>
 
-struct GLFWwindow;
+namespace N2Engine::Input
+{
+    class InputDevice;
+}
 
 namespace N2Engine::Input
 {
@@ -30,7 +33,7 @@ namespace N2Engine::Input
     std::string BindingParseErrorToString(BindingParseError error);
 
     std::expected<std::unique_ptr<InputBinding>, BindingParseError> CreateBindingFromJson(
-        GLFWwindow* window,
+        InputDevice *window,
         const nlohmann::json& j
     );
 }
