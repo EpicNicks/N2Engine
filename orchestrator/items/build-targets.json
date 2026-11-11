@@ -28,11 +28,12 @@
     "The editor lists the targets, shows what each one needs, builds any target the machine can build, and runs it on a device for device targets",
     "One command line (n2build) does the same for CI and people",
     "A console target can be added from outside the repository",
-    "Existing targets keep their behaviour, tests, smoke runs and size budgets at every stage"
+    "Existing targets keep their behaviour, tests, smoke runs and size budgets at every stage",
+    "The editor can pick and build the targets that already work (Windows, Linux, web) after stage 3, before any platform-layer change"
   ],
   "requiresDocs": true,
   "allowProtocol": true,
-  "gate": "split per stage; every stage needs the user's go; decisions D1-D7 of the design first",
+  "gate": "split per stage; every stage needs the user's go; decisions D1, D3, D4 before stage 1, the rest before the stage that needs them",
   "approved": false,
   "reviewer": "opus",
   "notes": "Reviewer: no behaviour change on existing targets, platform code only behind the platform layer, no signing secret in the project, host, logs or protocol."

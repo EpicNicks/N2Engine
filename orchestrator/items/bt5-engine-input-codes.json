@@ -1,0 +1,31 @@
+{
+  "name": "bt5-engine-input-codes",
+  "repo": "engine",
+  "branch": "feat-bt5-engine-input-codes",
+  "title": "Build targets stage 5: engine key, mouse-button and gamepad codes instead of GLFW's; GLFW codes translated only at the GLFW boundary",
+  "closes": null,
+  "issue": "User request, 2026-11-10: 'I would like for the engine to be able to allow the user to select a build target in the engine editor UI like windows, linux, android, ios, web, and maybe other console toolchains in the future like switch'. Design and stage table: orchestrator/proposals/build-targets-design.md. Stage 5 of section 5.",
+  "allowedPaths": [
+    "^engine/",
+    "^web/",
+    "^lua_project/",
+    "^editor-server/",
+    "^tests/",
+    "^docs/",
+    "^orchestrator/items/bt",
+    "^orchestrator/proposals/build-targets-design\\.md$"
+  ],
+  "acceptance": [
+    "InputMapping and bindings use engine codes; no GLFW constant outside the code that talks to GLFW",
+    "Saved input settings and bindings load unchanged (migration or same numeric values), with a test",
+    "Lua key names and the web input map unchanged; full engine_tests, web_tests and the web smoke pass",
+    "Saved data that holds GLFW key numbers (scenes, action maps, input settings; the key field of a binding) is migrated on load, with a test for a file saved before this stage",
+    "The editor inspector shows and edits keys by name as before"
+  ],
+  "requiresDocs": true,
+  "allowProtocol": false,
+  "gate": "needs the user's go; depends on the Triangle-Like input branches being merged to master first (feat-lua-key-text-input, feat-input-touch, feat-input-gamepad-rumble, feat-input-gamepad-composites): this stage rewrites that code",
+  "approved": false,
+  "reviewer": "opus",
+  "notes": "Reviewer: every GLFW code has an engine code, the mapping is total both ways, saved data compatible."
+}

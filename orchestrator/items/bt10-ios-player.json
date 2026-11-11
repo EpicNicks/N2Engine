@@ -23,11 +23,12 @@
   "acceptance": [
     "n2build --target ios produces an app that runs a Lua 2D sample on the simulator in CI (macOS runner)",
     "Touch, gamepad, lifecycle, safe area, audio session and saves work; a device checklist exists",
-    "Signing by reference to the user's identity and profile"
+    "Signing by reference to the user's identity and profile",
+    "The ios target's physics as for android (decision D8)"
   ],
   "requiresDocs": true,
   "allowProtocol": false,
-  "gate": "needs the user's go; depends on bt3-renderer-surfaces and bt5-n2build-desktop-web; a Mac (D7)",
+  "gate": "needs the user's go; depends on bt4-vfs-packs and bt7-renderer-surfaces; decisions D2, D5, D7 and D8",
   "approved": false,
   "reviewer": "opus",
   "notes": "Reviewer: no private API, App Store rules on code loading respected (Lua interpreted, no JIT)."

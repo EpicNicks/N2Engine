@@ -1,10 +1,10 @@
 {
-  "name": "bt3-renderer-surfaces",
+  "name": "bt7-renderer-surfaces",
   "repo": "engine",
-  "branch": "feat-bt3-renderer-surfaces",
-  "title": "Build targets stage 3: renderers take a native surface from the platform layer; the software renderer presents through a per-platform callback",
+  "branch": "feat-bt7-renderer-surfaces",
+  "title": "Build targets stage 7: renderers take a native surface from the platform layer; the software renderer presents through a per-platform callback",
   "closes": null,
-  "issue": "User request, 2026-11-10: 'I would like for the engine to be able to allow the user to select a build target in the engine editor UI like windows, linux, android, ios, web, and maybe other console toolchains in the future like switch'. Design and stage table: orchestrator/proposals/build-targets-design.md. Stage 3 of section 5.",
+  "issue": "User request, 2026-11-10: 'I would like for the engine to be able to allow the user to select a build target in the engine editor UI like windows, linux, android, ios, web, and maybe other console toolchains in the future like switch'. Design and stage table: orchestrator/proposals/build-targets-design.md. Stage 7 of section 5.",
   "allowedPaths": [
     "^renderer/",
     "^engine/",
@@ -22,7 +22,7 @@
   ],
   "requiresDocs": true,
   "allowProtocol": false,
-  "gate": "needs the user's go; depends on bt2-platform-host",
+  "gate": "needs the user's go; depends on bt6-platform-host",
   "approved": false,
   "reviewer": "opus",
   "notes": "Reviewer: surface loss and recreation are possible without restarting the renderer."

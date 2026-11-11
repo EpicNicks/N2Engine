@@ -1,0 +1,37 @@
+{
+  "name": "bt1-n2build-desktop-web",
+  "repo": "engine",
+  "branch": "feat-bt1-n2build",
+  "title": "Build targets stage 1: target descriptors, n2build (build, doctor, run), the desktop player, and Windows, Linux and web as targets",
+  "closes": null,
+  "issue": "User request, 2026-11-10: 'I would like for the engine to be able to allow the user to select a build target in the engine editor UI like windows, linux, android, ios, web, and maybe other console toolchains in the future like switch'. Design and stage table: orchestrator/proposals/build-targets-design.md. Stage 1 of section 5.",
+  "allowedPaths": [
+    "^players/",
+    "^targets/",
+    "^tools/",
+    "^lua_project/",
+    "^web/",
+    "^scripts/",
+    "^CMakeLists\\.txt$",
+    "^cmake/",
+    "^\\.github/workflows/",
+    "^tests/",
+    "^docs/",
+    "^orchestrator/items/bt",
+    "^orchestrator/proposals/build-targets-design\\.md$"
+  ],
+  "acceptance": [
+    "n2build builds Windows, Linux and web packages from a project, prebuilt and from-source (D3), with JSON progress lines",
+    "n2build doctor reports each missing toolchain with how to fix it; descriptors pin toolchain versions",
+    "Descriptors are read from targets/ and from extra folders in user settings",
+    "CI builds its packages through n2build",
+    "Works with no pack and no platform layer: the desktop player runs a project folder (as lua_project does) and the web target uses today's preload",
+    "doctor checks each target's physics modules: a project whose build.modules needs PhysX on a target with no PhysX build fails with a clear message"
+  ],
+  "requiresDocs": true,
+  "allowProtocol": false,
+  "gate": "needs the user's go; depends on decisions D1, D3 and D4. Uses project folders (lua_project and the web's preload) until bt4-vfs-packs",
+  "approved": false,
+  "reviewer": "opus",
+  "notes": "Reviewer: descriptors are data, not code paths in n2build; nothing target-specific hard-coded in the tool."
+}

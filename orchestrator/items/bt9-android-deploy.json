@@ -23,7 +23,7 @@
   ],
   "requiresDocs": true,
   "allowProtocol": false,
-  "gate": "needs the user's go; depends on bt7-fe-build-settings and bt8-android-player",
+  "gate": "needs the user's go; depends on bt3-fe-build-settings and bt8-android-player",
   "approved": false,
   "reviewer": "opus",
   "notes": "Reviewer: keystore passwords never on a command line, in logs or in the project."

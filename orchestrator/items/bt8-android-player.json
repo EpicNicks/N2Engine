@@ -23,11 +23,12 @@
   "acceptance": [
     "n2build --target android produces an APK that runs lua_project and a Lua 2D sample on an emulator in CI",
     "Touch, gamepad, back button, pause and resume with surface loss, insets, user:// saves and audio work; rumble or a documented no-op",
-    "A manual device checklist like docs/web-checklist.html"
+    "A manual device checklist like docs/web-checklist.html",
+    "The android target's physics: Jolt and Box2D built for it, PhysX only if decision D8 says so"
   ],
   "requiresDocs": true,
   "allowProtocol": false,
-  "gate": "needs the user's go; depends on bt3-renderer-surfaces and bt5-n2build-desktop-web",
+  "gate": "needs the user's go; depends on bt4-vfs-packs and bt7-renderer-surfaces; decisions D2 and D8",
   "approved": false,
   "reviewer": "opus",
   "notes": "Reviewer: surface loss handled without leaks, no main-thread blocking, NDK and SDK versions pinned."

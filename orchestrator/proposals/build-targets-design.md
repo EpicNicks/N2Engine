@@ -4,7 +4,9 @@ Item: `orchestrator/items/build-targets.json` (gated). Requested by the user on 
 able to allow the user to select a build target in the engine editor UI like windows, linux, android, ios, web, and maybe other
 console toolchains in the future like switch".
 
-**Status: proposal, 2026-11-10. Nothing decided yet: section 6 lists the decisions. No stage is approved.**
+**Status: proposal, 2026-11-10, amended the same day after review (stage order, unmerged input code, headless backend,
+physics per target, remote hosts, saved key codes, web size). Nothing decided yet: section 6 lists the decisions. No stage is
+approved.**
 
 ## 1. Goal
 
@@ -25,9 +27,21 @@ A console target must be addable later **without its code living in this reposit
   3.3 core context). **Key and button codes are GLFW's:** `engine/include/engine/input/InputMapping.hpp` has 144 references.
 - **The web build fakes GLFW.** `external/web-stubs` is a no-op GLFW plus a `<generator>` for libc++. It works for one extra
   platform and will not scale to four.
+- **Part of the input code is not on master yet.** `engine/src/input/Keyboard.cpp`, `Input::Touchscreen`, gamepad rumble and
+  composites, and their web player hooks are on the Triangle-Like branches (`feat-lua-key-text-input`, `feat-input-touch`,
+  `feat-input-gamepad-rumble`, `feat-input-gamepad-composites`, merged together in `triangle-like-integration`), with no PR as
+  of this date. The counts above that include `Keyboard.cpp` are from that branch. Stage 5, which rewrites this code, waits for
+  them to merge.
+- **Saved data holds GLFW key numbers.** A binding serializes its key as the raw number (`"key"` in
+  `engine/src/input/InputBinding.cpp`), so scenes, action maps and input settings saved today carry GLFW codes. The replay
+  files do not: `tests/golden/replays/*.n2replay.json` record abstract per-tick input, not key codes.
+- **Several programs run with no window:** the editor host (also in Docker), `n2server`, the test suites, and the golden replay
+  and determinism CI legs (`Window` has a windowless mode for them).
+- **Physics modules are per platform.** PhysX comes as pinned prebuilts for Windows, Linux and the web (`cmake/PhysX*Hashes.cmake`,
+  `cmake/PhysXWeb*.cmake`); Jolt and Box2D are built from source. A mobile target has no PhysX build.
 - **The web player is the model for a non-GLFW host.** `web/player/WebPlayer.cpp` runs the engine windowless, calls
   `Application::RunFrame` from the host's frame callback, and feeds input through `InjectedKeys`, `Mouse::InjectPointer` and
-  `Input::Touchscreen`. Android and iOS hosts have the same shape.
+  (on the Triangle-Like branch) `Input::Touchscreen`. Android and iOS hosts have the same shape.
 - **Files are read straight from disk** through `std::filesystem` and streams (about 195 call sites in `engine/src`).
   `user://` comes from `APPDATA` or XDG and falls back to `"."` (`engine/src/io/ProjectFile.cpp:400-430`). There is no virtual
   filesystem and no pack format; the web packs the folder with Emscripten's `--preload-file`.
@@ -42,7 +56,8 @@ A console target must be addable later **without its code living in this reposit
 
 ## 3. Architecture
 
-Five layers. Each later stage depends only on the layers before it.
+Five layers. The stages (section 5) do not build them bottom up: the build tool, settings and editor panel (3.4, 3.5) come
+first, since they work for today's targets without the platform layer, which only new platforms need.
 
 ### 3.1 Platform layer (`engine/platform/`)
 
@@ -57,8 +72,11 @@ An engine interface for everything GLFW does today, with one backend per platfor
 | Native surface | A handle the renderer can use: HWND, X11 or Wayland, `ANativeWindow`, `CAMetalLayer`, a canvas |
 | Paths | The read-only project root (`res://`), the writable `user://` folder, a temporary folder |
 
-Backends: `desktop-glfw` (Windows, Linux, macOS), `web`, `android`, `ios`, and private console backends. The web backend
-replaces `external/web-stubs`' fake GLFW. GLFW stays, but only inside `desktop-glfw`.
+Backends: `desktop-glfw` (Windows, Linux, macOS), `headless`, `web`, `android`, `ios`, and private console backends. The web
+backend replaces `external/web-stubs`' fake GLFW. GLFW stays, but only inside `desktop-glfw`. The `headless` backend (no
+window, no surface, input only by injection, paths from the command line or the environment) replaces today's windowless mode
+for the editor host, `n2server`, the tests and the replay legs; it is part of stage 6, not a later addition, since CI and the
+remote editor run on it.
 
 ### 3.2 Renderer surfaces and backends per target
 
@@ -83,7 +101,9 @@ and Android. That would revisit W8.
 (shipped builds), and the platform's own bundle (Android's APK through `AAssetManager`, iOS's app bundle). Writes go only to
 `user://`. A **cook step** turns a project folder into a pack: the module-list check that already exists, the assets, `.import`,
 `project.n2proj`, and a manifest of sizes and hashes (the web's `manifest.json` generalised). The web package then packs the
-same pack instead of a preloaded folder, which also opens the way to persistent web saves (IDBFS on `user://`).
+same pack instead of a preloaded folder, which also opens the way to persistent web saves (IDBFS on `user://`). The pack
+reader adds code to the web player, so stage 4 measures the package against the web size budget; the web may use an
+uncompressed (stored) pack if inflate costs more than it saves.
 
 ### 3.4 Players and the build tool
 
@@ -99,6 +119,11 @@ same pack instead of a preloaded folder, which also opens the way to persistent 
 - **`n2build`**, a command-line tool and the one way to build: `n2build --project DIR --target android --config release --out DIR`,
   plus `n2build doctor --target android` (what is missing and how to fix it) and `n2build run` (install, start, stream the log).
   It prints JSON progress lines for the editor. CI, the editor and a person at a terminal all call it.
+- **Before packs exist** (stages 1 to 3), `n2build` packages what works today: the desktop player beside a copy of the project
+  folder, and the web package with its preload. Stage 4 swaps both to a pack without changing the command line.
+- **Physics per target.** `doctor` and the build check the project's `build.modules` against what the target can build
+  (decision D8): today PhysX only on Windows, Linux and the web. A project that needs PhysX on a target without it fails with a
+  clear message, not a link error.
 
 Host-system limits, which `doctor` reports:
 
@@ -120,6 +145,9 @@ Host-system limits, which `doctor` reports:
 - The frontend gets a **Build Settings** panel: the target list with each target's status from `n2build doctor`, the target's
   settings, Build and Build and Run, a progress bar and the build log, and for device targets a device picker, with the
   device's log in the editor console. Where the build runs is decision D1.
+- **Remote hosts.** With the host in Docker or over SSH, the project lives on the host, not beside the Electron app, so a build
+  run by the Electron main process (D1 (a)) has nothing to build. Until D1 (b) exists, the panel says so for a remote host and
+  shows the targets and settings without a Build button.
 
 ## 4. Per-target work
 
@@ -128,48 +156,58 @@ Host-system limits, which `doctor` reports:
 - **Web:** move onto the platform layer and the pack; the package exists.
 - **Android:** the platform backend (GameActivity input, lifecycle, `ANativeWindow`, `getFilesDir()`, `Vibrator` for rumble,
   insets, the back button); openal-soft's AAudio backend; the `<generator>` shim; a renderer per D2; the Gradle template;
-  APK for development, AAB for release; signing; `adb install`, start and `logcat`; an emulator smoke in CI.
+  APK for development, AAB for release; signing; `adb install`, start and `logcat`; an emulator smoke in CI; physics per D8
+  (Jolt and Box2D from source; PhysX only if built for the NDK).
 - **iOS:** the UIKit backend; a renderer per D2; AVAudioSession around OpenAL; the bundle and app container paths; the Xcode
-  template and code signing; the simulator for CI and a device for checks. Needs a Mac.
+  template and code signing; the simulator for CI and a device for checks; physics per D8. Needs a Mac.
 - **macOS (decision D5):** nearly free once iOS's Metal path and the desktop GLFW backend exist.
 - **Consoles:** a private repository with a platform backend, a renderer if needed and a target descriptor. Needs a developer
   account and the vendor SDK. The public repository only ships the interface and a sample private target.
 
 ## 5. Stages
 
-Each stage is its own item and PR and needs the user's go. Stages 1 to 3 change no behaviour on existing targets: the tests,
-the web smoke and the budgets stay as they are.
+Each stage is its own item and PR and needs the user's go. The order puts what the user asked for first: stages 1 to 3 give
+target selection in the editor for the three targets that already work (Windows, Linux, web) without touching the input,
+window or renderer code. The platform layer (stages 5 to 7) is only needed for new platforms, so it comes just before Android.
+(Amended 2026-11-10: the first draft ran the platform layer first, which delayed the Build button behind the riskiest stage.)
 
 | Stage | Item | What | Depends on | Size |
 | --- | --- | --- | --- | --- |
-| 1 | `bt1-engine-input-codes` | Engine key, mouse-button and gamepad codes; GLFW codes only in the GLFW backend; input settings and saved bindings migrated | | M |
-| 2 | `bt2-platform-host` | The platform layer (3.1); `desktop-glfw` and `web` backends; `Window.cpp` and the web player moved onto it; `web-stubs`' fake GLFW removed | 1 | L |
-| 3 | `bt3-renderer-surfaces` | Renderers take native surfaces; the software renderer's present callback per platform | 2 | M |
-| 4 | `bt4-vfs-packs` | Mounts, `user://` per platform, the pack format and the cook step; native and web players read packs | 2 | L |
-| 5 | `bt5-n2build-desktop-web` | Target descriptors, `n2build` (build, doctor, run), the desktop player, Windows, Linux and web targets, CI calls `n2build` | 4 | L |
-| 6 | `bt6-project-targets-protocol` | `build.targets` in `project.n2proj`, its validation, `GetProjectInfo` and `SetProjectSettings`, docs | 5 | S |
-| 7 | `bt7-fe-build-settings` (frontend) | The Build Settings panel, `n2build` from the Electron main process, progress, log, doctor results | 6 | M |
-| 8 | `bt8-android-player` | Android platform backend, renderer (D2), Gradle template, the `android` target, emulator smoke | 3, 5 | L |
-| 9 | `bt9-android-deploy` | Signing, AAB, devices, install and run, `logcat` into the editor | 7, 8 | M |
-| 10 | `bt10-ios-player` | iOS backend, renderer (D2), Xcode template, the `ios` target, simulator smoke; macOS if D5 | 3, 5 | L |
-| 11 | `bt11-private-targets` | Descriptor discovery outside the repository, the plugin boundary for platform and renderer backends, a sample private target, docs | 5 | M |
+| 1 | `bt1-n2build-desktop-web` | Target descriptors, `n2build` (build, doctor, run), the desktop player, Windows, Linux and web targets from project folders, the physics-module check per target, CI calls `n2build` | D1, D3, D4 | L |
+| 2 | `bt2-project-targets-protocol` | `build.targets` in `project.n2proj`, its validation, `GetProjectInfo` and `SetProjectSettings`, docs | 1 | S |
+| 3 | `bt3-fe-build-settings` (frontend) | The Build Settings panel, `n2build` from the Electron main process, progress, log, doctor results; the remote-host case | 2 | M |
+| 4 | `bt4-vfs-packs` | Mounts, the pack format and the cook step; native and web players read packs; `user://` as today on desktop and web (mobile paths come with their backends); web size measured | 1, D6 | L |
+| 5 | `bt5-engine-input-codes` | Engine key, mouse-button and gamepad codes; GLFW codes only in the GLFW backend; saved GLFW key numbers migrated on load | the Triangle-Like input branches merged | M |
+| 6 | `bt6-platform-host` | The platform layer (3.1); `desktop-glfw`, `headless` and `web` backends; `Window.cpp` and the web player moved onto it; `web-stubs`' fake GLFW removed | 5 | L |
+| 7 | `bt7-renderer-surfaces` | Renderers take native surfaces; the software renderer's present callback per platform | 6 | M |
+| 8 | `bt8-android-player` | Android platform backend, renderer (D2), physics (D8), Gradle template, the `android` target, emulator smoke | 4, 7 | L |
+| 9 | `bt9-android-deploy` | Signing, AAB, devices, install and run, `logcat` into the editor | 3, 8 | M |
+| 10 | `bt10-ios-player` | iOS backend, renderer (D2), physics (D8), Xcode template, the `ios` target, simulator smoke; macOS if D5 | 4, 7, D7 | L |
+| 11 | `bt11-private-targets` | Descriptor discovery outside the repository, the plugin boundary for platform and renderer backends, a sample private target, docs | 1 | M |
 
-**After stage 7, stop and compare.** Stages 1 to 7 deliver target selection in the editor for the three targets that already
-work. Stage 8 is the first new platform, and its real cost decides how stage 10 is planned.
+**After stage 3, stop and compare.** The editor then builds the three working targets. Whether packs (4) come next or wait
+until mobile depends on how stage 1 went.
 
-Stage 2 is the largest risk: it touches every input and window path. Stage 1 lands first so that stage 2 is mechanical.
+**Behaviour changes.** Stages 1 to 4 add tools and settings and change nothing about how a game runs. Stages 6 and 7 must not
+change behaviour either: the tests, the web smoke, the replay legs and the budgets stay as they are. Stage 5 does change saved
+data: GLFW key numbers in scenes, action maps and input settings become engine codes, migrated on load, with a test for a file
+saved before it.
+
+Stage 6 is the largest risk: it touches every input and window path, and the headless programs. Stage 5 lands first so that
+stage 6 is mechanical.
 
 ## 6. Decisions for the user
 
 | # | Decision | Options | Recommendation |
 | --- | --- | --- | --- |
-| D1 | Where a build runs | (a) the Electron main process runs `n2build` on the user's machine; (b) the host runs it (a `BuildProject` command) | **(a) first.** Toolchains and devices are on the user's machine; (b) later for remote hosts and build servers |
+| D1 | Where a build runs | (a) the Electron main process runs `n2build` on the user's machine; (b) the host runs it (a `BuildProject` command) | **(a) first.** Toolchains and devices are on the user's machine. A remote host (Docker, SSH) keeps the project on the host, so (a) cannot build there: the panel says so (3.5) until (b) exists for remote hosts and build servers |
 | D2 | Hardware renderer on mobile | (a) WebGPU on Dawn native for Android, iOS and macOS (revisits W8); (b) Vulkan on Android, Metal or MoltenVK on Apple; (c) GLES 3 on Android | **(a)**, after a spike: one backend for web and mobile. Every target ships the software renderer first regardless |
 | D3 | Player model | (a) prebuilt players plus a pack by default, from source for stripped builds; (b) always from source | **(a)** |
 | D4 | `lua_project` | (a) becomes `players/desktop`; (b) stays as a sample and a new player is added | **(a)** |
 | D5 | macOS | in scope with iOS, or later | With iOS: little extra once Metal exists |
 | D6 | Pack format | (a) zip (stored or deflate) with a manifest; (b) a custom format | **(a)**: tools can inspect it and it is easy to read from an APK |
 | D7 | A Mac for iOS | Is one available for builds and device checks? | Needed before stage 10 |
+| D8 | Physics on mobile | (a) Jolt and Box2D only (a project needing PhysX cannot target mobile); (b) also build PhysX for the NDK and Apple | **(a)**: both build from source; PhysX for mobile is a large extra build to maintain. Revisit if a game needs it |
 
 ## 7. Not verified
 
@@ -179,12 +217,19 @@ Stage 2 is the largest risk: it touches every input and window path. Stage 1 lan
   Linux arm or Windows when `DawnPrebuilt.cmake` was written; building Dawn from source may be needed).
 - How many of the `std::filesystem` call sites assume a real disk (a stage 4 audit).
 - The Switch: whether its SDK allows this plugin shape. Only a developer account can tell.
+- Which projects and saved files hold GLFW key numbers today (the stage 5 migration needs the full list), and how the editor
+  inspector shows a binding's key.
+- The size of a zip reader in the web player (stage 4).
 
 ## 8. Risks
 
-- **Stage 2 regressions** in input on desktop and web. Mitigation: stage 1 first; the existing input tests and smoke plans
-  run unchanged; a recorded-input replay before and after.
+- **Stage 6 regressions** in input on desktop and web, and in the headless programs. Mitigation: stage 5 first; the
+  existing input tests, smoke plans and replay legs run unchanged; a recorded-input replay before and after.
+- **Conflicts with the Triangle-Like input work.** Stages 5 and 6 rewrite the code those unmerged branches add. Mitigation:
+  stage 5 starts only after they merge (its gate says so).
+- **Saved data.** A missed migration in stage 5 would silently rebind keys in old projects. Mitigation: a test loads files
+  saved before the stage; the reviewer checks every place a key number is written.
 - **Toolchain drift** (NDK, Xcode, emsdk). Mitigation: each descriptor pins versions, `doctor` checks them, CI uses the same
   pins, as the web build already does for emsdk.
 - **Secrets.** Signing material must never reach the project file, the host, logs or the protocol. The reviewer checks this
-  on stages 6, 7 and 9.
+  on stages 2, 3 and 9.
