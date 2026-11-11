@@ -18,6 +18,7 @@
 #include <engine/GameObjectScene.hpp>
 #include <engine/Layers.hpp>
 #include <engine/Time.hpp>
+#include <engine/io/BuildTargets.hpp>
 #include <engine/io/ProjectFile.hpp>
 #include <engine/io/ResourceLoader.hpp>
 #include <engine/io/ResourceUUID.hpp>
@@ -739,6 +740,67 @@ TEST_F(EditorProjectTest, SetStartupSceneRefusesWhatIsntAnExistingSceneFile)
     EXPECT_EQ(saved->startupScene, IO::DefaultStartupScene);
 }
 
+// ==================== Build targets (1.29.0) ====================
+
+TEST_F(EditorProjectTest, SetBuildTargetsMergesSavesAndKeepsTheModuleList)
+{
+    // A module list already in the project file stays as it is
+    {
+        auto file = IO::ProjectFile::Load(_root);
+        ASSERT_TRUE(file) << file.error();
+        file->unknownKeys["build"] = {{"modules", {{"physics3d", "none"}}}};
+        ASSERT_TRUE(file->Save(_root));
+        server.SetProject(_root, *file);
+    }
+
+    const ProjectInfo first = DecodeProjectInfo(Execute(server, CommandType::SetBuildTargets, JsonPayload(json::parse(R"({
+        "windows": {"enabled": true, "displayName": "My Game", "version": "1.0.0", "buildNumber": 1},
+        "android": {"appId": "com.example.mygame", "signing": {"profile": "release"}}
+    })"))));
+    EXPECT_EQ(first.project.at("build").at("targets").at("windows").at("displayName"), "My Game");
+    EXPECT_EQ(first.project.at("build").at("modules").at("physics3d"), "none");
+
+    const ProjectInfo second = DecodeProjectInfo(Execute(server, CommandType::SetBuildTargets,
+        JsonPayload(json::parse(R"({"windows": {"version": "1.1.0", "buildNumber": null}, "android": null})"))));
+    const json &targets = second.project.at("build").at("targets");
+    EXPECT_EQ(targets.at("windows").at("version"), "1.1.0");
+    EXPECT_FALSE(targets.at("windows").contains("buildNumber"));
+    EXPECT_EQ(targets.at("windows").at("displayName"), "My Game") << "untouched keys stay";
+    EXPECT_FALSE(targets.contains("android"));
+
+    const auto saved = IO::ProjectFile::Load(_root);
+    ASSERT_TRUE(saved) << saved.error();
+    EXPECT_EQ(IO::BuildTargets::Of(*saved), targets);
+    EXPECT_EQ(saved->unknownKeys.at("build").at("modules").at("physics3d"), "none");
+}
+
+TEST_F(EditorProjectTest, SetBuildTargetsRefusesBadSettingsAndSecretsAndSavesNothing)
+{
+    const std::string before = IO::ProjectFile::Load(_root)->ToText();
+    for (const auto &[patch, expected] : std::vector<std::pair<json, std::string>>{
+             {json{{"windows", {{"version", "one"}}}}, "build.targets.windows.version"},
+             {json{{"Bad Name", json::object()}}, "is not a target name"},
+             {json{{"android", {{"signing", {{"keystorePassword", "hunter2"}}}}}}, "secret"},
+             {json{{"android", {{"notes", "-----BEGIN PRIVATE KEY-----"}}}}, "secret"},
+             {json::array(), "must be a JSON object"},
+         })
+    {
+        const Frame refused = Execute(server, CommandType::SetBuildTargets, JsonPayload(patch));
+        ASSERT_EQ(refused.type, ErrorType) << patch.dump();
+        EXPECT_NE(refused.Text().find(expected), std::string::npos) << refused.Text();
+        EXPECT_EQ(refused.Text().find("hunter2"), std::string::npos) << "a refused secret is never echoed";
+    }
+    EXPECT_EQ(IO::ProjectFile::Load(_root)->ToText(), before) << "nothing was saved";
+}
+
+TEST_F(EditorProjectTest, SetBuildTargetsWithNothingToChangeSavesNothing)
+{
+    const auto before = std::filesystem::last_write_time(IO::ProjectFile::PathIn(_root));
+    const ProjectInfo info = DecodeProjectInfo(Execute(server, CommandType::SetBuildTargets, JsonPayload(json::object())));
+    EXPECT_FALSE(info.project.contains("build")) << "a project that never had targets is written back as it was";
+    EXPECT_EQ(std::filesystem::last_write_time(IO::ProjectFile::PathIn(_root)), before);
+}
+
 // ==================== Without a project ====================
 
 TEST(EditorNoProjectTest, ProjectAndSceneFileCommandsNeedAProject)
@@ -750,6 +812,7 @@ TEST(EditorNoProjectTest, ProjectAndSceneFileCommandsNeedAProject)
              {CommandType::GetProjectInfo, {}},
              {CommandType::SetProjectSettings, JsonPayload(json::object())},
              {CommandType::SetStartupScene, Strings({"res://scenes/Main.scene"})},
+             {CommandType::SetBuildTargets, JsonPayload(json::object())},
              {CommandType::OpenScene, Strings({"res://scenes/Main.scene"})},
              {CommandType::NewScene, Strings({"res://scenes/New.scene", ""})},
          })
