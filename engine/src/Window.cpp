@@ -183,9 +183,9 @@ bool Window::InitWindow(const Config::ApplicationOptions &options)
     }
 
     // Initialize the chosen renderer, in pixels: on HiDPI displays the framebuffer is larger than the window
+    // The renderer takes the platform's surface and its operations (build targets stage 7): no renderer calls GLFW
     const Platform::NativeSurface native = _host->Surface();
-    auto *glfwWindow = static_cast<GLFWwindow *>(native.handle);
-    if (!_renderer || !_renderer->Initialize(glfwWindow, static_cast<uint32_t>(native.width),
+    if (!_renderer || !_renderer->Initialize(_host->RenderSurface(), static_cast<uint32_t>(native.width),
                                              static_cast<uint32_t>(native.height)))
     {
         _rendererFailed = true;

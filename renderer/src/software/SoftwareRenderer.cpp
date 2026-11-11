@@ -1063,18 +1063,30 @@ SoftwareRenderer::~SoftwareRenderer()
     m_renderThread.Stop();
 }
 
-bool SoftwareRenderer::Initialize(GLFWwindow *windowHandle, uint32_t width, uint32_t height)
+namespace
 {
-    m_window = windowHandle;
-#ifndef N2ENGINE_PLATFORM_WEB
-    // A desktop window: the frame is presented through its OpenGL context. The web has no window (its page draws the
-    // frames it reads back) and no GLFW (build targets stage 6)
-    if (windowHandle)
+    // glad takes a plain function pointer; the platform's lookup is a std::function, reached through this
+    thread_local const std::function<void *(const char *)> *t_getProcAddress = nullptr;
+    void *LoadGlFunction(const char *name) { return (*t_getProcAddress)(name); }
+}
+
+bool SoftwareRenderer::Initialize(const Common::Surface &surface, uint32_t width, uint32_t height)
+{
+    m_window = surface;
+    // A window: the frame is presented through its OpenGL context (the platform's operations). Offscreen (headless, the
+    // web) frames are only read back
+    if (m_window.HasWindow())
     {
-        glfwMakeContextCurrent(windowHandle);
-        if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return false;
+        if (!m_window.makeContextCurrent || !m_window.getProcAddress)
+        {
+            return false;
+        }
+        m_window.makeContextCurrent();
+        t_getProcAddress = &m_window.getProcAddress;
+        const bool loaded = gladLoadGLLoader(reinterpret_cast<GLADloadproc>(&LoadGlFunction)) != 0;
+        t_getProcAddress = nullptr;
+        if (!loaded) return false;
     }
-#endif
 
     Resize(width, height);
     if (windowHandle)
@@ -1109,7 +1121,7 @@ void SoftwareRenderer::Shutdown()
         m_glReady = false;
     }
     m_blitTex = m_blitVAO = m_blitVBO = m_blitProg = 0;
-    m_window = nullptr;
+    m_window = Common::Surface();
 }
 
 void SoftwareRenderer::Resize(uint32_t w, uint32_t h)
@@ -1229,9 +1241,7 @@ void SoftwareRenderer::Present()
     glBindVertexArray(0);
     glEnable(GL_DEPTH_TEST);
 
-#ifndef N2ENGINE_PLATFORM_WEB
-    if (m_window) glfwSwapBuffers(m_window);
-#endif
+    if (m_window.swapBuffers) m_window.swapBuffers();
 }
 
 IShader* SoftwareRenderer::CreateShaderProgram(const char *, const char *)

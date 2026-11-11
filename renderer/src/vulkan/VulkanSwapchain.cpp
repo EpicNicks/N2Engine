@@ -256,10 +256,11 @@ bool VulkanRenderer::ReadPresentedImageForTest(std::vector<std::uint8_t>& rgba, 
 
 bool VulkanRenderer::CreateSurfaceLocked()
 {
-    if (_window != nullptr)
+    if (_window.HasWindow())
     {
-        // From this renderer's own instance: the engine never makes a surface
-        const VkResult result = glfwCreateWindowSurface(_instance, _window, nullptr, &_surface);
+        // From this renderer's own instance, through the platform's operation (GLFW's glfwCreateWindowSurface on the
+        // desktop): the engine never makes a surface
+        const auto result = static_cast<VkResult>(_window.createVulkanSurface(_instance, &_surface));
         if (result != VK_SUCCESS)
         {
             _surface = VK_NULL_HANDLE;
@@ -416,13 +417,12 @@ bool VulkanRenderer::CreateCaptureBufferLocked(VkDeviceSize size)
 
 VkExtent2D VulkanRenderer::FramebufferSizeLocked() const
 {
-    if (_window == nullptr)
+    if (!_window.HasWindow())
     {
         return _headlessSurfaceForTest ? _testFramebuffer : VkExtent2D{0, 0};
     }
-    int width = 0;
-    int height = 0;
-    glfwGetFramebufferSize(_window, &width, &height); // pixels, so HiDPI windows get their real size
+    // Pixels, so HiDPI windows get their real size (0 x 0 while minimised)
+    const auto [width, height] = _window.framebufferSize ? _window.framebufferSize() : std::pair<int, int>{0, 0};
     return {static_cast<uint32_t>(std::max(width, 0)), static_cast<uint32_t>(std::max(height, 0))};
 }
 

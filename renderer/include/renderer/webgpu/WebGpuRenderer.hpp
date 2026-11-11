@@ -114,7 +114,7 @@ namespace Renderer
             /// window handle is accepted and not used). Returns false and leaves nothing allocated on any failure; see
             /// GetInitStatus. Initializing a renderer that is already initialized shuts it down first (a new renderer for
             /// everything holding the old one's lifetime token).
-            bool Initialize(GLFWwindow* windowHandle, uint32_t width, uint32_t height) override;
+            bool Initialize(const Common::Surface &surface, uint32_t width, uint32_t height) override;
             /// Destroys every WebGPU object, the device last but one, and expires the lifetime token. Safe to call twice, or
             /// without Initialize
             void Shutdown() override;

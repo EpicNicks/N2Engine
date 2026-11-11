@@ -31,9 +31,9 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(n2_glfw_headers n2_openal_headers)
 
-# GLFW's headers only (build targets stage 6): the web build calls no GLFW function. The engine's platform layer runs the web
-# player on its headless backend, the desktop backend and the GLFW input device are not compiled, and the software
-# renderer's window present is compiled out. The renderers' interface still names GLFWwindow until stage 7.
+# GLFW's headers only: the web build calls no GLFW function and, since build targets stage 7 (renderers take a platform
+# Surface), includes no GLFW header in its own sources either. The target stays for the targets that list glfw among their
+# libraries; it adds an include path and nothing else.
 add_library(glfw INTERFACE)
 target_include_directories(glfw SYSTEM INTERFACE "${n2_glfw_headers_SOURCE_DIR}/include")
 

@@ -104,8 +104,22 @@
 </div>
 <p><code>Window</code> chooses the backend in <code>InitWindow</code>: <code>RenderBackend::NONE</code> and the windowless renderers (<code>Window::UsesNoWindow</code>) run on the headless backend, everything else on the desktop one. <code>Window::GetPlatformHost()</code> returns it, <code>Window::GetInputDevice()</code> its input device, and <code>Window::SetLifecycleHandler</code> receives its lifecycle events. The desktop backend sends none today.</p>
 
+<h2 id="surfaces">Renderer surfaces <span class="badge">stage 7</span></h2>
+<p>A renderer starts on a <code>Renderer::Common::Surface</code> (<code>renderer/include/renderer/common/Surface.hpp</code>), not a <code>GLFWwindow*</code>: the platform's native surface (its kind and handle) and the few window-system operations a renderer needs, supplied by the platform backend (<code>IPlatformHost::RenderSurface()</code>), so no renderer calls the window system itself.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Operation</th><th>Who uses it</th><th>desktop-glfw supplies</th></tr></thead>
+<tbody>
+<tr><td><code>makeContextCurrent</code>, <code>getProcAddress</code>, <code>swapBuffers</code></td><td>The OpenGL renderer; the software renderer presents its frame through the same context</td><td><code>glfwMakeContextCurrent</code>, <code>glfwGetProcAddress</code>, <code>glfwSwapBuffers</code> (only for a window made with an OpenGL context)</td></tr>
+<tr><td><code>vulkanInstanceExtensions</code>, <code>createVulkanSurface</code></td><td>The Vulkan renderer</td><td><code>glfwGetRequiredInstanceExtensions</code> (empty when <code>glfwVulkanSupported</code> is false: the renderer refuses the window), <code>glfwCreateWindowSurface</code></td></tr>
+<tr><td><code>framebufferSize</code></td><td>Vulkan's swapchain after a resize (0 x 0 while minimised)</td><td><code>glfwGetFramebufferSize</code></td></tr>
+</tbody>
+</table>
+</div>
+<p><code>Initialize(nullptr, width, height)</code> is still an offscreen renderer (a <code>Surface</code> converts from <code>nullptr</code>), as headless hosts, the tests and the web start them. Android supplies the same operations from EGL and its <code>ANativeWindow</code> (stage 8); Apple's from a <code>CAMetalLayer</code> (stage 10). Outside the desktop backend and the GLFW input device, no source in <code>engine/</code> or <code>renderer/</code> includes a GLFW header.</p>
+
 <h2 id="web">The web build has no GLFW</h2>
-<p>The web build compiles neither the desktop backend nor the GLFW input device, and the software renderer's window present is compiled out there, so no GLFW function is called. <code>external/web-stubs</code> no longer has a stand-in GLFW: only GLFW's headers remain, because the renderers' interface still names <code>GLFWwindow</code> until <a href="build-targets.html">stage 7</a> gives them native surfaces. Its <code>&lt;generator&gt;</code> shim stays: every libc++ toolchain (Emscripten, the NDK, Apple's) needs it.</p>
+<p>The web build compiles neither the desktop backend nor the GLFW input device, and the web player's renderers have no window (they draw offscreen and the page shows what they read back), so no GLFW function is called. <code>external/web-stubs</code> no longer has a stand-in GLFW; since stage 7 no web source includes a GLFW header either (the <code>glfw</code> target there is an include path only, for targets that list it). Its <code>&lt;generator&gt;</code> shim stays: every libc++ toolchain (Emscripten, the NDK, Apple's) needs it.</p>
 
 <h2 id="tests">Tests</h2>
 <ul>
@@ -114,7 +128,7 @@
 </ul>
 
 <div class="page-footer">
-<span>Describes the build targets plan through stage 6 (PR #TBD).</span>
+<span>Describes the build targets plan through stage 7 (PR #TBD).</span>
 <a href="index.html">Back to overview</a>
 </div>
 
