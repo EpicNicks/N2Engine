@@ -1075,7 +1075,8 @@ bool SoftwareRenderer::Initialize(const Common::Surface &surface, uint32_t width
     m_window = surface;
     // A window: the frame is presented through its OpenGL context (the platform's operations). Offscreen (headless, the
     // web) frames are only read back
-    if (m_window.HasWindow())
+    // A platform that takes the frame from the CPU (presentPixels) needs no OpenGL context at all
+    if (m_window.HasWindow() && !m_window.presentPixels)
     {
         if (!m_window.makeContextCurrent || !m_window.getProcAddress)
         {
@@ -1089,9 +1090,9 @@ bool SoftwareRenderer::Initialize(const Common::Surface &surface, uint32_t width
     }
 
     Resize(width, height);
-    if (windowHandle)
+    if (m_window.HasWindow() && !m_window.presentPixels)
     {
-        // Headless there is no context: no blit resources, and Present never calls GL
+        // Headless (or a platform that takes the pixels) there is no context: no blit resources, and Present never calls GL
         if (!SetupBlitResources()) return false;
         m_glReady = true;
     }
@@ -1216,6 +1217,14 @@ void SoftwareRenderer::Present()
 {
     // Wait for the render thread to finish rasterizing into m_colorBuffer
     m_renderThread.WaitForFrame();
+
+    // The platform copies the frame itself (Android's window buffer)
+    if (m_window.presentPixels)
+    {
+        m_window.presentPixels(reinterpret_cast<const std::uint8_t *>(m_colorBuffer.data()), static_cast<int>(m_width),
+                               static_cast<int>(m_height));
+        return;
+    }
 
     // Headless: the frame stays in m_colorBuffer for ReadFramebuffer; there is nothing to show it on
     if (!m_glReady) return;
