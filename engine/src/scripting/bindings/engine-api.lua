@@ -2882,6 +2882,9 @@ function Input.LoadActionMap(mapName) end
 ---  { type = "Vector2Composite", up = "W", down = "S", left = "A", right = "D" }
 ---  { type = "GamepadStick", xAxis = "LeftX", yAxis = "LeftY", deadzone = 0.25, invertX = false, invertY = true }
 ---  { type = "GamepadButton", button = "South" }, { type = "GamepadAxis", axis = "LeftTrigger" }, { type = "MouseButton", button = "Left" }
+---  { type = "GamepadAxis", axis = "LeftX", direction = "Negative", pressPoint = 0.5 } (one half of an axis, as a button)
+---  { type = "GamepadButtonComposite", up = "DpadUp", down = "DpadDown", left = "DpadLeft", right = "DpadRight" }
+---  { type = "Chord", modifier = { type = "GamepadButton", button = "LeftThumb" }, binding = { type = "GamepadButton", button = "RightThumb" } }
 ---@param mapName string
 ---@param actions table<string, table[]> e.g. { ["Quit"] = { { type = "KeyboardButton", key = "Escape" } } }
 ---@return ActionMap|nil nil without a window, or if the map is malformed. References to a map it replaces stop working.
