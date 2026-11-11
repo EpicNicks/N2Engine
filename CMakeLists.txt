@@ -121,6 +121,15 @@ if(N2ENGINE_PLATFORM_WEB)
     message(STATUS "Web: no GLFW window or GL context (external/web-stubs stands in for GLFW; the player shows frames on a canvas and reads input from the page), audio is Emscripten's OpenAL on WebAudio (N2ENGINE_WEB_AUDIO, or a no-op stub); the editor host (sockets, TLS), test_project and lua_project are not built")
 endif()
 
+# == Android platform (build targets stage 8) ==
+# From the NDK's toolchain (players/android's Gradle build), never set by hand. cmake/N2EngineAndroid.cmake and docs/android.html.
+if(ANDROID)
+    set(N2ENGINE_PLATFORM_ANDROID ON)
+    include(${CMAKE_SOURCE_DIR}/cmake/N2EngineAndroid.cmake)
+else()
+    set(N2ENGINE_PLATFORM_ANDROID OFF)
+endif()
+
 # == PhysX setup ==
 set(N2ENGINE_PHYSX_AVAILABLE OFF)
 
@@ -385,7 +394,12 @@ if(N2ENGINE_PLATFORM_WEB)
     # The web player and its package folder (stage 2): web/CMakeLists.txt
     add_subdirectory(web)
 endif()
-if(NOT N2ENGINE_PLATFORM_WEB)
+if(N2ENGINE_PLATFORM_ANDROID)
+    # The Android player's native library, libn2game.so (players/android/native): built when Gradle configures this
+    # repository for an APK
+    add_subdirectory(players/android/native)
+endif()
+if(NOT N2ENGINE_PLATFORM_WEB AND NOT N2ENGINE_PLATFORM_ANDROID)
 add_subdirectory(test_project)
 add_subdirectory(lua_project)
 # The desktop player that tools/n2build packages for the windows and linux targets (docs/build-targets.html)

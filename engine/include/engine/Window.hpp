@@ -53,6 +53,8 @@ namespace N2Engine
         // InitWindow made a window (the desktop host's surface)
         bool _windowed = false;
         std::function<void(Platform::LifecycleEvent)> _lifecycleHandler;
+        /// SetPlatformHost's backend, for the next windowed InitWindow
+        std::unique_ptr<Platform::IPlatformHost> _pendingHost;
         /// Hands the host's lifecycle events to _lifecycleHandler
         void ConnectLifecycle();
         bool _rendererFailed = false;
@@ -125,6 +127,12 @@ namespace N2Engine
         /// Called with the platform's lifecycle events (pause, resume, surface loss, quit; Platform::LifecycleEvent). The
         /// desktop sends none today; Android and iOS send them all. Set it before or after InitWindow.
         void SetLifecycleHandler(std::function<void(Platform::LifecycleEvent)> handler) { _lifecycleHandler = std::move(handler); }
+        /**
+         * The platform backend the next windowed InitWindow runs on, in place of desktop-glfw: a player for another
+         * platform hands in its own (players/android's, a private target's; build targets stages 8 and 11). Taken by that
+         * InitWindow (a windowless InitWindow leaves it for the next one). Null goes back to the build's default.
+         */
+        void SetPlatformHost(std::unique_ptr<Platform::IPlatformHost> host) { _pendingHost = std::move(host); }
 
         /// The window's size in screen coordinates; windowless, the size the renderer started at; {0, 0} without either
         [[nodiscard]] Vector2i GetWindowDimensions() const;
