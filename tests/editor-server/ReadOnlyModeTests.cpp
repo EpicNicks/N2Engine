@@ -76,7 +76,7 @@ namespace
             {"RescanAssets", Class::Write}, {"SetImportSettings", Class::Write}, {"WriteTextAsset", Class::Write},
             {"CreateScriptAsset", Class::Write}, {"CreateFolder", Class::Write}, {"AddComponent", Class::Write},
             {"RemoveComponent", Class::Write}, {"SetComponentFields", Class::Write},
-            {"SetProjectSettings", Class::Write}, {"SetStartupScene", Class::Write}, {"Undo", Class::Write},
+            {"SetProjectSettings", Class::Write}, {"SetStartupScene", Class::Write}, {"SetBuildTargets", Class::Write}, {"Undo", Class::Write},
             {"Redo", Class::Write}, {"BeginEditGroup", Class::Write}, {"EndEditGroup", Class::Write},
             {"RestoreAutosave", Class::Write}, {"DiscardAutosave", Class::Write},
             {"WritePlaySnapshot", Class::Write}, {"SetPaused", Class::Write}, {"Step", Class::Write},
@@ -233,7 +233,7 @@ TEST(CommandClassificationTest, NothingThatChangesStateOrRunsCodeIsARead)
                              "CreateScriptAsset", "CreateFolder", "MoveAsset", "OpenPrefabStage", "SetPrefabStageMode",
                              "SavePrefabStage", "ClosePrefabStage", "LoadScene", "OpenScene", "NewScene",
                              "DeleteScene",
-                             "SetProjectSettings", "SetStartupScene", "RestoreAutosave", "DiscardAutosave",
+                             "SetProjectSettings", "SetStartupScene", "SetBuildTargets", "RestoreAutosave", "DiscardAutosave",
                              "SetCameraPosition", "CreateScript", "BeginEditGroup", "EndEditGroup"})
     {
         const auto found = ExpectedClasses().find(name);

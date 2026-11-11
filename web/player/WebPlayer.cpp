@@ -37,7 +37,9 @@
 #include "engine/Window.hpp"
 #include "engine/input/InputSystem.hpp"
 #include "engine/input/KeySource.hpp"
+#include "engine/input/Keyboard.hpp"
 #include "engine/input/Mouse.hpp"
+#include "engine/input/Touchscreen.hpp"
 #include "engine/io/ProjectFile.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourcePath.hpp"
@@ -102,6 +104,7 @@ namespace
         std::vector<std::uint8_t> frame; // the last frame read back, top row first, RGBA8
         bool ended = false;
         bool webgpu = false;
+        long primaryTouch = -1;    // the finger that also drives the mouse pointer and left button, or -1
     };
 
     Player g_player;
@@ -116,6 +119,16 @@ namespace
             return EM_FALSE;
         }
         g_player.keys.SetKey(key, type == EMSCRIPTEN_EVENT_KEYDOWN);
+        if (type == EMSCRIPTEN_EVENT_KEYDOWN)
+        {
+            // Typed text (Keyboard::GetTypedText): the character the key makes, held keys repeating as the browser does
+            const std::string_view text = Web::TypedTextFromKey(event->key, event->ctrlKey || event->metaKey);
+            auto *keyboard = Input::Keyboard::Get();
+            if (!text.empty() && keyboard != nullptr)
+            {
+                keyboard->InjectText(text);
+            }
+        }
         // A key with a browser meaning (scrolling, tabbing) is the game's while it runs, unless a shortcut modifier is held
         const bool shortcut = event->ctrlKey || event->altKey || event->metaKey;
         return Web::SuppressesBrowserDefault(key) && !shortcut ? EM_TRUE : EM_FALSE;
@@ -126,6 +139,8 @@ namespace
         g_player.keys.ReleaseAll();
         g_player.buttons = 0;
         g_player.pressedSinceSample = 0;
+        Input::Touchscreen::Get().CancelAll();
+        g_player.primaryTouch = -1;
     }
 
     EM_BOOL OnBlur(int, const EmscriptenFocusEvent *, void *)
@@ -186,6 +201,71 @@ namespace
         return down ? EM_TRUE : EM_FALSE;
     }
 
+    // Fingers on the canvas go to the Touchscreen. The first finger also moves the mouse pointer and holds the left
+    // button (Unity's Input.simulateMouseWithTouches), so taps work on UI and picking with no touch code. The page's
+    // own handling (scrolling, zooming, the mouse events browsers synthesise from touches) is cancelled.
+    EM_BOOL OnTouch(const int type, const EmscriptenTouchEvent *event, void *)
+    {
+        double rect[4];
+        if (!CanvasRect(rect))
+        {
+            return EM_FALSE;
+        }
+        auto &screen = Input::Touchscreen::Get();
+        const std::uint32_t left = Input::Mouse::ButtonBit(static_cast<int>(Input::MouseButton::Left));
+        for (int i = 0; i < event->numTouches; ++i)
+        {
+            const EmscriptenTouchPoint &p = event->touches[i];
+            if (!p.isChanged)
+            {
+                continue;
+            }
+            const Math::Vector2 position(
+                Web::ClientToRender(static_cast<double>(p.clientX), rect[0], rect[2], g_player.size.width),
+                Web::ClientToRender(static_cast<double>(p.clientY), rect[1], rect[3], g_player.size.height));
+            const int id = static_cast<int>(p.identifier);
+            switch (type)
+            {
+            case EMSCRIPTEN_EVENT_TOUCHSTART:
+                screen.Down(id, position);
+                if (g_player.primaryTouch < 0)
+                {
+                    g_player.primaryTouch = p.identifier;
+                    g_player.pointer = position;
+                    g_player.keys.SetMouseButton(Input::MouseButton::Left, true);
+                    g_player.buttons |= left;
+                    g_player.pressedSinceSample |= left;
+                }
+                break;
+            case EMSCRIPTEN_EVENT_TOUCHMOVE:
+                screen.Down(id, position);
+                if (p.identifier == g_player.primaryTouch)
+                {
+                    g_player.pointer = position;
+                }
+                break;
+            default: // end, cancel
+                if (type == EMSCRIPTEN_EVENT_TOUCHCANCEL)
+                {
+                    screen.Cancel(id);
+                }
+                else
+                {
+                    screen.Up(id, position);
+                }
+                if (p.identifier == g_player.primaryTouch)
+                {
+                    g_player.primaryTouch = -1;
+                    g_player.pointer = position;
+                    g_player.keys.SetMouseButton(Input::MouseButton::Left, false);
+                    g_player.buttons &= ~left;
+                }
+                break;
+            }
+        }
+        return EM_TRUE;
+    }
+
     EM_BOOL OnWheel(int, const EmscriptenWheelEvent *event, void *)
     {
         if (auto *mouse = Input::Mouse::Get())
@@ -209,6 +289,11 @@ namespace
         emscripten_set_mousedown_callback(window, nullptr, EM_TRUE, OnMouse);
         emscripten_set_mouseup_callback(window, nullptr, EM_TRUE, OnMouse);
         emscripten_set_wheel_callback("#canvas", nullptr, EM_TRUE, OnWheel);
+        // Touches start on the canvas; a finger keeps reporting to it after it slides off
+        emscripten_set_touchstart_callback("#canvas", nullptr, EM_TRUE, OnTouch);
+        emscripten_set_touchmove_callback("#canvas", nullptr, EM_TRUE, OnTouch);
+        emscripten_set_touchend_callback("#canvas", nullptr, EM_TRUE, OnTouch);
+        emscripten_set_touchcancel_callback("#canvas", nullptr, EM_TRUE, OnTouch);
     }
 
     // -- size and frames -----------------------------------------------------------------------------------------

@@ -41,6 +41,15 @@ namespace N2Engine::Scripting
         // Audio
         void BindAudio(LuaRuntime& runtime);
 
+        // SaveData (text files in user://saves) and Json (Encode, Decode)
+        void BindSaveData(LuaRuntime& runtime);
+        /// The longest save name SaveData accepts
+        inline constexpr std::size_t SaveDataMaxNameLength = 64;
+        /// The largest save file SaveData writes or reads (1 MiB)
+        inline constexpr std::size_t SaveDataMaxBytes = 1024 * 1024;
+        /// The deepest nesting Json.Decode turns into tables
+        inline constexpr int JsonMaxDepth = 100;
+
         // Input & Events
         void BindInput(LuaRuntime& runtime);
         void BindEvents(LuaRuntime& runtime);

@@ -107,6 +107,22 @@ namespace N2Engine::Web
         }
     }
 
+    std::string_view TypedTextFromKey(const std::string_view key, const bool ctrlOrMeta)
+    {
+        if (ctrlOrMeta || key.empty())
+        {
+            return {};
+        }
+        // One code point: the first byte says how long its UTF-8 sequence is
+        const auto lead = static_cast<unsigned char>(key[0]);
+        const std::size_t length = lead < 0x80 ? 1 : (lead >> 5) == 0x6 ? 2 : (lead >> 4) == 0xE ? 3 : (lead >> 3) == 0x1E ? 4 : 0;
+        if (length == 0 || key.size() != length || (length == 1 && (lead < 0x20 || lead == 0x7F)))
+        {
+            return {};
+        }
+        return key;
+    }
+
     bool SuppressesBrowserDefault(const Key key)
     {
         switch (key)

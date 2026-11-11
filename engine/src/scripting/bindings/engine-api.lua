@@ -819,6 +819,12 @@ function GameObject:AddComponent(typeName) end
 ---@return Component|nil nil when the object has no component of that type
 function GameObject:GetComponent(typeName) end
 
+---The instance table (self) of the first LuaComponent here whose script runs, or of the first running `path`.
+---How one script calls another: obj:GetScript("res://scripts/Enemy.lua"):Damage(1)
+---@param path string|nil e.g. "res://scripts/Enemy.lua"
+---@return table|nil
+function GameObject:GetScript(path) end
+
 ---A 1 x 1 x 1 cube (the built-in "Cube" mesh), unlit in its colour unless it has a material.
 ---Opaque: a translucent colour doesn't blend; give it a material with alphaMode "blend" for that.
 ---@class CubeRenderer : Component
@@ -1386,6 +1392,11 @@ function LuaComponent:GetScriptPath() end
 ---True when the script is missing, failed to load, or didn't return a table
 ---@return boolean
 function LuaComponent:HasMissingScript() end
+
+---The running script's instance table (its self), or nil when no script runs. The same table each call; once the
+---component is destroyed its gameObject and component fields are nil.
+---@return table|nil
+function LuaComponent:GetScript() end
 
 ---@class Component
 Component = {}
@@ -2680,6 +2691,19 @@ function AudioSource:SetMaxDistance(distance) end
 ---@param factor number
 function AudioSource:SetRolloffFactor(factor) end
 
+---Set the clip by path, loaded through the resource cache; a clip that does not load is a Lua error
+---@param path string e.g. "res://audio/music.ogg"
+function AudioSource:SetClip(path) end
+
+---@return boolean
+function AudioSource:HasClip() end
+
+---@param playOnAwake boolean
+function AudioSource:SetPlayOnAwake(playOnAwake) end
+
+---@return boolean
+function AudioSource:GetPlayOnAwake() end
+
 ---@class AudioListener : Component
 AudioListener = {}
 
@@ -2708,6 +2732,83 @@ function Audio.SetListenerPosition(x, y, z) end
 ---@param uy number Up Y
 ---@param uz number Up Z
 function Audio.SetListenerOrientation(fx, fy, fz, ux, uy, uz) end
+
+---Fire-and-forget playback. Returns a handle id, 0 when the sound was dropped. A clip that does not load is a Lua error.
+---@param path string e.g. "res://audio/shoot.ogg"
+---@param volume number|nil default 1
+---@param pitch number|nil default 1
+---@param group string|nil mixer group, default "SFX"
+---@return integer
+function Audio.PlayOneShot(path, volume, pitch, group) end
+
+---@param id integer a PlayOneShot handle
+function Audio.StopOneShot(id) end
+
+---@param id integer a PlayOneShot handle
+---@return boolean
+function Audio.IsOneShotPlaying(id) end
+
+---Mixer group volume, clamped to 0..1 (groups: Master, Music, SFX, UI, Voice, Ambient). Unknown groups are ignored.
+---@param group string
+---@param volume number
+function Audio.SetGroupVolume(group, volume) end
+
+---@param group string
+---@return number 1 for an unknown group
+function Audio.GetGroupVolume(group) end
+
+---@param group string
+---@param muted boolean
+function Audio.SetGroupMuted(group, muted) end
+
+---@param group string
+---@return boolean
+function Audio.IsGroupMuted(group) end
+
+---@param group string
+---@return boolean
+function Audio.HasGroup(group) end
+
+-- ===== SAVE DATA AND JSON =====
+
+---Small text files in the project's user://saves folder. Names are plain file names (letters, digits, _ - .,
+---at most 64 characters, not starting with '.'); anything else is a Lua error. Files are at most 1 MiB.
+---@class SaveData
+SaveData = {}
+
+---Write the whole file (atomically: a temporary file is renamed over the old one)
+---@param name string
+---@param text string
+---@return boolean ok
+---@return string|nil message
+function SaveData.Write(name, text) end
+
+---@param name string
+---@return string|nil text nil when the file does not exist
+function SaveData.Read(name) end
+
+---@param name string
+---@return boolean
+function SaveData.Exists(name) end
+
+---@param name string
+---@return boolean existed
+function SaveData.Delete(name) end
+
+---@class Json
+Json = {}
+
+---A Lua value as JSON text (a table with keys 1..n is an array; object keys are sorted)
+---@param value any
+---@param pretty boolean|nil indent with two spaces
+---@return string
+function Json.Encode(value, pretty) end
+
+---JSON text as a Lua value (null is nil), or nil and a message
+---@param text string
+---@return any value
+---@return string|nil message
+function Json.Decode(text) end
 
 -- ===== INPUT =====
 
@@ -2873,6 +2974,28 @@ function Input.GetMouseButtonDown(button) end
 ---@return boolean
 function Input.GetMouseButtonUp(button) end
 
+---The number of touches this frame (Input.touchCount); 0 on desktop (GLFW has no touch)
+---@return integer
+function Input.GetTouchCount() end
+
+---Touch `index` (1-based) this frame: { id, x, y, phase } with phase "Began", "Moved", "Stationary", "Ended" or "Canceled"; nil past the count
+---@param index integer
+---@return {id: integer, x: number, y: number, phase: string}|nil
+function Input.GetTouch(index) end
+
+---Gamepad rumble (Gamepad.SetMotorSpeeds): low- and high-frequency motors 0..1, for `seconds` of real time (nil or 0:
+---until StopGamepadRumble), on `gamepad` (default 0). False when there is no rumble there (Linux, macOS, no pad)
+---@param low number
+---@param high number
+---@param seconds? number
+---@param gamepad? integer
+---@return boolean
+function Input.SetGamepadRumble(low, high, seconds, gamepad) end
+
+---Stops `gamepad`'s rumble, or every gamepad's without an argument
+---@param gamepad? integer
+function Input.StopGamepadRumble(gamepad) end
+
 ---Whether the pointer was over a UI element (a raycast-target graphic under a canvas) in the last pointer update
 ---@return boolean
 function Input.IsPointerOverUI() end
@@ -2887,11 +3010,33 @@ function Input.GetActionMap(mapName) end
 ---@return ActionMap|nil
 function Input.LoadActionMap(mapName) end
 
+---A key held this frame, by its action-map name ("A", "Space", "LeftShift", "Enter"). An unknown name is a Lua error.
+---@param name string
+---@return boolean
+function Input.GetKey(name) end
+
+---A key that went down this frame
+---@param name string
+---@return boolean
+function Input.GetKeyDown(name) end
+
+---A key that went up this frame
+---@param name string
+---@return boolean
+function Input.GetKeyUp(name) end
+
+---The characters typed since the previous frame (UTF-8), "" when none
+---@return string
+function Input.GetTypedText() end
+
 ---Create (or replace) an action map. Each action lists bindings; fields and names follow the action map JSON format:
 ---  { type = "KeyboardButton", key = "Escape" }
 ---  { type = "Vector2Composite", up = "W", down = "S", left = "A", right = "D" }
 ---  { type = "GamepadStick", xAxis = "LeftX", yAxis = "LeftY", deadzone = 0.25, invertX = false, invertY = true }
 ---  { type = "GamepadButton", button = "South" }, { type = "GamepadAxis", axis = "LeftTrigger" }, { type = "MouseButton", button = "Left" }
+---  { type = "GamepadAxis", axis = "LeftX", direction = "Negative", pressPoint = 0.5 } (one half of an axis, as a button)
+---  { type = "GamepadButtonComposite", up = "DpadUp", down = "DpadDown", left = "DpadLeft", right = "DpadRight" }
+---  { type = "Chord", modifier = { type = "GamepadButton", button = "LeftThumb" }, binding = { type = "GamepadButton", button = "RightThumb" } }
 ---@param mapName string
 ---@param actions table<string, table[]> e.g. { ["Quit"] = { { type = "KeyboardButton", key = "Escape" } } }
 ---@return ActionMap|nil nil without a window, or if the map is malformed. References to a map it replaces stop working.

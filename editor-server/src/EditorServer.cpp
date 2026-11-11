@@ -36,6 +36,7 @@
 #include "engine/input/Mouse.hpp"
 #include "engine/example/renderers/QuadRenderer.hpp"
 #include "engine/example/renderers/SphereRenderer.hpp"
+#include "engine/io/BuildTargets.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourceUUID.hpp"
 #include "engine/network/NetworkObject.hpp"
@@ -2888,7 +2889,7 @@ namespace N2Engine::Editor
     std::vector<std::string> EditorServer::Capabilities()
     {
         return {"editorExtensions","editorTooling","luaSyntax","assetPreviews","entityClipboard","prefabAssets","physicsBackends","networkPanel","prefabFields",
-                "prefabStage","prefabStageContext","engineStats"};
+                "prefabStage","prefabStageContext","engineStats","buildTargets"};
     }
 
     bool EditorServer::EnableEditorExtensions(std::filesystem::path projectRoot)
@@ -4389,6 +4390,7 @@ namespace N2Engine::Editor
         {CommandType::SetComponentFields, "SetComponentFields", EditorServer::CommandClass::Write},
         {CommandType::SetProjectSettings, "SetProjectSettings", EditorServer::CommandClass::Write},
         {CommandType::SetStartupScene, "SetStartupScene", EditorServer::CommandClass::Write},
+        {CommandType::SetBuildTargets, "SetBuildTargets", EditorServer::CommandClass::Write},
         {CommandType::Undo, "Undo", EditorServer::CommandClass::Write},
         {CommandType::Redo, "Redo", EditorServer::CommandClass::Write},
         {CommandType::BeginEditGroup, "BeginEditGroup", EditorServer::CommandClass::Write},
@@ -4692,6 +4694,9 @@ namespace N2Engine::Editor
             break;
         case CommandType::SetStartupScene:
             HandleSetStartupScene(clientSocket, payload);
+            break;
+        case CommandType::SetBuildTargets:
+            HandleSetBuildTargets(clientSocket, payload);
             break;
         case CommandType::CreateEntity:
             HandleCreateEntity(clientSocket, payload);
@@ -6162,6 +6167,8 @@ namespace N2Engine::Editor
         case CommandType::DeleteScene:
         case CommandType::SetProjectSettings:
         case CommandType::SetStartupScene:
+        // 1.29.0's: it saves project.n2proj too
+        case CommandType::SetBuildTargets:
         case CommandType::RestoreAutosave:
         case CommandType::DiscardAutosave:
         case CommandType::LoadScene:
@@ -10859,6 +10866,12 @@ namespace N2Engine::Editor
         // frame to a remote client (ClientText::Redact).
         const std::filesystem::path assets = root / "assets";
         _events.SetHostRoots({assets.string(), assets.generic_string()});
+        // build.targets is checked when the editor writes it (SetBuildTargets), not when a project opens: a hand-edited
+        // mistake there must not keep the project from opening, so it is reported instead
+        if (auto targets = IO::BuildTargets::Validate(IO::BuildTargets::Of(project)); !targets)
+        {
+            ServerLog::Warn("project.n2proj: " + targets.error() + " (SetBuildTargets refuses to save until it is fixed)");
+        }
         _project = ProjectState{std::move(root), std::move(project)};
     }
 
@@ -11590,6 +11603,43 @@ namespace N2Engine::Editor
         WriteNetworkValidation(response, NetworkPanel::BuildValidationReport(settings, preset,
                                                                              NetworkPanel::CurrentHostBuild()));
         SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleSetBuildTargets(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const SetBuildTargetsCmd cmd = SetBuildTargetsCmd::Deserialize(reader);
+        if (!_project)
+        {
+            SendNoProject(clientSocket);
+            return;
+        }
+
+        const nlohmann::json current = IO::BuildTargets::Of(_project->file);
+        const auto changed = IO::BuildTargets::ApplyPatch(current, cmd.targets);
+        if (!changed)
+        {
+            // The message names keys, never values (a refused secret is not echoed), with control characters quoted
+            BufferWriter response;
+            WriteError(response, changed.error());
+            SendResponse(clientSocket, response.Release());
+            return;
+        }
+        // Nothing to change: no save, no projectChanged
+        if (*changed != current)
+        {
+            IO::ProjectFile file = _project->file;
+            IO::BuildTargets::Set(file, *changed);
+            if (auto saved = SaveProject(std::move(file)); !saved)
+            {
+                BufferWriter response;
+                WriteError(response, saved.error());
+                SendResponse(clientSocket, response.Release());
+                return;
+            }
+            ServerLog::Info(std::format("Build targets saved ({} target{})", changed->size(), changed->size() == 1 ? "" : "s"));
+        }
+        SendProjectInfo(clientSocket);
     }
 
     void EditorServer::HandleSetStartupScene(int clientSocket, const std::vector<uint8_t> &payload)

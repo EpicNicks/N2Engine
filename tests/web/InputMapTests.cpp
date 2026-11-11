@@ -108,6 +108,21 @@ TEST(WebInputMap, OnlyPageScrollingKeysAreSuppressed)
     EXPECT_FALSE(SuppressesBrowserDefault(Key::LeftControl));
 }
 
+TEST(WebInputMap, TypedTextIsTheKeyWhenItIsOneCharacter)
+{
+    EXPECT_EQ(TypedTextFromKey("a", false), "a");
+    EXPECT_EQ(TypedTextFromKey("A", false), "A");
+    EXPECT_EQ(TypedTextFromKey(" ", false), " ");
+    EXPECT_EQ(TypedTextFromKey("`", false), "`");
+    EXPECT_EQ(TypedTextFromKey("\xC3\xA9", false), "\xC3\xA9") << "one code point, two bytes";
+    EXPECT_EQ(TypedTextFromKey("\xF0\x9F\x98\x80", false), "\xF0\x9F\x98\x80");
+    EXPECT_TRUE(TypedTextFromKey("Enter", false).empty());
+    EXPECT_TRUE(TypedTextFromKey("Shift", false).empty());
+    EXPECT_TRUE(TypedTextFromKey("Dead", false).empty());
+    EXPECT_TRUE(TypedTextFromKey("", false).empty());
+    EXPECT_TRUE(TypedTextFromKey("c", true).empty()) << "Ctrl+C is a shortcut, not typing";
+}
+
 TEST(WebInputMap, PointerCoordinatesScaleFromTheCanvasToTheRenderSize)
 {
     // A canvas shown 800x450 CSS pixels at (100, 50), rendered at 400x225: every CSS pixel is half a render pixel

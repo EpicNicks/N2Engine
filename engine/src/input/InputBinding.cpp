@@ -51,20 +51,39 @@ float AxisBinding::NormalizeAxis(const GamepadAxis axis, const float raw)
     return value < 0.0f ? -rescaled : rescaled;
 }
 
+InputValue AxisBinding::Shape(const float normalized, const AxisDirection direction, const float pressPoint)
+{
+    float value = normalized;
+    if (direction == AxisDirection::Positive)
+    {
+        value = std::max(0.0f, normalized);
+    }
+    else if (direction == AxisDirection::Negative)
+    {
+        value = std::max(0.0f, -normalized);
+    }
+    if (pressPoint > 0.0f)
+    {
+        // A button: the same value type whether or not a gamepad is there, so the action stays a button action
+        return std::abs(value) >= pressPoint;
+    }
+    return value;
+}
+
 InputValue AxisBinding::getValue()
 {
     // Without GLFW (no window, or windowless) there are no gamepads; GLFW would refuse the call
     if (!Window::HasGlfw())
     {
-        return 0.0f;
+        return Shape(0.0f, direction, pressPoint);
     }
     GLFWgamepadstate state;
     if (glfwGetGamepadState(gamepadId, &state))
     {
         const int glfwAxis = GamepadAxisToGLFW.at(boundAxis);
-        return NormalizeAxis(boundAxis, state.axes[glfwAxis]);
+        return Shape(NormalizeAxis(boundAxis, state.axes[glfwAxis]), direction, pressPoint);
     }
-    return 0.0f;
+    return Shape(0.0f, direction, pressPoint);
 }
 
 InputValue GamepadStickBinding::getValue()
@@ -166,6 +185,59 @@ InputValue GamepadButtonBinding::getValue()
     return false;
 }
 
+Vector2 GamepadButtonCompositeBinding::Combine(const bool upDown, const bool downDown, const bool leftDown,
+                                               const bool rightDown)
+{
+    float x = 0.0f, y = 0.0f;
+    if (rightDown)
+        x += 1.0f;
+    if (leftDown)
+        x -= 1.0f;
+    if (upDown)
+        y += 1.0f;
+    if (downDown)
+        y -= 1.0f;
+    return Vector2(x, y);
+}
+
+InputValue GamepadButtonCompositeBinding::getValue()
+{
+    // Without GLFW (no window, or windowless) there are no gamepads; GLFW would refuse the call
+    if (!Window::HasGlfw())
+    {
+        return Vector2(0.0f, 0.0f);
+    }
+    GLFWgamepadstate state;
+    if (!glfwGetGamepadState(gamepadId, &state))
+    {
+        return Vector2(0.0f, 0.0f);
+    }
+    const auto isDown = [&state](const GamepadButton button)
+    {
+        return state.buttons[GamepadButtonToGLFW.at(button)] == GLFW_PRESS;
+    };
+    return Combine(isDown(up), isDown(down), isDown(left), isDown(right));
+}
+
+InputValue ChordBinding::getValue()
+{
+    // The main binding is read every frame, so the chord's value type never changes with the modifier
+    const InputValue value = binding->getValue();
+    if (modifier->getValue().asBool())
+    {
+        return value;
+    }
+    if (value.Is<Vector2>())
+    {
+        return Vector2(0.0f, 0.0f);
+    }
+    if (value.Is<float>())
+    {
+        return 0.0f;
+    }
+    return false;
+}
+
 nlohmann::json KeyboardButtonBinding::Serialize() const
 {
     return {
@@ -176,10 +248,41 @@ nlohmann::json KeyboardButtonBinding::Serialize() const
 
 nlohmann::json AxisBinding::Serialize() const
 {
-    return {
+    nlohmann::json j = {
             {"type", GetType()},
             {"axis", boundAxis},
             {"gamepadId", gamepadId}
+    };
+    // Written only when set, so maps saved before these fields existed serialize as they did
+    if (direction != AxisDirection::Both)
+    {
+        j["direction"] = direction;
+    }
+    if (pressPoint > 0.0f)
+    {
+        j["pressPoint"] = pressPoint;
+    }
+    return j;
+}
+
+nlohmann::json GamepadButtonCompositeBinding::Serialize() const
+{
+    return {
+            {"type", GetType()},
+            {"up", up},
+            {"down", down},
+            {"left", left},
+            {"right", right},
+            {"gamepadId", gamepadId}
+    };
+}
+
+nlohmann::json ChordBinding::Serialize() const
+{
+    return {
+            {"type", GetType()},
+            {"modifier", modifier->Serialize()},
+            {"binding", binding->Serialize()}
     };
 }
 
