@@ -120,6 +120,7 @@ namespace
             {"GetProjectInfo", CommandType::GetProjectInfo},
             {"SetProjectSettings", CommandType::SetProjectSettings},
             {"SetStartupScene", CommandType::SetStartupScene},
+            {"SetBuildTargets", CommandType::SetBuildTargets},
             {"ListEditorExtensions", CommandType::ListEditorExtensions},
             {"GetEditorUi", CommandType::GetEditorUi},
             {"InvokeMenuItem", CommandType::InvokeMenuItem},
@@ -260,6 +261,7 @@ namespace
             {"NewScene", [](BufferReader &r) { (void)NewSceneCmd::Deserialize(r); }},
             {"SetProjectSettings", [](BufferReader &r) { (void)SetProjectSettingsCmd::Deserialize(r); }},
             {"SetStartupScene", [](BufferReader &r) { (void)SetStartupSceneCmd::Deserialize(r); }},
+            {"SetBuildTargets", [](BufferReader &r) { (void)SetBuildTargetsCmd::Deserialize(r); }},
             {"BeginEditGroup", [](BufferReader &r) { (void)BeginEditGroupCmd::Deserialize(r); }},
             {"InvokeMenuItem", [](BufferReader &r) { (void)InvokeMenuItemCmd::Deserialize(r); }},
             {"InvokeInspectorAction", [](BufferReader &r) { (void)InvokeInspectorActionCmd::Deserialize(r); }},
@@ -678,6 +680,8 @@ TEST(ProtocolSpecTest, EveryCommandIsClassifiedForAPlayHost)
         {"ClosePrefabStage", true}, {"GetPrefabStage", false},
         // B11: SetNetworkSettings saves project.n2proj (the two Get commands only read, below)
         {"SetNetworkSettings", true},
+        // 1.29.0: SetBuildTargets saves project.n2proj
+        {"SetBuildTargets", true},
         // Allowed: they read, or change only the running game, the in-memory scene store or the connection
         {"RenderFrame", false}, {"SetViewportSize", false}, {"GetAudio", false}, {"Hello", false},
         {"PollEvents", false}, {"RenderFrameIfChanged", false}, {"SetCameraPosition", false},
