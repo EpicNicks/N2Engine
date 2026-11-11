@@ -30,8 +30,8 @@
   ],
   "requiresDocs": true,
   "allowProtocol": false,
-  "gate": "needs the user's go; depends on bt1-n2build-desktop-web; D6 decided: zip by default, 7z as an option",
-  "approved": false,
+  "gate": "approved by the user on 2026-11-10 (all stages); depends on bt1-n2build-desktop-web; D6 decided: zip by default, 7z as an option",
+  "approved": true,
   "reviewer": "opus",
   "notes": "Reviewer: no write outside user://, pack reads bounded and checked, path traversal out of a mount impossible."
 }

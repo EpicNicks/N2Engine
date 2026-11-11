@@ -26,8 +26,8 @@
   ],
   "requiresDocs": true,
   "allowProtocol": false,
-  "gate": "later goal; needs the user's go; depends on bt10-ios-player",
-  "approved": false,
+  "gate": "approved by the user on 2026-11-10 (all stages); later goal; depends on bt10-ios-player",
+  "approved": true,
   "reviewer": "opus",
   "notes": "Reviewer: interface parity with the other backends, no Objective-C leaking into renderer headers outside the Metal backend."
 }

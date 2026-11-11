@@ -33,8 +33,8 @@
   ],
   "requiresDocs": true,
   "allowProtocol": true,
-  "gate": "split per stage; every stage needs the user's go; decisions D1-D8 made on 2026-11-10",
-  "approved": false,
+  "gate": "approved by the user on 2026-11-10 (all stages); split per stage; every stage decisions D1-D8 made on 2026-11-10",
+  "approved": true,
   "reviewer": "opus",
   "notes": "Reviewer: no behaviour change on existing targets, platform code only behind the platform layer, no signing secret in the project, host, logs or protocol."
 }

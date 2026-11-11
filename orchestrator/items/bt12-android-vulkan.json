@@ -26,8 +26,8 @@
   ],
   "requiresDocs": true,
   "allowProtocol": false,
-  "gate": "later goal; needs the user's go; depends on bt8-android-player",
-  "approved": false,
+  "gate": "approved by the user on 2026-11-10 (all stages); later goal; depends on bt8-android-player",
+  "approved": true,
   "reviewer": "opus",
   "notes": "Reviewer: mobile tiler costs (render pass load/store ops), pre-rotation, validation layers clean on the emulator."
 }

@@ -30,8 +30,8 @@
   ],
   "requiresDocs": true,
   "allowProtocol": false,
-  "gate": "needs the user's go; depends on bt5-engine-input-codes",
-  "approved": false,
+  "gate": "approved by the user on 2026-11-10 (all stages); depends on bt5-engine-input-codes",
+  "approved": true,
   "reviewer": "opus",
   "notes": "Reviewer: the interface is enough for Android and iOS (lifecycle, surface loss, insets, loop owned by the OS) without changing it later. The headless backend is not an afterthought: the editor host and CI run without a window."
 }

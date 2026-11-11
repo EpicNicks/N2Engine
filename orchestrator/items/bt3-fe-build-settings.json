@@ -21,8 +21,8 @@
   ],
   "requiresDocs": false,
   "allowProtocol": false,
-  "gate": "needs the user's go; depends on bt2-project-targets-protocol",
-  "approved": false,
+  "gate": "approved by the user on 2026-11-10 (all stages); depends on bt2-project-targets-protocol",
+  "approved": true,
   "reviewer": "opus",
   "notes": "Reviewer: n2build is spawned without a shell, arguments are not built from strings, no secret in logs or storage."
 }

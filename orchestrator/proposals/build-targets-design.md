@@ -5,8 +5,8 @@ able to allow the user to select a build target in the engine editor UI like win
 console toolchains in the future like switch".
 
 **Status: proposal, 2026-11-10, amended the same day after review (stage order, unmerged input code, headless backend,
-physics per target, remote hosts, saved key codes, web size). The user decided D1 to D8 the same day (section 6). No stage is
-approved.**
+physics per target, remote hosts, saved key codes, web size). The user decided D1 to D8 the same day (section 6) and approved
+every stage. Stages still run in the order of section 5, each after the stages it depends on.**
 
 ## 1. Goal
 
@@ -191,7 +191,7 @@ repository secrets and used only in the workflow.
 
 ## 5. Stages
 
-Each stage is its own item and PR and needs the user's go. The order puts what the user asked for first: stages 1 to 3 give
+Each stage is its own item and PR. All stages were approved by the user on 2026-11-10. The order puts what the user asked for first: stages 1 to 3 give
 target selection in the editor for the three targets that already work (Windows, Linux, web) without touching the input,
 window or renderer code. The platform layer (stages 5 to 7) is only needed for new platforms, so it comes just before Android.
 (Amended 2026-11-10: the first draft ran the platform layer first, which delayed the Build button behind the riskiest stage.)

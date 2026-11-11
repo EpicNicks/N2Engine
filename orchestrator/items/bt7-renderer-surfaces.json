@@ -23,8 +23,8 @@
   ],
   "requiresDocs": true,
   "allowProtocol": false,
-  "gate": "needs the user's go; depends on bt6-platform-host",
-  "approved": false,
+  "gate": "approved by the user on 2026-11-10 (all stages); depends on bt6-platform-host",
+  "approved": true,
   "reviewer": "opus",
   "notes": "Reviewer: surface loss and recreation are possible without restarting the renderer."
 }

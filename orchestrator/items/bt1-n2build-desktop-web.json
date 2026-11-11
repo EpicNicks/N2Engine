@@ -33,8 +33,8 @@
   ],
   "requiresDocs": true,
   "allowProtocol": false,
-  "gate": "needs the user's go; decisions D1, D3, D4 made (local builds; full build from source; new desktop player, lua_project stays a demo). Uses project folders until bt4-vfs-packs",
-  "approved": false,
+  "gate": "approved by the user on 2026-11-10 (all stages); decisions D1, D3, D4 made (local builds; full build from source; new desktop player, lua_project stays a demo). Uses project folders until bt4-vfs-packs",
+  "approved": true,
   "reviewer": "opus",
   "notes": "Reviewer: descriptors are data, not code paths in n2build; nothing target-specific hard-coded in the tool. Prebuilt players are not part of this stage (D3: an extra, later option)."
 }

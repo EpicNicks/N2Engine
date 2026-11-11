@@ -25,8 +25,8 @@
   ],
   "requiresDocs": true,
   "allowProtocol": false,
-  "gate": "needs the user's go; depends on the Triangle-Like input branches being merged to master first (feat-lua-key-text-input, feat-input-touch, feat-input-gamepad-rumble, feat-input-gamepad-composites): this stage rewrites that code",
-  "approved": false,
+  "gate": "approved by the user on 2026-11-10 (all stages); depends on the Triangle-Like input branches being merged to master first (feat-lua-key-text-input, feat-input-touch, feat-input-gamepad-rumble, feat-input-gamepad-composites): this stage rewrites that code",
+  "approved": true,
   "reviewer": "opus",
   "notes": "Reviewer: every GLFW code has an engine code, the mapping is total both ways, saved data compatible."
 }
