@@ -11,6 +11,10 @@ layout(set = 0, binding = 0, std140, row_major) uniform PerDraw {
     mat4 uProjection;
     // RenderState::dim (the prefab stage's dimmed scene), passed on to the fragment stage
     float uStageDim;
+    // RenderState::tint (the screen tint), read by the fragment stage from this same block
+    float uTintSaturation;
+    int uTintInside;
+    vec3 uTintCircle;
 };
 
 layout(location = 0) out vec2 fragTexCoord;

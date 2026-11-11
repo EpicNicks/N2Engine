@@ -501,7 +501,7 @@ jobs:
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
-        run: cmake --build build --parallel --target N2EditorHost N2Server math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client n2server_net_host n2server_net_client n2server_lockstep_client n2server_rollback_client n2_replay websocket_echo jolt_smoke_tests box2d_smoke_tests -- -k 0
+        run: cmake --build build --parallel --target N2EditorHost N2Server n2player player_tests math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client n2server_net_host n2server_net_client n2server_lockstep_client n2server_rollback_client n2_replay websocket_echo jolt_smoke_tests box2d_smoke_tests -- -k 0
 
       # The vendored Jolt Physics tree is exactly upstream's v5.6.0 (the SHA-256 of every file, no extra file under Jolt/)
       - name: Check the vendored Jolt Physics tree
@@ -672,6 +672,60 @@ jobs:
           path: .ccache
           key: ccache-linux-x86_64-clang20-${{ github.run_id }}-${{ github.run_attempt }}
 
+  # Build targets stage 1 (docs/build-targets.html): n2build's own tests, then a real Linux package of lua_project built,
+  # packaged and run through n2build exactly as a person or the editor would, with GCC 14 (the compiler n2build's doctor
+  # recommends). The package runs 60 frames under Xvfb with Mesa's software GL; there is no audio device, which the engine
+  # reports and runs without. A job of its own, so the main linux job's time does not grow.
+  n2build:
+    name: n2build (linux package of lua_project)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CC: gcc-14
+      CXX: g++-14
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-14 g++-14 cmake ninja-build libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev xvfb xauth libgl1-mesa-dri
+
+      - name: n2build unit tests
+        run: node --test tools/n2build/n2build.test.mjs
+
+      - name: Cache PhysX binaries
+        uses: actions/cache@v6
+        with:
+          path: external/PhysX/physx/bin
+          key: physx-bin-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/PhysXLinuxHashes.cmake') }}
+
+      - name: n2build doctor
+        run: node tools/n2build/n2build.mjs doctor --target linux --project lua_project
+
+      - name: n2build build (linux, release, zip)
+        run: node tools/n2build/n2build.mjs build --target linux --project lua_project --build-dir "$RUNNER_TEMP/n2build" --out "$RUNNER_TEMP/package/LuaDemo" --archive zip
+
+      - name: Check the package
+        run: |
+          pkg="$RUNNER_TEMP/package/LuaDemo"
+          ls -la "$pkg" "$pkg/game"
+          test -x "$pkg/lua_project"
+          test -f "$pkg/game/project.n2proj"
+          test -f "$pkg/game/assets/scene.lua"
+          test -f "$pkg.zip"
+          ldd "$pkg/lua_project" | tee ldd.txt
+          if grep -q "not found" ldd.txt; then echo "::error::The packaged player is missing a shared library"; exit 1; fi
+
+      - name: n2build run (60 frames under Xvfb)
+        run: xvfb-run -a node tools/n2build/n2build.mjs run --target linux --project lua_project --out "$RUNNER_TEMP/package/LuaDemo" --no-build --frames 60
+
   # The same Linux build and tests on arm64 (ubuntu-24.04-arm, aarch64): the math library's x86 SIMD paths are compiled out
   # there and the scalar versions run; PhysX runs its own aarch64 build. Not a required check yet.
   linux-arm64:
@@ -742,7 +796,7 @@ jobs:
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/aarch64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
-        run: cmake --build build --parallel --target N2EditorHost N2Server math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client n2server_net_host n2server_net_client n2server_lockstep_client n2server_rollback_client n2_replay websocket_echo jolt_smoke_tests box2d_smoke_tests -- -k 0
+        run: cmake --build build --parallel --target N2EditorHost N2Server n2player player_tests math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client n2server_net_host n2server_net_client n2server_lockstep_client n2server_rollback_client n2_replay websocket_echo jolt_smoke_tests box2d_smoke_tests -- -k 0
 
       # The vendored Jolt Physics (N2ENGINE_USE_JOLT): its smoke test (the library alone) run directly, because ctest
       # hides a passing test's output, so this leg's [JOLT-DETERMINISM] line (the state hash every leg must produce, the
@@ -929,7 +983,7 @@ jobs:
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DN2ENGINE_RENDERER_VULKAN=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
-        run: cmake --build build --parallel --target N2EditorHost N2Server math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client n2server_net_host n2server_net_client n2server_lockstep_client n2server_rollback_client n2_replay websocket_echo jolt_smoke_tests box2d_smoke_tests -- -k 0
+        run: cmake --build build --parallel --target N2EditorHost N2Server n2player player_tests math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client n2server_net_host n2server_net_client n2server_lockstep_client n2server_rollback_client n2_replay websocket_echo jolt_smoke_tests box2d_smoke_tests -- -k 0
 
       # The vendored Jolt Physics (N2ENGINE_USE_JOLT): its smoke test (the library alone) run directly, because ctest
       # hides a passing test's output, so this leg's [JOLT-DETERMINISM] line (the state hash every leg must produce, the
@@ -940,13 +994,15 @@ jobs:
           ./build/bin/jolt_smoke_tests | tee jolt-smoke.log
           { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-DETERMINISM\]' jolt-smoke.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
 
-      # A native build from the same list: the engine with no physics module at all, with its whole test suite
+      # A native build from the same list: the engine with no physics, particles or soft-body module at all, with its whole test
+      # suite (the tests of a module left out are not built; tests/engine/modules/LeftOutModulesTests.cpp checks the components)
       - name: Build and test with no physics modules
         run: |
           set -e -o pipefail
           cmake -S . -B build-nophysics -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DN2ENGINE_RENDERER_VULKAN=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DN2ENGINE_PROJECT=tests/projects/no_physics 2>&1 | tee configure-nophysics.log
           grep -q "PhysX disabled" configure-nophysics.log
           if grep -q "Jolt Physics (vendored\|Box2D (vendored" configure-nophysics.log; then echo "a physics module was still configured"; exit 1; fi
+          grep -q "Engine modules: particles OFF, softbodies OFF" configure-nophysics.log
           cmake --build build-nophysics --parallel --target engine_tests -- -k 0
           ./build-nophysics/bin/engine_tests
 
@@ -1173,7 +1229,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # Since the per-project module builds (#315) a full run takes about 63 minutes: every step passed and the job was cancelled at 60
+    timeout-minutes: 90
     env:
       N2_DOWNLOAD_CACHE: ${{ github.workspace }}/.n2-downloads
       EMSCRIPTEN_VERSION: 4.0.10
@@ -1425,8 +1482,9 @@ jobs:
             echo "    $line" >> "$GITHUB_STEP_SUMMARY"
           done
 
-      # A game that lists its modules (docs/project-modules.html): a player with no physics at all must build, start and draw, and
-      # this is what leaving physics out saves. Size profile, against the full package just built.
+      # Games that list their modules (docs/project-modules.html): a player with no optional module at all (no_physics: no physics,
+      # particles or soft bodies), and one without only particles and soft bodies (no_particles_softbodies), must each build,
+      # start and draw, and the sizes are what leaving them out saves. Size profile, against the full package just built.
       - name: Build and run a project with no physics modules
         run: |
           set -e -o pipefail
@@ -1434,9 +1492,15 @@ jobs:
           emcmake cmake -S . -B build-web-nophysics -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=size -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_PROJECT=tests/projects/no_physics 2>&1 | tee configure-nophysics.log
           grep -q "PhysX disabled" configure-nophysics.log
           if grep -q "Jolt Physics (vendored\|Box2D (vendored" configure-nophysics.log; then echo "a physics module was still configured"; exit 1; fi
+          grep -q "Engine modules: particles OFF, softbodies OFF" configure-nophysics.log
           cmake --build build-web-nophysics --target web-package -- -k 0
           node scripts/web-package-smoke.mjs build-web-nophysics/web-package 30 320x180 --precompressed
-          for tree in build-web-size build-web-nophysics; do
+          # The same physics as build-web-size (PhysX, Jolt and Box2D), so the difference is the two modules alone
+          emcmake cmake -S . -B build-web-noparticles -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=size -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_PROJECT=tests/projects/no_particles_softbodies 2>&1 | tee configure-noparticles.log
+          grep -q "Engine modules: particles OFF, softbodies OFF" configure-noparticles.log
+          cmake --build build-web-noparticles --target web-package -- -k 0
+          node scripts/web-package-smoke.mjs build-web-noparticles/web-package 30 320x180 --precompressed
+          for tree in build-web-size build-web-noparticles build-web-nophysics; do
             w="$tree/web-package/index.wasm"
             line="$tree: index.wasm raw $(wc -c < "$w") gzip $(gzip -9 -c "$w" | wc -c) brotli $(wc -c < "$w.br")"
             echo "[MODULES-SIZE] $line"

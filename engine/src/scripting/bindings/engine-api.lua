@@ -808,7 +808,7 @@ function GameObject:Destroy() end
 ---Add a component by type name and return it.
 ---Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CharacterController", "Rigidbody2D", "BoxCollider2D",
 ---"CircleCollider2D", "PolygonCollider2D", "CubeRenderer",
----"SphereRenderer", "QuadRenderer", "MeshRenderer", "TextRenderer", "ParticleSystem", "SoftBody", "Light", "AudioSource", "AudioListener",
+---"SphereRenderer", "QuadRenderer", "Sprite2D", "MeshRenderer", "TextRenderer", "ParticleSystem", "SoftBody", "Light", "AudioSource", "AudioListener",
 ---"LuaComponent", "RectTransform", "Canvas", "Image", "UIText", "Button". Unknown names raise an error.
 ---@param typeName string
 ---@return Component
@@ -1520,6 +1520,18 @@ function Image:SetColor(color) end
 function Image:GetRaycastTarget() end
 ---@param raycastTarget boolean false lets the pointer through to what is underneath
 function Image:SetRaycastTarget(raycastTarget) end
+---@return number
+function Image:GetSaturation() end
+---1 (the default) draws the colour as it is, 0 grey, in between mixes, above 1 strengthens it (stored clamped to 0..4). Saved
+---with the scene.
+---@param saturation number
+function Image:SetSaturation(saturation) end
+---@return Color
+function Image:GetFlash() end
+---A colour mixed over the image by its alpha, after the saturation; Color.new(0, 0, 0, 0) (the default) is none. Saved with
+---the scene.
+---@param flash Color
+function Image:SetFlash(flash) end
 ---Show an image file (PNG, JPEG, TGA or BMP) in the rect, multiplied by the colour; nil clears it. Raises an
 ---error, keeping the current sprite, if the file doesn't load. Saved with the scene.
 ---@param path string|nil e.g. "res://ui/icon.png"
@@ -2208,6 +2220,91 @@ PolygonCollider2D = {}
 function PolygonCollider2D:SetVertices(vertices) end
 ---@return Vector2[]
 function PolygonCollider2D:GetVertices() end
+---@alias Sprite2DShape integer
+---@class Sprite2DShapeValues
+---@field Rect Sprite2DShape
+---@field Triangle Sprite2DShape
+---@field Circle Sprite2DShape
+---@field RegularPolygon Sprite2DShape
+---@field Polygon Sprite2DShape
+Sprite2DShape = {}
+
+---A flat shape in the object's x, y plane (docs/sprite2d.html): filled or outlined, coloured, optionally textured. Lower sorting
+---orders draw first; equal ones back to front by depth.
+---@class Sprite2D : Component
+Sprite2D = {}
+---@param shape Sprite2DShape
+function Sprite2D:SetShape(shape) end
+---@return Sprite2DShape
+function Sprite2D:GetShape() end
+---World units; for a circle or regular polygon, the diameter on each axis
+---@param size Vector2
+function Sprite2D:SetSize(size) end
+---@return Vector2
+function Sprite2D:GetSize() end
+---RegularPolygon: 3 to 64
+---@param sides integer
+function Sprite2D:SetSides(sides) end
+---@return integer
+function Sprite2D:GetSides() end
+---Polygon: 3 to 64 convex points, in units of the size
+---@param vertices Vector2[]
+function Sprite2D:SetVertices(vertices) end
+---@return Vector2[]
+function Sprite2D:GetVertices() end
+---0 fills; above 0, only a border this wide, in world units
+---@param width number
+function Sprite2D:SetOutline(width) end
+---@return number
+function Sprite2D:GetOutline() end
+---@param color Color
+function Sprite2D:SetColor(color) end
+---@return Color
+function Sprite2D:GetColor() end
+---1 (the default) draws the colour as it is, 0 grey (its own luminance), in between mixes, above 1 strengthens it
+---(stored clamped to 0..4). sprite:SetSaturation(0) is a greyed-out icon. Saved with the scene.
+---@param saturation number
+function Sprite2D:SetSaturation(saturation) end
+---@return number
+function Sprite2D:GetSaturation() end
+---A colour mixed over the sprite by its alpha, after the saturation; the sprite's own alpha (its shape) is unchanged.
+---Color.new(1, 1, 1, 0.8) for a few frames is a hit flash; a hue that cycles each frame is a rainbow. Color.new(0, 0, 0, 0) (the
+---default) is none. Saved with the scene.
+---@param flash Color
+function Sprite2D:SetFlash(flash) end
+---@return Color
+function Sprite2D:GetFlash() end
+---A res:// path to an image, or nil for a plain colour
+---@param path string|nil
+function Sprite2D:SetTexture(path) end
+---@return boolean
+function Sprite2D:HasTexture() end
+---The part of the texture shown, in uv with v up: its lower-left corner and its size
+---@param offset Vector2
+---@param size Vector2
+function Sprite2D:SetRegion(offset, size) end
+---@return Vector2
+function Sprite2D:GetRegionOffset() end
+---@return Vector2
+function Sprite2D:GetRegionSize() end
+---@param flip boolean
+function Sprite2D:SetFlipX(flip) end
+---@return boolean
+function Sprite2D:GetFlipX() end
+---@param flip boolean
+function Sprite2D:SetFlipY(flip) end
+---@return boolean
+function Sprite2D:GetFlipY() end
+---Where the object's position sits within the size: (0.5, 0.5) is the middle
+---@param pivot Vector2
+function Sprite2D:SetPivot(pivot) end
+---@return Vector2
+function Sprite2D:GetPivot() end
+---Lower draws first
+---@param order integer
+function Sprite2D:SetSortingOrder(order) end
+---@return integer
+function Sprite2D:GetSortingOrder() end
 
 ---@class PhysicsMaterial
 ---@field staticFriction number Friction when not moving (0-1)
@@ -3059,6 +3156,47 @@ function Window.SetMode(mode) end
 ---Set the clear color
 ---@param color Color
 function Window.SetClearColor(color) end
+
+-- ===== SCREEN =====
+
+---The screen tint: a saturation change inside (or outside) a circle on the screen, applied to the scene and not to the
+---screen-space UI (the HUD stays in colour). For the time-stop effect (animate `radius` from 0 to the corner distance and
+---back with `saturation = 0.2`; from the middle the corners are `math.sqrt((Window.GetWidth() / Window.GetHeight())^2 + 1)`
+---half heights away: about 2.04 at 16:9, 2.54 at 21:9) and full-screen grey (`saturation = 0` with no radius). Every
+---renderer draws it (OpenGL, Vulkan, WebGPU and software), and the clear colour is tinted with the scene.
+---@class ScreenTint
+---@field saturation number 0 (grey) to 1 (no tint)
+---@field centre Vector2 the circle's centre, 0 to 1 of the screen from the bottom left (default (0.5, 0.5))
+---@field radius number the circle's radius in half screen heights: 1 reaches the top and bottom edges from the middle (default: covers the screen)
+---@field inside boolean true (the default): the tint applies inside the circle; false: outside it
+
+---@class Screen
+Screen = {}
+
+---Set the screen tint for every frame drawn from now on, until it is changed or cleared. `saturation` is required; the other fields
+---are optional and take their defaults on every call (not the previous tint's values). A field of the wrong type, out of
+---range (saturation outside 0..1, a negative radius) or unknown is an error, and the tint is left as it was.
+---@param tint ScreenTint
+function Screen.SetTint(tint) end
+
+---Remove the screen tint
+function Screen.ClearTint() end
+
+---The screen tint as it is now (saturation 1 when there is none)
+---@return ScreenTint
+function Screen.GetTint() end
+
+-- ===== GRAPHICS =====
+
+---What the renderer the game runs on can do
+---@class Graphics
+Graphics = {}
+
+---False on the software renderer (the web player's fallback when the browser has no WebGPU), which cannot blend: a
+---half-transparent pixel is drawn opaque or not at all, so a soft glow sprite becomes a hard disc. Skip such sprites
+---when it is false. True on OpenGL, Vulkan and WebGPU, and without a renderer.
+---@return boolean
+function Graphics.CanBlend() end
 
 -- ===== CAMERA =====
 

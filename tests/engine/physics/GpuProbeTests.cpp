@@ -222,6 +222,8 @@ TEST(GpuProbeTest, ExplicitOffBehavesTheSame)
     backend.Shutdown();
 }
 
+// The cases below install a fake GPU particle or soft-body driver, which a build without either module refuses
+#if defined(N2ENGINE_PARTICLES_ENABLED) && defined(N2ENGINE_SOFTBODIES_ENABLED)
 namespace
 {
     /// Collects the warnings logged while it lives
@@ -504,6 +506,8 @@ TEST_F(ParticleFallbackTest, AGpuFailureRestartsTheSystemOnTheCpuWithOneWarning)
     system->OnDestroy();
 }
 
+#endif // both modules
+
 TEST(GpuProbeTest, SoftBodiesRowIsDisabledWithTheSceneReasonWhenGpuIsOff)
 {
     PhysXBackend backend;
@@ -552,7 +556,7 @@ namespace
     };
 }
 
-#ifdef N2ENGINE_PHYSX_ENABLED
+#if defined(N2ENGINE_PHYSX_ENABLED) && defined(N2ENGINE_PARTICLES_ENABLED) && defined(N2ENGINE_SOFTBODIES_ENABLED)
 TEST_F(LuaGpuTest, IsGpuAvailableFollowsTheSceneNotTheParticleFeature)
 {
     InjectedBackend rig(GpuMode::Auto);

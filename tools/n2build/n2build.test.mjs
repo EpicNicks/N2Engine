@@ -1,0 +1,470 @@
+// Tests for tools/n2build. Run: node --test tools/n2build/n2build.test.mjs
+// Nothing here compiles the engine: toolchains come from a fake probe, build trees are fake folders. The real builds run
+// in CI (the n2build job in .github/workflows/tests.yml).
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+
+import {
+  archivePackage, buildKey, checkPhysics, needsConfigure, packageDesktop, packageWeb, planBuild, preparePackageDir,
+  readProject, recordConfigure, resolveOptions, safeName, writeMarker, PACKAGE_MARKER,
+} from './lib/build.mjs';
+import { loadDescriptors, readUserSettings, userSettingsFile, validateDescriptor } from './lib/descriptors.mjs';
+import { BuildError, Reporter } from './lib/report.mjs';
+import { resolveRequest } from './lib/serve.mjs';
+import { applyEnv, checkToolchains, findOnPath, parseVersion, versionAtLeast } from './lib/toolchains.mjs';
+import { ENGINE_ROOT, main, parseArguments, UsageError } from './n2build.mjs';
+
+const tmp = (prefix) => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+
+function write(file, content) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, typeof content === 'string' ? content : JSON.stringify(content, null, 2));
+}
+
+function makeProject(project = { name: 'My Game!', projectId: '00000000-0000-0000-0000-000000000001' }, files = {}) {
+  const dir = tmp('n2build-project-');
+  write(path.join(dir, 'project.n2proj'), project);
+  write(path.join(dir, 'assets', 'scene.lua'), '-- scene');
+  for (const [relative, content] of Object.entries(files)) write(path.join(dir, relative), content);
+  return dir;
+}
+
+function descriptor(overrides = {}) {
+  return validateDescriptor({
+    formatVersion: 1,
+    name: 'fake',
+    displayName: 'Fake',
+    hostSystems: ['linux'],
+    toolchains: { required: ['cmake'], optional: ['vulkan-sdk'] },
+    physics3d: ['none', 'jolt'],
+    cmake: {
+      target: 'n2player',
+      options: { N2ENGINE_BUILD_TESTS: 'OFF' },
+      configs: { debug: { CMAKE_BUILD_TYPE: 'Debug' }, release: { CMAKE_BUILD_TYPE: 'Release' } },
+      toolchainOptions: { 'vulkan-sdk': { present: { N2ENGINE_RENDERER_VULKAN: 'ON' }, absent: { N2ENGINE_RENDERER_VULKAN: 'OFF' } } },
+    },
+    package: { kind: 'desktop', from: 'bin' },
+    run: { kind: 'executable' },
+    ...overrides,
+  }, 'fake/target.json');
+}
+
+/** A probe with the given files and commands: run(command) answers from `commands` by the command's base name */
+function fakeProbe({ platform = 'linux', env = {}, files = [], commands = {}, dirs = {} } = {}) {
+  const fileSet = new Set(files);
+  return {
+    platform,
+    env: { PATH: platform === 'win32' ? 'C:\\tools' : '/usr/bin', ...env },
+    exists: (file) => fileSet.has(file),
+    readFile: (file) => (typeof commands[`read:${file}`] === 'string' ? commands[`read:${file}`] : null),
+    listDir: (dir) => dirs[dir] ?? [],
+    run(command, args) {
+      // Either separator: a simulated Windows path must work when the tests run on Linux
+      const name = command.split(/[\\/]/).pop().replace(/\.exe$/i, '');
+      const answer = commands[name];
+      if (answer === undefined) return null;
+      if (typeof answer === 'function') return answer(args);
+      return typeof answer === 'object' ? answer : { status: 0, stdout: answer, stderr: '' };
+    },
+  };
+}
+
+function capture() {
+  const lines = [];
+  const reporter = new Reporter({ json: true, out: (line) => lines.push(JSON.parse(line)), err: () => {} });
+  return { reporter, lines };
+}
+
+// --- descriptors -------------------------------------------------------------------------------------------------
+
+test('the repository\'s descriptors load and are valid', () => {
+  const descriptors = loadDescriptors(ENGINE_ROOT);
+  assert.deepEqual([...descriptors.keys()].sort(), ['linux', 'web', 'windows']);
+  for (const d of descriptors.values()) {
+    assert.equal(d.source, 'targets/');
+    assert.ok(d.cmake.configs.debug && d.cmake.configs.release, `${d.name} has debug and release`);
+  }
+  assert.equal(descriptors.get('web').cmake.toolchain, 'emsdk');
+  assert.equal(descriptors.get('windows').package.kind, 'desktop');
+});
+
+test('a descriptor with a mistake is refused with the file and the reason', () => {
+  const base = JSON.parse(fs.readFileSync(path.join(ENGINE_ROOT, 'targets', 'linux', 'target.json'), 'utf8'));
+  const bad = [
+    [{ formatVersion: 2 }, /formatVersion/],
+    [{ name: 'Linux!' }, /name must be/],
+    [{ hostSystems: [] }, /hostSystems/],
+    [{ toolchains: { required: ['xcode-magic'] } }, /unknown toolchain 'xcode-magic'/],
+    [{ physics3d: ['havok'] }, /physics3d: unknown value 'havok'/],
+    [{ cmake: { ...base.cmake, configs: {} } }, /cmake.configs/],
+    [{ cmake: { ...base.cmake, options: { 'not a var': 'x' } } }, /not a CMake variable name/],
+    [{ cmake: { ...base.cmake, toolchainOptions: { emsdk: { present: {} } } } }, /not one of this target's toolchains/],
+    [{ package: { kind: 'ipa', from: 'x' } }, /package.kind/],
+    [{ run: { kind: 'teleport' } }, /run.kind/],
+    [{ pins: { emsdk: 4 } }, /pins.emsdk/],
+  ];
+  for (const [change, message] of bad) {
+    assert.throws(() => validateDescriptor({ ...base, ...change }, 'x/target.json'), (error) => error instanceof BuildError && message.test(error.message) && error.message.startsWith('x/target.json'), JSON.stringify(change));
+  }
+});
+
+test('extra target folders add targets, and a name defined twice names both files', () => {
+  const extra = tmp('n2build-targets-');
+  const console = JSON.parse(fs.readFileSync(path.join(ENGINE_ROOT, 'targets', 'linux', 'target.json'), 'utf8'));
+  write(path.join(extra, 'handheld', 'target.json'), { ...console, name: 'handheld', displayName: 'A handheld' });
+  const descriptors = loadDescriptors(ENGINE_ROOT, [extra]);
+  assert.equal(descriptors.get('handheld').source, extra);
+
+  write(path.join(extra, 'linux', 'target.json'), console);
+  assert.throws(() => loadDescriptors(ENGINE_ROOT, [extra]), /defined twice: .*linux.*target\.json and .*linux.*target\.json/s);
+
+  const mismatch = tmp('n2build-targets-');
+  write(path.join(mismatch, 'other', 'target.json'), { ...console, name: 'notother' });
+  assert.throws(() => loadDescriptors(ENGINE_ROOT, [mismatch]), /differs from its folder/);
+  assert.throws(() => loadDescriptors(ENGINE_ROOT, [path.join(extra, 'missing')]), /does not exist/);
+});
+
+test('user settings: where they live, and a broken file is an error', () => {
+  assert.equal(userSettingsFile({ APPDATA: 'C:\\Users\\a\\AppData\\Roaming' }, 'win32'), path.join('C:\\Users\\a\\AppData\\Roaming', 'N2Engine', 'n2build.json'));
+  assert.equal(userSettingsFile({ HOME: '/home/a' }, 'linux'), path.join('/home/a', '.local', 'share', 'n2engine', 'n2build.json'));
+  assert.equal(userSettingsFile({ XDG_DATA_HOME: '/data', HOME: '/home/a' }, 'linux'), path.join('/data', 'n2engine', 'n2build.json'));
+  assert.deepEqual(readUserSettings(null), {});
+  const dir = tmp('n2build-settings-');
+  write(path.join(dir, 'ok.json'), { targetFolders: ['/private/targets'] });
+  assert.deepEqual(readUserSettings(path.join(dir, 'ok.json')).targetFolders, ['/private/targets']);
+  write(path.join(dir, 'bad.json'), '{ nope');
+  assert.throws(() => readUserSettings(path.join(dir, 'bad.json')), /not valid JSON/);
+  write(path.join(dir, 'wrong.json'), { targetFolders: 'one' });
+  assert.throws(() => readUserSettings(path.join(dir, 'wrong.json')), /targetFolders/);
+});
+
+// --- project and physics -----------------------------------------------------------------------------------------
+
+test('the physics check: a list asking for a backend the target cannot build fails with the reason', () => {
+  const d = descriptor();
+  assert.equal(checkPhysics(null, d), null, 'no list: every backend the target has');
+  assert.equal(checkPhysics({ physics2d: true }, d), null, 'a list without physics3d keeps the default');
+  assert.equal(checkPhysics({ physics3d: 'jolt' }, d), null);
+  const problem = checkPhysics({ physics3d: 'physx' }, d);
+  assert.match(problem, /physics3d is "physx", but the fake target can build only: none, jolt/);
+});
+
+test('readProject reads the module list and refuses folders that are not projects', () => {
+  const project = readProject(makeProject({ name: 'G', build: { modules: { physics3d: 'none', physics2d: true } } }));
+  assert.deepEqual(project.modules, { physics3d: 'none', physics2d: true });
+  assert.throws(() => readProject(tmp('n2build-empty-')), /no project.n2proj/);
+  assert.throws(() => readProject(makeProject({ name: 'G', build: { modules: { physics3d: 'havok' } } })), /physics3d/);
+  const noAssets = tmp('n2build-noassets-');
+  write(path.join(noAssets, 'project.n2proj'), { name: 'G' });
+  assert.throws(() => readProject(noAssets), /no assets folder/);
+});
+
+test('safeName keeps a usable file name', () => {
+  assert.equal(safeName('Triangle-Like'), 'Triangle-Like');
+  assert.equal(safeName('My Game!'), 'My Game_');
+  assert.equal(safeName('../evil'), '_evil');
+  assert.equal(safeName(''), 'Game');
+  assert.equal(safeName(undefined), 'Game');
+});
+
+// --- planning ----------------------------------------------------------------------------------------------------
+
+test('the build tree is per target, configuration, module list, options and project', () => {
+  const base = { projectDir: '/p', target: 'windows', config: 'release', modules: null, options: { A: '1' } };
+  assert.equal(buildKey(base), buildKey({ ...base }));
+  assert.match(buildKey(base), /^windows-release-[0-9a-f]{10}$/);
+  for (const change of [{ config: 'debug' }, { modules: { physics3d: 'none' } }, { options: { A: '2' } }, { projectDir: '/q' }, { target: 'linux' }]) {
+    assert.notEqual(buildKey({ ...base, ...change }), buildKey(base), JSON.stringify(change));
+  }
+});
+
+test('options: configuration, then the optional toolchains present or absent', () => {
+  const d = descriptor();
+  assert.deepEqual(resolveOptions(d, 'release', new Set(['vulkan-sdk'])), { N2ENGINE_BUILD_TESTS: 'OFF', CMAKE_BUILD_TYPE: 'Release', N2ENGINE_RENDERER_VULKAN: 'ON' });
+  assert.equal(resolveOptions(d, 'debug', new Set()).N2ENGINE_RENDERER_VULKAN, 'OFF');
+  assert.throws(() => resolveOptions(d, 'profile', new Set()), /no 'profile' configuration .*debug, release/);
+});
+
+test('planBuild: the commands for a desktop and a web target', () => {
+  const projectDir = makeProject({ name: 'Tri' });
+  const descriptors = loadDescriptors(ENGINE_ROOT);
+  const desktop = planBuild({ engineRoot: '/engine', projectDir, descriptor: descriptors.get('windows'), config: 'release', modules: null, present: new Set(), jobs: 4, gameName: 'Tri' });
+  assert.ok(desktop.configureArgs.includes(`-DN2ENGINE_PROJECT=${path.resolve(projectDir)}`));
+  assert.ok(desktop.configureArgs.includes('-DCMAKE_BUILD_TYPE=Release'));
+  assert.ok(desktop.configureArgs.includes('-DN2ENGINE_RENDERER_VULKAN=OFF'));
+  assert.deepEqual(desktop.buildArgs.slice(2), ['--target', 'n2player', '-j', '4']);
+  assert.equal(desktop.treeDir, path.join(projectDir, '.n2', 'build', desktop.key));
+  assert.equal(desktop.packageDir, path.join(projectDir, '.n2', 'out', 'windows-release', 'Tri'));
+
+  const web = planBuild({ engineRoot: '/engine', projectDir, descriptor: descriptors.get('web'), config: 'debug', modules: null, present: new Set(), toolchainFile: '/emsdk/Emscripten.cmake', gameName: 'Tri', outDir: path.join(projectDir, 'site') });
+  assert.ok(web.configureArgs.includes('-DCMAKE_TOOLCHAIN_FILE=/emsdk/Emscripten.cmake'));
+  assert.ok(web.configureArgs.includes('-DN2ENGINE_WEB_PROFILE=dev'));
+  assert.ok(web.buildArgs.includes('web-package'));
+  assert.equal(web.packageDir, path.join(projectDir, 'site'));
+  assert.throws(() => planBuild({ engineRoot: '/e', projectDir, descriptor: descriptors.get('web'), config: 'release', modules: null, present: new Set(), toolchainFile: null, gameName: 'T' }), /toolchain file/);
+});
+
+test('a tree is configured again only when its arguments change', () => {
+  const tree = tmp('n2build-tree-');
+  assert.equal(needsConfigure(tree, ['a']), true, 'no cache');
+  write(path.join(tree, 'CMakeCache.txt'), '');
+  assert.equal(needsConfigure(tree, ['a']), true, 'no stamp');
+  recordConfigure(tree, ['a']);
+  assert.equal(needsConfigure(tree, ['a']), false);
+  assert.equal(needsConfigure(tree, ['a', 'b']), true);
+});
+
+// --- toolchains --------------------------------------------------------------------------------------------------
+
+test('versions', () => {
+  assert.deepEqual(parseVersion('cmake version 3.30.1\n'), [3, 30, 1]);
+  assert.deepEqual(parseVersion('g++ (GCC) 14.2'), [14, 2, 0]);
+  assert.equal(parseVersion('nothing'), null);
+  assert.ok(versionAtLeast([3, 25, 0], [3, 25, 0]));
+  assert.ok(versionAtLeast([4, 0, 0], [3, 25, 0]));
+  assert.ok(!versionAtLeast([3, 24, 9], [3, 25, 0]));
+});
+
+test('findOnPath honours PATHEXT on Windows', () => {
+  const probe = fakeProbe({ platform: 'win32', env: { PATH: 'C:\\a;C:\\b', PATHEXT: '.EXE;.BAT' }, files: ['C:\\b\\cmake.EXE'.replace('.EXE', '.exe')] });
+  assert.equal(findOnPath('cmake', probe.env, probe), 'C:\\b\\cmake.exe');
+  assert.equal(findOnPath('ninja', probe.env, probe), null);
+});
+
+test('applyEnv: replace, set, then PATH prepended (Windows spells it Path)', () => {
+  const env = applyEnv({ Path: 'C:\\x' }, { set: { A: '1' }, prependPath: ['C:\\y'], delimiter: ';' });
+  assert.deepEqual(env, { Path: 'C:\\y;C:\\x', A: '1' });
+  assert.deepEqual(applyEnv({ PATH: '/x' }, { replace: { PATH: '/v' } }), { PATH: '/v' });
+});
+
+test('doctor on Linux: cmake, ninja, the compiler version, and an optional Vulkan SDK', () => {
+  const d = validateDescriptor({ ...JSON.parse(fs.readFileSync(path.join(ENGINE_ROOT, 'targets', 'linux', 'target.json'), 'utf8')) }, 'linux');
+  const files = ['/usr/bin/cmake', '/usr/bin/ninja', '/usr/bin/c++'];
+  const ready = checkToolchains(d, fakeProbe({ files, commands: { cmake: 'cmake version 3.28.3', ninja: '1.11.1', 'c++': 'c++ (Ubuntu 14.2.0) 14.2.0' } }));
+  assert.equal(ready.ok, true);
+  assert.equal(ready.present.has('vulkan-sdk'), false);
+  assert.equal(ready.checks.find((c) => c.id === 'vulkan-sdk').required, false);
+
+  const oldGcc = checkToolchains(d, fakeProbe({ files, commands: { cmake: 'cmake version 3.28.3', ninja: '1.11.1', 'c++': 'c++ (Ubuntu 13.1.0) 13.1.0' } }));
+  assert.equal(oldGcc.ok, false);
+  assert.match(oldGcc.checks.find((c) => c.id === 'cxx').fix, /GCC 14/);
+
+  const oldCmake = checkToolchains(d, fakeProbe({ files, commands: { cmake: 'cmake version 3.22.1', ninja: '1.11.1', 'c++': 'clang version 18.1.3' } }));
+  assert.equal(oldCmake.ok, false);
+  assert.match(oldCmake.checks.find((c) => c.id === 'cmake').detail, /older than 3\.25/);
+
+  const noNinja = checkToolchains(d, fakeProbe({ files: ['/usr/bin/cmake', '/usr/bin/c++'], commands: { cmake: 'cmake version 3.28.3', 'c++': 'g++ 14.1.0' } }));
+  assert.equal(noNinja.ok, false);
+  assert.match(noNinja.checks.find((c) => c.id === 'ninja').fix, /ninja-build/);
+});
+
+test('doctor for the web: emsdk found, pinned version checked, environment and toolchain file set', () => {
+  const d = loadDescriptors(ENGINE_ROOT).get('web');
+  const emsdk = '/home/u/emsdk';
+  const em = path.posix.join(emsdk, 'upstream', 'emscripten');
+  const probe = (version) => fakeProbe({
+    env: { HOME: '/home/u' },
+    files: ['/usr/bin/cmake', '/usr/bin/ninja', path.posix.join(em, 'cmake', 'Modules', 'Platform', 'Emscripten.cmake')],
+    dirs: { [path.posix.join(emsdk, 'node')]: ['22.16.0_64bit'] },
+    commands: { cmake: 'cmake version 3.30.0', ninja: '1.12.0', [`read:${path.posix.join(em, 'emscripten-version.txt')}`]: `"${version}"\n` },
+  });
+  const ok = checkToolchains(d, probe('4.0.10'));
+  assert.equal(ok.ok, true);
+  assert.equal(ok.env.EMSDK, emsdk);
+  assert.equal(ok.env.EMSDK_NODE, path.posix.join(emsdk, 'node', '22.16.0_64bit', 'bin', 'node'));
+  assert.ok(ok.env.PATH.startsWith(`${emsdk}:${em}:`));
+  assert.equal(ok.toolchainFile, path.posix.join(em, 'cmake', 'Modules', 'Platform', 'Emscripten.cmake'));
+
+  const wrong = checkToolchains(d, probe('3.1.0'));
+  assert.equal(wrong.ok, false);
+  assert.match(wrong.checks.find((c) => c.id === 'emsdk').fix, /emsdk install 4\.0\.10/);
+
+  const none = checkToolchains(d, fakeProbe({ env: { HOME: '/home/u' }, files: ['/usr/bin/cmake', '/usr/bin/ninja'], commands: { cmake: 'cmake version 3.30.0', ninja: '1.12' } }));
+  assert.equal(none.ok, false);
+  assert.match(none.checks.find((c) => c.id === 'emsdk').fix, /git clone https:\/\/github\.com\/emscripten-core\/emsdk/);
+});
+
+test('doctor on Windows: Visual Studio through vswhere and vcvars64, whose environment the build then uses', () => {
+  const d = loadDescriptors(ENGINE_ROOT).get('windows');
+  const vs = 'C:\\VS';
+  const vswhere = 'C:\\PF86\\Microsoft Visual Studio\\Installer\\vswhere.exe';
+  const vcvars = `${vs}\\VC\\Auxiliary\\Build\\vcvars64.bat`;
+  const probe = fakeProbe({
+    platform: 'win32',
+    env: { 'ProgramFiles(x86)': 'C:\\PF86', PATH: 'C:\\Windows' },
+    files: [vswhere, vcvars, 'C:\\MSVC\\bin\\cl.exe', 'C:\\CMake\\cmake.exe', 'C:\\CMake\\ninja.exe'],
+    commands: {
+      vswhere: `${vs}\r\n`,
+      cmd: { status: 0, stdout: 'Path=C:\\MSVC\\bin;C:\\CMake;C:\\Windows\r\nVCToolsVersion=14.44.35207\r\nPATHEXT=.EXE;.BAT\r\n', stderr: '' },
+      cmake: 'cmake version 3.30.1',
+      ninja: '1.12.1',
+    },
+  });
+  const result = checkToolchains(d, probe);
+  assert.equal(result.ok, true, JSON.stringify(result.checks));
+  assert.equal(result.checks.find((c) => c.id === 'msvc').version, '14.44.35207');
+  assert.equal(result.env.Path, 'C:\\MSVC\\bin;C:\\CMake;C:\\Windows');
+
+  const noVs = checkToolchains(d, fakeProbe({ platform: 'win32', env: { 'ProgramFiles(x86)': 'C:\\PF86' } }));
+  assert.equal(noVs.ok, false);
+  assert.match(noVs.checks.find((c) => c.id === 'msvc').fix, /Desktop development with C\+\+/);
+});
+
+// --- packaging ---------------------------------------------------------------------------------------------------
+
+function fakeTree(files) {
+  const tree = tmp('n2build-tree-');
+  for (const [name, content] of Object.entries(files)) write(path.join(tree, 'bin', name), content);
+  return tree;
+}
+
+test('a desktop package: the listed files, the player named after the game, and the game folder', () => {
+  const projectDir = makeProject({ name: 'Tri' }, { '.import/a.meta': '{}' });
+  const tree = fakeTree({ 'n2player-files.txt': 'n2player.exe\nOpenAL32.dll\n', 'n2player.exe': 'exe', 'OpenAL32.dll': 'dll', 'other.dll': 'not listed' });
+  const packageDir = path.join(tmp('n2build-out-'), 'Tri');
+  preparePackageDir(packageDir);
+  const exe = packageDesktop({ treeDir: tree, descriptor: descriptor(), projectDir, packageDir, gameName: 'Tri', platform: 'win32' });
+  assert.equal(exe, 'Tri.exe');
+  assert.deepEqual(fs.readdirSync(packageDir).sort(), ['OpenAL32.dll', 'Tri.exe', 'game']);
+  assert.ok(fs.existsSync(path.join(packageDir, 'game', 'project.n2proj')));
+  assert.ok(fs.existsSync(path.join(packageDir, 'game', 'assets', 'scene.lua')));
+  assert.ok(fs.existsSync(path.join(packageDir, 'game', '.import', 'a.meta')));
+});
+
+test('a desktop package refuses a list that names a path or a missing file', () => {
+  const projectDir = makeProject();
+  const out = tmp('n2build-out-');
+  const escaping = fakeTree({ 'n2player-files.txt': 'n2player\n../secret\n', n2player: 'x' });
+  assert.throws(() => packageDesktop({ treeDir: escaping, descriptor: descriptor(), projectDir, packageDir: out, gameName: 'G', platform: 'linux' }), /not a plain file name/);
+  const missing = fakeTree({ 'n2player-files.txt': 'n2player\nlibopenal.so.1\n', n2player: 'x' });
+  assert.throws(() => packageDesktop({ treeDir: missing, descriptor: descriptor(), projectDir, packageDir: out, gameName: 'G', platform: 'linux' }), /libopenal\.so\.1 is missing/);
+  assert.throws(() => packageDesktop({ treeDir: tmp('n2build-tree-'), descriptor: descriptor(), projectDir, packageDir: out, gameName: 'G' }), /did not produce the player/);
+});
+
+test('a package folder is only ever emptied when n2build made it', () => {
+  const parent = tmp('n2build-out-');
+  const foreign = path.join(parent, 'mine');
+  write(path.join(foreign, 'notes.txt'), 'keep me');
+  assert.throws(() => preparePackageDir(foreign), /did not write/);
+  assert.equal(fs.readFileSync(path.join(foreign, 'notes.txt'), 'utf8'), 'keep me');
+
+  const ours = path.join(parent, 'ours');
+  preparePackageDir(ours);
+  write(path.join(ours, 'old.txt'), 'old');
+  writeMarker(ours, { target: 'linux' });
+  preparePackageDir(ours);
+  assert.deepEqual(fs.readdirSync(ours), []);
+  assert.ok(!fs.existsSync(path.join(ours, PACKAGE_MARKER)));
+});
+
+test('a web package copies the build\'s package folder', () => {
+  const tree = tmp('n2build-tree-');
+  for (const name of ['index.html', 'index.js', 'index.wasm', 'index.data', 'manifest.json']) write(path.join(tree, 'web-package', name), name);
+  const out = tmp('n2build-out-');
+  const web = loadDescriptors(ENGINE_ROOT).get('web');
+  assert.equal(packageWeb({ treeDir: tree, descriptor: web, packageDir: out }), 'index.html');
+  assert.deepEqual(fs.readdirSync(out).sort(), ['index.data', 'index.html', 'index.js', 'index.wasm', 'manifest.json']);
+  assert.throws(() => packageWeb({ treeDir: tmp('n2build-tree-'), descriptor: web, packageDir: out }), /no index.html/);
+});
+
+const haveCmake = spawnSync('cmake', ['--version']).status === 0;
+test('archives: .zip and .7z beside the package folder', { skip: !haveCmake && 'cmake is not on PATH' }, () => {
+  const packageDir = path.join(tmp('n2build-out-'), 'Tri');
+  write(path.join(packageDir, 'game', 'assets', 'scene.lua'), '-- scene');
+  for (const format of ['zip', '7z']) {
+    const archive = archivePackage({ packageDir, format });
+    assert.equal(archive, `${packageDir}.${format}`);
+    assert.ok(fs.statSync(archive).size > 0);
+    const listing = spawnSync('cmake', ['-E', 'tar', 'tf', archive], { encoding: 'utf8' });
+    assert.match(listing.stdout, /Tri\/game\/assets\/scene\.lua/);
+  }
+  assert.throws(() => archivePackage({ packageDir, format: 'rar' }), /zip or 7z/);
+});
+
+// --- the web server ----------------------------------------------------------------------------------------------
+
+test('the web server never serves outside the package folder', () => {
+  const root = path.resolve('/srv/game');
+  assert.equal(resolveRequest(root, '/'), path.join(root, 'index.html'));
+  assert.equal(resolveRequest(root, '/index.wasm?v=1'), path.join(root, 'index.wasm'));
+  assert.equal(resolveRequest(root, '/../secret'), null);
+  assert.equal(resolveRequest(root, '/%2e%2e/secret'), null);
+  assert.equal(resolveRequest(root, '/a%00b'), null);
+  assert.equal(resolveRequest(root, '/%E0%A4%A'), null);
+});
+
+// --- the command line --------------------------------------------------------------------------------------------
+
+test('arguments', () => {
+  const { command, options } = parseArguments(['build', '--target', 'web', '--project=game', '--archive', '7z', '--jobs', '8', '--json', '--targets-dir', 'a', '--targets-dir=b']);
+  assert.equal(command, 'build');
+  assert.equal(options.target, 'web');
+  assert.equal(options.project, 'game');
+  assert.equal(options.config, 'release');
+  assert.equal(options.archive, '7z');
+  assert.equal(options.jobs, 8);
+  assert.equal(options.json, true);
+  assert.deepEqual(options.targetsDir, ['a', 'b']);
+  assert.equal(parseArguments([]).command, 'help');
+  for (const bad of [['explode'], ['build', '--project', 'p'], ['build', '--target', 'web'], ['doctor', '--target'], ['build', '--target', 'w', '--project', 'p', '--archive', 'rar'], ['run', '--target', 'w', '--project', 'p', '--frames', '0'], ['list', '--json=yes'], ['list', '--colour']]) {
+    assert.throws(() => parseArguments(bad), UsageError, JSON.stringify(bad));
+  }
+});
+
+test('list --json reports every target and whether it builds here', async () => {
+  const { reporter, lines } = capture();
+  const code = await main(['list', '--json'], { ctx: fakeProbe({ platform: 'linux', env: { HOME: tmp('n2build-home-') } }), reporter });
+  assert.equal(code, 0);
+  const targets = lines.find((l) => l.type === 'targets').targets;
+  assert.deepEqual(targets.map((t) => [t.name, t.buildableHere]), [['linux', true], ['web', true], ['windows', false]]);
+  assert.deepEqual(lines.at(-1), { type: 'result', ok: true });
+});
+
+test('build refuses a project whose physics the target cannot build, before compiling anything', async () => {
+  const extra = tmp('n2build-targets-');
+  const linux = JSON.parse(fs.readFileSync(path.join(ENGINE_ROOT, 'targets', 'linux', 'target.json'), 'utf8'));
+  write(path.join(extra, 'nophysx', 'target.json'), { ...linux, name: 'nophysx', displayName: 'No PhysX', physics3d: ['none', 'jolt'] });
+  const projectDir = makeProject({ name: 'G', build: { modules: { physics3d: 'physx' } } });
+  const { reporter, lines } = capture();
+  const ctx = fakeProbe({ files: ['/usr/bin/cmake', '/usr/bin/ninja', '/usr/bin/c++'], env: { HOME: tmp('n2build-home-') }, commands: { cmake: 'cmake version 3.30.0', ninja: '1.12', 'c++': 'g++ 14.2.0' } });
+  const code = await main(['build', '--target', 'nophysx', '--project', projectDir, '--targets-dir', extra, '--json'], { ctx, reporter });
+  assert.equal(code, 1);
+  const result = lines.at(-1);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /physics3d is "physx", but the nophysx target can build only: none, jolt/);
+  assert.ok(!fs.existsSync(path.join(projectDir, '.n2')), 'nothing was configured or built');
+});
+
+test('build --dry-run prints the plan without running anything', async () => {
+  const projectDir = makeProject({ name: 'Tri' });
+  const { reporter, lines } = capture();
+  const ctx = fakeProbe({ files: ['/usr/bin/cmake', '/usr/bin/ninja', '/usr/bin/c++'], env: { HOME: tmp('n2build-home-') }, commands: { cmake: 'cmake version 3.30.0', ninja: '1.12', 'c++': 'g++ 14.2.0' } });
+  const code = await main(['build', '--target', 'linux', '--project', projectDir, '--dry-run', '--json'], { ctx, reporter });
+  assert.equal(code, 0);
+  const logs = lines.filter((l) => l.type === 'log').map((l) => l.text);
+  assert.ok(logs.some((t) => t.startsWith('cmake -S ') && t.includes('-DN2ENGINE_PROJECT=')), logs.join('\n'));
+  assert.ok(logs.some((t) => t.includes('--target n2player')));
+  const result = lines.at(-1);
+  assert.equal(result.ok, true);
+  assert.equal(result.dryRun, true);
+  assert.ok(!fs.existsSync(path.join(projectDir, '.n2')));
+});
+
+test('doctor exits 1 and names the fix when a required tool is missing', async () => {
+  const { reporter, lines } = capture();
+  const code = await main(['doctor', '--target', 'linux', '--json'], { ctx: fakeProbe({ env: { HOME: tmp('n2build-home-') } }), reporter });
+  assert.equal(code, 1);
+  const report = lines.find((l) => l.type === 'doctor');
+  assert.equal(report.ok, false);
+  assert.ok(report.checks.find((c) => c.id === 'cmake').fix);
+});
+
+test('usage errors exit 2 with the usage', async () => {
+  const { reporter, lines } = capture();
+  assert.equal(await main(['build', '--json'], { ctx: fakeProbe(), reporter }), 2);
+  assert.match(lines.at(-1).error, /needs --target/);
+});

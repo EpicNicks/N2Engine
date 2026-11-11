@@ -61,14 +61,26 @@ namespace
         return (to8(a) << 24) | (to8(b) << 16) | (to8(g) << 8) | to8(r);
     }
 
-    // RenderState::dim applied to a packed pixel (the prefab stage's dimmed scene): the same maths as the GPU shaders
-    // (RenderState::StageDimmed), on the colour the draw would write; alpha unchanged
-    inline uint32_t DimPacked(const uint32_t rgba, const float dim)
+    // RenderState::dim applied to a packed pixel (the prefab stage's dimmed scene), then RenderState::tint (the screen
+    // tint) when its circle selects the pixel whose centre is at (x, y): the same maths as the GPU shaders
+    // (RenderState::StageDimmed, then ScreenTint::Saturated), on the colour the draw would write; alpha unchanged. A pixel
+    // that neither changes is returned as it is
+    inline uint32_t EffectsPacked(const uint32_t rgba, const float dim, const ScreenTint& tint,
+                                  const ScreenTintPixels& circle, const float x, const float y)
     {
+        const bool tinted = tint.IsActive() && tint.Covers(circle, x, y);
+        if (dim <= 0.f && !tinted)
+        {
+            return rgba;
+        }
         float r = float(rgba & 0xFFu) / 255.f;
         float g = float((rgba >> 8) & 0xFFu) / 255.f;
         float b = float((rgba >> 16) & 0xFFu) / 255.f;
         RenderState::StageDimmed(r, g, b, dim);
+        if (tinted)
+        {
+            ScreenTint::Saturated(r, g, b, tint.saturation);
+        }
         auto to8 = [](float x) -> uint32_t
         {
             x = std::clamp(x, 0.f, 1.f);
@@ -111,9 +123,20 @@ namespace
         // Unlit and lit multiply by the interpolated vertex colour. Off when every vertex of the mesh is white,
         // so such meshes (every built-in one) shade exactly as they did before vertex colour was read.
         bool vertexColor = false;
-        uint32_t flatColor = 0xFFFFFFFF;  // unlit + untextured: constant per draw
+        // Unlit only: saturation and flash (Common::ColorEffects), applied to the shaded colour before the dim and tint.
+        // colorFx is false at the defaults, so a draw without them shades exactly as before
+        ColorEffects colorEffects{};
+        bool colorFx = false;
+        uint32_t flatColor = 0xFFFFFFFF;  // unlit + untextured: constant per draw (with colorEffects applied)
         // RenderState::dim of the draw (0: none), applied to every pixel it writes
         float dim = 0.f;
+        // RenderState::tint of the draw, applied after the dim to the pixels its circle selects, with the circle in this
+        // frame's pixels (rows up from the bottom, as the pixel loop counts py). ScreenTint{} (inactive) when none
+        ScreenTint tint{};
+        ScreenTintPixels tintCircle{};
+        // The dim or the tint changes some pixel: decided once per draw, so a draw with neither (every draw but the
+        // prefab stage's backdrop and a tinted scene) writes its colour as it is, with no per-pixel maths
+        bool effects = false;
 
         // Text effects (text only). Off unless an outline or shadow is drawn, and then the text pixel path
         // is exactly the one without effects.
@@ -179,6 +202,15 @@ namespace
         if (auto* sh = dynamic_cast<const SWShader*>(mat.GetShader()))
             s.shader = sh->GetType();
 
+        // The unlit colour effects: only the unlit shader reads them
+        if (s.shader == SWShaderType::Unlit)
+        {
+            static const std::string saturationKey = "uSaturation";
+            static const std::string flashKey = "uFlash";
+            s.colorEffects.saturation = mat.GetFloat(saturationKey, 1.0f);
+            s.colorEffects.flash = mat.GetVec4(flashKey, {0, 0, 0, 0});
+        }
+
         // Text effects: only the text shader reads them, so other draws skip the lookups
         if (s.shader == SWShaderType::Text)
         {
@@ -221,7 +253,15 @@ namespace
             // only with uPbr, and the engine gives it to Pbr materials only)
             r.metallicRoughnessTex = mat.pbr ? mat.metallicRoughnessTexture : nullptr;
         }
-        r.flatColor = PackRGBA(r.aR, r.aG, r.aB, r.aA);
+        // Defaults for lit and text materials (SnapshotMaterial reads them for unlit only), so colorFx stays off there
+        r.colorEffects = mat.colorEffects;
+        r.colorFx = !mat.colorEffects.IsDefault();
+        float flatR = r.aR, flatG = r.aG, flatB = r.aB;
+        if (r.colorFx)
+        {
+            r.colorEffects.Apply(flatR, flatG, flatB);
+        }
+        r.flatColor = PackRGBA(flatR, flatG, flatB, r.aA);
 
         if (r.text)
         {
@@ -336,6 +376,10 @@ namespace
         if (m.vertexColor)
         {
             r *= vc.r; g *= vc.g; b *= vc.b; a *= vc.a;
+        }
+        if (m.colorFx)
+        {
+            m.colorEffects.Apply(r, g, b);
         }
         return PxColor{r, g, b, a};
     }
@@ -995,7 +1039,10 @@ namespace
                         if (covered)
                         {
                             if (rs.depthWrite && writesDepth) drow[px] = z;
-                            crow[px] = mat.dim > 0.f ? DimPacked(colOut, mat.dim) : colOut;
+                            crow[px] = mat.effects
+                                ? EffectsPacked(colOut, mat.dim, mat.tint, mat.tintCircle,
+                                                (float)px + 0.5f, (float)py + 0.5f)
+                                : colOut;
                         }
                     }
                 }
@@ -1356,8 +1403,9 @@ void SoftwareRenderer::RecordDraw(IMesh* mesh, const float* modelMatrix, IMateri
     // Copied now, on the main thread: a change to the material after this call affects later draws only,
     // as OpenGL applies uniforms when the draw is submitted
     cmd.material = SnapshotMaterial(*swMat);
-    // With the frame's stage dim (SetStageDim) as it is now: the draw keeps it however the queue is reordered
-    cmd.state = WithStageDim(state);
+    // With the frame's stage dim (SetStageDim) and screen tint (SetScreenTint) as they are now: the draw keeps them however
+    // the queue is reordered
+    cmd.state = WithFrameModifiers(state);
     cmd.wireframe = m_wireframe;
     memcpy(cmd.modelMatrix, modelMatrix, 64);
     memcpy(cmd.view, m_view, 64);
@@ -1458,6 +1506,13 @@ void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, con
     ResolvedMat rm = ResolveMaterial(material);
     // The prefab stage's dim travels in the draw's own state (recorded at DrawMesh, so a reordered draw keeps it)
     rm.dim = state.dim;
+    // The screen tint travels the same way; its circle is placed in this frame's pixels now, once per draw
+    if (state.tint.IsActive())
+    {
+        rm.tint = state.tint;
+        rm.tintCircle = state.tint.InPixels((float)m_width, (float)m_height, false);
+    }
+    rm.effects = rm.dim > 0.f || rm.tint.IsActive();
     // Vertex colour only matters when some vertex isn't white (see ResolvedMat::vertexColor)
     rm.vertexColor = mesh->hasVertexColors; // found once per CreateMesh/UpdateMesh, not per draw
     const ShadeKind kind = rm.Kind();
