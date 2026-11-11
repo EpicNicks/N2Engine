@@ -62,6 +62,27 @@ else()
     message(STATUS "Web package: ${N2_WEB_PROJECT_DIR} has no .import folder; asset UUIDs are the hashes of their paths")
 endif()
 
+# The game as one pack (build targets stage 4; docs/packs.html): n2build cooks the project into a stored zip and passes it as
+# N2ENGINE_WEB_PACK, which is preloaded as /game.n2pack instead of the folders above; the player mounts it at /project. Without
+# it the folders are preloaded as before.
+set(N2ENGINE_WEB_PACK "" CACHE FILEPATH "A game's pack (n2build cook) to preload as /game.n2pack instead of the project folder")
+if(N2ENGINE_WEB_PACK)
+    if(NOT EXISTS "${N2ENGINE_WEB_PACK}")
+        message(FATAL_ERROR "N2ENGINE_WEB_PACK (${N2ENGINE_WEB_PACK}) does not exist: n2build cooks it before configuring")
+    endif()
+    set(N2_WEB_GAME_PRELOAD "SHELL:--preload-file \"${N2ENGINE_WEB_PACK}@/game.n2pack\"")
+    set(N2_WEB_GAME_DEPENDS "${N2ENGINE_WEB_PACK}")
+    # The player's pack mount (WebPlayer.cpp): compiled only into a build that preloads a pack
+    target_compile_definitions(N2WebPlayer PRIVATE N2_WEB_GAME_PACK=1)
+    message(STATUS "Web package: the game is the pack ${N2ENGINE_WEB_PACK}")
+else()
+    set(N2_WEB_GAME_PRELOAD
+        "SHELL:--preload-file \"${N2_WEB_PROJECT_DIR}/assets@/project/assets\""
+        "SHELL:--preload-file \"${N2_WEB_PROJECT_DIR}/project.n2proj@/project/project.n2proj\""
+        ${N2_WEB_IMPORT_PRELOAD})
+    set(N2_WEB_GAME_DEPENDS "${N2_WEB_PROJECT_DIR}/project.n2proj" ${N2_WEB_PROJECT_FILES})
+endif()
+
 # Single-threaded and without cross-origin isolation: no pthreads, no SharedArrayBuffer (cmake/N2EngineWeb.cmake).
 # MODULARIZE: index.js is a factory (createN2Player), which the page calls when it is ready and node's smoke test calls
 # with its own arguments and hooks; callMain is what the page's Start button runs.
@@ -70,14 +91,12 @@ target_link_options(N2WebPlayer PRIVATE
     -sEXPORT_NAME=createN2Player
     -sEXPORTED_RUNTIME_METHODS=callMain
     "SHELL:--shell-file \"${CMAKE_CURRENT_SOURCE_DIR}/shell.html\""
-    "SHELL:--preload-file \"${N2_WEB_PROJECT_DIR}/assets@/project/assets\""
-    "SHELL:--preload-file \"${N2_WEB_PROJECT_DIR}/project.n2proj@/project/project.n2proj\""
-    ${N2_WEB_IMPORT_PRELOAD}
+    ${N2_WEB_GAME_PRELOAD}
 )
 n2_check_project_modules(N2WebPlayer)
 set_property(TARGET N2WebPlayer APPEND PROPERTY LINK_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/shell.html" "${CMAKE_CURRENT_SOURCE_DIR}/webgpu-library.js"
-    "${N2_WEB_PROJECT_DIR}/project.n2proj" ${N2_WEB_PROJECT_FILES})
+    ${N2_WEB_GAME_DEPENDS})
 
 # Not a node/ctest executable: its map callbacks need a browser event loop and
 # a real GPUDevice. The browser smoke runs it when N2_READBACK_DIR points here.

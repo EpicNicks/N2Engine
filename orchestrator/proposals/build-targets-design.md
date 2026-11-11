@@ -16,6 +16,11 @@ every stage. Stages still run in the order of section 5, each after the stages i
   the default, `modules` per target through `-DN2ENGINE_TARGET` (`cmake/N2EngineModules.cmake` reads
   `build.targets.<target>.modules` over `build.modules`, key by key), and `scripts/project-modules.mjs --target`. The frontend
   half (the Build Settings panel) is a frontend PR.
+- Stage 4 (packs), branch `feat-bt4-vfs-packs`: `IO::Vfs` with folder, zip (miniz inflate) and 7z (the LZMA SDK's
+  decoder) mounts; every read of game data goes through it; a project whose root is a mount is packed and read-only; the
+  cook step (`n2build cook`, and `build` packages `game.n2pack`: zip for desktop, stored for the web, 7z non-solid
+  through 7-Zip); the desktop and web players mount the pack. The audit of `std::filesystem` call sites is in
+  `docs/packs.html#audit`. Persistent web saves (IDBFS on `user://`) are the documented gap.
 - The Triangle-Like input branches (needed by stage 5): #330 and #331 merged; #332 to #336 in review.
 
 ## 1. Goal

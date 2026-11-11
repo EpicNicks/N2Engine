@@ -8,6 +8,7 @@
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <mutex>
 #include <ranges>
 #include <set>
 
@@ -69,8 +70,8 @@ namespace N2Engine::IO
         class ZipMount final : public IMount
         {
         public:
-            ZipMount(std::filesystem::path file, std::uint64_t fileSize, std::map<std::string, ZipEntry> entries)
-                : _file(std::move(file)), _fileSize(fileSize), _entries(std::move(entries))
+            ZipMount(std::filesystem::path file, std::ifstream stream, std::uint64_t fileSize, std::map<std::string, ZipEntry> entries)
+                : _file(std::move(file)), _stream(std::move(stream)), _fileSize(fileSize), _entries(std::move(entries))
             {
                 for (const auto &name : _entries | std::views::keys)
                 {
@@ -139,11 +140,10 @@ namespace N2Engine::IO
                     return std::unexpected(where + " uses compression method " + std::to_string(entry.method) +
                                            " (a pack is stored or deflate)");
                 }
-                std::ifstream file(_file, std::ios::binary);
-                if (!file.is_open())
-                {
-                    return std::unexpected("Couldn't open " + PathToUtf8(_file));
-                }
+                // One handle for the pack's life: opening the file for every read cost more than the reads (Windows)
+                std::lock_guard lock(_streamMutex);
+                std::ifstream &file = _stream;
+                file.clear();
                 std::uint8_t header[30];
                 if (entry.localHeaderOffset + sizeof header > _fileSize)
                 {
@@ -193,6 +193,8 @@ namespace N2Engine::IO
 
         private:
             std::filesystem::path _file;
+            mutable std::ifstream _stream;
+            mutable std::mutex _streamMutex;
             std::uint64_t _fileSize;
             std::map<std::string, ZipEntry> _entries;
             std::set<std::string> _folders;
@@ -348,6 +350,7 @@ namespace N2Engine::IO
                 return std::unexpected(name + " holds " + *normal + " twice");
             }
         }
-        return std::make_unique<ZipMount>(path, fileSize, std::move(entries));
+        file.clear();
+        return std::make_unique<ZipMount>(path, std::move(file), fileSize, std::move(entries));
     }
 }

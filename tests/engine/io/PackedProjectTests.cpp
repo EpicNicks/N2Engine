@@ -1,9 +1,15 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <map>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -125,38 +131,95 @@ TEST_F(PackedProjectTest, AProjectRunsTheSameFromItsFolderAndFromItsPack)
     EXPECT_FALSE(fs::exists(game)) << "nothing was written where the pack is mounted (no .import, no .n2)";
 }
 
-TEST_F(PackedProjectTest, APackedModelReadsItsBufferFromThePack)
+namespace
 {
-    // A glTF whose buffer is an external .bin: the importer reads it through the mount (ModelImportSettings::readFile)
-    const fs::path models = fs::path(N2_TEST_ASSETS_DIR) / "models";
-    fs::path gltf;
-    for (const auto &entry : fs::directory_iterator(models))
+    std::string DecodeBase64(const std::string_view text)
     {
-        if (entry.path().extension() == ".gltf" && fs::exists(entry.path().parent_path() / (entry.path().stem().string() + ".bin")))
+        static constexpr std::string_view Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        std::string out;
+        std::uint32_t buffer = 0;
+        int bits = 0;
+        for (const char c : text)
         {
-            gltf = entry.path();
-            break;
+            const auto value = Alphabet.find(c);
+            if (value == std::string_view::npos)
+            {
+                continue; // '=' padding
+            }
+            buffer = (buffer << 6) | static_cast<std::uint32_t>(value);
+            bits += 6;
+            if (bits >= 8)
+            {
+                bits -= 8;
+                out += static_cast<char>((buffer >> bits) & 0xff);
+            }
         }
+        return out;
     }
-    if (gltf.empty())
-    {
-        GTEST_SKIP() << "no .gltf with an external .bin in tests/assets/models";
-    }
-    const std::string name = gltf.filename().string();
-    const std::string bin = gltf.stem().string() + ".bin";
-    const std::string project = R"({"formatVersion":1,"name":"Packed Model","projectId":"6f1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"})";
-    std::vector<Tests::ZipEntry> entries{{"project.n2proj", project}};
-    for (const std::string &file : {name, bin})
-    {
-        std::ifstream in(models / file, std::ios::binary);
-        entries.push_back({"assets/" + file, std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>())});
-    }
+}
+
+TEST_F(PackedProjectTest, APackedModelReadsItsBufferAndImageFromThePack)
+{
+    // lua_project's robot with its embedded buffer and image moved out to robot.bin and robot.png: the importer then reads
+    // both through the mount (ModelImportSettings::readFile), not from the disk
+    std::ifstream in(fs::path(N2_LUA_PROJECT_DIR) / "assets" / "models" / "smoke_robot.gltf", std::ios::binary);
+    nlohmann::json gltf = nlohmann::json::parse(in);
+    std::ifstream projectFile(fs::path(N2_LUA_PROJECT_DIR) / "project.n2proj", std::ios::binary);
+    std::vector<Tests::ZipEntry> entries{
+        {"project.n2proj", std::string(std::istreambuf_iterator<char>(projectFile), std::istreambuf_iterator<char>())}};
+    const auto externalise = [&](nlohmann::json &item, const std::string &file) {
+        const std::string uri = item.at("uri").get<std::string>();
+        const auto comma = uri.find(',');
+        ASSERT_NE(comma, std::string::npos);
+        entries.push_back({"assets/" + file, DecodeBase64(std::string_view(uri).substr(comma + 1))});
+        item["uri"] = file;
+    };
+    ASSERT_EQ(gltf.at("buffers").size(), 1u);
+    externalise(gltf.at("buffers")[0], "robot.bin");
+    ASSERT_GE(gltf.value("images", nlohmann::json::array()).size(), 1u);
+    externalise(gltf.at("images")[0], "robot.png");
+    entries.push_back({"assets/robot.gltf", gltf.dump()});
+
     const fs::path pack = _dir / "model.n2pack";
     std::ofstream(pack, std::ios::binary) << Tests::MakeZip(entries);
     IO::Vfs::Instance().Mount(_dir / "model", std::move(*IO::Pack::Open(pack)));
 
     const auto assets = Snapshot(_dir / "model", _dir / "user");
-    const auto it = assets.find("res://" + name);
+    const auto it = assets.find("res://robot.gltf");
     ASSERT_NE(it, assets.end());
     EXPECT_TRUE(it->second.loaded) << "the model and its .bin were read from the pack";
+    EXPECT_FALSE(fs::exists(_dir / "model")) << "nothing on disk where the pack is mounted";
+}
+
+TEST_F(PackedProjectTest, LoadTimesOfAFolderAndItsPacks)
+{
+    // A measurement, not a check (docs/packs.html#measured): N2_PACK_TIMING_DIR names a folder holding lua_project cooked
+    // as lua_project-zip.n2pack, -stored.n2pack and -7z.n2pack (n2build cook --pack ...). Each way of opening the project
+    // is timed opening it and loading every asset, the median of 7 runs.
+    const char *dir = std::getenv("N2_PACK_TIMING_DIR");
+    if (dir == nullptr || *dir == '\0')
+    {
+        GTEST_SKIP() << "set N2_PACK_TIMING_DIR to a folder of cooked lua_project packs to measure";
+    }
+    const auto median = [&](const fs::path &projectDir) {
+        std::vector<double> times;
+        for (int i = 0; i < 7; ++i)
+        {
+            const auto start = std::chrono::steady_clock::now();
+            const auto assets = Snapshot(projectDir, _dir / "user");
+            times.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+            EXPECT_FALSE(assets.empty());
+        }
+        std::ranges::sort(times);
+        return times[times.size() / 2];
+    };
+    std::cout << "folder: " << median(fs::path(N2_LUA_PROJECT_DIR)) << " ms" << std::endl;
+    for (const char *format : {"zip", "stored", "7z"})
+    {
+        const fs::path pack = fs::path(dir) / (std::string("lua_project-") + format + ".n2pack");
+        auto mount = IO::Pack::Open(pack);
+        ASSERT_TRUE(mount.has_value()) << mount.error();
+        IO::Vfs::Instance().Mount(_dir / format, std::move(*mount));
+        std::cout << format << ": " << median(_dir / format) << " ms" << std::endl;
+    }
 }

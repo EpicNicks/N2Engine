@@ -10,6 +10,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { readModuleList } from '../../../scripts/project-modules.mjs';
+import { PACK_EXTENSION, cookPack } from './cook.mjs';
+import { PACK_KINDS } from './descriptors.mjs';
 import { BuildError } from './report.mjs';
 
 export const PACKAGE_MARKER = '.n2build-package.json';
@@ -76,7 +78,23 @@ export function readTargetSettings(project, target) {
   if (settings.config !== undefined && !['debug', 'release'].includes(settings.config)) {
     throw new Error(`${where}.config must be "debug" or "release"`);
   }
+  if (settings.pack !== undefined && !PACK_KINDS.includes(settings.pack)) {
+    throw new Error(`${where}.pack must be one of ${PACK_KINDS.join(', ')}`);
+  }
   return settings;
+}
+
+/**
+ * How the game's files go into the package (docs/packs.html): --pack, else the target's build.targets pack, else the
+ * descriptor's package.pack, else zip for a desktop package and stored (an uncompressed zip) for the web
+ */
+export function resolvePackFormat(descriptor, settings, optionPack) {
+  return optionPack ?? settings?.pack ?? descriptor.package.pack ?? (descriptor.package.kind === 'web' ? 'stored' : 'zip');
+}
+
+/** Where the game's pack goes: beside the player in a desktop package, in the build tree for the web (index.data holds it) */
+export function packPath({ descriptor, packageDir, treeDir }) {
+  return descriptor.package.kind === 'web' ? path.join(treeDir, `game${PACK_EXTENSION}`) : path.join(packageDir, `game${PACK_EXTENSION}`);
 }
 
 /**
@@ -124,14 +142,19 @@ export function resolveOptions(descriptor, config, present) {
 }
 
 /** Every path and command of a build, decided before anything runs (printed by --dry-run) */
-export function planBuild({ engineRoot, projectDir, descriptor, config, modules, present, toolchainFile, buildRoot, outDir, jobs, gameName }) {
+export function planBuild({ engineRoot, projectDir, descriptor, config, modules, present, toolchainFile, buildRoot, outDir, jobs, gameName, packFormat }) {
   const options = resolveOptions(descriptor, config, present);
+  // The pack format is not part of the key: the web's pack path is a configure argument (a change reconfigures the tree)
   const key = buildKey({ projectDir, target: descriptor.name, config, modules, options });
   const treeDir = path.join(buildRoot ?? path.join(projectDir, '.n2', 'build'), key);
   const packageDir = outDir ? path.resolve(outDir) : path.join(projectDir, '.n2', 'out', `${descriptor.name}-${config}`, safeName(gameName));
   // N2ENGINE_TARGET: cmake/N2EngineModules.cmake reads build.targets.<target>.modules over build.modules
   const configureArgs = ['-S', engineRoot, '-B', treeDir, '-G', descriptor.cmake.generator, `-DN2ENGINE_PROJECT=${path.resolve(projectDir)}`,
     `-DN2ENGINE_TARGET=${descriptor.name}`];
+  // The web package preloads the game's pack instead of its folder (web/CMakeLists.txt, docs/packs.html)
+  if (descriptor.package.kind === 'web' && packFormat !== undefined && packFormat !== 'folder') {
+    configureArgs.push(`-DN2ENGINE_WEB_PACK=${packPath({ descriptor, packageDir: null, treeDir })}`);
+  }
   if (descriptor.cmake.toolchain === 'emsdk') {
     if (!toolchainFile) throw new BuildError('The Emscripten toolchain file was not found (see n2build doctor)');
     configureArgs.push(`-DCMAKE_TOOLCHAIN_FILE=${toolchainFile}`);
@@ -214,7 +237,7 @@ export function copyGameData(projectDir, gameDir) {
  * A desktop package: the player (renamed after the game) and the files players/desktop lists beside it, and the game
  * folder. Returns the executable's file name.
  */
-export function packageDesktop({ treeDir, descriptor, projectDir, packageDir, gameName, platform = process.platform }) {
+export function packageDesktop({ treeDir, descriptor, projectDir, packageDir, gameName, platform = process.platform, pack = null }) {
   const binDir = path.join(treeDir, descriptor.package.from);
   const listFile = path.join(binDir, descriptor.package.fileList ?? 'n2player-files.txt');
   if (!fs.existsSync(listFile)) throw new BuildError(`${listFile} is missing: the build did not produce the player`);
@@ -229,7 +252,13 @@ export function packageDesktop({ treeDir, descriptor, projectDir, packageDir, ga
   fs.copyFileSync(path.join(binDir, player), path.join(packageDir, executable));
   if (platform !== 'win32') fs.chmodSync(path.join(packageDir, executable), 0o755);
   for (const file of runtime) fs.copyFileSync(path.join(binDir, file), path.join(packageDir, file));
-  copyGameData(projectDir, path.join(packageDir, 'game'));
+  // The game: one pack beside the player (it mounts game.n2pack where the game folder would be), or the folder as it is
+  if (pack && pack.format !== 'folder') {
+    cookPack({ projectDir, outFile: path.join(packageDir, `game${PACK_EXTENSION}`), format: pack.format, target: descriptor.name,
+      game: gameName, sevenZip: pack.sevenZip, env: pack.env, skipModuleCheck: pack.skipModuleCheck });
+  } else {
+    copyGameData(projectDir, path.join(packageDir, 'game'));
+  }
   return executable;
 }
 

@@ -243,6 +243,8 @@ namespace N2Engine::IO
                      std::unordered_set<ResourcePath, ResourcePath::Hash>& seen);
         AssetMetadata CreateOrUpdateMetadata(const std::filesystem::path& sourcePath);
         std::filesystem::path GetMetadataPath(const std::filesystem::path& sourcePath) const;
+        /// path relative to the assets folder: the filesystem's relative() for a folder, lexical for a packed project
+        [[nodiscard]] std::filesystem::path AssetsRelative(const std::filesystem::path& path) const;
         /// <project>/.import/<path>.meta for a res:// path, worked out lexically (the file need not exist)
         [[nodiscard]] std::filesystem::path MetaPathOf(const ResourcePath &resourcePath) const;
         /// Puts one file's fresh metadata in the index (RefreshAsset, Reload): when another indexed file already holds its

@@ -462,9 +462,21 @@ namespace N2Engine::IO
         return meta;
     }
 
+    std::filesystem::path ResourceLoader::AssetsRelative(const std::filesystem::path &path) const
+    {
+        if (_packed)
+        {
+            // Inside a mount nothing is on disk: the filesystem's relative() would probe every component, fail, and
+            // fall back to the same lexical answer, many times slower (docs/packs.html#measured). Empty when unrelated.
+            const std::filesystem::path relative = path.lexically_normal().lexically_relative(_assetsRoot.lexically_normal());
+            return relative.empty() ? std::filesystem::path("..") : relative;
+        }
+        return std::filesystem::relative(path, _assetsRoot);
+    }
+
     std::filesystem::path ResourceLoader::GetMetadataPath(const std::filesystem::path &sourcePath) const
     {
-        auto relative = std::filesystem::relative(sourcePath, _assetsRoot);
+        auto relative = AssetsRelative(sourcePath);
         // Appended as a path, not a narrow string: a file name the code page can't spell keeps its .meta beside it
         std::filesystem::path metaName = relative.filename();
         metaName += ".meta";
@@ -507,7 +519,7 @@ namespace N2Engine::IO
 
     ResourcePath ResourceLoader::MakeResourcePath(const std::filesystem::path &physicalPath) const
     {
-        auto relative = std::filesystem::relative(physicalPath, _assetsRoot);
+        auto relative = AssetsRelative(physicalPath);
         // UTF-8, as every res:// path is (the .meta keys, the editor's wire paths)
         if (!PathToUtf8(relative).starts_with(".."))
         {
