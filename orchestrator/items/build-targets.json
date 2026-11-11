@@ -1,0 +1,39 @@
+{
+  "name": "build-targets",
+  "repo": "engine",
+  "branch": "feat-build-targets",
+  "closes": null,
+  "title": "Build targets: choose Windows, Linux, Android, iOS or web in the editor and build, with private console targets later (eleven stages)",
+  "issue": "User request, 2026-11-10: 'I would like for the engine to be able to allow the user to select a build target in the engine editor UI like windows, linux, android, ios, web, and maybe other console toolchains in the future like switch'. Design and stage table: orchestrator/proposals/build-targets-design.md. Split into one item per stage (bt1..bt11) before launching.",
+  "allowedPaths": [
+    "^engine/",
+    "^renderer/",
+    "^CMakeLists\\.txt$",
+    "^cmake/",
+    "^web/",
+    "^players/",
+    "^targets/",
+    "^tools/",
+    "^lua_project/",
+    "^external/web-stubs/",
+    "^editor-server/",
+    "^scripts/",
+    "^\\.github/workflows/",
+    "^tests/",
+    "^docs/",
+    "^orchestrator/items/bt",
+    "^orchestrator/proposals/build-targets-design\\.md$"
+  ],
+  "acceptance": [
+    "The editor lists the targets, shows what each one needs, builds any target the machine can build, and runs it on a device for device targets",
+    "One command line (n2build) does the same for CI and people",
+    "A console target can be added from outside the repository",
+    "Existing targets keep their behaviour, tests, smoke runs and size budgets at every stage"
+  ],
+  "requiresDocs": true,
+  "allowProtocol": true,
+  "gate": "split per stage; every stage needs the user's go; decisions D1-D7 of the design first",
+  "approved": false,
+  "reviewer": "opus",
+  "notes": "Reviewer: no behaviour change on existing targets, platform code only behind the platform layer, no signing secret in the project, host, logs or protocol."
+}
