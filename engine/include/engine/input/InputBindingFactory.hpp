@@ -19,8 +19,13 @@ namespace N2Engine::Input
         MissingAxis,
         MissingCompositeKeys,
         InvalidValue, // a key/button/axis name that doesn't exist
-        InvalidOptionalField // gamepadId, deadzone, invertX or invertY present with the wrong type
+        InvalidOptionalField, // gamepadId, deadzone, invertX, invertY, direction or pressPoint present but invalid
+        MissingChordBinding, // a Chord without an object 'modifier' and 'binding'
+        ChordTooDeep // Chords nested more than MaxChordDepth levels
     };
+
+    /// How many Chords may nest inside each other (a chord of a chord is a two-modifier chord)
+    inline constexpr int MaxChordDepth = 4;
 
     std::string BindingParseErrorToString(BindingParseError error);
 

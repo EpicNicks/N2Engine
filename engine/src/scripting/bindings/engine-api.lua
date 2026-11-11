@@ -2923,6 +2923,28 @@ function Input.GetMouseButtonDown(button) end
 ---@return boolean
 function Input.GetMouseButtonUp(button) end
 
+---The number of touches this frame (Input.touchCount); 0 on desktop (GLFW has no touch)
+---@return integer
+function Input.GetTouchCount() end
+
+---Touch `index` (1-based) this frame: { id, x, y, phase } with phase "Began", "Moved", "Stationary", "Ended" or "Canceled"; nil past the count
+---@param index integer
+---@return {id: integer, x: number, y: number, phase: string}|nil
+function Input.GetTouch(index) end
+
+---Gamepad rumble (Gamepad.SetMotorSpeeds): low- and high-frequency motors 0..1, for `seconds` of real time (nil or 0:
+---until StopGamepadRumble), on `gamepad` (default 0). False when there is no rumble there (Linux, macOS, no pad)
+---@param low number
+---@param high number
+---@param seconds? number
+---@param gamepad? integer
+---@return boolean
+function Input.SetGamepadRumble(low, high, seconds, gamepad) end
+
+---Stops `gamepad`'s rumble, or every gamepad's without an argument
+---@param gamepad? integer
+function Input.StopGamepadRumble(gamepad) end
+
 ---Whether the pointer was over a UI element (a raycast-target graphic under a canvas) in the last pointer update
 ---@return boolean
 function Input.IsPointerOverUI() end
@@ -2937,11 +2959,33 @@ function Input.GetActionMap(mapName) end
 ---@return ActionMap|nil
 function Input.LoadActionMap(mapName) end
 
+---A key held this frame, by its action-map name ("A", "Space", "LeftShift", "Enter"). An unknown name is a Lua error.
+---@param name string
+---@return boolean
+function Input.GetKey(name) end
+
+---A key that went down this frame
+---@param name string
+---@return boolean
+function Input.GetKeyDown(name) end
+
+---A key that went up this frame
+---@param name string
+---@return boolean
+function Input.GetKeyUp(name) end
+
+---The characters typed since the previous frame (UTF-8), "" when none
+---@return string
+function Input.GetTypedText() end
+
 ---Create (or replace) an action map. Each action lists bindings; fields and names follow the action map JSON format:
 ---  { type = "KeyboardButton", key = "Escape" }
 ---  { type = "Vector2Composite", up = "W", down = "S", left = "A", right = "D" }
 ---  { type = "GamepadStick", xAxis = "LeftX", yAxis = "LeftY", deadzone = 0.25, invertX = false, invertY = true }
 ---  { type = "GamepadButton", button = "South" }, { type = "GamepadAxis", axis = "LeftTrigger" }, { type = "MouseButton", button = "Left" }
+---  { type = "GamepadAxis", axis = "LeftX", direction = "Negative", pressPoint = 0.5 } (one half of an axis, as a button)
+---  { type = "GamepadButtonComposite", up = "DpadUp", down = "DpadDown", left = "DpadLeft", right = "DpadRight" }
+---  { type = "Chord", modifier = { type = "GamepadButton", button = "LeftThumb" }, binding = { type = "GamepadButton", button = "RightThumb" } }
 ---@param mapName string
 ---@param actions table<string, table[]> e.g. { ["Quit"] = { { type = "KeyboardButton", key = "Escape" } } }
 ---@return ActionMap|nil nil without a window, or if the map is malformed. References to a map it replaces stop working.

@@ -294,6 +294,10 @@ namespace ProtocolVectors
                 return json{{"settings", SetProjectSettingsCmd::Deserialize(r).settings}};
             }},
             {"SetStartupScene", [](BufferReader &r) { return json{{"path", SetStartupSceneCmd::Deserialize(r).path}}; }},
+            {"SetBuildTargets", [](BufferReader &r)
+            {
+                return json{{"targets", SetBuildTargetsCmd::Deserialize(r).targets}};
+            }},
             {"InvokeMenuItem", [](BufferReader &r)
             {
                 const auto cmd = InvokeMenuItemCmd::Deserialize(r);

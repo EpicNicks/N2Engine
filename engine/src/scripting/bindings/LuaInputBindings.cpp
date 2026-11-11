@@ -6,16 +6,36 @@
 #include "engine/Application.hpp"
 #include "engine/input/InputSystem.hpp"
 #include "engine/input/Mouse.hpp"
+#include "engine/input/Keyboard.hpp"
+#include "engine/input/Touchscreen.hpp"
+#include "engine/input/Rumble.hpp"
 #include "engine/Logger.hpp"
 #include "engine/scripting/LuaJson.hpp"
 #include "engine/scripting/ScriptCallback.hpp"
 
+#include <format>
 #include <stdexcept>
 
 namespace N2Engine::Scripting::Bindings
 {
     namespace
     {
+        // Input.GetKey/GetKeyDown/GetKeyUp: which 0 = held, 1 = went down this frame, 2 = went up this frame
+        bool KeyState(const std::string &name, const char *function, const int which)
+        {
+            const auto key = Input::Keyboard::KeyFromName(name);
+            if (!key)
+            {
+                throw std::runtime_error(std::format("{}: '{}' is not a key name", function, name));
+            }
+            const auto *keyboard = Input::Keyboard::Get();
+            if (keyboard == nullptr)
+            {
+                return false;
+            }
+            return which == 0 ? keyboard->GetKey(*key) : which == 1 ? keyboard->GetKeyDown(*key) : keyboard->GetKeyUp(*key);
+        }
+
         // Maps and actions reach Lua as handles: a map can be replaced or reloaded and an action replaced or
         // removed, while a script may keep either for longer than that
         sol::optional<ActionMapRef> MapRefOrNil(Input::ActionMap *map)
@@ -221,6 +241,51 @@ namespace N2Engine::Scripting::Bindings
             {
                 const auto *mouse = Input::Mouse::Get();
                 return mouse != nullptr && mouse->GetButtonUp(button);
+            },
+            // Raw keys by their action-map names ("A", "Space", "LeftShift", "Enter", "Key1", "Up"): held this frame,
+            // pressed this frame, released this frame. False without a window. An unknown name is a Lua error.
+            "GetKey", [](const std::string &name) { return KeyState(name, "Input.GetKey", 0); },
+            "GetKeyDown", [](const std::string &name) { return KeyState(name, "Input.GetKeyDown", 1); },
+            "GetKeyUp", [](const std::string &name) { return KeyState(name, "Input.GetKeyUp", 2); },
+            // The characters typed since the previous frame, as UTF-8 ("" when none or without a window)
+            "GetTypedText", []() -> std::string
+            {
+                const auto *keyboard = Input::Keyboard::Get();
+                return keyboard ? keyboard->GetTypedText() : std::string();
+            },
+            // Unity's Input.touchCount / Input.GetTouch: this frame's touches (Touchscreen), 1-based here
+            "GetTouchCount", []() { return static_cast<int>(Input::Touchscreen::Get().GetTouchCount()); },
+            "GetTouch", [](const int index, const sol::this_state state) -> sol::object
+            {
+                const auto &touches = Input::Touchscreen::Get().GetTouches();
+                if (index < 1 || static_cast<std::size_t>(index) > touches.size())
+                {
+                    return sol::make_object(state, sol::lua_nil);
+                }
+                const Input::Touch &t = touches[static_cast<std::size_t>(index - 1)];
+                sol::state_view lua(state);
+                return sol::make_object(state, lua.create_table_with(
+                    "id", t.id, "x", t.position.x, "y", t.position.y,
+                    "phase", std::string(Input::TouchPhaseName(t.phase))));
+            },
+            // Gamepad.SetMotorSpeeds: low- and high-frequency motors 0..1 for `seconds` of real time (0 or nil: until
+            // StopGamepadRumble) on gamepad `gamepad` (default 0). False when there is no rumble there
+            "SetGamepadRumble", [](const float low, const float high, const sol::optional<double> seconds,
+                                   const sol::optional<int> gamepad)
+            {
+                return Input::Rumble::Start(gamepad.value_or(0), low, high, seconds.value_or(0.0));
+            },
+            // Stops gamepad `gamepad`'s rumble, or every gamepad's without an argument
+            "StopGamepadRumble", [](const sol::optional<int> gamepad)
+            {
+                if (gamepad.has_value())
+                {
+                    Input::Rumble::Stop(*gamepad);
+                }
+                else
+                {
+                    Input::Rumble::StopAll();
+                }
             },
             // Whether the pointer is over a UI element (PointerDispatcher::IsPointerOverUI)
             "IsPointerOverUI", []()

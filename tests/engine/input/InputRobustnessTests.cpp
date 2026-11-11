@@ -386,3 +386,166 @@ TEST_F(InputSystemHeadlessTest, WrongTypedOptionalFieldsDoNotThrow)
     EXPECT_NE(_input.GetActionMap("Gameplay"), nullptr);
     EXPECT_EQ(_input.GetActionMap("Menu"), nullptr);
 }
+
+// ============================================================================
+// Gamepad button composites, axis halves and press points, chords
+// ============================================================================
+
+TEST(GamepadButtonCompositeTest, CombinesLikeTheKeyboardComposite)
+{
+    EXPECT_EQ(GamepadButtonCompositeBinding::Combine(false, false, false, false), Vector2(0.0f, 0.0f));
+    EXPECT_EQ(GamepadButtonCompositeBinding::Combine(true, false, false, false), Vector2(0.0f, 1.0f));
+    EXPECT_EQ(GamepadButtonCompositeBinding::Combine(false, true, false, true), Vector2(1.0f, -1.0f));
+    // Opposite buttons cancel
+    EXPECT_EQ(GamepadButtonCompositeBinding::Combine(true, true, true, true), Vector2(0.0f, 0.0f));
+}
+
+TEST(GamepadButtonCompositeTest, ParsesAndRoundTrips)
+{
+    const json source = {{"type", "GamepadButtonComposite"}, {"up", "DpadUp"}, {"down", "DpadDown"},
+                         {"left", "DpadLeft"}, {"right", "DpadRight"}};
+    auto parsed = CreateBindingFromJson(nullptr, source);
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_EQ((*parsed)->GetType(), BindingType::GamepadButtonComposite);
+    const json written = (*parsed)->Serialize();
+    EXPECT_EQ(written["up"], "DpadUp");
+    EXPECT_EQ(written["gamepadId"], 0);
+    EXPECT_TRUE(CreateBindingFromJson(nullptr, written).has_value());
+
+    // Headless (no GLFW): a zero vector, so the action stays a Vector2 action
+    EXPECT_TRUE((*parsed)->getValue().Is<Vector2>());
+
+    auto missing = CreateBindingFromJson(nullptr, {{"type", "GamepadButtonComposite"}, {"up", "North"}});
+    ASSERT_FALSE(missing.has_value());
+    EXPECT_EQ(missing.error(), BindingParseError::MissingCompositeKeys);
+
+    auto keyName = CreateBindingFromJson(nullptr, {{"type", "GamepadButtonComposite"}, {"up", "W"},
+                                                   {"down", "S"}, {"left", "A"}, {"right", "D"}});
+    ASSERT_FALSE(keyName.has_value());
+    EXPECT_EQ(keyName.error(), BindingParseError::InvalidValue);
+}
+
+TEST(AxisBindingTest, DirectionKeepsOneHalf)
+{
+    const auto value = [](const float normalized, const AxisDirection direction)
+    {
+        return AxisBinding::Shape(normalized, direction, 0.0f).asFloat();
+    };
+    EXPECT_FLOAT_EQ(value(-0.7f, AxisDirection::Both), -0.7f);
+    EXPECT_FLOAT_EQ(value(-0.7f, AxisDirection::Negative), 0.7f);
+    EXPECT_FLOAT_EQ(value(-0.7f, AxisDirection::Positive), 0.0f);
+    EXPECT_FLOAT_EQ(value(0.4f, AxisDirection::Positive), 0.4f);
+    EXPECT_FLOAT_EQ(value(0.4f, AxisDirection::Negative), 0.0f);
+}
+
+TEST(AxisBindingTest, PressPointMakesAButton)
+{
+    const InputValue below = AxisBinding::Shape(0.49f, AxisDirection::Both, 0.5f);
+    ASSERT_TRUE(below.Is<bool>());
+    EXPECT_FALSE(below.asBool());
+    EXPECT_TRUE(AxisBinding::Shape(0.5f, AxisDirection::Both, 0.5f).asBool());
+    // A stick pushed left, as a button: only the negative half presses it
+    EXPECT_TRUE(AxisBinding::Shape(-0.8f, AxisDirection::Negative, 0.5f).asBool());
+    EXPECT_FALSE(AxisBinding::Shape(0.8f, AxisDirection::Negative, 0.5f).asBool());
+}
+
+TEST(AxisBindingTest, DirectionAndPressPointParseAndRoundTrip)
+{
+    auto parsed = CreateBindingFromJson(nullptr, {{"type", "GamepadAxis"}, {"axis", "LeftX"},
+                                                  {"direction", "Negative"}, {"pressPoint", 0.5}});
+    ASSERT_TRUE(parsed.has_value());
+    const json written = (*parsed)->Serialize();
+    EXPECT_EQ(written["direction"], "Negative");
+    EXPECT_FLOAT_EQ(written["pressPoint"].get<float>(), 0.5f);
+    // Headless: still a button value
+    EXPECT_TRUE((*parsed)->getValue().Is<bool>());
+
+    // Defaults are not written, so older maps serialize as before
+    auto plain = CreateBindingFromJson(nullptr, {{"type", "GamepadAxis"}, {"axis", "LeftX"}});
+    ASSERT_TRUE(plain.has_value());
+    EXPECT_FALSE((*plain)->Serialize().contains("direction"));
+    EXPECT_FALSE((*plain)->Serialize().contains("pressPoint"));
+
+    const std::vector<json> bad = {
+        {{"type", "GamepadAxis"}, {"axis", "LeftX"}, {"direction", "Left"}},
+        {{"type", "GamepadAxis"}, {"axis", "LeftX"}, {"direction", 1}},
+        {{"type", "GamepadAxis"}, {"axis", "LeftX"}, {"pressPoint", "0.5"}},
+        {{"type", "GamepadAxis"}, {"axis", "LeftX"}, {"pressPoint", 1.5}},
+        {{"type", "GamepadAxis"}, {"axis", "LeftX"}, {"pressPoint", -0.1}},
+    };
+    for (const auto &binding : bad)
+    {
+        auto result = CreateBindingFromJson(nullptr, binding);
+        ASSERT_FALSE(result.has_value()) << binding.dump();
+        EXPECT_EQ(result.error(), BindingParseError::InvalidOptionalField) << binding.dump();
+    }
+}
+
+TEST(ChordBindingTest, CountsOnlyWhileTheModifierIsHeld)
+{
+    auto modifier = std::make_unique<FakeBinding>(false);
+    auto main = std::make_unique<FakeBinding>(true);
+    FakeBinding *modifierRaw = modifier.get();
+    FakeBinding *mainRaw = main.get();
+    ChordBinding chord(nullptr, std::move(modifier), std::move(main));
+
+    EXPECT_FALSE(chord.getValue().asBool());
+    modifierRaw->value = true;
+    EXPECT_TRUE(chord.getValue().asBool());
+    mainRaw->value = false;
+    EXPECT_FALSE(chord.getValue().asBool());
+
+    // The released value keeps the main binding's type
+    mainRaw->value = Vector2(0.5f, 0.5f);
+    modifierRaw->value = false;
+    const InputValue released = chord.getValue();
+    ASSERT_TRUE(released.Is<Vector2>());
+    EXPECT_EQ(released.asVector2(), Vector2(0.0f, 0.0f));
+    mainRaw->value = 0.75f;
+    ASSERT_TRUE(chord.getValue().Is<float>());
+    EXPECT_FLOAT_EQ(chord.getValue().asFloat(), 0.0f);
+}
+
+TEST(ChordBindingTest, ParsesNestedBindingsAndRoundTrips)
+{
+    const json source = {{"type", "Chord"},
+                         {"modifier", {{"type", "GamepadButton"}, {"button", "LeftThumb"}}},
+                         {"binding", {{"type", "GamepadButton"}, {"button", "RightThumb"}}}};
+    auto parsed = CreateBindingFromJson(nullptr, source);
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_EQ((*parsed)->GetType(), BindingType::Chord);
+    const json written = (*parsed)->Serialize();
+    EXPECT_EQ(written["modifier"]["button"], "LeftThumb");
+    EXPECT_EQ(written["binding"]["button"], "RightThumb");
+    EXPECT_TRUE(CreateBindingFromJson(nullptr, written).has_value());
+
+    auto missing = CreateBindingFromJson(nullptr, {{"type", "Chord"}, {"modifier", {{"type", "KeyboardButton"},
+                                                                                    {"key", "LeftShift"}}}});
+    ASSERT_FALSE(missing.has_value());
+    EXPECT_EQ(missing.error(), BindingParseError::MissingChordBinding);
+
+    // A bad inner binding reports its own error
+    auto badInner = CreateBindingFromJson(nullptr, {{"type", "Chord"},
+                                                    {"modifier", {{"type", "KeyboardButton"}, {"key", "Shfit"}}},
+                                                    {"binding", {{"type", "KeyboardButton"}, {"key", "R"}}}});
+    ASSERT_FALSE(badInner.has_value());
+    EXPECT_EQ(badInner.error(), BindingParseError::InvalidValue);
+}
+
+TEST(ChordBindingTest, NestingIsBounded)
+{
+    json binding = {{"type", "KeyboardButton"}, {"key", "R"}};
+    for (int i = 0; i < MaxChordDepth; ++i)
+    {
+        binding = {{"type", "Chord"}, {"modifier", {{"type", "KeyboardButton"}, {"key", "LeftShift"}}},
+                   {"binding", binding}};
+    }
+    EXPECT_TRUE(CreateBindingFromJson(nullptr, binding).has_value());
+
+    binding = {{"type", "Chord"}, {"modifier", {{"type", "KeyboardButton"}, {"key", "LeftShift"}}},
+               {"binding", binding}};
+    auto tooDeep = CreateBindingFromJson(nullptr, binding);
+    ASSERT_FALSE(tooDeep.has_value());
+    EXPECT_EQ(tooDeep.error(), BindingParseError::ChordTooDeep);
+    EXPECT_FALSE(BindingParseErrorToString(BindingParseError::ChordTooDeep).empty());
+}
