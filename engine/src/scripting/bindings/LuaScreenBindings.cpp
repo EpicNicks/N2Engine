@@ -6,6 +6,7 @@
 
 #include <math/Vector2.hpp>
 #include <renderer/common/RenderState.hpp>
+#include <renderer/common/Renderer.hpp>
 
 #include "engine/Application.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
@@ -14,6 +15,9 @@
 // The Screen table: the screen tint of the game's scene pass (Application::SetScreenTint, effects design stage E2), for the
 // time-stop effect (a grey circle that grows and shrinks) and full-screen grey (a death or pause screen). The UI is drawn
 // over it in its own colours.
+//
+// The Graphics table: what the renderer the game runs on can do (effects design, decision E). Graphics.CanBlend() is false on
+// the software renderer (the web's fallback), which cannot blend, so a game can skip soft glow sprites there.
 namespace N2Engine::Scripting::Bindings
 {
     namespace
@@ -140,6 +144,13 @@ namespace N2Engine::Scripting::Bindings
                 Application::GetInstance().ClearScreenTint();
             },
             "GetTint", [](const sol::this_state state) { return GetTint(state); }
+        );
+        lua["Graphics"] = lua.create_table_with(
+            // True without a renderer (a headless run draws nothing, so nothing is lost either way)
+            "CanBlend", []() {
+                const Renderer::Common::IRenderer *renderer = Application::GetInstance().GetWindow().GetRenderer();
+                return renderer == nullptr || renderer->SupportsBlending();
+            }
         );
     }
 }

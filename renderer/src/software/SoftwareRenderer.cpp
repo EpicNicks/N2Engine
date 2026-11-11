@@ -123,7 +123,11 @@ namespace
         // Unlit and lit multiply by the interpolated vertex colour. Off when every vertex of the mesh is white,
         // so such meshes (every built-in one) shade exactly as they did before vertex colour was read.
         bool vertexColor = false;
-        uint32_t flatColor = 0xFFFFFFFF;  // unlit + untextured: constant per draw
+        // Unlit only: saturation and flash (Common::ColorEffects), applied to the shaded colour before the dim and tint.
+        // colorFx is false at the defaults, so a draw without them shades exactly as before
+        ColorEffects colorEffects{};
+        bool colorFx = false;
+        uint32_t flatColor = 0xFFFFFFFF;  // unlit + untextured: constant per draw (with colorEffects applied)
         // RenderState::dim of the draw (0: none), applied to every pixel it writes
         float dim = 0.f;
         // RenderState::tint of the draw, applied after the dim to the pixels its circle selects, with the circle in this
@@ -198,6 +202,15 @@ namespace
         if (auto* sh = dynamic_cast<const SWShader*>(mat.GetShader()))
             s.shader = sh->GetType();
 
+        // The unlit colour effects: only the unlit shader reads them
+        if (s.shader == SWShaderType::Unlit)
+        {
+            static const std::string saturationKey = "uSaturation";
+            static const std::string flashKey = "uFlash";
+            s.colorEffects.saturation = mat.GetFloat(saturationKey, 1.0f);
+            s.colorEffects.flash = mat.GetVec4(flashKey, {0, 0, 0, 0});
+        }
+
         // Text effects: only the text shader reads them, so other draws skip the lookups
         if (s.shader == SWShaderType::Text)
         {
@@ -240,7 +253,15 @@ namespace
             // only with uPbr, and the engine gives it to Pbr materials only)
             r.metallicRoughnessTex = mat.pbr ? mat.metallicRoughnessTexture : nullptr;
         }
-        r.flatColor = PackRGBA(r.aR, r.aG, r.aB, r.aA);
+        // Defaults for lit and text materials (SnapshotMaterial reads them for unlit only), so colorFx stays off there
+        r.colorEffects = mat.colorEffects;
+        r.colorFx = !mat.colorEffects.IsDefault();
+        float flatR = r.aR, flatG = r.aG, flatB = r.aB;
+        if (r.colorFx)
+        {
+            r.colorEffects.Apply(flatR, flatG, flatB);
+        }
+        r.flatColor = PackRGBA(flatR, flatG, flatB, r.aA);
 
         if (r.text)
         {
@@ -355,6 +376,10 @@ namespace
         if (m.vertexColor)
         {
             r *= vc.r; g *= vc.g; b *= vc.b; a *= vc.a;
+        }
+        if (m.colorFx)
+        {
+            m.colorEffects.Apply(r, g, b);
         }
         return PxColor{r, g, b, a};
     }

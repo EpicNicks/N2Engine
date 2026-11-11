@@ -4,6 +4,7 @@
 #include <string>
 
 #include <math/Matrix.hpp>
+#include <renderer/common/ColorEffects.hpp>
 #include <renderer/common/IMaterial.hpp>
 #include <renderer/common/IMesh.hpp>
 #include <renderer/common/ITexture.hpp>
@@ -52,12 +53,23 @@ namespace N2Engine::UI
         /// Sets the sprite; nullptr clears it. A previous sprite's share of its GPU texture is released now.
         void SetSprite(std::shared_ptr<Rendering::Texture> sprite);
 
+        /// The colour effects, as on Sprite2D (serialized as "saturation" and "flash"): 1 draws the colour as it is, 0 grey,
+        /// in between mixes, above 1 strengthens it. Stored clamped to 0..4; a non-finite value is 1
+        void SetSaturation(float saturation) { _saturation = Renderer::Common::ColorEffects::ClampSaturation(saturation); }
+        [[nodiscard]] float GetSaturation() const { return _saturation; }
+        /// A colour mixed over the image by its alpha, after the saturation; transparent (the default) is none. Stored with
+        /// each component clamped to 0..1 (a non-finite one is 0)
+        void SetFlash(const Common::Color &flash) { _flash = Renderer::Common::ColorEffects::ClampFlash(flash); }
+        [[nodiscard]] const Common::Color &GetFlash() const { return _flash; }
+
         /// The model matrix (row-major, as the renderers take it) that maps the unit square onto the rect
         [[nodiscard]] static Math::Matrix<float, 4, 4> ModelMatrixFor(const Rect &rect);
 
     private:
         Renderer::Common::ITexture *_texture = nullptr;
         std::shared_ptr<Rendering::Texture> _sprite; // serialized as "sprite"
+        float _saturation = 1.0f;
+        Common::Color _flash{Common::Color::Transparent};
         Rendering::GpuCache::Handle _spriteTexture;  // _sprite's texture on _renderer, once drawn
         // The last sprite a renderer failed to make a texture for, so it isn't retried every frame
         std::weak_ptr<Rendering::Texture> _failedSprite;
