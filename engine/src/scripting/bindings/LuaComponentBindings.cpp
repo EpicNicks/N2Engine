@@ -560,6 +560,10 @@ namespace N2Engine::Scripting::Bindings
             "GetOutline", Forward<Sprite2DRef, &Rendering::Sprite2D::GetOutline>(),
             "SetColor", Forward<Sprite2DRef, &Rendering::Sprite2D::SetColor>(),
             "GetColor", Forward<Sprite2DRef, &Rendering::Sprite2D::GetColor>(),
+            "SetSaturation", Forward<Sprite2DRef, &Rendering::Sprite2D::SetSaturation>(),
+            "GetSaturation", Forward<Sprite2DRef, &Rendering::Sprite2D::GetSaturation>(),
+            "SetFlash", Forward<Sprite2DRef, &Rendering::Sprite2D::SetFlash>(),
+            "GetFlash", Forward<Sprite2DRef, &Rendering::Sprite2D::GetFlash>(),
             // A res:// path to an image, or nil for none
             "SetTexture", [](const Sprite2DRef &ref, const sol::optional<std::string> path)
             {

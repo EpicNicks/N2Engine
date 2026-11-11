@@ -13,19 +13,41 @@
 #include "engine/Positionable.hpp"
 #include "engine/Time.hpp"
 #include "engine/common/ScriptUtils.hpp"
+#include "engine/rendering/RenderCamera.hpp"
+#include "engine/serialization/MathSerialization.hpp"
+
+// The particles module (N2ENGINE_USE_PARTICLES, set on this file only by engine/CMakeLists.txt). Without it the backends,
+// the emitter and the billboards are not in the build: this file keeps the component's fields, its registration and its
+// render resources, and everything that would simulate or draw particles does nothing (docs/particles.html#leaving-it-out).
+#ifdef N2ENGINE_PARTICLES_ENABLED
 #include "engine/particles/CpuParticleBackend.hpp"
 #include "engine/particles/ParticleBillboards.hpp"
 #include "engine/particles/WebGpuParticleBackend.hpp"
-#include "engine/rendering/RenderCamera.hpp"
-#include "engine/serialization/MathSerialization.hpp"
+#endif
 
 namespace N2Engine::Rendering
 {
     namespace
     {
-        constexpr float kIdentity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+#ifndef N2ENGINE_PARTICLES_ENABLED
+        // One warning per process, from the first system that starts, not one per system
+        void WarnParticlesLeftOut(const std::string &objectName)
+        {
+            static bool warned = false;
+            if (!std::exchange(warned, true))
+            {
+                Logger::Warn(std::format("ParticleSystem on '{}': this build has no particles module (N2ENGINE_USE_PARTICLES is "
+                                         "OFF), so ParticleSystems keep their data and emit nothing",
+                                         objectName));
+            }
+        }
+#endif
+
         // The backend's own random stream differs from the emitter's, so a lifetime never mirrors a speed
         constexpr std::uint32_t kBackendSeedMix = 0x5BD1E995u;
+
+#ifdef N2ENGINE_PARTICLES_ENABLED
+        constexpr float kIdentity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 
         enum class RenderWarning
         {
@@ -42,6 +64,7 @@ namespace N2Engine::Rendering
             static bool warned[static_cast<std::size_t>(RenderWarning::Count)] = {};
             return !std::exchange(warned[static_cast<std::size_t>(kind)], true);
         }
+#endif
     }
 
     ParticleSystem::ParticleSystem(GameObject &gameObject) : IRenderable(gameObject)
@@ -184,6 +207,33 @@ namespace N2Engine::Rendering
         return settings;
     }
 
+#ifndef N2ENGINE_PARTICLES_ENABLED
+    // Without the particles module: no backend is ever made (so Backend() is null and _handle stays invalid), and so
+    // nothing below emits, steps or draws. Play and Stop still keep _playing, and a burst asked for before the start is
+    // dropped when the system would have started.
+    void ParticleSystem::OnAttach()
+    {
+        WarnParticlesLeftOut(GetGameObject().GetName());
+        _pendingBurst = 0;
+        if (playOnAwake && !_playing)
+        {
+            Play();
+        }
+    }
+
+    void ParticleSystem::ReleaseSystem()
+    {
+        _handle = Physics::kInvalidParticleSystem;
+        _cpuBackend.reset();
+        _webGpuBackend.reset();
+        _usingGpu = false;
+    }
+
+    bool ParticleSystem::RecoverFromReplacedBackend()
+    {
+        return false;
+    }
+#else
     void ParticleSystem::OnAttach()
     {
         if (_handle != Physics::kInvalidParticleSystem)
@@ -314,7 +364,8 @@ namespace N2Engine::Rendering
     {
         // The WebGPU backend stopped working (the renderer shut down or was replaced, the device was lost, a GPU call
         // failed): its particles can't be read back, so the system restarts empty on the CPU backend
-        if (_webGpuBackend && _handle != Physics::kInvalidParticleSystem && !_webGpuBackend->IsHealthy())
+        if (_webGpuBackend && _handle != Physics::kInvalidParticleSystem &&
+            !static_cast<const Particles::WebGpuParticleBackend &>(*_webGpuBackend).IsHealthy())
         {
             Logger::Warn(std::format("ParticleSystem on '{}': the WebGPU backend stopped working (the renderer or its "
                                      "device went away), so the system continues on the CPU (its particles are lost)",
@@ -358,6 +409,7 @@ namespace N2Engine::Rendering
         _warnedFull = false;
         return true;
     }
+#endif
 
     void ParticleSystem::OnDestroy()
     {
@@ -365,6 +417,16 @@ namespace N2Engine::Rendering
         ReleaseSystem();
     }
 
+#ifndef N2ENGINE_PARTICLES_ENABLED
+    void ParticleSystem::OnFixedUpdate()
+    {
+    }
+
+    void ParticleSystem::Emit(const std::uint32_t count)
+    {
+        static_cast<void>(count);
+    }
+#else
     void ParticleSystem::OnFixedUpdate()
     {
         RecoverFromReplacedBackend();
@@ -409,6 +471,7 @@ namespace N2Engine::Rendering
             WarnFull();
         }
     }
+#endif
 
     void ParticleSystem::WarnFull()
     {
@@ -450,6 +513,11 @@ namespace N2Engine::Rendering
 
     void ParticleSystem::EmitBurst(const int count)
     {
+#ifndef N2ENGINE_PARTICLES_ENABLED
+        // No backend will ever start in this build, so there is nothing to queue the burst for
+        (void)count;
+        return;
+#endif
         if (count <= 0)
         {
             return;
@@ -527,6 +595,16 @@ namespace N2Engine::Rendering
         RenderInQueue(renderer, Renderer::Common::RenderState::Transparent(), RenderQueue::Transparent);
     }
 
+#ifndef N2ENGINE_PARTICLES_ENABLED
+    // Without the particles module there are never particles to draw
+    void ParticleSystem::RenderInQueue(Renderer::Common::IRenderer *renderer, const Renderer::Common::RenderState &state,
+                                       const RenderQueue queue)
+    {
+        static_cast<void>(renderer);
+        static_cast<void>(state);
+        static_cast<void>(queue);
+    }
+#else
     void ParticleSystem::RenderInQueue(Renderer::Common::IRenderer *renderer, const Renderer::Common::RenderState &state,
                                        const RenderQueue queue)
     {
@@ -619,4 +697,5 @@ namespace N2Engine::Rendering
         drawState.additive = blendMode == ParticleBlend::Additive;
         renderer->DrawMesh(_mesh, kIdentity, _material, drawState);
     }
+#endif
 }

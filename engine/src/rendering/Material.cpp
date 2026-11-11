@@ -14,6 +14,7 @@
 #include <utility>
 
 #include <math/UUID.hpp>
+#include <renderer/common/ColorEffects.hpp>
 #include <renderer/common/IMaterial.hpp>
 
 #include "engine/Logger.hpp"
@@ -242,6 +243,18 @@ namespace N2Engine::Rendering
         Changed();
     }
 
+    void Material::SetSaturation(const float saturation)
+    {
+        _saturation = Renderer::Common::ColorEffects::ClampSaturation(saturation);
+        Changed();
+    }
+
+    void Material::SetFlash(const Common::Color &flash)
+    {
+        _flash = Renderer::Common::ColorEffects::ClampFlash(flash);
+        Changed();
+    }
+
     void Material::SetDoubleSided(const bool doubleSided)
     {
         _doubleSided = doubleSided;
@@ -317,7 +330,12 @@ namespace N2Engine::Rendering
             cutoff = _blendDiscardBelow;
         }
         target.SetFloat("uAlphaCutoff", cutoff);
-        if (_shading != ShadingModel::Unlit)
+        if (_shading == ShadingModel::Unlit)
+        {
+            target.SetFloat("uSaturation", _saturation);
+            target.SetVec4("uFlash", _flash.r, _flash.g, _flash.b, _flash.a);
+        }
+        else
         {
             target.SetFloat("uSmoothness", _smoothness);
             target.SetFloat("uMetallic", _metallic);

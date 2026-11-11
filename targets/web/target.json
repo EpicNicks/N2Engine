@@ -1,0 +1,25 @@
+{
+  "formatVersion": 1,
+  "name": "web",
+  "displayName": "Web (WebAssembly)",
+  "hostSystems": ["win32", "linux", "darwin"],
+  "toolchains": {
+    "required": ["emsdk", "cmake", "ninja"]
+  },
+  "pins": { "emsdk": "4.0.10" },
+  "physics3d": ["none", "physx", "jolt", "both"],
+  "cmake": {
+    "toolchain": "emsdk",
+    "target": "web-package",
+    "options": {
+      "CMAKE_BUILD_TYPE": "Release",
+      "N2ENGINE_BUILD_TESTS": "OFF"
+    },
+    "configs": {
+      "debug": { "N2ENGINE_WEB_PROFILE": "dev" },
+      "release": { "N2ENGINE_WEB_PROFILE": "size" }
+    }
+  },
+  "package": { "kind": "web", "from": "web-package" },
+  "run": { "kind": "web-server" }
+}
