@@ -24,7 +24,7 @@ namespace
     class FakeBinding final : public InputBinding
     {
     public:
-        explicit FakeBinding(InputValue value) : InputBinding(static_cast<GLFWwindow *>(nullptr)), value(value) {}
+        explicit FakeBinding(InputValue value) : InputBinding(static_cast<N2Engine::Input::InputDevice *>(nullptr)), value(value) {}
         InputValue getValue() override { return value; }
         [[nodiscard]] BindingType GetType() const override { return BindingType::KeyboardButton; }
         [[nodiscard]] json Serialize() const override { return json::object(); }

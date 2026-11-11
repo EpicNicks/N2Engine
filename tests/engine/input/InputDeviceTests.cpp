@@ -27,7 +27,7 @@ namespace
     public:
         std::set<Key> keys;
         std::set<MouseButton> buttons;
-        Math::Vector2 cursor{10.0f, 20.0f};
+        Math::Vector2 cursor = Math::Vector2(10.0f, 20.0f);
         bool gamepadConnected = false;
         GamepadState gamepad;
         bool sticky = false;
@@ -122,11 +122,11 @@ TEST(InputDeviceTest, MouseAndKeyboardReadTheirDevice)
         EXPECT_TRUE(device.sticky);
         ASSERT_TRUE(device.scroll && device.text);
 
-        device.cursor = {100.0f, 50.0f};
+        device.cursor = Math::Vector2(100.0f, 50.0f);
         device.buttons = {MouseButton::Right};
         device.scroll(Math::Vector2(0.0f, 2.0f));
         device.keys = {Key::Enter};
-        device.text(U'é');
+        device.text(0xE9u); // é
         mouse.Update();
         keyboard.Update();
         EXPECT_EQ(mouse.GetPosition(), Math::Vector2(100.0f, 50.0f));
