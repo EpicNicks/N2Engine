@@ -21,6 +21,9 @@ every stage. Stages still run in the order of section 5, each after the stages i
   (`engine/src/input/GlfwInputDevice.cpp`) is the only code that knows GLFW's key, button and axis numbers, its tables
   private; `Window` owns it; bindings, `ActionMap`, `Mouse`, `Keyboard` and `InputSystem` take an `InputDevice*`. Saved data
   names its keys, so it loads unchanged (tested); no migration is needed.
+- Stage 6 (platform layer), branch `feat-bt6-platform-host`: `Platform::IPlatformHost` (surface, window, lifecycle, loop
+  ownership, input device, paths); `desktop-glfw` (Window.cpp's GLFW code, moved as it was) and `headless` backends; `Window`
+  on the host; the web build has no stand-in GLFW (`glfw_stub.c` deleted). `docs/platform.html`.
 
 ## 1. Goal
 
