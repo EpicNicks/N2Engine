@@ -60,5 +60,6 @@ namespace N2Engine::Input
         std::bitset<KeyCount> _keys;
         std::bitset<KeyCount> _previousKeys;
         std::string _pendingText;
+        std::string _typedText;
     };
 }
