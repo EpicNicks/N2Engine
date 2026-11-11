@@ -230,3 +230,33 @@ test('--suggest prints a block that can be pasted, and --json the whole report',
   assert.equal(report.unresolved.length, 1);
   assert.deepEqual(report.conflicts, []);
 });
+
+test("a target's list is laid over build.modules, key by key (build targets stage 3)", () => {
+  const project = {
+    build: {
+      modules: { physics3d: 'both', physics2d: true },
+      targets: { android: { modules: { physics3d: 'jolt', particles: false } }, web: { enabled: true } },
+    },
+  };
+  assert.deepEqual(readModuleList(project, 'android'), { physics3d: 'jolt', physics2d: true, particles: false });
+  assert.deepEqual(readModuleList(project, 'web'), { physics3d: 'both', physics2d: true });
+  assert.deepEqual(readModuleList(project), { physics3d: 'both', physics2d: true }, 'without a target: build.modules alone');
+  assert.deepEqual(readModuleList({ build: { targets: { ios: { modules: { physics3d: 'none' } } } } }, 'ios'), { physics3d: 'none' });
+  assert.equal(readModuleList({ build: { targets: { ios: { modules: { physics3d: 'none' } } } } }, 'web'), null);
+  assert.throws(() => readModuleList({ build: { targets: { ios: { modules: { physics2d: 'no' } } } } }, 'ios'),
+    /build\.targets\.ios\.modules\.physics2d must be true or false/);
+  assert.throws(() => readModuleList({ build: { targets: { ios: { modules: [] } } } }, 'ios'), /build\.targets\.ios\.modules must be an object/);
+});
+
+test('--target checks the target\'s list against the project', () => {
+  const folder = makeProject(
+    { name: 'p', build: { modules: { physics3d: 'physx' }, targets: { android: { modules: { physics3d: 'none' } } } } },
+    { 'assets/scene.lua': 'go:AddComponent("Rigidbody")' },
+  );
+  assert.equal(run(folder).status, 0, 'build.modules keeps PhysX');
+  const forAndroid = run(folder, '--target', 'android');
+  assert.equal(forAndroid.status, 1);
+  assert.match(forAndroid.stderr, /leaves physics3d out/);
+  assert.equal(run(folder, '--target=android').status, 1);
+  assert.equal(run(folder, '--target').status, 2, 'a missing value is wrong usage');
+});

@@ -1,7 +1,8 @@
 // Reads a project's list of engine modules ("build.modules" in project.n2proj), scans the project for what it uses, and reports
 // where they disagree (docs/project-modules.html). A build with a list runs this, so a game cannot ship without something it needs.
 //
-// Usage: node scripts/project-modules.mjs <project folder> [--suggest] [--json]
+// Usage: node scripts/project-modules.mjs <project folder> [--target T] [--suggest] [--json]
+//   --target T  the list a build for target T uses: build.targets.T.modules laid over build.modules, key by key.
 //   default     prints what the project uses against its list. Exit 0: nothing contradicts the list. Exit 1: something does.
 //   --suggest   prints the smallest list the scan can justify, as the "build" block to paste into project.n2proj.
 //   --json      the report as JSON instead of text.
@@ -149,36 +150,52 @@ function filesUnder(folder) {
   return files;
 }
 
-/** Reads the list. Throws on a list that a build could not act on. Absent modules mean "keep it": null for the whole list. */
-export function readModuleList(project) {
-  const modules = project?.build?.modules;
-  if (modules === undefined) {
-    return null;
-  }
+/** Checks one list (build.modules, or a target's modules); where names the key in messages */
+function checkList(modules, where) {
   if (!modules || typeof modules !== 'object' || Array.isArray(modules)) {
-    throw new Error('build.modules must be an object');
+    throw new Error(`${where} must be an object`);
   }
   for (const key of Object.keys(modules)) {
     if (!(key in MODULES)) {
-      throw new Error(`build.modules: unknown module "${key}" (known: ${Object.keys(MODULES).join(', ')})`);
+      throw new Error(`${where}: unknown module "${key}" (known: ${Object.keys(MODULES).join(', ')})`);
     }
   }
   if (modules.physics3d !== undefined && !PHYSICS3D_VALUES.includes(modules.physics3d)) {
-    throw new Error(`build.modules.physics3d must be one of ${PHYSICS3D_VALUES.join(', ')}, not ${JSON.stringify(modules.physics3d)}`);
+    throw new Error(`${where}.physics3d must be one of ${PHYSICS3D_VALUES.join(', ')}, not ${JSON.stringify(modules.physics3d)}`);
   }
   for (const module of BOOLEAN_MODULES) {
     if (modules[module] !== undefined && typeof modules[module] !== 'boolean') {
-      throw new Error(`build.modules.${module} must be true or false, not ${JSON.stringify(modules[module])}`);
+      throw new Error(`${where}.${module} must be true or false, not ${JSON.stringify(modules[module])}`);
     }
   }
-  return modules;
+}
+
+/**
+ * Reads the list. Throws on a list that a build could not act on. Absent modules mean "keep it": null for the whole list.
+ * With a target, that target's build.targets.<target>.modules is laid over build.modules key by key (build targets stage 3),
+ * so a target can change one module and keep the others: { physics3d: "physx" } over { physics3d: "both", physics2d: true }
+ * is { physics3d: "physx", physics2d: true }.
+ */
+export function readModuleList(project, target) {
+  const base = project?.build?.modules;
+  if (base !== undefined) {
+    checkList(base, 'build.modules');
+  }
+  const targetModules = target ? project?.build?.targets?.[target]?.modules : undefined;
+  if (targetModules !== undefined) {
+    checkList(targetModules, `build.targets.${target}.modules`);
+  }
+  if (base === undefined && targetModules === undefined) {
+    return null;
+  }
+  return { ...(base ?? {}), ...(targetModules ?? {}) };
 }
 
 /** Scans a project folder. Throws when project.n2proj cannot be read. */
-export function scanProject(folder) {
+export function scanProject(folder, target) {
   const projectPath = path.join(folder, 'project.n2proj');
   const project = JSON.parse(fs.readFileSync(projectPath, 'utf8'));
-  const list = readModuleList(project);
+  const list = readModuleList(project, target);
   const uses = [];
   const unresolved = [];
   const unreadable = [];
@@ -259,16 +276,28 @@ export function suggestList(scan) {
 }
 
 function main(argv) {
-  const flags = new Set(argv.filter((arg) => arg.startsWith('--')));
-  const folders = argv.filter((arg) => !arg.startsWith('--'));
+  // --target T takes a value; every other option is a flag
+  let target;
+  const rest = [];
+  for (let i = 0; i < argv.length; ++i) {
+    if (argv[i] === '--target' && i + 1 < argv.length) {
+      target = argv[++i];
+    } else if (argv[i].startsWith('--target=')) {
+      target = argv[i].slice('--target='.length);
+    } else {
+      rest.push(argv[i]);
+    }
+  }
+  const flags = new Set(rest.filter((arg) => arg.startsWith('--')));
+  const folders = rest.filter((arg) => !arg.startsWith('--'));
   const known = new Set(['--suggest', '--json']);
-  if (folders.length !== 1 || [...flags].some((flag) => !known.has(flag))) {
-    console.error('usage: project-modules.mjs <project folder> [--suggest] [--json]');
+  if (folders.length !== 1 || [...flags].some((flag) => !known.has(flag)) || target === '') {
+    console.error('usage: project-modules.mjs <project folder> [--target T] [--suggest] [--json]');
     return 2;
   }
   let scan;
   try {
-    scan = scanProject(folders[0]);
+    scan = scanProject(folders[0], target);
   } catch (error) {
     console.error(`project-modules: ${folders[0]}: ${error.message}`);
     return 2;
