@@ -63,7 +63,8 @@ function fakeProbe({ platform = 'linux', env = {}, files = [], commands = {}, di
     readFile: (file) => (typeof commands[`read:${file}`] === 'string' ? commands[`read:${file}`] : null),
     listDir: (dir) => dirs[dir] ?? [],
     run(command, args) {
-      const name = path.basename(command).replace(/\.exe$/i, '');
+      // Either separator: a simulated Windows path must work when the tests run on Linux
+      const name = command.split(/[\\/]/).pop().replace(/\.exe$/i, '');
       const answer = commands[name];
       if (answer === undefined) return null;
       if (typeof answer === 'function') return answer(args);
