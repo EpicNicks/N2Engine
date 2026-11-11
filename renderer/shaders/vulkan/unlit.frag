@@ -1,12 +1,14 @@
 #version 450
 
 // The Vulkan port of OpenGLRenderer.cpp's unlitFrag (GLSL 330): uAlbedo x texture x vertex colour, alpha-tested against
-// uAlphaCutoff (0 keeps every fragment). The material block (set 1, binding 0) is one dynamic-offset range per draw;
+// uAlphaCutoff (0 keeps every fragment), then the colour effects (uSaturation, uFlash). The material block (set 1, binding 0) is one dynamic-offset range per draw;
 // the base texture is set 1, binding 1.
 layout(set = 1, binding = 0, std140) uniform Material {
     vec4 uAlbedo;
     int uHasTexture;
     float uAlphaCutoff;
+    float uSaturation;
+    vec4 uFlash;
 };
 
 layout(set = 1, binding = 1) uniform sampler2D uTexture;
@@ -15,6 +17,17 @@ layout(location = 0) in vec2 fragTexCoord;
 layout(location = 1) in vec4 fragColor;
 layout(location = 2) in float fragStageDim;
 layout(location = 0) out vec4 FragColor;
+
+// Common::ColorEffects: saturation (1 none, 0 grey), then the flash colour mixed over by its alpha (0 none)
+vec3 colorEffected(vec3 rgb) {
+    if (uSaturation != 1.0) {
+        rgb = mix(vec3(dot(rgb, vec3(0.299, 0.587, 0.114))), rgb, uSaturation);
+    }
+    if (uFlash.a > 0.0) {
+        rgb = mix(rgb, uFlash.rgb, min(uFlash.a, 1.0));
+    }
+    return rgb;
+}
 
 // RenderState::dim (RenderState::StageDimmed): the colour mixed towards a darkened grey of its own luminance
 vec3 stageDimmed(vec3 rgb) {
@@ -56,5 +69,5 @@ void main() {
     if (color.a < uAlphaCutoff) {
         discard;
     }
-    FragColor = vec4(screenTinted(stageDimmed(color.rgb)), color.a);
+    FragColor = vec4(screenTinted(stageDimmed(colorEffected(color.rgb))), color.a);
 }

@@ -997,6 +997,15 @@ TEST(WebGpuShaderParityTest, TheTextPortKeepsTheAntialiasedSdfMathsAndTheUnlitPo
     {
         EXPECT_TRUE(Contains(unlit.text, line)) << "unlit.wgsl: " << line;
     }
+    // The colour effects (Common::ColorEffects, effects design stage E1), as the GLSL has them, before the dim and tint
+    for (const char* line : {"if (material.uSaturation != 1.0) {",
+                             "rgb = mix(vec3<f32>(dot(rgb, vec3<f32>(0.299, 0.587, 0.114))), rgb, material.uSaturation);",
+                             "if (material.uFlash.a > 0.0) {",
+                             "rgb = mix(rgb, material.uFlash.rgb, min(material.uFlash.a, 1.0));",
+                             "screenTinted(stageDimmed(colorEffected(color.rgb)), input.fragCoord)"})
+    {
+        EXPECT_TRUE(Contains(unlit.text, line)) << "unlit.wgsl: " << line;
+    }
 }
 
 TEST(WebGpuShaderParityTest, EveryDerivativeComesBeforeTheFirstDiscardAndInTheLitShaderBeforeTheLightingLoops)

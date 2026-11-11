@@ -376,6 +376,9 @@ Renderer::Common::IMaterial* OpenGLRenderer::CreateMaterial(Common::IShader *sha
     {
         material->SetInt("uHasTexture", texture != nullptr ? 1 : 0);
         material->SetFloat("uAlphaCutoff", 0.0f);
+        // No colour effects (Common::ColorEffects). A GL uniform starts at 0, which for uSaturation would be grey
+        material->SetFloat("uSaturation", 1.0f);
+        material->SetVec4("uFlash", 0.0f, 0.0f, 0.0f, 0.0f);
     }
     else if (shader == m_standardTextShader)
     {
@@ -921,10 +924,23 @@ void OpenGLRenderer::CreateStandardShaders()
         uniform sampler2D uTexture;
         uniform bool uHasTexture;
         uniform float uAlphaCutoff;
+        uniform float uSaturation;
+        uniform vec4 uFlash;
 
         in vec2 fragTexCoord;
         in vec4 fragColor;
         out vec4 FragColor;
+
+        // Common::ColorEffects: saturation (1 none, 0 grey), then the flash colour mixed over by its alpha (0 none)
+        vec3 colorEffected(vec3 rgb) {
+            if (uSaturation != 1.0) {
+                rgb = mix(vec3(dot(rgb, vec3(0.299, 0.587, 0.114))), rgb, uSaturation);
+            }
+            if (uFlash.a > 0.0) {
+                rgb = mix(rgb, uFlash.rgb, min(uFlash.a, 1.0));
+            }
+            return rgb;
+        }
 
         // RenderState::dim (RenderState::StageDimmed): the colour mixed towards a darkened grey of its own luminance
         uniform float uStageDim;
@@ -943,7 +959,7 @@ void OpenGLRenderer::CreateStandardShaders()
             if (color.a < uAlphaCutoff) {
                 discard;
             }
-            FragColor = vec4(screenTinted(stageDimmed(color.rgb)), color.a);
+            FragColor = vec4(screenTinted(stageDimmed(colorEffected(color.rgb))), color.a);
         }
     )";
 

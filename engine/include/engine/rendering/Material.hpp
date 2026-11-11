@@ -130,6 +130,19 @@ namespace N2Engine::Rendering
         /// instead of drawn opaque.
         [[nodiscard]] float GetBlendDiscardBelow() const { return _blendDiscardBelow; }
         void SetBlendDiscardBelow(float alpha);
+        /// Unlit only, not saved in .mat files: the colour effects (Renderer::Common::ColorEffects). Saturation 1 (the default)
+        /// leaves the colour as it is, 0 is grey, in between mixes, above 1 strengthens the colour; clamped to 0..4, and a
+        /// non-finite value is 1. Sprite2D sets it per sprite.
+        [[nodiscard]] float GetSaturation() const { return _saturation; }
+        void SetSaturation(float saturation);
+        /// What SetSaturation and SetFlash store for a value (the UI Image clamps with them too)
+        [[nodiscard]] static float ClampSaturation(float saturation);
+        [[nodiscard]] static Common::Color ClampFlash(const Common::Color &flash);
+        /// Unlit only, not saved in .mat files: a colour mixed over the result by its alpha (rgb = mix(rgb, flash.rgb,
+        /// flash.a)), after the saturation; alpha is unchanged. Transparent (the default) is no flash. Each component is
+        /// clamped to 0..1, and a non-finite one is 0. Sprite2D sets it per sprite (a white hit flash, a rainbow).
+        [[nodiscard]] const Common::Color &GetFlash() const { return _flash; }
+        void SetFlash(const Common::Color &flash);
         /// Draws both faces (no culling)
         [[nodiscard]] bool IsDoubleSided() const { return _doubleSided; }
         void SetDoubleSided(bool doubleSided);
@@ -187,7 +200,8 @@ namespace N2Engine::Rendering
 
         /**
          * Sets the standard shaders' uniforms on a GPU material from this material: uAlbedo (the base colour times
-         * `tint`), uHasTexture (whether `target` has a texture), uAlphaCutoff (the cutoff for Mask, GetBlendDiscardBelow for Blend, else 0) and,
+         * `tint`), uHasTexture (whether `target` has a texture), uAlphaCutoff (the cutoff for Mask, GetBlendDiscardBelow for Blend, else 0),
+         * unlit, uSaturation and uFlash (GetSaturation, GetFlash) and,
          * lit, uSmoothness and uMetallic, and the emissive and occlusion inputs: uEmissive (rgb),
          * uHasEmissiveTexture and uHasOcclusionTexture (whether `target` has those textures), and uOcclusionStrength,
          * and the normal map and PBR inputs: uHasNormalTexture, uNormalScale, uPbr (1 for the Pbr shading) and
@@ -215,6 +229,8 @@ namespace N2Engine::Rendering
         std::shared_ptr<Texture> _baseColorTexture;
         AlphaMode _alphaMode = AlphaMode::Opaque;
         float _blendDiscardBelow = 0.0f;
+        float _saturation = 1.0f;
+        Common::Color _flash{Common::Color::Transparent};
         float _alphaCutoff = 0.5f;
         bool _doubleSided = false;
         float _smoothness = 0.5f;

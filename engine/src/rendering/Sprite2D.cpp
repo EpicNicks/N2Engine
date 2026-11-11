@@ -19,6 +19,8 @@ namespace N2Engine::Rendering
         RegisterMember(NAMEOF(_vertices), _vertices);
         RegisterMember(NAMEOF(_outline), _outline);
         RegisterMember(NAMEOF(_color), _color);
+        RegisterMember(NAMEOF(_saturation), _saturation);
+        RegisterMember(NAMEOF(_flash), _flash);
         RegisterAssetRef(NAMEOF(_texture), _texture);
         RegisterMember(NAMEOF(_regionOffset), _regionOffset);
         RegisterMember(NAMEOF(_regionSize), _regionSize);
@@ -127,6 +129,9 @@ namespace N2Engine::Rendering
         {
             _material->SetBlendDiscardBelow(discard);
         }
+        // The colour effects, every draw: they reach the GPU as uniforms, so a change costs nothing (the material clamps them)
+        _material->SetSaturation(_saturation);
+        _material->SetFlash(_flash);
         return _material;
     }
 

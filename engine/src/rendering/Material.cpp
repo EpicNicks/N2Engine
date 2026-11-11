@@ -242,6 +242,29 @@ namespace N2Engine::Rendering
         Changed();
     }
 
+    float Material::ClampSaturation(const float saturation)
+    {
+        return std::isfinite(saturation) ? std::clamp(saturation, 0.0f, 4.0f) : 1.0f;
+    }
+
+    Common::Color Material::ClampFlash(const Common::Color &flash)
+    {
+        const auto unit = [](const float value) { return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 0.0f; };
+        return Common::Color{unit(flash.r), unit(flash.g), unit(flash.b), unit(flash.a)};
+    }
+
+    void Material::SetSaturation(const float saturation)
+    {
+        _saturation = ClampSaturation(saturation);
+        Changed();
+    }
+
+    void Material::SetFlash(const Common::Color &flash)
+    {
+        _flash = ClampFlash(flash);
+        Changed();
+    }
+
     void Material::SetDoubleSided(const bool doubleSided)
     {
         _doubleSided = doubleSided;
@@ -317,7 +340,12 @@ namespace N2Engine::Rendering
             cutoff = _blendDiscardBelow;
         }
         target.SetFloat("uAlphaCutoff", cutoff);
-        if (_shading != ShadingModel::Unlit)
+        if (_shading == ShadingModel::Unlit)
+        {
+            target.SetFloat("uSaturation", _saturation);
+            target.SetVec4("uFlash", _flash.r, _flash.g, _flash.b, _flash.a);
+        }
+        else
         {
             target.SetFloat("uSmoothness", _smoothness);
             target.SetFloat("uMetallic", _metallic);

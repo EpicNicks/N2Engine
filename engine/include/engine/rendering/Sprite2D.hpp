@@ -33,7 +33,8 @@ namespace N2Engine::Rendering
      * Both faces draw, so a flip or a negative scale never hides it. Depth tested against 3D geometry, not written.
      *
      * On the software renderer, which cannot blend, a textured sprite's pixels with alpha under 0.5 are not drawn, so a texture's
-     * transparent parts are cut out rather than drawn opaque. Solid shapes look the same everywhere.
+     * transparent parts are cut out rather than drawn opaque. Solid shapes look the same everywhere. `saturation` and `flash` (the
+     * colour effects) look the same on every renderer.
      */
     class Sprite2D final : public IRenderable
     {
@@ -69,6 +70,14 @@ namespace N2Engine::Rendering
 
         void SetColor(const Common::Color &color) { _color = color; }
         [[nodiscard]] const Common::Color &GetColor() const { return _color; }
+        /// 1 (the default) draws the colour as it is, 0 grey (its own luminance), in between mixes, above 1 strengthens it;
+        /// clamped to 0..4 when drawn (Material::SetSaturation)
+        void SetSaturation(float saturation) { _saturation = saturation; }
+        [[nodiscard]] float GetSaturation() const { return _saturation; }
+        /// A colour mixed over the sprite by its alpha, after the saturation: white at 0.8 is a hit flash, a hue that cycles
+        /// a rainbow. The sprite's own alpha, and so its shape, is unchanged. Transparent (the default) is none
+        void SetFlash(const Common::Color &flash) { _flash = flash; }
+        [[nodiscard]] const Common::Color &GetFlash() const { return _flash; }
         /// An image asset; null for a plain colour
         void SetTexture(std::shared_ptr<Texture> texture);
         [[nodiscard]] const std::shared_ptr<Texture> &GetTexture() const { return _texture; }
@@ -112,6 +121,8 @@ namespace N2Engine::Rendering
         std::vector<Math::Vector2> _vertices;
         float _outline = 0.0f;
         Common::Color _color{Common::Color::White};
+        float _saturation = 1.0f;
+        Common::Color _flash{Common::Color::Transparent};
         std::shared_ptr<Texture> _texture;
         Math::Vector2 _regionOffset{0.0f, 0.0f};
         Math::Vector2 _regionSize{1.0f, 1.0f};

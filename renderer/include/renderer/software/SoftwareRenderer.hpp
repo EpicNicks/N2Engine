@@ -6,6 +6,7 @@
 #include <vector>
 #include <memory>
 
+#include "renderer/common/ColorEffects.hpp"
 #include "renderer/common/Renderer.hpp"
 #include "renderer/software/RenderThread.hpp"
 #include "renderer/software/SWMesh.hpp"
@@ -57,6 +58,8 @@ namespace Renderer::Software
         /// Lit only: uPbr (metallic-roughness PBR instead of Blinn-Phong) and uMetallic
         bool pbr = false;
         float metallic = 0.0f;
+        /// Unlit only: uSaturation and uFlash (Common::ColorEffects; the defaults change nothing)
+        Common::ColorEffects colorEffects{};
         SWShaderType shader = SWShaderType::Unlit; ///< Unlit too when the material's shader isn't an SWShader
     };
 

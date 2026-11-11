@@ -84,6 +84,8 @@
 <tr><td><code>vertices</code></td><td>none</td><td><code>Polygon</code>: 3 to 64 convex points in units of the size (-0.5 to 0.5 spans it), either winding</td></tr>
 <tr><td><code>outline</code></td><td>0</td><td>0 fills. Above 0, only a border this wide in world units, the same width on every side. Where a corner is sharper than the border, the border narrows there. Only a border so wide that nothing is left inside fills the shape</td></tr>
 <tr><td><code>color</code></td><td>white</td><td>Multiplies the texture</td></tr>
+<tr><td><code>saturation</code> <span class="badge">PR #TBD</span></td><td>1</td><td>1 draws the colour as it is, 0 as the grey of its own luminance, in between mixes, above 1 strengthens it. Clamped to 0..4 when drawn. See <a href="#effects">Colour effects</a></td></tr>
+<tr><td><code>flash</code> <span class="badge">PR #TBD</span></td><td>transparent</td><td>A colour mixed over the sprite by its own alpha, after the saturation. The sprite's alpha, and so its shape, does not change. Each component is clamped to 0..1 when drawn</td></tr>
 <tr><td><code>texture</code></td><td>none</td><td>An image asset. Its <code>filter</code> setting (<code>nearest</code> for pixel art) applies</td></tr>
 <tr><td><code>regionOffset</code>, <code>regionSize</code></td><td>(0, 0), (1, 1)</td><td>The part of the texture shown, in uv with v up: one cell of a sprite sheet. The size box maps onto it, so a textured circle shows the middle of its cell</td></tr>
 <tr><td><code>flipX</code>, <code>flipY</code></td><td>false</td><td>Mirror the shape and its texture around the object's position, as Unity's <code>flipX</code> does: with the pivot in the middle the sprite stays in place, with it at a corner the sprite turns over onto the other side</td></tr>
@@ -103,8 +105,22 @@
 </ul>
 <div class="callout note" id="design-sprite-queue"><p class="callout-title">Design decision: always the Transparent queue</p><p>Only the Transparent queue has a draw order a component can set. An opaque sprite in the Opaque queue would be ordered by depth alone, and two sprites at the same z would fight. The cost is no early depth rejection for sprites, which does not matter at 2D scale.</p></div>
 
+<h2 id="effects">Colour effects <span class="badge">PR #TBD</span></h2>
+<p><code>saturation</code> and <code>flash</code> are applied by the unlit shader on every renderer (OpenGL, Vulkan, WebGPU and software), to the colour after texture × <code>color</code>, in this order:</p>
+<ul>
+<li><strong>Saturation:</strong> <code>rgb = mix(luma(rgb), rgb, saturation)</code>, with the Rec. 601 luma (0.299, 0.587, 0.114), the weights the screen tint uses.</li>
+<li><strong>Flash:</strong> <code>rgb = mix(rgb, flash.rgb, flash.a)</code>. Alpha is not changed.</li>
+</ul>
+<p>Then the prefab stage's dim and the <a href="scripting-lua.html#screen">screen tint</a> apply on top. Each step is skipped at its default, so a sprite that never sets them draws exactly what it drew before. Both are uniforms, so changing them every frame costs nothing extra.</p>
+<ul>
+<li><strong>Grayscale</strong> (a locked gallery icon): <code>saturation = 0</code>.</li>
+<li><strong>Hit flash:</strong> <code>flash = Color(1, 1, 1, 0.8)</code> for a few frames, then back to transparent.</li>
+<li><strong>Rainbow:</strong> set <code>flash</code> each frame to a hue that cycles, with alpha as the strength. On a white shape, setting <code>color</code> instead gives the same image.</li>
+</ul>
+<p>The maths is <code>Renderer::Common::ColorEffects</code> (<code>renderer/include/renderer/common/ColorEffects.hpp</code>). The values reach the shader through <code>Material::SetSaturation</code> and <code>Material::SetFlash</code>, which apply to unlit materials only and are not saved in <code>.mat</code> files. The UI <a href="ui.html#image-effects"><code>Image</code></a> has the same two fields.</p>
+
 <h2 id="software">On the software renderer</h2>
-<p>The software renderer cannot blend (<code>IRenderer::SupportsBlending</code> is false). There a textured sprite's pixels whose texture alpha is below 0.5 are not drawn, whatever the sprite's own alpha, so a texture's transparent parts are cut out instead of drawn as boxes. Partial transparency, such as a soft edge, is lost there. Solid shapes look the same on every renderer. This uses <code>Material::SetBlendDiscardBelow</code>, which applies only to blended materials and is not saved in <code>.mat</code> files.</p>
+<p>The software renderer cannot blend (<code>IRenderer::SupportsBlending</code> is false). There a textured sprite's pixels whose texture alpha is below 0.5 are not drawn, whatever the sprite's own alpha, so a texture's transparent parts are cut out instead of drawn as boxes. Partial transparency, such as a soft edge, is lost there. Solid shapes look the same on every renderer, and so do <a href="#effects">the colour effects</a>. The cut-out uses <code>Material::SetBlendDiscardBelow</code>, which applies only to blended materials and is not saved in <code>.mat</code> files. A game can ask with <code>Graphics.CanBlend()</code> in Lua and skip soft glow sprites where it is false: a soft disc would become a hard one at half strength.</p>
 
 <h2 id="performance">Performance</h2>
 <p>Each sprite is one draw call. Sprites with the same shape, size, outline, region and pivot share one mesh, kept while any sprite uses it. <code>tests/engine/rendering/Sprite2DTests.cpp</code> draws 2,000 circles on the software renderer and prints the time as a <code>[SPRITE2D-PERF]</code> line. Batching many sprites into one draw is not done yet.</p>
@@ -120,14 +136,20 @@ sprite:SetSortingOrder(10)
 local player = GameObject.Create('Player')
 local body = player:AddComponent('Sprite2D')
 body:SetTexture('res://sprites/player.png')
-body:SetRegion(Vector2(0, 0.5), Vector2(0.25, 0.5)) -- one cell of a 4 x 2 sheet</code></pre>
+body:SetRegion(Vector2(0, 0.5), Vector2(0.25, 0.5)) -- one cell of a 4 x 2 sheet
+
+-- A white hit flash, then back to normal; a locked icon in grey
+body:SetFlash(Color(1, 1, 1, 0.8))
+-- ... a few frames later:
+body:SetFlash(Color(0, 0, 0, 0))
+icon:SetSaturation(0)</code></pre>
 <p>Every field has a setter and a getter with the C++ name. <code>SetTexture</code> takes a <code>res://</code> path or <code>nil</code>; <code>SetVertices</code> takes an array of <code>Vector2</code>. Annotations are in <code>engine-api.lua</code>.</p>
 
 <h2 id="not-yet">Not yet</h2>
-<p>Effects (glow, outline glow, grayscale and the rest), sprite animation (a script can change the region), batching, nine-slice, named sorting layers, and editor gizmos.</p>
+<p>Glow and outline glow (recipes in <code>orchestrator/proposals/effects-design.md</code>: a gradient texture behind the sprite, child outlines), sprite animation (a script can change the region), batching, nine-slice, named sorting layers, and editor gizmos.</p>
 
 <div class="page-footer">
-<span>Describes master through PR #318.</span>
+<span>Describes master through PR #TBD.</span>
 <a href="index.html">Back to overview</a>
 </div>
 
