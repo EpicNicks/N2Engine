@@ -5,8 +5,8 @@ able to allow the user to select a build target in the engine editor UI like win
 console toolchains in the future like switch".
 
 **Status: proposal, 2026-11-10, amended the same day after review (stage order, unmerged input code, headless backend,
-physics per target, remote hosts, saved key codes, web size). Nothing decided yet: section 6 lists the decisions. No stage is
-approved.**
+physics per target, remote hosts, saved key codes, web size). The user decided D1, D2, D5, D6 and D7 the same day (section 6);
+D3, D4 and D8 are open. No stage is approved.**
 
 ## 1. Goal
 
@@ -88,12 +88,14 @@ so **every target can draw with the software renderer first.**
 | --- | --- |
 | Windows, Linux | Vulkan, OpenGL (exist) |
 | Web | WebGPU through emdawnwebgpu (exists) |
-| Android | Vulkan (`VK_KHR_android_surface`), or GLES 3 (a port of the GL 3.3 renderer), or WebGPU on Dawn native: decision D2 |
-| iOS, macOS | No native Vulkan. Metal, MoltenVK, or WebGPU on Dawn native: decision D2 |
+| Android | Software first (stage 8); later the existing Vulkan renderer on `VK_KHR_android_surface` (stage 12) |
+| iOS, macOS | Software first (stage 10); later a native Metal renderer (stage 13) |
 | Consoles | The vendor's API, in the private backend |
 
-Dawn native runs on Metal, Vulkan and D3D12, and the engine already has a WebGPU backend, so one backend could cover web, iOS
-and Android. That would revisit W8.
+Decision D2 (user, 2026-11-10): **native rendering on Android and Apple, as a later goal.** Android and iOS ship first with the
+software renderer, then get native backends: Vulkan on Android (the existing renderer with an Android surface, plus mobile
+fixes) and Metal on iOS and macOS (a new backend; MoltenVK over the Vulkan renderer is an interim option the stage 13 spike can
+weigh). WebGPU on Dawn native was considered and not chosen, so W8 stands.
 
 ### 3.3 Virtual filesystem and packs
 
@@ -104,6 +106,13 @@ and Android. That would revisit W8.
 same pack instead of a preloaded folder, which also opens the way to persistent web saves (IDBFS on `user://`). The pack
 reader adds code to the web player, so stage 4 measures the package against the web size budget; the web may use an
 uncompressed (stored) pack if inflate costs more than it saves.
+
+**Pack formats (D6, user 2026-11-10): zip by default, 7z as an option.** A target's settings choose the format. Zip is read in
+place, file by file, including straight from an APK. 7z compresses better but needs care: a *solid* 7z must be decompressed
+from the start of a block to reach one file, so packs written as 7z are **non-solid** (or in small solid blocks) for random
+access, and the reader is the LZMA SDK's 7z decoder (public domain). Stage 4 measures the reader's size per target (the web
+budget most of all) and the load time of both formats. Separately, `n2build` can wrap a finished desktop build in a `.zip` or
+`.7z` for distribution; that is an output option, not the runtime pack.
 
 ### 3.4 Players and the build tool
 
@@ -133,8 +142,15 @@ Host-system limits, which `doctor` reports:
 | Linux | Linux; Windows through WSL or a container |
 | Web | any (emsdk) |
 | Android | any (SDK, NDK, JDK) |
-| iOS, macOS | macOS only (Xcode) |
+| iOS, macOS | macOS only (Xcode); the user has no Mac, so GitHub Actions macOS runners (D7) |
 | Consoles | the vendor's approved setup |
+
+**Apple targets without a Mac (D7, user 2026-11-10).** `n2build` for iOS and macOS runs in a GitHub Actions workflow on a macOS
+runner (the engine repository is public, so standard runners cost nothing). The editor's Build for an Apple target starts that
+workflow (`gh workflow run`) and downloads the artifact instead of building locally, and `doctor` checks for `gh` and its
+login instead of Xcode. Tests run on the iOS simulator in CI. What CI cannot do: run on a real iPhone or iPad. Installing on a
+device or publishing needs an Apple Developer account, with the signing certificate and provisioning profile stored as
+repository secrets and used only in the workflow.
 
 ### 3.5 Project settings and the editor
 
@@ -155,12 +171,13 @@ Host-system limits, which `doctor` reports:
   AppImage). Mostly done already.
 - **Web:** move onto the platform layer and the pack; the package exists.
 - **Android:** the platform backend (GameActivity input, lifecycle, `ANativeWindow`, `getFilesDir()`, `Vibrator` for rumble,
-  insets, the back button); openal-soft's AAudio backend; the `<generator>` shim; a renderer per D2; the Gradle template;
+  insets, the back button); openal-soft's AAudio backend; the `<generator>` shim; the software renderer, Vulkan later (D2); the Gradle template;
   APK for development, AAB for release; signing; `adb install`, start and `logcat`; an emulator smoke in CI; physics per D8
   (Jolt and Box2D from source; PhysX only if built for the NDK).
-- **iOS:** the UIKit backend; a renderer per D2; AVAudioSession around OpenAL; the bundle and app container paths; the Xcode
-  template and code signing; the simulator for CI and a device for checks; physics per D8. Needs a Mac.
-- **macOS (decision D5):** nearly free once iOS's Metal path and the desktop GLFW backend exist.
+- **iOS:** the UIKit backend; the software renderer, Metal later (D2); AVAudioSession around OpenAL; the bundle and app container
+  paths; the Xcode template and code signing; built and tested on the simulator in GitHub Actions (D7); physics per D8.
+- **macOS (D5: with iOS):** the desktop GLFW backend built on the macOS runner, an app bundle, the software or OpenGL
+  renderer first and Metal with stage 13. Built in GitHub Actions like iOS.
 - **Consoles:** a private repository with a platform backend, a renderer if needed and a target descriptor. Needs a developer
   account and the vendor SDK. The public repository only ships the interface and a sample private target.
 
@@ -180,10 +197,12 @@ window or renderer code. The platform layer (stages 5 to 7) is only needed for n
 | 5 | `bt5-engine-input-codes` | Engine key, mouse-button and gamepad codes; GLFW codes only in the GLFW backend; saved GLFW key numbers migrated on load | the Triangle-Like input branches merged | M |
 | 6 | `bt6-platform-host` | The platform layer (3.1); `desktop-glfw`, `headless` and `web` backends; `Window.cpp` and the web player moved onto it; `web-stubs`' fake GLFW removed | 5 | L |
 | 7 | `bt7-renderer-surfaces` | Renderers take native surfaces; the software renderer's present callback per platform | 6 | M |
-| 8 | `bt8-android-player` | Android platform backend, renderer (D2), physics (D8), Gradle template, the `android` target, emulator smoke | 4, 7 | L |
+| 8 | `bt8-android-player` | Android platform backend, the software renderer, physics (D8), Gradle template, the `android` target, emulator smoke | 4, 7 | L |
 | 9 | `bt9-android-deploy` | Signing, AAB, devices, install and run, `logcat` into the editor | 3, 8 | M |
-| 10 | `bt10-ios-player` | iOS backend, renderer (D2), physics (D8), Xcode template, the `ios` target, simulator smoke; macOS if D5 | 4, 7, D7 | L |
+| 10 | `bt10-ios-player` | iOS backend, the software renderer, physics (D8), Xcode template, the `ios` and `macos` targets, built and simulator-tested in GitHub Actions, the editor starting that workflow | 4, 7 | L |
 | 11 | `bt11-private-targets` | Descriptor discovery outside the repository, the plugin boundary for platform and renderer backends, a sample private target, docs | 1 | M |
+| 12 | `bt12-android-vulkan` (later goal) | The Vulkan renderer on Android: Android surface, swapchain recreation on surface loss, mobile GPU fixes, emulator and device checks | 8 | M |
+| 13 | `bt13-metal-renderer` (later goal) | A native Metal renderer for iOS and macOS, MSL shaders, image comparison against the software renderer in CI; a spike first weighs MoltenVK as an interim step | 10 | L |
 
 **After stage 3, stop and compare.** The editor then builds the three working targets. Whether packs (4) come next or wait
 until mobile depends on how stage 1 went.
@@ -198,23 +217,24 @@ stage 6 is mechanical.
 
 ## 6. Decisions for the user
 
-| # | Decision | Options | Recommendation |
-| --- | --- | --- | --- |
-| D1 | Where a build runs | (a) the Electron main process runs `n2build` on the user's machine; (b) the host runs it (a `BuildProject` command) | **(a) first.** Toolchains and devices are on the user's machine. A remote host (Docker, SSH) keeps the project on the host, so (a) cannot build there: the panel says so (3.5) until (b) exists for remote hosts and build servers |
-| D2 | Hardware renderer on mobile | (a) WebGPU on Dawn native for Android, iOS and macOS (revisits W8); (b) Vulkan on Android, Metal or MoltenVK on Apple; (c) GLES 3 on Android | **(a)**, after a spike: one backend for web and mobile. Every target ships the software renderer first regardless |
-| D3 | Player model | (a) prebuilt players plus a pack by default, from source for stripped builds; (b) always from source | **(a)** |
-| D4 | `lua_project` | (a) becomes `players/desktop`; (b) stays as a sample and a new player is added | **(a)** |
-| D5 | macOS | in scope with iOS, or later | With iOS: little extra once Metal exists |
-| D6 | Pack format | (a) zip (stored or deflate) with a manifest; (b) a custom format | **(a)**: tools can inspect it and it is easy to read from an APK |
-| D7 | A Mac for iOS | Is one available for builds and device checks? | Needed before stage 10 |
-| D8 | Physics on mobile | (a) Jolt and Box2D only (a project needing PhysX cannot target mobile); (b) also build PhysX for the NDK and Apple | **(a)**: both build from source; PhysX for mobile is a large extra build to maintain. Revisit if a game needs it |
+| # | Decision | Options | Recommendation | Decided |
+| --- | --- | --- | --- | --- |
+| D1 | Where a build runs | (a) the Electron main process runs `n2build` on the user's machine; (b) the host runs it (a `BuildProject` command) | **(a) first.** Toolchains and devices are on the user's machine. A remote host (Docker, SSH) keeps the project on the host, so (a) cannot build there: the panel says so (3.5) until (b) exists for remote hosts and build servers | **(a), 2026-11-10:** "run the builds locally". Apple targets are the exception: built in GitHub Actions (D7) |
+| D2 | Hardware renderer on mobile | (a) WebGPU on Dawn native for Android, iOS and macOS (revisits W8); (b) Vulkan on Android, Metal or MoltenVK on Apple; (c) GLES 3 on Android | (a), after a spike | **(b), as a later goal, 2026-11-10:** "I want native android and ios rendering at some point but we can make that a later goal". Software renderer first; stages 12 and 13 |
+| D3 | Player model | (a) prebuilt players plus a pack by default, from source for stripped builds; (b) always from source | **(a)** | open |
+| D4 | `lua_project` | (a) becomes `players/desktop`; (b) stays as a sample and a new player is added | **(a)** | open |
+| D5 | macOS | in scope with iOS, or later | With iOS: little extra once Metal exists | **With iOS, 2026-11-10** |
+| D6 | Pack format | (a) zip (stored or deflate) with a manifest; (b) a custom format | **(a)**: tools can inspect it and it is easy to read from an APK | **(a), with 7z as an option, 2026-11-10** (section 3.3: non-solid 7z for packs; zip or 7z for distribution archives) |
+| D7 | A Mac for iOS | Is one available for builds and device checks? | Needed before stage 10 | **No Mac; GitHub Actions macOS runners, 2026-11-10** (section 3.4). No real-device checks until a device or an Apple Developer account exists |
+| D8 | Physics on mobile | (a) Jolt and Box2D only (a project needing PhysX cannot target mobile); (b) also build PhysX for the NDK and Apple | **(a)**: both build from source; PhysX for mobile is a large extra build to maintain. Revisit if a game needs it | open (needed before stage 8) |
 
 ## 7. Not verified
 
 - That the engine builds with the Android NDK's clang and libc++ beyond `std::generator` (no NDK build was tried).
 - openal-soft 1.24 on Android in this engine's configuration.
-- Dawn native's size and start time on mobile, and whether its prebuilt releases cover Android and Apple (they did not on
-  Linux arm or Windows when `DawnPrebuilt.cmake` was written; building Dawn from source may be needed).
+- The software renderer's frame rate on mid-range phones at the game's resolution (stages 8 and 10 ship with it).
+- The LZMA SDK 7z reader's code size in the web player, and non-solid 7z load times against zip (stage 4).
+- That the iOS simulator on GitHub's macOS runners can run the smoke plans headlessly within the job time limits.
 - How many of the `std::filesystem` call sites assume a real disk (a stage 4 audit).
 - The Switch: whether its SDK allows this plugin shape. Only a developer account can tell.
 - Which projects and saved files hold GLFW key numbers today (the stage 5 migration needs the full list), and how the editor

@@ -3,8 +3,8 @@
   "repo": "engine",
   "branch": "feat-build-targets",
   "closes": null,
-  "title": "Build targets: choose Windows, Linux, Android, iOS or web in the editor and build, with private console targets later (eleven stages)",
-  "issue": "User request, 2026-11-10: 'I would like for the engine to be able to allow the user to select a build target in the engine editor UI like windows, linux, android, ios, web, and maybe other console toolchains in the future like switch'. Design and stage table: orchestrator/proposals/build-targets-design.md. Split into one item per stage (bt1..bt11) before launching.",
+  "title": "Build targets: choose Windows, Linux, Android, iOS, macOS or web in the editor and build, with private console targets later (thirteen stages)",
+  "issue": "User request, 2026-11-10: 'I would like for the engine to be able to allow the user to select a build target in the engine editor UI like windows, linux, android, ios, web, and maybe other console toolchains in the future like switch'. Design and stage table: orchestrator/proposals/build-targets-design.md. Split into one item per stage (bt1..bt13) before launching. User decisions 2026-11-10 (section 6 of the design): D1 local builds (Apple targets in GitHub Actions), D2 native mobile rendering as a later goal (software first), D5 macOS with iOS, D6 zip with 7z as an option, D7 no Mac (GitHub Actions macOS runners).",
   "allowedPaths": [
     "^engine/",
     "^renderer/",
@@ -33,7 +33,7 @@
   ],
   "requiresDocs": true,
   "allowProtocol": true,
-  "gate": "split per stage; every stage needs the user's go; decisions D1, D3, D4 before stage 1, the rest before the stage that needs them",
+  "gate": "split per stage; every stage needs the user's go; D3 and D4 before stage 1, D8 before stage 8",
   "approved": false,
   "reviewer": "opus",
   "notes": "Reviewer: no behaviour change on existing targets, platform code only behind the platform layer, no signing secret in the project, host, logs or protocol."

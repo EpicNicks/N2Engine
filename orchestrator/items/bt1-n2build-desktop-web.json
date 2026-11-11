@@ -26,11 +26,12 @@
     "Descriptors are read from targets/ and from extra folders in user settings",
     "CI builds its packages through n2build",
     "Works with no pack and no platform layer: the desktop player runs a project folder (as lua_project does) and the web target uses today's preload",
-    "doctor checks each target's physics modules: a project whose build.modules needs PhysX on a target with no PhysX build fails with a clear message"
+    "doctor checks each target's physics modules: a project whose build.modules needs PhysX on a target with no PhysX build fails with a clear message",
+    "Desktop builds can be wrapped in a .zip or .7z for distribution (an output option)"
   ],
   "requiresDocs": true,
   "allowProtocol": false,
-  "gate": "needs the user's go; depends on decisions D1, D3 and D4. Uses project folders (lua_project and the web's preload) until bt4-vfs-packs",
+  "gate": "needs the user's go; D1 decided (local builds); depends on decisions D3 and D4 (open). Uses project folders (lua_project and the web's preload) until bt4-vfs-packs",
   "approved": false,
   "reviewer": "opus",
   "notes": "Reviewer: descriptors are data, not code paths in n2build; nothing target-specific hard-coded in the tool."
