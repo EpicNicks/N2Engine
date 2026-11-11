@@ -84,8 +84,8 @@
 <tr><td><code>vertices</code></td><td>none</td><td><code>Polygon</code>: 3 to 64 convex points in units of the size (-0.5 to 0.5 spans it), either winding</td></tr>
 <tr><td><code>outline</code></td><td>0</td><td>0 fills. Above 0, only a border this wide in world units, the same width on every side. Where a corner is sharper than the border, the border narrows there. Only a border so wide that nothing is left inside fills the shape</td></tr>
 <tr><td><code>color</code></td><td>white</td><td>Multiplies the texture</td></tr>
-<tr><td><code>saturation</code> <span class="badge">PR #327</span></td><td>1</td><td>1 draws the colour as it is, 0 as the grey of its own luminance, in between mixes, above 1 strengthens it. Clamped to 0..4 when drawn. See <a href="#effects">Colour effects</a></td></tr>
-<tr><td><code>flash</code> <span class="badge">PR #327</span></td><td>transparent</td><td>A colour mixed over the sprite by its own alpha, after the saturation. The sprite's alpha, and so its shape, does not change. Each component is clamped to 0..1 when drawn</td></tr>
+<tr><td><code>saturation</code> <span class="badge">PR #327</span></td><td>1</td><td>1 draws the colour as it is, 0 as the grey of its own luminance, in between mixes, above 1 strengthens it. Stored clamped to 0..4 (a value that is not finite is stored as 1, so the scene always saves a number). See <a href="#effects">Colour effects</a></td></tr>
+<tr><td><code>flash</code> <span class="badge">PR #327</span></td><td>transparent</td><td>A colour mixed over the sprite by its own alpha, after the saturation. The sprite's alpha, and so its shape, does not change. Each component is stored clamped to 0..1 (a value that is not finite as 0)</td></tr>
 <tr><td><code>texture</code></td><td>none</td><td>An image asset. Its <code>filter</code> setting (<code>nearest</code> for pixel art) applies</td></tr>
 <tr><td><code>regionOffset</code>, <code>regionSize</code></td><td>(0, 0), (1, 1)</td><td>The part of the texture shown, in uv with v up: one cell of a sprite sheet. The size box maps onto it, so a textured circle shows the middle of its cell</td></tr>
 <tr><td><code>flipX</code>, <code>flipY</code></td><td>false</td><td>Mirror the shape and its texture around the object's position, as Unity's <code>flipX</code> does: with the pivot in the middle the sprite stays in place, with it at a corner the sprite turns over onto the other side</td></tr>
@@ -108,7 +108,7 @@
 <h2 id="effects">Colour effects <span class="badge">PR #327</span></h2>
 <p><code>saturation</code> and <code>flash</code> are applied by the unlit shader on every renderer (OpenGL, Vulkan, WebGPU and software), to the colour after texture × <code>color</code>, in this order:</p>
 <ul>
-<li><strong>Saturation:</strong> <code>rgb = mix(luma(rgb), rgb, saturation)</code>, with the Rec. 601 luma (0.299, 0.587, 0.114), the weights the screen tint uses.</li>
+<li><strong>Saturation:</strong> <code>rgb = clamp(mix(luma(rgb), rgb, saturation), 0, 1)</code>, with the Rec. 601 luma (0.299, 0.587, 0.114), the weights the dim and the screen tint use. The clamp comes at once, so above 1 the dim and tint see the same colour on every renderer (the software renderer stores 8-bit colour before them).</li>
 <li><strong>Flash:</strong> <code>rgb = mix(rgb, flash.rgb, flash.a)</code>. Alpha is not changed.</li>
 </ul>
 <p>Then the prefab stage's dim and the <a href="scripting-lua.html#screen">screen tint</a> apply on top. Each step is skipped at its default, so a sprite that never sets them draws exactly what it drew before. Both are uniforms, so changing them every frame costs nothing extra.</p>

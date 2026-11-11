@@ -91,6 +91,9 @@ TEST(ImageColorEffectsTest, OutOfRangeValuesAreClampedWhenDrawn)
     image->SetColor(Common::Color::Red);
     image->SetSaturation(std::numeric_limits<float>::infinity()); // not finite: 1, no change
     image->SetFlash(Common::Color{0.0f, 2.0f, 0.0f, 5.0f});       // clamped to green at alpha 1
+    EXPECT_FLOAT_EQ(image->GetSaturation(), 1.0f) << "stored clamped, so it saves as a number";
+    EXPECT_FLOAT_EQ(image->GetFlash().g, 1.0f);
+    EXPECT_FLOAT_EQ(image->GetFlash().a, 1.0f);
     const Rgb pixel = DrawMiddle(*image);
     EXPECT_EQ(pixel.r, 0);
     EXPECT_EQ(pixel.g, 255);

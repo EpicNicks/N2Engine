@@ -5,6 +5,7 @@
 #include <vector>
 
 #include <math/Vector2.hpp>
+#include <renderer/common/ColorEffects.hpp>
 
 #include "engine/IRenderable.hpp"
 #include "engine/Positionable.hpp"
@@ -70,13 +71,14 @@ namespace N2Engine::Rendering
 
         void SetColor(const Common::Color &color) { _color = color; }
         [[nodiscard]] const Common::Color &GetColor() const { return _color; }
-        /// 1 (the default) draws the colour as it is, 0 grey (its own luminance), in between mixes, above 1 strengthens it;
-        /// clamped to 0..4 when drawn (Material::SetSaturation)
-        void SetSaturation(float saturation) { _saturation = saturation; }
+        /// 1 (the default) draws the colour as it is, 0 grey (its own luminance), in between mixes, above 1 strengthens it.
+        /// Stored clamped to 0..4; a non-finite value is 1 (Renderer::Common::ColorEffects)
+        void SetSaturation(float saturation) { _saturation = Renderer::Common::ColorEffects::ClampSaturation(saturation); }
         [[nodiscard]] float GetSaturation() const { return _saturation; }
         /// A colour mixed over the sprite by its alpha, after the saturation: white at 0.8 is a hit flash, a hue that cycles
-        /// a rainbow. The sprite's own alpha, and so its shape, is unchanged. Transparent (the default) is none
-        void SetFlash(const Common::Color &flash) { _flash = flash; }
+        /// a rainbow. The sprite's own alpha, and so its shape, is unchanged. Transparent (the default) is none. Stored with
+        /// each component clamped to 0..1 (a non-finite one is 0)
+        void SetFlash(const Common::Color &flash) { _flash = Renderer::Common::ColorEffects::ClampFlash(flash); }
         [[nodiscard]] const Common::Color &GetFlash() const { return _flash; }
         /// An image asset; null for a plain colour
         void SetTexture(std::shared_ptr<Texture> texture);

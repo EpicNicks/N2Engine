@@ -19,7 +19,7 @@ namespace N2Engine::Rendering
         RegisterMember(NAMEOF(_vertices), _vertices);
         RegisterMember(NAMEOF(_outline), _outline);
         RegisterMember(NAMEOF(_color), _color);
-        RegisterMember(NAMEOF(_saturation), _saturation);
+        RegisterMember(NAMEOF(_saturation), _saturation).Range(0.0, Renderer::Common::ColorEffects::MaxSaturation);
         RegisterMember(NAMEOF(_flash), _flash);
         RegisterAssetRef(NAMEOF(_texture), _texture);
         RegisterMember(NAMEOF(_regionOffset), _regionOffset);
@@ -129,9 +129,19 @@ namespace N2Engine::Rendering
         {
             _material->SetBlendDiscardBelow(discard);
         }
-        // The colour effects, every draw: they reach the GPU as uniforms, so a change costs nothing (the material clamps them)
-        _material->SetSaturation(_saturation);
-        _material->SetFlash(_flash);
+        // The colour effects reach the GPU as uniforms, so a change costs nothing; set only when changed, as above (a scene
+        // file can hold any value, which the material clamps, so compare with what it would store)
+        if (_material->GetSaturation() != Renderer::Common::ColorEffects::ClampSaturation(_saturation))
+        {
+            _material->SetSaturation(_saturation);
+        }
+        // Component by component: Color's == allows an epsilon, which would skip a small step of a rainbow
+        const Common::Color flash = Renderer::Common::ColorEffects::ClampFlash(_flash);
+        const Common::Color &current = _material->GetFlash();
+        if (current.r != flash.r || current.g != flash.g || current.b != flash.b || current.a != flash.a)
+        {
+            _material->SetFlash(flash);
+        }
         return _material;
     }
 

@@ -1511,7 +1511,7 @@ function Image:GetRaycastTarget() end
 function Image:SetRaycastTarget(raycastTarget) end
 ---@return number
 function Image:GetSaturation() end
----1 (the default) draws the colour as it is, 0 grey, in between mixes, above 1 strengthens it (clamped to 0..4). Saved
+---1 (the default) draws the colour as it is, 0 grey, in between mixes, above 1 strengthens it (stored clamped to 0..4). Saved
 ---with the scene.
 ---@param saturation number
 function Image:SetSaturation(saturation) end
@@ -2251,7 +2251,7 @@ function Sprite2D:SetColor(color) end
 ---@return Color
 function Sprite2D:GetColor() end
 ---1 (the default) draws the colour as it is, 0 grey (its own luminance), in between mixes, above 1 strengthens it
----(clamped to 0..4). sprite:SetSaturation(0) is a greyed-out icon. Saved with the scene.
+---(stored clamped to 0..4). sprite:SetSaturation(0) is a greyed-out icon. Saved with the scene.
 ---@param saturation number
 function Sprite2D:SetSaturation(saturation) end
 ---@return number

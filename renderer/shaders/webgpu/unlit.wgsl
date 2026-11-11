@@ -63,11 +63,12 @@ fn screenTinted(rgb: vec3<f32>, fragCoord: vec4<f32>) -> vec3<f32> {
 
 @group(1) @binding(0) var<uniform> material: Material;
 
-// Common::ColorEffects: saturation (1 none, 0 grey), then the flash colour mixed over by its alpha (0 none)
+// Common::ColorEffects: saturation (1 none, 0 grey; clamped at once, as the software renderer packs before the dim
+// and tint), then the flash colour mixed over by its alpha (0 none)
 fn colorEffected(rgbIn: vec3<f32>) -> vec3<f32> {
     var rgb = rgbIn;
     if (material.uSaturation != 1.0) {
-        rgb = mix(vec3<f32>(dot(rgb, vec3<f32>(0.299, 0.587, 0.114))), rgb, material.uSaturation);
+        rgb = clamp(mix(vec3<f32>(dot(rgb, vec3<f32>(0.299, 0.587, 0.114))), rgb, material.uSaturation), vec3<f32>(0.0), vec3<f32>(1.0));
     }
     if (material.uFlash.a > 0.0) {
         rgb = mix(rgb, material.uFlash.rgb, min(material.uFlash.a, 1.0));

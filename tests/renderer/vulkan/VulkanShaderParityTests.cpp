@@ -990,7 +990,7 @@ TEST(VulkanShaderParityTest, TheUnlitColourEffectsAreTheGlShadersAndComeBeforeTh
     const std::string glUnlit = GlShaderSource(ReadFile("src/opengl/OpenGLRenderer.cpp"), "unlitFrag");
     ASSERT_FALSE(glUnlit.empty());
     for (const char* line : {"if (uSaturation != 1.0) {",
-                             "rgb = mix(vec3(dot(rgb, vec3(0.299, 0.587, 0.114))), rgb, uSaturation);",
+                             "rgb = clamp(mix(vec3(dot(rgb, vec3(0.299, 0.587, 0.114))), rgb, uSaturation), 0.0, 1.0);",
                              "if (uFlash.a > 0.0) {", "rgb = mix(rgb, uFlash.rgb, min(uFlash.a, 1.0));",
                              "screenTinted(stageDimmed(colorEffected(color.rgb)))"})
     {

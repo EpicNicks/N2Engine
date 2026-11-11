@@ -135,9 +135,6 @@ namespace N2Engine::Rendering
         /// non-finite value is 1. Sprite2D sets it per sprite.
         [[nodiscard]] float GetSaturation() const { return _saturation; }
         void SetSaturation(float saturation);
-        /// What SetSaturation and SetFlash store for a value (the UI Image clamps with them too)
-        [[nodiscard]] static float ClampSaturation(float saturation);
-        [[nodiscard]] static Common::Color ClampFlash(const Common::Color &flash);
         /// Unlit only, not saved in .mat files: a colour mixed over the result by its alpha (rgb = mix(rgb, flash.rgb,
         /// flash.a)), after the saturation; alpha is unchanged. Transparent (the default) is no flash. Each component is
         /// clamped to 0..1, and a non-finite one is 0. Sprite2D sets it per sprite (a white hit flash, a rainbow).

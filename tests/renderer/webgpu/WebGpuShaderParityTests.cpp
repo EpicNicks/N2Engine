@@ -999,7 +999,7 @@ TEST(WebGpuShaderParityTest, TheTextPortKeepsTheAntialiasedSdfMathsAndTheUnlitPo
     }
     // The colour effects (Common::ColorEffects, effects design stage E1), as the GLSL has them, before the dim and tint
     for (const char* line : {"if (material.uSaturation != 1.0) {",
-                             "rgb = mix(vec3<f32>(dot(rgb, vec3<f32>(0.299, 0.587, 0.114))), rgb, material.uSaturation);",
+                             "rgb = clamp(mix(vec3<f32>(dot(rgb, vec3<f32>(0.299, 0.587, 0.114))), rgb, material.uSaturation), vec3<f32>(0.0), vec3<f32>(1.0));",
                              "if (material.uFlash.a > 0.0) {",
                              "rgb = mix(rgb, material.uFlash.rgb, min(material.uFlash.a, 1.0));",
                              "screenTinted(stageDimmed(colorEffected(color.rgb)), input.fragCoord)"})

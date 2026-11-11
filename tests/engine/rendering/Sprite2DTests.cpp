@@ -510,6 +510,33 @@ TEST(Sprite2DTest, TheEffectsAreClampedWhenDrawn)
     EXPECT_TRUE(IsGreen(frame.At(32, 32)));
 }
 
+TEST(Sprite2DTest, TheEffectsAreStoredClampedSoTheGettersAndTheSavedSceneAgree)
+{
+    const auto go = GameObject::Create("Sprite");
+    go->CreatePositionable();
+    auto *sprite = go->AddComponent<Sprite2D>();
+    sprite->SetSaturation(11.0f);
+    EXPECT_FLOAT_EQ(sprite->GetSaturation(), 4.0f);
+    sprite->SetFlash(Common::Color{2.0f, -1.0f, 0.5f, 7.0f});
+    EXPECT_FLOAT_EQ(sprite->GetFlash().r, 1.0f);
+    EXPECT_FLOAT_EQ(sprite->GetFlash().g, 0.0f);
+    EXPECT_FLOAT_EQ(sprite->GetFlash().a, 1.0f);
+
+    // A NaN would be saved as null, which does not load: it is stored as 1 (no change) instead
+    sprite->SetSaturation(std::numeric_limits<float>::quiet_NaN());
+    sprite->SetFlash(Common::Color{std::numeric_limits<float>::infinity(), 0.0f, 0.0f, 0.5f});
+    EXPECT_FLOAT_EQ(sprite->GetSaturation(), 1.0f);
+    const auto scene = Scene::Create("Sprite2DNonFinite");
+    scene->AddRootGameObject(go);
+    const auto loaded = Scene::FromJSON(scene->Serialize());
+    ASSERT_NE(loaded, nullptr);
+    const auto *copy = loaded->FindGameObject("Sprite")->GetComponent<Sprite2D>();
+    ASSERT_NE(copy, nullptr);
+    EXPECT_FLOAT_EQ(copy->GetSaturation(), 1.0f);
+    EXPECT_FLOAT_EQ(copy->GetFlash().r, 0.0f);
+    EXPECT_FLOAT_EQ(copy->GetFlash().a, 0.5f);
+}
+
 TEST(Sprite2DTest, TheEffectsSurviveASceneLoadAndAnOlderSceneLoadsWithoutThem)
 {
     const auto go = GameObject::Create("Sprite");

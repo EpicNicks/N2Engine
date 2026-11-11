@@ -100,6 +100,23 @@ TEST_F(VulkanColorEffectsTest, AFlashMixesByItsAlphaAfterTheSaturation)
     EXPECT_TRUE(Near(both.At(32, 32), Expected(1, 0, 0, greyThenBlue)));
 }
 
+TEST_F(VulkanColorEffectsTest, SaturationAboveOneIsClampedBeforeTheStageDimAsOnTheSoftwareRenderer)
+{
+    // Unclamped, red at 4 is (3.09, -0.9, -0.9), and half dimmed its red would still be above 1: the clamp must come first
+    IMesh* quad = Full();
+    IMaterial* red = Colour(1.0f, 0.0f, 0.0f);
+    Set(red, Effects(4.0f));
+    const Frame frame = RenderFrame([&] {
+        R().SetStageDim(0.5f);
+        R().DrawMesh(quad, Identity, red, RenderState::Opaque());
+        R().SetStageDim(0.0f);
+    });
+    float r = 1.0f, g = 0.0f, b = 0.0f;
+    Effects(4.0f).Apply(r, g, b);
+    RenderState::StageDimmed(r, g, b, 0.5f);
+    EXPECT_TRUE(Near(frame.At(32, 32), Expected(r, g, b, ColorEffects{})));
+}
+
 TEST_F(VulkanColorEffectsTest, TwoMaterialsInOneFrameKeepTheirOwnValues)
 {
     // Each draw's material block is its own dynamic-offset range: one sprite's flash never leaks into the next

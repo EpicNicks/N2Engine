@@ -931,10 +931,11 @@ void OpenGLRenderer::CreateStandardShaders()
         in vec4 fragColor;
         out vec4 FragColor;
 
-        // Common::ColorEffects: saturation (1 none, 0 grey), then the flash colour mixed over by its alpha (0 none)
+        // Common::ColorEffects: saturation (1 none, 0 grey; clamped at once, as the software renderer packs before the dim
+        // and tint), then the flash colour mixed over by its alpha (0 none)
         vec3 colorEffected(vec3 rgb) {
             if (uSaturation != 1.0) {
-                rgb = mix(vec3(dot(rgb, vec3(0.299, 0.587, 0.114))), rgb, uSaturation);
+                rgb = clamp(mix(vec3(dot(rgb, vec3(0.299, 0.587, 0.114))), rgb, uSaturation), 0.0, 1.0);
             }
             if (uFlash.a > 0.0) {
                 rgb = mix(rgb, uFlash.rgb, min(uFlash.a, 1.0));

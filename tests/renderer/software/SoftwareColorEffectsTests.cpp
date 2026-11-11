@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <vector>
 
 #include <renderer/common/ColorEffects.hpp>
@@ -167,6 +168,27 @@ TEST(ColorEffectsMaths, SaturationZeroIsTheLumaGreyAndAboveOnePushesAwayFromIt)
     EXPECT_NEAR(0.299f * r2 + 0.587f * g2 + 0.114f * b2, luma, 1e-6f) << "the luma is kept";
 }
 
+TEST(ColorEffectsMaths, AboveOneTheResultIsClampedBeforeAnythingElse)
+{
+    // Red at 4: luma 0.299, so (3.09, -0.9, -0.9) before the clamp. Clamped at once, as the software renderer packs to bytes
+    // before the dim and tint, so every backend dims and tints the same in-range colour
+    float r = 1.f, g = 0.f, b = 0.f;
+    Effects(4.f).Apply(r, g, b);
+    EXPECT_FLOAT_EQ(r, 1.f);
+    EXPECT_FLOAT_EQ(g, 0.f);
+    EXPECT_FLOAT_EQ(b, 0.f);
+}
+
+TEST(ColorEffectsMaths, TheClampsGiveTheStoredValues)
+{
+    EXPECT_FLOAT_EQ(ColorEffects::ClampSaturation(9.f), 4.f);
+    EXPECT_FLOAT_EQ(ColorEffects::ClampSaturation(-1.f), 0.f);
+    EXPECT_FLOAT_EQ(ColorEffects::ClampSaturation(std::numeric_limits<float>::quiet_NaN()), 1.f);
+    EXPECT_FLOAT_EQ(ColorEffects::ClampSaturation(std::numeric_limits<float>::infinity()), 1.f);
+    EXPECT_FLOAT_EQ(ColorEffects::ClampFlashComponent(2.f), 1.f);
+    EXPECT_FLOAT_EQ(ColorEffects::ClampFlashComponent(-std::numeric_limits<float>::infinity()), 0.f);
+}
+
 TEST(ColorEffectsMaths, TheFlashMixesByItsAlphaAfterTheSaturation)
 {
     float r = 1.f, g = 0.f, b = 0.f;
@@ -231,18 +253,21 @@ TEST_F(SoftwareColorEffectsTest, ThePerPixelPathAppliesThemAfterTheVertexColour)
 
 TEST_F(SoftwareColorEffectsTest, TheyComeBeforeTheStageDim)
 {
-    IMaterial *red = Unlit(1, 0, 0);
-    const ColorEffects effects = Effects(0.f, {0, 1, 0, 0.5f});
-    Set(red, effects);
-    const Frame frame = Render([&] {
-        renderer.SetStageDim(1.0f);
-        renderer.DrawMesh(white, Identity, red, RenderState::Opaque());
-        renderer.SetStageDim(0.0f);
-    });
-    float r = 1, g = 0, b = 0;
-    effects.Apply(r, g, b);
-    RenderState::StageDimmed(r, g, b, 1.0f);
-    EXPECT_TRUE(Near(frame.At(16, 16), Pixel{To8(r), To8(g), To8(b), 255}));
+    // Saturation 4 too: the clamp comes before the dim, as on the GPU backends
+    for (const ColorEffects &effects : {Effects(0.f, {0, 1, 0, 0.5f}), Effects(4.f)})
+    {
+        IMaterial *red = Unlit(1, 0, 0);
+        Set(red, effects);
+        const Frame frame = Render([&] {
+            renderer.SetStageDim(0.5f);
+            renderer.DrawMesh(white, Identity, red, RenderState::Opaque());
+            renderer.SetStageDim(0.0f);
+        });
+        float r = 1, g = 0, b = 0;
+        effects.Apply(r, g, b);
+        RenderState::StageDimmed(r, g, b, 0.5f);
+        EXPECT_TRUE(Near(frame.At(16, 16), Pixel{To8(r), To8(g), To8(b), 255})) << effects.saturation;
+    }
 }
 
 TEST_F(SoftwareColorEffectsTest, TheLitShaderIgnoresThem)

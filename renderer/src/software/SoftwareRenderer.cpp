@@ -253,19 +253,15 @@ namespace
             // only with uPbr, and the engine gives it to Pbr materials only)
             r.metallicRoughnessTex = mat.pbr ? mat.metallicRoughnessTexture : nullptr;
         }
-        if (!r.lit && !r.text)
+        // Defaults for lit and text materials (SnapshotMaterial reads them for unlit only), so colorFx stays off there
+        r.colorEffects = mat.colorEffects;
+        r.colorFx = !mat.colorEffects.IsDefault();
+        float flatR = r.aR, flatG = r.aG, flatB = r.aB;
+        if (r.colorFx)
         {
-            r.colorEffects = mat.colorEffects;
-            r.colorFx = !mat.colorEffects.IsDefault();
+            r.colorEffects.Apply(flatR, flatG, flatB);
         }
-        {
-            float fr = r.aR, fg = r.aG, fb = r.aB;
-            if (r.colorFx)
-            {
-                r.colorEffects.Apply(fr, fg, fb);
-            }
-            r.flatColor = PackRGBA(fr, fg, fb, r.aA);
-        }
+        r.flatColor = PackRGBA(flatR, flatG, flatB, r.aA);
 
         if (r.text)
         {
