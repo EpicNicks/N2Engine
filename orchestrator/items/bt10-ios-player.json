@@ -1,0 +1,36 @@
+{
+  "name": "bt10-ios-player",
+  "repo": "engine",
+  "branch": "feat-bt10-ios",
+  "title": "Build targets stage 10: iOS and macOS players with the software renderer, built and simulator-tested in GitHub Actions, started from the editor",
+  "closes": null,
+  "issue": "User request, 2026-11-10: 'I would like for the engine to be able to allow the user to select a build target in the engine editor UI like windows, linux, android, ios, web, and maybe other console toolchains in the future like switch'. Design and stage table: orchestrator/proposals/build-targets-design.md. Stage 10 of section 5.",
+  "allowedPaths": [
+    "^CMakeLists\\.txt$",
+    "^\\.github/workflows/",
+    "^cmake/",
+    "^docs/",
+    "^engine/",
+    "^external/",
+    "^orchestrator/items/bt",
+    "^orchestrator/proposals/build-targets-design\\.md$",
+    "^players/",
+    "^renderer/",
+    "^scripts/",
+    "^targets/",
+    "^tests/"
+  ],
+  "acceptance": [
+    "A GitHub Actions workflow on a macOS runner builds the ios target (simulator build) and the macos target, runs a Lua 2D sample on the iOS simulator and the macOS player headless, and uploads both as artifacts",
+    "The editor's Build for an Apple target starts the workflow with gh, follows it and downloads the artifact; n2build doctor checks gh and its login instead of Xcode (a small frontend item if the panel needs changes)",
+    "Touch, gamepad, lifecycle, safe area, audio session and saves are implemented and covered by simulator tests where the simulator allows; a device checklist exists for when a device is available",
+    "Device signing only through repository secrets used inside the workflow, never in the project, logs or protocol; unsigned simulator builds work without them",
+    "The ios and macos targets' physics as for android (decision D8)"
+  ],
+  "requiresDocs": true,
+  "allowProtocol": false,
+  "gate": "approved by the user on 2026-11-10 (all stages); depends on bt4-vfs-packs and bt7-renderer-surfaces; D8 decided: Jolt and Box2D only. D2: software renderer here, Metal in bt13-metal-renderer. D5: macOS included. D7: no Mac, GitHub Actions only",
+  "approved": true,
+  "reviewer": "opus",
+  "notes": "Reviewer: no private API, App Store rules on code loading respected (Lua interpreted, no JIT), secrets only in the workflow, the workflow pinned (runner image, Xcode version)."
+}

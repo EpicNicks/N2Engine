@@ -1,0 +1,40 @@
+{
+  "name": "build-targets",
+  "repo": "engine",
+  "branch": "feat-build-targets",
+  "closes": null,
+  "title": "Build targets: choose Windows, Linux, Android, iOS, macOS or web in the editor and build, with private console targets later (thirteen stages)",
+  "issue": "User request, 2026-11-10: 'I would like for the engine to be able to allow the user to select a build target in the engine editor UI like windows, linux, android, ios, web, and maybe other console toolchains in the future like switch'. Design and stage table: orchestrator/proposals/build-targets-design.md. Split into one item per stage (bt1..bt13) before launching. User decisions 2026-11-10 (section 6 of the design): D1 local builds (Apple targets in GitHub Actions), D2 native mobile rendering as a later goal (software first), D5 macOS with iOS, D6 zip with 7z as an option, D7 no Mac (GitHub Actions macOS runners). Later the same day: D3 the final game is always a full build from source (prebuilt players only as an extra, later option); D4 a new desktop player, lua_project stays a demo; D8 Jolt and Box2D only on mobile.",
+  "allowedPaths": [
+    "^engine/",
+    "^renderer/",
+    "^CMakeLists\\.txt$",
+    "^cmake/",
+    "^web/",
+    "^players/",
+    "^targets/",
+    "^tools/",
+    "^lua_project/",
+    "^external/web-stubs/",
+    "^editor-server/",
+    "^scripts/",
+    "^\\.github/workflows/",
+    "^tests/",
+    "^docs/",
+    "^orchestrator/items/bt",
+    "^orchestrator/proposals/build-targets-design\\.md$"
+  ],
+  "acceptance": [
+    "The editor lists the targets, shows what each one needs, builds any target the machine can build, and runs it on a device for device targets",
+    "One command line (n2build) does the same for CI and people",
+    "A console target can be added from outside the repository",
+    "Existing targets keep their behaviour, tests, smoke runs and size budgets at every stage",
+    "The editor can pick and build the targets that already work (Windows, Linux, web) after stage 3, before any platform-layer change"
+  ],
+  "requiresDocs": true,
+  "allowProtocol": true,
+  "gate": "approved by the user on 2026-11-10 (all stages); split per stage; every stage decisions D1-D8 made on 2026-11-10",
+  "approved": true,
+  "reviewer": "opus",
+  "notes": "Reviewer: no behaviour change on existing targets, platform code only behind the platform layer, no signing secret in the project, host, logs or protocol."
+}
