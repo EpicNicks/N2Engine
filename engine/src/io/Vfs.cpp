@@ -335,7 +335,8 @@ namespace N2Engine::IO
             }
             return mount->Stat(relative);
         }
-        return DiskStat(path);
+        // Lexically normal first: on POSIX "a/../b" fails when "a" does not exist (a mount point, say)
+        return DiskStat(path.lexically_normal());
     }
 
     bool Vfs::IsDirectory(const std::filesystem::path &path) const
@@ -361,7 +362,7 @@ namespace N2Engine::IO
             }
             return mount->Read(relative);
         }
-        return DiskRead(path);
+        return DiskRead(path.lexically_normal());
     }
 
     std::expected<VfsBytes, std::string> Vfs::ReadBytesCapped(const std::filesystem::path &path, const std::uint64_t maxBytes) const
@@ -413,7 +414,8 @@ namespace N2Engine::IO
         else
         {
             std::vector<VfsEntry> all;
-            DiskList(directory, directory, recursive, all);
+            const std::filesystem::path normal = directory.lexically_normal();
+            DiskList(normal, normal, recursive, all);
             for (VfsEntry &entry : all)
             {
                 if (!entry.directory)
