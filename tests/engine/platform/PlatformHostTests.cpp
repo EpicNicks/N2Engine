@@ -38,8 +38,8 @@ namespace
         SafeAreaInsets Insets() const override { return {0, 96, 0, 48}; }
         void SetResizeHandler(std::function<void(int, int)> handler) override { resize = std::move(handler); }
         void SetTitle(const std::string &) override {}
-        void SetWindowMode(WindowMode) override {}
-        WindowMode GetWindowMode() const override { return WindowMode::Fullscreen; }
+        void SetWindowMode(Platform::WindowMode) override {}
+        Platform::WindowMode GetWindowMode() const override { return Platform::WindowMode::Fullscreen; }
         void SetTextInputActive(const bool active) override { textInput = active; }
         void SetKeepScreenOn(const bool on) override { keepScreenOn = on; }
         void PollEvents() override {}
