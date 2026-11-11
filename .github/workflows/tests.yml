@@ -715,10 +715,16 @@ jobs:
       - name: Check the package
         run: |
           pkg="$RUNNER_TEMP/package/LuaDemo"
-          ls -la "$pkg" "$pkg/game"
+          ls -la "$pkg"
           test -x "$pkg/lua_project"
-          test -f "$pkg/game/project.n2proj"
-          test -f "$pkg/game/assets/scene.lua"
+          # The game is one pack beside the player (build targets stage 4, docs/packs.html), not a folder
+          test -f "$pkg/game.n2pack"
+          test -f "$pkg/game.n2pack.manifest.json"
+          test ! -e "$pkg/game"
+          unzip -l "$pkg/game.n2pack" | tee pack.txt
+          grep -q " project.n2proj$" pack.txt
+          grep -q " assets/scene.lua$" pack.txt
+          grep -q " n2pack-manifest.json$" pack.txt
           test -f "$pkg.zip"
           ldd "$pkg/lua_project" | tee ldd.txt
           if grep -q "not found" ldd.txt; then echo "::error::The packaged player is missing a shared library"; exit 1; fi

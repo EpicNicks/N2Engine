@@ -379,6 +379,9 @@ if(WIN32)
     )
 endif()
 
+# The pack readers' decoders (zip: miniz inflate; 7z: the LZMA SDK), linked privately by the engine (docs/packs.html)
+add_subdirectory(cmake/packs)
+
 # == Production targets ==
 add_subdirectory(math)
 add_subdirectory(text)

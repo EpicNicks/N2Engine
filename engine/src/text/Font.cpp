@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <format>
 #include <fstream>
@@ -17,6 +18,7 @@
 #include "engine/Logger.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/Resources.hpp"
+#include "engine/io/Vfs.hpp"
 
 namespace N2Engine::Text
 {
@@ -34,21 +36,16 @@ namespace N2Engine::Text
 
         std::optional<std::vector<std::byte>> ReadFontFile(const std::filesystem::path &path)
         {
-            std::ifstream file(path, std::ios::binary | std::ios::ate);
-            if (!file.is_open())
+            // Through the virtual filesystem: a folder, or a pack (docs/packs.html)
+            const auto read = IO::Vfs::Instance().ReadBytes(path);
+            if (!read)
             {
                 return std::nullopt;
             }
-            const std::streamsize size = file.tellg();
-            if (size < 0)
+            std::vector<std::byte> bytes(read->size());
+            if (!read->empty())
             {
-                return std::nullopt;
-            }
-            std::vector<std::byte> bytes(static_cast<std::size_t>(size));
-            file.seekg(0);
-            if (size > 0 && !file.read(reinterpret_cast<char *>(bytes.data()), size))
-            {
-                return std::nullopt;
+                std::memcpy(bytes.data(), read->data(), read->size());
             }
             return bytes;
         }

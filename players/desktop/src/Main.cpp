@@ -24,6 +24,7 @@
 #include "engine/Logger.hpp"
 #include "engine/ProjectSettings.hpp"
 #include "engine/io/ProjectFile.hpp"
+#include "engine/io/Vfs.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourcePath.hpp"
 #include "engine/io/ResourceUUID.hpp"
@@ -128,6 +129,29 @@ int main(int argc, char *argv[])
     if (options.projectDir.empty())
     {
         options.projectDir = ExecutableDir(argc > 0 ? argv[0] : nullptr) / "game";
+    }
+
+    // A packaged game is one pack (game.n2pack, zip or 7z) mounted where its folder would be (docs/packs.html); the engine
+    // then opens that folder as it opens any project, reading every file through the mount
+    const auto isDirectory = [](const std::filesystem::path &p) {
+        std::error_code error;
+        return std::filesystem::is_directory(p, error);
+    };
+    const auto isFile = [](const std::filesystem::path &p) {
+        std::error_code error;
+        return std::filesystem::is_regular_file(p, error);
+    };
+    const Player::GameLocation game = Player::ResolveGame(options.projectDir, isDirectory, isFile);
+    options.projectDir = game.projectDir;
+    if (!game.pack.empty())
+    {
+        auto mount = IO::Pack::Open(game.pack);
+        if (!mount)
+        {
+            Report(std::format("The game's pack can't be read: {}", mount.error()));
+            return 1;
+        }
+        IO::Vfs::Instance().Mount(std::filesystem::absolute(game.projectDir), std::move(*mount));
     }
 
     // The project file first: the window's title is the game's name, and a folder without one is not a game

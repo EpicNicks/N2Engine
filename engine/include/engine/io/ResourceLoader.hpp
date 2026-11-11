@@ -61,7 +61,14 @@ namespace N2Engine::IO
          * change it. user:// is the game's own and is still created. Off by default.
          */
         void SetReadOnly(bool readOnly) { _readOnly = readOnly; }
-        [[nodiscard]] bool IsReadOnly() const { return _readOnly; }
+        /// Read-only as asked (SetReadOnly), or because the project is a pack (IsPacked), which is never written
+        [[nodiscard]] bool IsReadOnly() const { return _readOnly || _packed; }
+        /**
+         * Whether the project Initialize opened is a pack mounted in the virtual filesystem (Vfs; docs/packs.html) rather
+         * than a folder on disk: its files are read from the pack, listed from the pack's directory, and nothing is
+         * written (no .meta, no .n2/asset-state.json). user:// is still the game's own folder on disk.
+         */
+        [[nodiscard]] bool IsPacked() const { return _packed; }
         /// Indexes new and changed files under the assets folder and forgets deleted ones; returns what changed
         RescanResult RescanAssets();
 
@@ -231,8 +238,13 @@ namespace N2Engine::IO
         /// seen every such file found (even one whose metadata failed), so RescanAssets can tell what is gone
         void ScanDirectory(const std::filesystem::path& directory, RescanResult& result,
                            std::unordered_set<ResourcePath, ResourcePath::Hash>& seen);
+        /// One file of a scan (a folder's walk or a pack's listing): indexed when a loader takes its extension
+        void ScanOne(const std::filesystem::path& sourcePath, RescanResult& result,
+                     std::unordered_set<ResourcePath, ResourcePath::Hash>& seen);
         AssetMetadata CreateOrUpdateMetadata(const std::filesystem::path& sourcePath);
         std::filesystem::path GetMetadataPath(const std::filesystem::path& sourcePath) const;
+        /// path relative to the assets folder: the filesystem's relative() for a folder, lexical for a packed project
+        [[nodiscard]] std::filesystem::path AssetsRelative(const std::filesystem::path& path) const;
         /// <project>/.import/<path>.meta for a res:// path, worked out lexically (the file need not exist)
         [[nodiscard]] std::filesystem::path MetaPathOf(const ResourcePath &resourcePath) const;
         /// Puts one file's fresh metadata in the index (RefreshAsset, Reload): when another indexed file already holds its
@@ -295,6 +307,8 @@ namespace N2Engine::IO
         DirectoryFingerprint _fingerprint;
         bool _hasFingerprint = false;
         bool _readOnly = false;
+        /// The project root is inside a Vfs mount (set by Initialize)
+        bool _packed = false;
         /// meta.SaveToFile(path), or true without writing when read-only
         bool PersistMeta(const AssetMetadata &meta, const std::filesystem::path &path) const;
 

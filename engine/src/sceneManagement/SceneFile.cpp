@@ -8,21 +8,23 @@
 
 #include "engine/Logger.hpp"
 #include "engine/io/Resources.hpp"
+#include "engine/io/Vfs.hpp"
 #include "engine/serialization/JsonLimits.hpp"
 
 namespace N2Engine
 {
     bool SceneFile::Load(const std::filesystem::path &path)
     {
-        std::ifstream file(path, std::ios::binary);
-        if (!file)
+        // Read whole (through the virtual filesystem: a folder or a pack), so the nesting is checked before anything is
+        // parsed (a scene file is untrusted data: a client can write one, and a tree 100 000 deep would overflow the
+        // stack of the walks over it)
+        const auto read = IO::Vfs::Instance().ReadText(path);
+        if (!read)
         {
             Logger::Error(std::format("Cannot read scene file {}", IO::PathToUtf8(path)));
             return false;
         }
-        // Read whole, so the nesting is checked before anything is parsed (a scene file is untrusted data: a client
-        // can write one, and a tree 100 000 deep would overflow the stack of the walks over it)
-        const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        const std::string &text = *read;
         if (JsonLimits::SceneJsonTooDeep(text))
         {
             Logger::Error(std::format("Scene file {}: {}", IO::PathToUtf8(path), JsonLimits::SceneJsonTooDeepMessage()));

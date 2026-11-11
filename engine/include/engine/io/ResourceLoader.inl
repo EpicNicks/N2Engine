@@ -4,6 +4,7 @@
 #include <format>
 
 #include "engine/io/ResourceLoader.hpp"
+#include "engine/io/Vfs.hpp"
 #include "ResourceUUID.hpp"
 #include "engine/Logger.hpp"
 
@@ -29,7 +30,7 @@ namespace N2Engine::IO
         const AssetMetadata& meta = metaIt->second;
         std::filesystem::path sourcePath = Resolve(resourcePath);
 
-        if (!std::filesystem::exists(sourcePath))
+        if (!Vfs::Instance().Exists(sourcePath))
         {
             Logger::Error(std::format("Source file missing: {}", PathToUtf8(sourcePath)));
             return nullptr;
