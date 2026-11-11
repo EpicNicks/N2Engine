@@ -16,7 +16,14 @@ every stage. Stages still run in the order of section 5, each after the stages i
   the default, `modules` per target through `-DN2ENGINE_TARGET` (`cmake/N2EngineModules.cmake` reads
   `build.targets.<target>.modules` over `build.modules`, key by key), and `scripts/project-modules.mjs --target`. The frontend
   half (the Build Settings panel) is a frontend PR.
-- The Triangle-Like input branches (needed by stage 5): #330 and #331 merged; #332 to #336 in review.
+- The Triangle-Like input branches (needed by stage 5): #330 to #336 merged on 2026-11-11.
+- Stage 5 (engine input codes), branch `feat-bt5-engine-input-codes`: `Input::InputDevice` in engine codes; GLFW's device
+  (`engine/src/input/GlfwInputDevice.cpp`) is the only code that knows GLFW's key, button and axis numbers, its tables
+  private; `Window` owns it; bindings, `ActionMap`, `Mouse`, `Keyboard` and `InputSystem` take an `InputDevice*`. Saved data
+  names its keys, so it loads unchanged (tested); no migration is needed.
+- Stage 6 (platform layer), branch `feat-bt6-platform-host`: `Platform::IPlatformHost` (surface, window, lifecycle, loop
+  ownership, input device, paths); `desktop-glfw` (Window.cpp's GLFW code, moved as it was) and `headless` backends; `Window`
+  on the host; the web build has no stand-in GLFW (`glfw_stub.c` deleted). `docs/platform.html`.
 
 ## 1. Goal
 

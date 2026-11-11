@@ -387,6 +387,16 @@ Input.SetGamepadRumble(0.25, 0.75, 0.2)
 </code></pre>
 <p class="src">Source: <code>engine/src/input/Rumble.cpp</code>; <code>engine/src/input/InputSystem.cpp</code> &mdash; <code>InputSystem::Update</code>; <code>engine/src/scripting/bindings/LuaInputBindings.cpp</code>; tests: <code>RumbleTest.*</code>, <code>RumbleLuaTest.SetAndStopFromLua</code> (<code>tests/engine/input/RumbleTests.cpp</code>). Unverified: XInput on a real pad and the browser actuator were not felt in CI.</p>
 
+<h2 id="devices">Input devices and engine codes <span class="badge">build targets stage 5</span></h2>
+<p>The input system reads its devices through <code>Input::InputDevice</code> (<code>engine/include/engine/input/InputDevice.hpp</code>), entirely in engine codes: <code>Key</code>, <code>MouseButton</code>, <code>GamepadButton</code> and <code>GamepadAxis</code>. A device reports which keys and mouse buttons are held, the cursor, each gamepad's state (<code>GamepadState</code>: buttons and axes indexed by the engine's enums), whether a joystick is present and its name, and delivers scroll and typed characters to the handlers <code>Mouse</code> and <code>Keyboard</code> install.</p>
+<ul>
+<li><strong>The desktop's device is GLFW's</strong> (<code>engine/src/input/GlfwInputDevice.cpp</code>). It is the only code that knows GLFW's key, button and axis numbers: the tables (<code>engine/src/input/GlfwInputMapping.hpp</code>, formerly the public <code>InputMapping.hpp</code>) are private to it, and are total both ways. <code>Window</code> creates it with its GLFW window and destroys it after the input system; <code>Window::GetInputDevice()</code> returns it.</li>
+<li><strong>Without a window there is no device</strong>: nothing is pressed, as before, and hosts inject input (<code>KeySource</code>, <code>Mouse::InjectPointer</code>, <code>Touchscreen</code>). Gamepad bindings built without a device read the application window's, because gamepads belong to the system rather than to a window.</li>
+<li><strong>Bindings take an <code>InputDevice*</code></strong> where they took a <code>GLFWwindow*</code> (<code>ActionMap::Deserialize</code>, <code>CreateBindingFromJson</code>, every binding's constructor). A null device reads nothing.</li>
+<li><strong>Saved data is unchanged.</strong> Action maps, scenes and input settings name their keys, buttons and axes (<code>"W"</code>, <code>"Left"</code>, <code>"South"</code>), never GLFW numbers, so files saved before this stage load as they did and save back the same. Lua key names and the web input map are unchanged.</li>
+</ul>
+<p>The platform layer (stage 6) gives each platform its own device behind this interface. Tests: <code>InputDeviceTest.*</code> (<code>tests/engine/input/InputDeviceTests.cpp</code>): the tables are total both ways, bindings and <code>Mouse</code> and <code>Keyboard</code> read a fake device, and a map saved before this stage loads unchanged.</p>
+
 <h2 id="mouse">Mouse position, buttons and scroll</h2>
 <p><code>InputSystem</code> owns one <code>Mouse</code>. <code>Mouse::Get()</code> reaches it through <code>Application::GetInstance().GetWindow().GetInputSystem()</code> and returns <code>nullptr</code> when there is no input system (the window failed to open, or after shutdown).</p>
 <div class="table-wrap">
