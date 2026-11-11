@@ -388,6 +388,8 @@ endif()
 if(NOT N2ENGINE_PLATFORM_WEB)
 add_subdirectory(test_project)
 add_subdirectory(lua_project)
+# The desktop player that tools/n2build packages for the windows and linux targets (docs/build-targets.html)
+add_subdirectory(players/desktop)
 add_subdirectory(editor-server)
 # The dedicated game server (netcode stage A6): UDP sockets and the crypto library, so not part of the web build
 add_subdirectory(n2server)

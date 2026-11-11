@@ -1,0 +1,29 @@
+{
+  "formatVersion": 1,
+  "name": "linux",
+  "displayName": "Linux (x86-64)",
+  "hostSystems": ["linux"],
+  "toolchains": {
+    "required": ["cxx", "cmake", "ninja"],
+    "optional": ["vulkan-sdk"]
+  },
+  "physics3d": ["none", "physx", "jolt", "both"],
+  "cmake": {
+    "target": "n2player",
+    "options": {
+      "N2ENGINE_BUILD_TESTS": "OFF"
+    },
+    "configs": {
+      "debug": { "CMAKE_BUILD_TYPE": "Debug" },
+      "release": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    "toolchainOptions": {
+      "vulkan-sdk": {
+        "present": { "N2ENGINE_RENDERER_VULKAN": "ON" },
+        "absent": { "N2ENGINE_RENDERER_VULKAN": "OFF" }
+      }
+    }
+  },
+  "package": { "kind": "desktop", "from": "bin", "fileList": "n2player-files.txt" },
+  "run": { "kind": "executable" }
+}
