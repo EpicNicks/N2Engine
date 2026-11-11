@@ -1090,9 +1090,9 @@ bool SoftwareRenderer::Initialize(const Common::Surface &surface, uint32_t width
     }
 
     Resize(width, height);
-    if (windowHandle)
+    if (m_window.HasWindow() && !m_window.presentPixels)
     {
-        // Headless there is no context: no blit resources, and Present never calls GL
+        // Headless (or a platform that takes the pixels) there is no context: no blit resources, and Present never calls GL
         if (!SetupBlitResources()) return false;
         m_glReady = true;
     }
@@ -1221,7 +1221,8 @@ void SoftwareRenderer::Present()
     // The platform copies the frame itself (Android's window buffer)
     if (m_window.presentPixels)
     {
-        m_window.presentPixels(m_colorBuffer.data(), static_cast<int>(m_width), static_cast<int>(m_height));
+        m_window.presentPixels(reinterpret_cast<const std::uint8_t *>(m_colorBuffer.data()), static_cast<int>(m_width),
+                               static_cast<int>(m_height));
         return;
     }
 
