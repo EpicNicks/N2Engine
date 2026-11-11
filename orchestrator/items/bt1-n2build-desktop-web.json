@@ -1,0 +1,40 @@
+{
+  "name": "bt1-n2build-desktop-web",
+  "repo": "engine",
+  "branch": "feat-bt1-n2build",
+  "title": "Build targets stage 1: target descriptors, n2build (build, doctor, run) with full builds from source, a new players/desktop, and Windows, Linux and web as targets",
+  "closes": null,
+  "issue": "User request, 2026-11-10: 'I would like for the engine to be able to allow the user to select a build target in the engine editor UI like windows, linux, android, ios, web, and maybe other console toolchains in the future like switch'. Design and stage table: orchestrator/proposals/build-targets-design.md. Stage 1 of section 5.",
+  "allowedPaths": [
+    "^players/",
+    "^targets/",
+    "^tools/",
+    "^lua_project/",
+    "^web/",
+    "^scripts/",
+    "^CMakeLists\\.txt$",
+    "^cmake/",
+    "^\\.github/workflows/",
+    "^tests/",
+    "^docs/",
+    "^orchestrator/items/bt",
+    "^orchestrator/proposals/build-targets-design\\.md$"
+  ],
+  "acceptance": [
+    "n2build builds Windows, Linux and web packages from a project by compiling the target's player from source with the project's module list, with JSON progress lines",
+    "Build trees are kept per target, configuration and module list (ccache where available): a rebuild after only a script or asset change repackages without recompiling",
+    "players/desktop is a new player; it reuses what lua_project/src/Main.cpp solves (project folder argument, --renderer parsing and usage errors, window title, --console-log); lua_project stays a demo project and its tests and the web default package are unchanged",
+    "Works with no pack and no platform layer: the desktop player runs a project folder copied beside it and the web target uses today's preload",
+    "n2build doctor reports each missing toolchain with how to fix it; descriptors pin toolchain versions",
+    "Descriptors are read from targets/ and from extra folders in user settings",
+    "CI builds its packages through n2build",
+    "doctor checks each target's physics modules: a project whose build.modules needs PhysX on a target with no PhysX build fails with a clear message",
+    "Desktop builds can be wrapped in a .zip or .7z for distribution (an output option)"
+  ],
+  "requiresDocs": true,
+  "allowProtocol": false,
+  "gate": "approved by the user on 2026-11-10 (all stages); decisions D1, D3, D4 made (local builds; full build from source; new desktop player, lua_project stays a demo). Uses project folders until bt4-vfs-packs",
+  "approved": true,
+  "reviewer": "opus",
+  "notes": "Reviewer: descriptors are data, not code paths in n2build; nothing target-specific hard-coded in the tool. Prebuilt players are not part of this stage (D3: an extra, later option)."
+}

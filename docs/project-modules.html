@@ -106,10 +106,18 @@
 <li><strong>Web:</strong> <code>N2ENGINE_PROJECT</code> also picks the project the player packs, in place of <code>N2_WEB_PROJECT_DIR</code>. Build the <code>web-package</code> target as usual (<a href="web-build.html">Web build</a>).</li>
 <li><strong>Native:</strong> a native game is its own executable linking <code>engine</code>, as <code>lua_project</code> is. It can call <code>n2_check_project_modules(&lt;target&gt;)</code> in its <code>CMakeLists.txt</code> to check again each time it links.</li>
 </ul>
+<h3 id="per-target">A list per build target <span class="badge">build targets stage 3</span></h3>
+<p>A project can give one build target its own modules in <code>build.targets.&lt;target&gt;.modules</code> (<a href="build-targets.html#settings">Per-target settings</a>). They are laid over <code>build.modules</code> key by key, so a target names only what it changes:</p>
+<pre class="lang-json"><code>"build": {
+  "modules": { "physics3d": "physx", "physics2d": true },
+  "targets": { "android": { "modules": { "physics3d": "jolt" } } }
+}</code></pre>
+<p>Android then builds Jolt and Box2D; every other target builds PhysX and Box2D. <code>-DN2ENGINE_TARGET=android</code> on the configure picks the target's list (<code>n2build</code> passes it), and <code>node scripts/project-modules.mjs path/to/game --target android</code> checks that list. Without <code>N2ENGINE_TARGET</code> only <code>build.modules</code> counts, as before.</p>
 
 <h2 id="scan">The scan</h2>
 <pre class="lang-shell"><code>node scripts/project-modules.mjs path/to/game             # what it uses against its list
-node scripts/project-modules.mjs path/to/game --suggest   # the smallest list the scan can justify</code></pre>
+node scripts/project-modules.mjs path/to/game --suggest   # the smallest list the scan can justify
+node scripts/project-modules.mjs path/to/game --target android   # the list a build for that target uses</code></pre>
 <p>It reads the component types in scenes and prefabs, and in Lua the module's globals, its event handlers and component names in quotes. Particles and soft bodies have no Lua global of their own, so for them it is the component name alone: <code>"ParticleSystem"</code> and <code>"SoftBody"</code>. Comments do not count. It also reads the project settings: <code>physics.backend</code>, and the deterministic network preset, which needs Jolt.</p>
 <ul>
 <li><strong>A conflict stops the build.</strong> It names the file and line, and runs at configure time, so before anything compiles, and again when the game links.</li>

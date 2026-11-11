@@ -1,0 +1,33 @@
+{
+  "name": "bt13-metal-renderer",
+  "repo": "engine",
+  "branch": "feat-bt13-metal",
+  "title": "Build targets stage 13 (later goal): a native Metal renderer for iOS and macOS",
+  "closes": null,
+  "issue": "User request, 2026-11-10: 'I would like for the engine to be able to allow the user to select a build target in the engine editor UI like windows, linux, android, ios, web, and maybe other console toolchains in the future like switch'. Design and stage table: orchestrator/proposals/build-targets-design.md. Stage 13 of section 5. D2 (user, 2026-11-10): native mobile rendering as a later goal. Built and tested only in GitHub Actions (D7).",
+  "allowedPaths": [
+    "^renderer/",
+    "^engine/",
+    "^players/",
+    "^targets/",
+    "^CMakeLists\\.txt$",
+    "^cmake/",
+    "^scripts/",
+    "^\\.github/workflows/",
+    "^tests/",
+    "^docs/",
+    "^orchestrator/items/bt",
+    "^orchestrator/proposals/build-targets-design\\.md$"
+  ],
+  "acceptance": [
+    "A spike first compares MoltenVK over the Vulkan renderer with a native Metal backend and records the result; the user picks before the backend is written",
+    "The ios and macos targets can select Metal; the software renderer stays the fallback",
+    "MSL shaders validated in CI; image comparison against the software renderer on the simulator and on macOS in CI"
+  ],
+  "requiresDocs": true,
+  "allowProtocol": false,
+  "gate": "approved by the user on 2026-11-10 (all stages); later goal; depends on bt10-ios-player",
+  "approved": true,
+  "reviewer": "opus",
+  "notes": "Reviewer: interface parity with the other backends, no Objective-C leaking into renderer headers outside the Metal backend."
+}
