@@ -29,7 +29,7 @@
   ],
   "requiresDocs": true,
   "allowProtocol": false,
-  "gate": "needs the user's go; depends on bt4-vfs-packs and bt7-renderer-surfaces; decision D8 (open). D2: software renderer here, Metal in bt13-metal-renderer. D5: macOS included. D7: no Mac, GitHub Actions only",
+  "gate": "needs the user's go; depends on bt4-vfs-packs and bt7-renderer-surfaces; D8 decided: Jolt and Box2D only. D2: software renderer here, Metal in bt13-metal-renderer. D5: macOS included. D7: no Mac, GitHub Actions only",
   "approved": false,
   "reviewer": "opus",
   "notes": "Reviewer: no private API, App Store rules on code loading respected (Lua interpreted, no JIT), secrets only in the workflow, the workflow pinned (runner image, Xcode version)."

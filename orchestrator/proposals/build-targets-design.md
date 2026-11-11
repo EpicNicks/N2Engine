@@ -5,8 +5,8 @@ able to allow the user to select a build target in the engine editor UI like win
 console toolchains in the future like switch".
 
 **Status: proposal, 2026-11-10, amended the same day after review (stage order, unmerged input code, headless backend,
-physics per target, remote hosts, saved key codes, web size). The user decided D1, D2, D5, D6 and D7 the same day (section 6);
-D3, D4 and D8 are open. No stage is approved.**
+physics per target, remote hosts, saved key codes, web size). The user decided D1 to D8 the same day (section 6). No stage is
+approved.**
 
 ## 1. Goal
 
@@ -116,12 +116,20 @@ budget most of all) and the load time of both formats. Separately, `n2build` can
 
 ### 3.4 Players and the build tool
 
-- **One player per platform:** `players/desktop` (today's `lua_project` main, generalised), `players/web` (today's `web/`),
-  `players/android` (a Gradle template around GameActivity and the engine `.so`), `players/ios` (a CMake-generated Xcode
-  project). A player opens the pack beside it or inside its bundle.
-- **Two build modes (decision D3).** *Prebuilt:* the target's player, built once per engine version, plus the game's pack.
-  Fast, and needs no compiler for Windows, Linux or the web. *From source:* builds the player with the game's module list
-  (engine stripping) or native plugins. Games are Lua and data, so prebuilt is the default.
+- **One player per platform:** `players/desktop` (new, D4), `players/web` (today's `web/`), `players/android` (a Gradle
+  template around GameActivity and the engine `.so`), `players/ios` (a CMake-generated Xcode project). A player opens the pack
+  beside it or inside its bundle.
+- **`players/desktop` is new (D4, user 2026-11-10).** `lua_project` is a demo project and stays one (`engine_tests` and the web
+  player's default package use its assets). The desktop player is written separately and takes what `lua_project/src/Main.cpp`
+  already solves: the project folder argument, `--renderer` parsing and its usage errors, the window title, and the
+  `--console-log` option from the Triangle-Like integration branch. `lua_project` may later run through the new player.
+- **Build modes (D3, user 2026-11-10).** *The final game is always a full build from source:* `n2build` compiles the target's
+  player with the game's module list (engine stripping) and packages it with the game's data. While developing, the game runs
+  in the editor's play mode on the machine running the editor; that is the everyday "player". *Prebuilt players are an extra,
+  later option* for quick test packages (a player compiled once per engine version, plus the game's data), never a
+  replacement for the full build. Consequences: every target's compiler must be on the building machine, which `doctor`
+  checks; and full builds keep a build tree per target, configuration and module list (with ccache where available), so a
+  rebuild after a script change only repackages, and one after an engine update recompiles incrementally.
 - **Target descriptors** (`targets/<name>/target.json`): the CMake preset or toolchain file, the toolchains required and how to
   detect them, the host systems that can build it, the packaging steps, the outputs, and the deploy steps. The engine reads
   descriptors from `targets/` and from extra folders listed in the user's settings, which is where private console targets go.
@@ -190,7 +198,7 @@ window or renderer code. The platform layer (stages 5 to 7) is only needed for n
 
 | Stage | Item | What | Depends on | Size |
 | --- | --- | --- | --- | --- |
-| 1 | `bt1-n2build-desktop-web` | Target descriptors, `n2build` (build, doctor, run), the desktop player, Windows, Linux and web targets from project folders, the physics-module check per target, CI calls `n2build` | D1, D3, D4 | L |
+| 1 | `bt1-n2build-desktop-web` | Target descriptors, `n2build` (build, doctor, run) doing full builds from source, the new `players/desktop`, Windows, Linux and web targets from project folders, per-target build trees, the physics-module check per target, CI calls `n2build` | decisions made | L |
 | 2 | `bt2-project-targets-protocol` | `build.targets` in `project.n2proj`, its validation, `GetProjectInfo` and `SetProjectSettings`, docs | 1 | S |
 | 3 | `bt3-fe-build-settings` (frontend) | The Build Settings panel, `n2build` from the Electron main process, progress, log, doctor results; the remote-host case | 2 | M |
 | 4 | `bt4-vfs-packs` | Mounts, the pack format and the cook step; native and web players read packs; `user://` as today on desktop and web (mobile paths come with their backends); web size measured | 1, D6 | L |
@@ -221,12 +229,12 @@ stage 6 is mechanical.
 | --- | --- | --- | --- | --- |
 | D1 | Where a build runs | (a) the Electron main process runs `n2build` on the user's machine; (b) the host runs it (a `BuildProject` command) | **(a) first.** Toolchains and devices are on the user's machine. A remote host (Docker, SSH) keeps the project on the host, so (a) cannot build there: the panel says so (3.5) until (b) exists for remote hosts and build servers | **(a), 2026-11-10:** "run the builds locally". Apple targets are the exception: built in GitHub Actions (D7) |
 | D2 | Hardware renderer on mobile | (a) WebGPU on Dawn native for Android, iOS and macOS (revisits W8); (b) Vulkan on Android, Metal or MoltenVK on Apple; (c) GLES 3 on Android | (a), after a spike | **(b), as a later goal, 2026-11-10:** "I want native android and ios rendering at some point but we can make that a later goal". Software renderer first; stages 12 and 13 |
-| D3 | Player model | (a) prebuilt players plus a pack by default, from source for stripped builds; (b) always from source | **(a)** | open |
-| D4 | `lua_project` | (a) becomes `players/desktop`; (b) stays as a sample and a new player is added | **(a)** | open |
+| D3 | Player model | (a) prebuilt players plus a pack by default, from source for stripped builds; (b) always from source | (a) | **Full build from source for the final game; prebuilt players only as an extra, later option, 2026-11-10:** "the player should just be on the target hardware running the engine editor. I guess we could prebuild them for it but that would be in addition to the full build option to create the final game" (section 3.4) |
+| D4 | `lua_project` | (a) becomes `players/desktop`; (b) stays as a sample and a new player is added | (a) | **(b), 2026-11-10:** "lua project is a demo project right? Write a separate one, use what's solved from lua_project" |
 | D5 | macOS | in scope with iOS, or later | With iOS: little extra once Metal exists | **With iOS, 2026-11-10** |
 | D6 | Pack format | (a) zip (stored or deflate) with a manifest; (b) a custom format | **(a)**: tools can inspect it and it is easy to read from an APK | **(a), with 7z as an option, 2026-11-10** (section 3.3: non-solid 7z for packs; zip or 7z for distribution archives) |
 | D7 | A Mac for iOS | Is one available for builds and device checks? | Needed before stage 10 | **No Mac; GitHub Actions macOS runners, 2026-11-10** (section 3.4). No real-device checks until a device or an Apple Developer account exists |
-| D8 | Physics on mobile | (a) Jolt and Box2D only (a project needing PhysX cannot target mobile); (b) also build PhysX for the NDK and Apple | **(a)**: both build from source; PhysX for mobile is a large extra build to maintain. Revisit if a game needs it | open (needed before stage 8) |
+| D8 | Physics on mobile | (a) Jolt and Box2D only (a project needing PhysX cannot target mobile); (b) also build PhysX for the NDK and Apple | **(a)**: both build from source; PhysX for mobile is a large extra build to maintain. Revisit if a game needs it | **(a), 2026-11-10** |
 
 ## 7. Not verified
 

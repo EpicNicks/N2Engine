@@ -16,7 +16,8 @@
     "^tests/",
     "^docs/",
     "^orchestrator/items/bt",
-    "^orchestrator/proposals/build-targets-design\\.md$"
+    "^orchestrator/proposals/build-targets-design\\.md$",
+    "^players/"
   ],
   "acceptance": [
     "Reads go through mounts; a project runs the same from a folder and from its pack (test)",

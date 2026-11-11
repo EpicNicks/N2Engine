@@ -14,7 +14,8 @@
     "^tests/",
     "^docs/",
     "^orchestrator/items/bt",
-    "^orchestrator/proposals/build-targets-design\\.md$"
+    "^orchestrator/proposals/build-targets-design\\.md$",
+    "^players/"
   ],
   "acceptance": [
     "No renderer references GLFW; Vulkan surface creation is per surface kind",

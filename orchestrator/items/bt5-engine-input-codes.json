@@ -13,7 +13,8 @@
     "^tests/",
     "^docs/",
     "^orchestrator/items/bt",
-    "^orchestrator/proposals/build-targets-design\\.md$"
+    "^orchestrator/proposals/build-targets-design\\.md$",
+    "^players/"
   ],
   "acceptance": [
     "InputMapping and bindings use engine codes; no GLFW constant outside the code that talks to GLFW",

@@ -19,7 +19,8 @@
     "^tests/",
     "^docs/",
     "^orchestrator/items/bt",
-    "^orchestrator/proposals/build-targets-design\\.md$"
+    "^orchestrator/proposals/build-targets-design\\.md$",
+    "^players/"
   ],
   "acceptance": [
     "engine/ outside the desktop-glfw backend includes no GLFW header",
