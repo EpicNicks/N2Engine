@@ -10,7 +10,7 @@
         <activity
             android:name=".N2Activity"
             android:exported="true"
-            android:screenOrientation="fullUser"
+            android:screenOrientation="${n2Orientation}"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density"
             android:launchMode="singleTask">
             <meta-data android:name="android.app.lib_name" android:value="n2game" />

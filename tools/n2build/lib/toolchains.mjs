@@ -60,6 +60,27 @@ export function findOnPath(name, env, ctx) {
   return null;
 }
 
+// eslint-disable-next-line no-control-regex
+const CMD_UNSAFE = /[\u0000-\u001f"%!^&|<>]/;
+
+/** Whether cmd.exe would read nothing in this argument: no quote, %, !, ^, &, |, <, > or control character */
+export function cmdSafe(text) {
+  return !CMD_UNSAFE.test(text);
+}
+
+/**
+ * How to start a program. A Windows .bat or .cmd (gradle.bat) starts only through cmd.exe: the line is quoted for it,
+ * and null is returned when an argument holds a character cmd.exe would read, so nothing is ever run through a shell
+ * that could change its meaning. Anything else starts directly.
+ */
+export function commandInvocation(command, args, platform = process.platform) {
+  if (platform !== 'win32' || !/\.(bat|cmd)$/i.test(command)) return { command, args, options: {} };
+  if (![command, ...args].every(cmdSafe)) return null;
+  const quote = (text) => (/[\s()]/.test(text) || text === '' ? `"${text}"` : text);
+  const line = [command, ...args].map(quote).join(' ');
+  return { command: 'cmd.exe', args: ['/d', '/s', '/c', `"${line}"`], options: { windowsVerbatimArguments: true } };
+}
+
 /** "3.30.1" -> [3, 30, 1] */
 export function parseVersion(text) {
   const match = /(\d+)\.(\d+)(?:\.(\d+))?/.exec(text ?? '');
@@ -187,7 +208,9 @@ const CHECKS = {
       const fix = `Install Gradle ${MIN_GRADLE.join('.')} or newer (https://gradle.org/install/) and put it on PATH`;
       const exe = findOnPath('gradle', env, ctx);
       if (!exe) return { ok: false, detail: 'not found on PATH', fix };
-      const result = ctx.run(exe, ['--version'], { env });
+      const invocation = commandInvocation(exe, ['--version'], ctx.platform);
+      if (!invocation) return { ok: false, detail: `${exe}: its path holds a character n2build cannot pass to cmd.exe`, fix };
+      const result = ctx.run(invocation.command, invocation.args, { env, ...invocation.options });
       const version = parseVersion(/Gradle\s+([\d.]+)/.exec(result?.stdout ?? '')?.[1]);
       if (!version) return { ok: false, detail: `${exe} --version gave no version`, fix };
       if (!versionAtLeast(version, MIN_GRADLE)) return { ok: false, version: version.join('.'), detail: `older than ${MIN_GRADLE.join('.')}`, fix };

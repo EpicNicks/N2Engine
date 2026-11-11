@@ -28,6 +28,7 @@ import {
   archivePackage, checkPhysics, engineRevision, needsConfigure, packageDesktop, packageWeb, packPath, planBuild,
   preparePackageDir, readMarker, readProject, recordConfigure, resolvePackFormat, runProcess, writeMarker,
 } from './lib/build.mjs';
+import { cmakeInstallDir, gradleInvocation, packageAndroid, planAndroid, prepareGradleTree } from './lib/android.mjs';
 import { PACK_EXTENSION, cookPack, findSevenZip } from './lib/cook.mjs';
 import { PACK_KINDS } from './lib/descriptors.mjs';
 import { findTarget, loadDescriptors, readUserSettings, userSettingsFile } from './lib/descriptors.mjs';
@@ -166,6 +167,9 @@ async function build(descriptor, options, ctx, reporter) {
   if (packFormat === '7z' && !sevenZip && !options.dryRun) {
     throw new BuildError("A 7z pack needs 7-Zip's command line (7z, 7za or 7zz on PATH): install 7-Zip, or build with --pack zip");
   }
+  if (descriptor.package.kind === 'android') {
+    return buildAndroid({ descriptor, options, ctx, reporter, project, projectDir, config, toolchains, packFormat, sevenZip, ready: report.ok });
+  }
   const plan = planBuild({
     engineRoot: ENGINE_ROOT, projectDir, descriptor, config: config, modules: project.modules,
     present: toolchains.present, toolchainFile: toolchains.toolchainFile ?? (options.dryRun ? '<Emscripten.cmake from emsdk>' : null),
@@ -217,6 +221,53 @@ async function build(descriptor, options, ctx, reporter) {
   return { ok: true, output: plan.packageDir, entry, ...(archive ? { archive } : {}) };
 }
 
+/**
+ * The Android build (docs/android.html): cook the pack into the tree's assets, copy the Gradle template in, and let Gradle
+ * build libn2game.so (its CMake step, with the NDK) and the APK
+ */
+async function buildAndroid({ descriptor, options, ctx, reporter, project, projectDir, config, toolchains, packFormat, sevenZip, ready }) {
+  if (packFormat === 'folder') throw new BuildError('An APK holds the game as one pack: build the android target with --pack zip, stored or 7z');
+  const cmake = findOnPath('cmake', toolchains.env, ctx);
+  const plan = planAndroid({
+    engineRoot: ENGINE_ROOT, projectDir, descriptor, config, modules: project.modules, settings: project.settings,
+    info: toolchains.info, cmakeDir: cmakeInstallDir(cmake), buildRoot: options.buildDir ? path.resolve(options.buildDir) : null,
+    outDir: options.out, gameName: project.name,
+  });
+  const gradle = toolchains.info.gradle ?? 'gradle';
+  if (options.dryRun) {
+    reporter.step('plan', `Plan for ${descriptor.name} (${config})`);
+    reporter.log('stdout', `build tree: ${plan.treeDir}`);
+    reporter.log('stdout', `game: ${packFormat} pack ${plan.packFile}`);
+    reporter.log('stdout', `gradle ${plan.gradleArgs.join(' ')}`);
+    reporter.log('stdout', `apk: ${plan.apk}`);
+    reporter.log('stdout', `package: ${plan.packageDir}`);
+    return { ok: ready, dryRun: true, output: plan.packageDir, treeDir: plan.treeDir, ...(ready ? {} : { error: 'Not ready (see the doctor report)' }) };
+  }
+  reporter.step('cook', `Packing the game (${packFormat}) into ${plan.packFile}`);
+  prepareGradleTree(plan);
+  cookPack({ projectDir, outFile: plan.packFile, format: packFormat, target: descriptor.name, game: project.name, sevenZip, env: toolchains.env });
+
+  reporter.step('compile', `Building the APK with Gradle (${config}; the engine for ${plan.properties.abis})`);
+  const invocation = gradleInvocation(gradle, plan.gradleArgs, ctx.platform);
+  const code = await runProcess(invocation.command, invocation.args, { env: toolchains.env, cwd: plan.gradleDir, reporter, spawnOptions: invocation.options });
+  if (code !== 0) throw new BuildError(`The ${descriptor.name} build failed (Gradle exit code ${code}; see the log above)`);
+
+  reporter.step('package', `Packaging into ${plan.packageDir}`);
+  preparePackageDir(plan.packageDir);
+  const entry = packageAndroid({ plan, packageDir: plan.packageDir, gameName: project.name });
+  writeMarker(plan.packageDir, {
+    ...markerInfo({ descriptor, config, entry, project, engine: engineRevision(ENGINE_ROOT), builtAt: new Date().toISOString() }),
+    appId: plan.appId, abis: plan.properties.abis.split(','), signed: plan.signed,
+  });
+  if (!plan.signed) reporter.warning('The release APK is unsigned: Android installs only signed APKs (signing profiles come with stage 9; docs/android.html)');
+  let archive;
+  if (options.archive) {
+    reporter.step('archive', `Writing a .${options.archive} archive`);
+    archive = archivePackage({ packageDir: plan.packageDir, format: options.archive, cmake: cmake ?? 'cmake', env: toolchains.env });
+  }
+  return { ok: true, output: plan.packageDir, entry, ...(archive ? { archive } : {}) };
+}
+
 /** n2build cook: the game's pack alone (what build puts in a package), with its manifest beside it */
 async function cook(descriptor, options, ctx, reporter) {
   const projectDir = path.resolve(options.project);
@@ -253,6 +304,11 @@ async function run(descriptor, options, ctx, reporter) {
     const code = await runProcess(executable, args, { env: ctx.env, cwd: packageDir, reporter });
     if (code !== 0) throw new BuildError(`The game exited with code ${code}`);
     return { ok: true, output: packageDir };
+  }
+
+  if (descriptor.run.kind === 'android-device') {
+    throw new BuildError(`Built ${path.join(packageDir, marker.entry)}. Installing and running it on a device is not in n2build yet: `
+      + `adb install -r "${path.join(packageDir, marker.entry)}" then adb shell am start -n ${marker.appId}/com.n2engine.player.N2Activity`);
   }
 
   if (options.frames) {

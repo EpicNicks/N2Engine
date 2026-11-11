@@ -4,6 +4,8 @@
 //
 // The game is one pack, game.n2pack, in the APK's assets. It is copied once to the app's files folder (an APK asset is not
 // a file the pack reader can seek in) and mounted where the game's folder would be, as on the desktop.
+#include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <format>
@@ -48,7 +50,31 @@ namespace
         bool resumed = false;
         bool hasWindow = false;
         bool ended = false;
+        // The frame rate, logged every few seconds (the emulator smoke test and docs/android.html's device checklist read it)
+        std::uint64_t frames = 0;
+        std::uint64_t framesAtLastReport = 0;
+        std::chrono::steady_clock::time_point lastReport{};
     };
+
+    /// "N2Engine Android player: <frames> frames, <fps> fps" every five seconds of running
+    void CountFrame(PlayerState &state)
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (state.frames++ == 0)
+        {
+            state.lastReport = now;
+            Logger::Info("N2Engine Android player: first frame");
+            return;
+        }
+        const std::chrono::duration<double> elapsed = now - state.lastReport;
+        if (elapsed.count() >= 5.0)
+        {
+            const double fps = static_cast<double>(state.frames - state.framesAtLastReport) / elapsed.count();
+            Logger::Info(std::format("N2Engine Android player: {} frames, {:.1f} fps", state.frames, fps));
+            state.framesAtLastReport = state.frames;
+            state.lastReport = now;
+        }
+    }
 
     void LogToLogcat(const std::string_view message, const Logger::LogLevel level)
     {
@@ -202,6 +228,8 @@ namespace
             break;
         case APP_CMD_RESUME:
             state.resumed = true;
+            state.lastReport = std::chrono::steady_clock::now(); // the time in the background is not frame time
+            state.framesAtLastReport = state.frames;
             if (state.host != nullptr)
             {
                 state.host->OnLifecycle(Platform::LifecycleEvent::Resumed);
@@ -336,6 +364,10 @@ extern "C" void android_main(android_app *app)
             {
                 state.ended = true;
                 GameActivity_finish(app->activity);
+            }
+            else
+            {
+                CountFrame(state);
             }
         }
     }
