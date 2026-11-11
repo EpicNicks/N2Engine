@@ -72,7 +72,8 @@ namespace N2Engine::Player
     {
         return std::format(
             "Usage: {} [game folder] [--renderer opengl|vulkan|software] [--console-log] [--frames N]\n"
-            "  game folder     the folder holding project.n2proj and assets/ (default: the 'game' folder beside the player)\n"
+            "  game folder     the folder holding project.n2proj and assets/, or a game.n2pack (default: the 'game'\n"
+            "                  folder beside the player, else game.n2pack there)\n"
             "  --renderer      the renderer (default: software)\n"
             "  --console-log   print log lines on the console in a Release build too\n"
             "  --frames N      run N frames, then quit (smoke runs)",
