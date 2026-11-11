@@ -52,6 +52,8 @@ namespace N2Engine::Scripting
         void BindDebug(LuaRuntime& runtime);
         void BindApplication(LuaRuntime& runtime);
         void BindWindow(LuaRuntime& runtime);
+        // Screen.SetTint, Screen.ClearTint and Screen.GetTint: the screen tint of the scene pass (Application::SetScreenTint)
+        void BindScreen(LuaRuntime& runtime);
         void BindCamera(LuaRuntime& runtime);
 
         // Components that scripts can add to GameObjects by name (renderers, physics, audio, LuaComponent)
@@ -71,6 +73,8 @@ namespace N2Engine::Scripting
         /// An image file through Resources, e.g. "res://ui/icon.png"; throws "<caller>: can't load texture ..."
         /// if it doesn't load
         std::shared_ptr<Rendering::Texture> LoadTextureOrThrow(const std::string& path, std::string_view caller);
+        /// An array of Vector2 from a script; anything else in it is a Lua error naming `caller`
+        std::vector<Math::Vector2> ReadVector2Array(const sol::table& points, std::string_view caller);
         /// What scripts see as a texture's path: its res:// (or user://) path for a project asset, else the file
         /// it was loaded from, else "" (a texture made at runtime)
         std::string TexturePathForLua(const Rendering::Texture& texture);

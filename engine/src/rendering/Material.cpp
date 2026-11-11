@@ -14,6 +14,7 @@
 #include <utility>
 
 #include <math/UUID.hpp>
+#include <renderer/common/ColorEffects.hpp>
 #include <renderer/common/IMaterial.hpp>
 
 #include "engine/Logger.hpp"
@@ -236,6 +237,24 @@ namespace N2Engine::Rendering
         Changed();
     }
 
+    void Material::SetBlendDiscardBelow(const float alpha)
+    {
+        _blendDiscardBelow = std::isfinite(alpha) ? std::clamp(alpha, 0.0f, 1.0f) : 0.0f;
+        Changed();
+    }
+
+    void Material::SetSaturation(const float saturation)
+    {
+        _saturation = Renderer::Common::ColorEffects::ClampSaturation(saturation);
+        Changed();
+    }
+
+    void Material::SetFlash(const Common::Color &flash)
+    {
+        _flash = Renderer::Common::ColorEffects::ClampFlash(flash);
+        Changed();
+    }
+
     void Material::SetDoubleSided(const bool doubleSided)
     {
         _doubleSided = doubleSided;
@@ -301,8 +320,22 @@ namespace N2Engine::Rendering
         target.SetColor("uAlbedo", _baseColor.r * tint.r, _baseColor.g * tint.g, _baseColor.b * tint.b,
                         _baseColor.a * tint.a);
         target.SetInt("uHasTexture", target.GetTexture() != nullptr ? 1 : 0);
-        target.SetFloat("uAlphaCutoff", _alphaMode == AlphaMode::Mask ? _alphaCutoff : 0.0f);
-        if (_shading != ShadingModel::Unlit)
+        float cutoff = 0.0f;
+        if (_alphaMode == AlphaMode::Mask)
+        {
+            cutoff = _alphaCutoff;
+        }
+        else if (_alphaMode == AlphaMode::Blend)
+        {
+            cutoff = _blendDiscardBelow;
+        }
+        target.SetFloat("uAlphaCutoff", cutoff);
+        if (_shading == ShadingModel::Unlit)
+        {
+            target.SetFloat("uSaturation", _saturation);
+            target.SetVec4("uFlash", _flash.r, _flash.g, _flash.b, _flash.a);
+        }
+        else
         {
             target.SetFloat("uSmoothness", _smoothness);
             target.SetFloat("uMetallic", _metallic);

@@ -9,6 +9,8 @@ namespace N2Engine::UI
     Image::Image(GameObject &gameObject) : UIGraphic(gameObject)
     {
         RegisterAssetRef("sprite", _sprite);
+        RegisterMember("saturation", _saturation).Range(0.0, Renderer::Common::ColorEffects::MaxSaturation);
+        RegisterMember("flash", _flash);
     }
 
     void Image::SetSprite(std::shared_ptr<Rendering::Texture> sprite)
@@ -156,6 +158,10 @@ namespace N2Engine::UI
         _material->SetInt("uHasTexture", texture != nullptr ? 1 : 0);
         const Common::Color color = GetDrawColor(); // the colour with a Button's tint, if any
         _material->SetColor("uAlbedo", color.r, color.g, color.b, color.a);
+        // The colour effects (Renderer::Common::ColorEffects), clamped again: a scene file can hold any value
+        const Common::Color flash = Renderer::Common::ColorEffects::ClampFlash(_flash);
+        _material->SetFloat("uSaturation", Renderer::Common::ColorEffects::ClampSaturation(_saturation));
+        _material->SetVec4("uFlash", flash.r, flash.g, flash.b, flash.a);
 
         const Matrix4 model = ComposeModel(canvasToWorld, ModelMatrixFor(rect));
         renderer->DrawMesh(_mesh, model.Data(), _material, state);

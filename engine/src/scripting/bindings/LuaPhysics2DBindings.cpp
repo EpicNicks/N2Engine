@@ -236,22 +236,6 @@ namespace N2Engine::Scripting::Bindings
             return argument.as<float>();
         }
 
-        std::vector<Math::Vector2> ReadVertices(const sol::table &points)
-        {
-            std::vector<Math::Vector2> vertices;
-            const std::size_t count = points.size();
-            vertices.reserve(count);
-            for (std::size_t i = 1; i <= count; ++i)
-            {
-                const sol::object point = points[i];
-                if (!point.is<Math::Vector2>())
-                {
-                    throw std::runtime_error("PolygonCollider2D:SetVertices: every point must be a Vector2");
-                }
-                vertices.push_back(point.as<Math::Vector2>());
-            }
-            return vertices;
-        }
     }
 
     sol::object Collision2DToLua(const Physics2D::Collision2D &collision, lua_State *state)
@@ -487,7 +471,7 @@ namespace N2Engine::Scripting::Bindings
         using PolygonRef = ComponentRef<Physics2D::PolygonCollider2D>;
         BindComponentType<Physics2D::PolygonCollider2D>(lua, "PolygonCollider2D",
             // An array of Vector2 in, a new array of Vector2 out
-            "SetVertices", [](const PolygonRef &ref, const sol::table &points) { ref.Pin()->SetVertices(ReadVertices(points)); },
+            "SetVertices", [](const PolygonRef &ref, const sol::table &points) { ref.Pin()->SetVertices(ReadVector2Array(points, "PolygonCollider2D:SetVertices")); },
             "GetVertices", [](const PolygonRef &ref, const sol::this_state state) -> sol::table
             {
                 sol::state_view view(state);
