@@ -18,6 +18,7 @@ namespace N2Engine
 namespace N2Engine::Input
 {
     class Mouse;
+    class Keyboard;
     class ActionMap;
 
     struct GamepadInfo
@@ -33,6 +34,7 @@ namespace N2Engine::Input
         std::unordered_map<std::string, std::unique_ptr<ActionMap>> _actionMaps;
         std::string _curActionMapName;
         std::unique_ptr<Mouse> _mouse;
+        std::unique_ptr<Keyboard> _keyboard;
         // Maps replaced while callbacks run are freed after the update, not under their own Update
         bool _updating = false;
         std::vector<std::unique_ptr<ActionMap>> _retiredMaps;
@@ -59,6 +61,8 @@ namespace N2Engine::Input
 
         static std::vector<GamepadInfo> GetConnectedGamepads();
         [[nodiscard]] Mouse* GetMouse() const { return _mouse.get(); }
+        /// Raw keys and typed text (Keyboard.hpp)
+        [[nodiscard]] Keyboard* GetKeyboard() const { return _keyboard.get(); }
 
         void Update();
 

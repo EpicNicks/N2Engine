@@ -1,3 +1,4 @@
+#include "engine/input/Keyboard.hpp"
 #include "engine/input/InputSystem.hpp"
 #include "engine/input/ActionMap.hpp"
 #include "engine/input/InputBinding.hpp"
@@ -44,6 +45,7 @@ InputSystem::InputSystem(Window &window)
     // it with the Mouse, so resizing called Window::OnWindowResize on a Mouse). The Mouse's scroll
     // callback reaches it through the Window instead.
     _mouse = std::make_unique<Mouse>(_window._window);
+    _keyboard = std::make_unique<Keyboard>(_window._window);
 }
 
 InputSystem::~InputSystem() = default;
@@ -168,6 +170,7 @@ std::vector<GamepadInfo> InputSystem::GetConnectedGamepads()
 void InputSystem::Update()
 {
     _mouse->Update();
+    _keyboard->Update();
 
     UpdatingScope scope{*this};
 
