@@ -142,6 +142,10 @@ namespace N2Engine::Scripting::Bindings
             "SetColor", Forward<ImageRef, &UI::UIGraphic::SetColor>(),
             "GetRaycastTarget", Forward<ImageRef, &UI::UIGraphic::GetRaycastTarget>(),
             "SetRaycastTarget", Forward<ImageRef, &UI::UIGraphic::SetRaycastTarget>(),
+            "GetSaturation", Forward<ImageRef, &UI::Image::GetSaturation>(),
+            "SetSaturation", Forward<ImageRef, &UI::Image::SetSaturation>(),
+            "GetFlash", Forward<ImageRef, &UI::Image::GetFlash>(),
+            "SetFlash", Forward<ImageRef, &UI::Image::SetFlash>(),
             // An image file, e.g. "res://ui/icon.png"; nil clears the sprite. A path that doesn't load raises an
             // error and keeps the current sprite.
             "SetSprite", [](const ImageRef &c, sol::optional<std::string> path)

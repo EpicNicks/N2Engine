@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Build targets · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="physics2d.html">2D physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="particles.html">Particles</a></li>
+<li><a href="soft-bodies.html">Soft bodies</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+<li><a href="netcode.html">Netcode (n2net)</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+<li><a href="editor-extensions.html">Lua editor extensions</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="editor.html">Editor projects</a></li>
+<li><a href="mcp.html">MCP bridge (n2-mcp)</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+<li><a href="web-build.html">Web build</a></li>
+<li><a href="project-modules.html">Project modules</a></li>
+<li><a href="build-targets.html" aria-current="page">Build targets</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Build targets</h1>
+<p class="lead"><code>n2build</code> builds a game for a target (Windows, Linux or the web so far) and packages it, from a project folder, with one command. The final game is always a full build from source: the target's player is compiled with the project's module list, then packaged with the game's data. The editor will call the same tool. This is stage 1 of the build targets plan <span class="badge">PR #328</span>.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#using">Using n2build</a></li>
+<li><a href="#targets">Targets</a></li>
+<li><a href="#where">Build trees and packages</a></li>
+<li><a href="#player">The desktop player</a></li>
+<li><a href="#physics">The physics check per target</a></li>
+<li><a href="#descriptors">Target descriptors</a></li>
+<li><a href="#json">JSON output</a></li>
+<li><a href="#not-yet">Not done yet</a></li>
+</ol>
+</div>
+
+<h2 id="using">Using n2build</h2>
+<p><code>n2build</code> is a node script with no packages to install (node 22 or newer). Run it from anywhere:</p>
+<pre class="lang-shell"><code>node tools/n2build/n2build.mjs list                                   # the targets, and which build on this machine
+node tools/n2build/n2build.mjs doctor --target web                    # what the target needs, and what is missing
+node tools/n2build/n2build.mjs build  --target windows --project path/to/game --archive zip
+node tools/n2build/n2build.mjs run    --target web --project path/to/game   # build, then serve on http://127.0.0.1:8080/</code></pre>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Option</th><th>Commands</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>--target NAME</code></td><td>doctor, build, run</td><td>A target from <code>list</code></td></tr>
+<tr><td><code>--project DIR</code></td><td>build, run (doctor: optional)</td><td>The game: a folder with <code>project.n2proj</code> and <code>assets/</code>. With doctor, also runs the <a href="#physics">physics check</a></td></tr>
+<tr><td><code>--config debug|release</code></td><td>build, run</td><td>Default <code>release</code>. On the web, <code>debug</code> is the dev profile and <code>release</code> the size profile (<a href="web-build.html">Web build</a>)</td></tr>
+<tr><td><code>--out DIR</code></td><td>build, run</td><td>The package folder. Default: <code>&lt;project&gt;/.n2/out/&lt;target&gt;-&lt;config&gt;/&lt;game name&gt;</code></td></tr>
+<tr><td><code>--build-dir DIR</code></td><td>build, run</td><td>Where build trees go. Default: <code>&lt;project&gt;/.n2/build</code></td></tr>
+<tr><td><code>--archive zip|7z</code></td><td>build</td><td>Also writes <code>&lt;package&gt;.zip</code> or <code>.7z</code> beside the package folder, with CMake's own archiver</td></tr>
+<tr><td><code>--jobs N</code></td><td>build, run</td><td>Parallel compile jobs. Default: the machine's processor count</td></tr>
+<tr><td><code>--dry-run</code></td><td>build</td><td>Prints the build tree, the CMake commands and the package folder, and runs nothing</td></tr>
+<tr><td><code>--no-build</code></td><td>run</td><td>Runs the package already built</td></tr>
+<tr><td><code>--frames N</code></td><td>run</td><td>Desktop: the player quits after N frames. Web: runs the package under node for N frames (<code>scripts/web-package-smoke.mjs</code>) instead of serving it</td></tr>
+<tr><td><code>--port N</code></td><td>run (web)</td><td>The local server's port. Default 8080; 0 picks a free one</td></tr>
+<tr><td><code>--json</code></td><td>all</td><td>One JSON event per line on stdout (<a href="#json">JSON output</a>)</td></tr>
+<tr><td><code>--targets-dir DIR</code></td><td>all</td><td>Another folder of <a href="#descriptors">target descriptors</a>; can be repeated</td></tr>
+</tbody>
+</table>
+</div>
+<p>Exit codes: 0 done, 1 a check or the build failed (the last line says why), 2 wrong usage.</p>
+<ol class="steps">
+<li><strong>Checks</strong>, before anything compiles: the project file and its module list, the <a href="#physics">physics check</a>, and the target's toolchains (the same report as <code>doctor</code>). A missing required tool stops here with how to fix it. A missing optional one (the Vulkan SDK) is a warning, and the build leaves that part out.</li>
+<li><strong>Configure</strong> the build tree with CMake, only when the tree is new or its arguments changed. <code>-DN2ENGINE_PROJECT</code> is the project, so its module list applies (<a href="project-modules.html">Project modules</a>).</li>
+<li><strong>Compile</strong> the target's CMake target. Ninja rebuilds only what changed.</li>
+<li><strong>Package</strong> into the package folder, then write the archive when asked.</li>
+</ol>
+<p class="src">Source: <code>tools/n2build/n2build.mjs</code>, <code>tools/n2build/lib/</code>; tests: <code>tools/n2build/n2build.test.mjs</code></p>
+
+<div class="callout note" id="design-full-build"><p class="callout-title">Design decision: the final game is always a full build from source</p><p>Decided by the user on 2026-11-10 (D3 of <code>orchestrator/proposals/build-targets-design.md</code>). While a game is being made it runs in the editor's play mode, on the machine running the editor. A shipped build compiles the player with the game's module list, so a stripped engine is the normal case, not a special one. Prebuilt players (one compiled per engine version, plus the game's data) may come later as a fast option for test builds, never as a replacement. The cost is that every target's compiler must be on the building machine, which <code>doctor</code> checks.</p></div>
+
+<h2 id="targets">Targets</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Target</th><th>Builds on</th><th>Needs</th><th>Package</th></tr></thead>
+<tbody>
+<tr><td><code>windows</code></td><td>Windows</td><td>Visual Studio's x64 C++ tools (found with <code>vswhere</code>; <code>vcvars64.bat</code> sets the environment), CMake 3.25+, Ninja (Visual Studio's own copies count). Optional: the Vulkan SDK</td><td>A folder: the game's executable, <code>OpenAL32.dll</code> and PhysX's DLLs when PhysX is built, and <code>game/</code></td></tr>
+<tr><td><code>linux</code></td><td>Linux</td><td>GCC 14 or newer (or Clang with libstdc++ 14) for <code>std::generator</code>, CMake 3.25+, Ninja, and the usual X11, GL and ALSA development packages. Optional: Vulkan headers and <code>glslangValidator</code> or <code>glslc</code></td><td>A folder: the executable (it finds its libraries beside it, <code>$ORIGIN</code>), <code>libopenal.so.1</code>, and <code>game/</code></td></tr>
+<tr><td><code>web</code></td><td>Windows, Linux, macOS</td><td>emsdk with Emscripten 4.0.10 activated (<code>EMSDK</code>, else <code>~/emsdk</code>), CMake, Ninja</td><td>The static web package (<a href="web-build.html#hosting">hosting</a>)</td></tr>
+</tbody>
+</table>
+</div>
+<p>The Vulkan renderer is built when the Vulkan SDK is found and left out otherwise; the software and OpenGL renderers are always in a desktop build.</p>
+
+<h2 id="where">Build trees and packages</h2>
+<p>A build tree is kept per target, configuration, module list and project: <code>&lt;project&gt;/.n2/build/&lt;target&gt;-&lt;config&gt;-&lt;hash&gt;</code>, where the hash covers the project's path, its module list and the CMake options. So a build after a script or asset edit only re-packages, a build after an engine update recompiles what changed, and switching a module list never rebuilds the other trees. <code>.n2/</code> is the editor's per-machine folder, which a new project's <code>.gitignore</code> already leaves out (<a href="editor.html">Editor projects</a>).</p>
+<pre class="lang-text"><code>&lt;game&gt;/                    a desktop package
+  &lt;game&gt;.exe               n2player, named after the game (no .exe on Linux)
+  OpenAL32.dll             and any other file players/desktop lists in n2player-files.txt
+  game/
+    project.n2proj
+    assets/
+    .import/               when the project has one: the stored asset UUIDs and import settings
+  .n2build-package.json    what was built: target, configuration, game, engine commit, time (no local paths:
+                           a web package is uploaded with it)</code></pre>
+<div class="callout guarantee"><p class="callout-title">Guarantee: n2build only replaces a folder it made</p><p>A package folder is emptied before it is written only when it is empty or holds <code>.n2build-package.json</code>. Any other folder is refused, so a mistyped <code>--out</code> cannot delete files. Test: <code>a package folder is only ever emptied when n2build made it</code>.</p></div>
+
+<h2 id="player">The desktop player</h2>
+<p><code>players/desktop</code> builds <code>n2player</code>, the program a desktop package ships. <code>lua_project</code> stays a demo project with its own executable; the player takes what it solved (decision D4).</p>
+<pre class="lang-text"><code>n2player [game folder] [--renderer opengl|vulkan|software] [--console-log] [--frames N] [--help]</code></pre>
+<ul>
+<li><strong>The game folder</strong> defaults to <code>game/</code> beside the executable (found from the executable's own path, not the working directory). A folder without <code>project.n2proj</code> is refused with the reason and the usage.</li>
+<li><strong>Start:</strong> the project's <code>startupScene</code> (a <code>.scene</code> file) when it names one, else <code>assets/scene.lua</code> in an empty scene named after the game, as <code>lua_project</code> and the web player start.</li>
+<li><strong>The project</strong> is opened as the editor host opens it: its <code>projectId</code> is the asset UUID namespace, <code>user://</code> is its own folder, and its settings apply (<code>physics.backend</code> among them; the player itself asks for no backend).</li>
+<li><strong>The window's title</strong> is the game's name; a Debug build adds the renderer.</li>
+<li><strong>Windows:</strong> a Release player is a windowed program, with no console window behind the game. <code>--console-log</code> still prints the log when it is started from a console or by <code>n2build run</code>. Debug keeps the console.</li>
+<li><strong><code>--frames N</code></strong> runs N frames through <code>Application::BeginRun</code>/<code>RunFrame</code>/<code>EndRun</code> and quits, for smoke runs.</li>
+</ul>
+<p class="src">Source: <code>players/desktop/src/Main.cpp</code>, <code>players/desktop/src/PlayerOptions.cpp</code>; tests: <code>tests/players/PlayerOptionsTests.cpp</code></p>
+
+<h2 id="physics">The physics check per target</h2>
+<p>A target lists the 3D physics values it can build (<code>physics3d</code> in its descriptor). A project whose <code>build.modules.physics3d</code> asks for one the target cannot build fails before configuring, with the target's list. A project without a list gets every backend the target has. Today all three targets build PhysX; the check matters for the mobile targets, which will build Jolt and Box2D only (decision D8). Test: <code>build refuses a project whose physics the target cannot build, before compiling anything</code>.</p>
+
+<h2 id="descriptors">Target descriptors</h2>
+<p>A target is data, not code: <code>targets/&lt;name&gt;/target.json</code>. n2build has no code path named after a target. More folders of descriptors come from <code>"targetFolders"</code> in the user's <code>n2build.json</code> (<code>%APPDATA%\N2Engine\n2build.json</code>, else <code>$XDG_DATA_HOME/n2engine/</code> or <code>~/.local/share/n2engine/</code>), from <code>N2BUILD_TARGET_DIRS</code>, and from <code>--targets-dir</code>. That is where a private target lives (a console SDK under NDA). A name defined twice is an error naming both files, so a private target can never silently replace a public one.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Key</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>formatVersion</code></td><td><code>1</code></td></tr>
+<tr><td><code>name</code>, <code>displayName</code></td><td>The name (lowercase, the folder's name) and what people see</td></tr>
+<tr><td><code>hostSystems</code></td><td>Node's <code>process.platform</code> values that can build it: <code>win32</code>, <code>linux</code>, <code>darwin</code></td></tr>
+<tr><td><code>toolchains.required</code>, <code>.optional</code></td><td>From <code>msvc</code>, <code>cxx</code>, <code>emsdk</code>, <code>cmake</code>, <code>ninja</code>, <code>vulkan-sdk</code></td></tr>
+<tr><td><code>pins</code></td><td>A toolchain's exact version, checked by doctor (the web pins Emscripten, as CI does)</td></tr>
+<tr><td><code>physics3d</code></td><td>The <code>build.modules.physics3d</code> values the target can build</td></tr>
+<tr><td><code>cmake.target</code></td><td>The CMake target to build (<code>n2player</code>, <code>web-package</code>)</td></tr>
+<tr><td><code>cmake.toolchain</code></td><td><code>"emsdk"</code>: configure with Emscripten's toolchain file</td></tr>
+<tr><td><code>cmake.options</code>, <code>cmake.configs.&lt;config&gt;</code></td><td>CMake options for every build, and per configuration</td></tr>
+<tr><td><code>cmake.toolchainOptions.&lt;id&gt;</code></td><td>Options when an optional toolchain is <code>present</code> or <code>absent</code></td></tr>
+<tr><td><code>package</code></td><td><code>kind</code> (<code>desktop</code> or <code>web</code>), <code>from</code> (the folder in the build tree), <code>fileList</code> (desktop: the list of files to ship, which the player's CMake writes)</td></tr>
+<tr><td><code>run</code></td><td><code>kind</code>: <code>executable</code> or <code>web-server</code></td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="json">JSON output</h2>
+<p>With <code>--json</code> every line on stdout is one JSON object, and the last is the result. The editor's Build Settings panel (stage 3) reads these.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th><code>type</code></th><th>Fields</th></tr></thead>
+<tbody>
+<tr><td><code>step</code></td><td><code>id</code> (<code>configure</code>, <code>compile</code>, <code>package</code>, <code>archive</code>, <code>run</code>, <code>serve</code>, <code>plan</code>), <code>title</code></td></tr>
+<tr><td><code>log</code></td><td><code>stream</code> (<code>stdout</code>, <code>stderr</code>), <code>text</code>: one line from a tool n2build runs, or from the game</td></tr>
+<tr><td><code>warning</code></td><td><code>text</code></td></tr>
+<tr><td><code>doctor</code></td><td><code>target</code>, <code>displayName</code>, <code>ok</code>, <code>checks</code> (each: <code>id</code>, <code>title</code>, <code>required</code>, <code>ok</code>, <code>version</code>, <code>detail</code>, <code>fix</code>)</td></tr>
+<tr><td><code>targets</code></td><td><code>targets</code> (each: <code>name</code>, <code>displayName</code>, <code>hostSystems</code>, <code>buildableHere</code>, <code>source</code>)</td></tr>
+<tr><td><code>result</code></td><td><code>ok</code>; on success <code>output</code> (the package folder), <code>entry</code>, <code>archive</code>, <code>url</code> (web run); on failure <code>error</code></td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="not-yet">Not done yet</h2>
+<ul>
+<li><strong>The editor.</strong> Target settings in <code>project.n2proj</code> (stage 2) and the Build Settings panel (stage 3).</li>
+<li><strong>Packs.</strong> A package carries the game's folder as it is; zip and 7z packs come in stage 4.</li>
+<li><strong>CI</strong> builds and runs the Linux package through n2build. The Windows and web packages are built through n2build locally only; CI still builds those with CMake directly.</li>
+<li><strong>Package size on Windows.</strong> A build with PhysX ships <code>PhysXGpu_64.dll</code> (about 360 MB of the 374 MB <code>lua_project</code> package, measured 2026-11-10), because the engine's PhysX build always lists it. A game that does not use GPU physics (<code>physics.gpu</code>) does not need it; leaving it out is a follow-up. A project with <code>"physics3d": "none"</code> or <code>"jolt"</code> ships no PhysX at all.</li>
+<li><strong>Android, iOS, macOS</strong> and private targets: later stages of the plan.</li>
+</ul>
+
+<div class="page-footer">
+<span>Describes master through PR #327.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>

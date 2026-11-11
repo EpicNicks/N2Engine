@@ -49,8 +49,10 @@ for (const name of required) {
 for (const name of expectPrecompressed ? siblings : []) {
   expect(present.includes(name), `missing ${name} (--precompressed)`);
 }
+// tools/n2build's marker (docs/build-targets.html#where): what was built, with no local paths, so it may be hosted
+const n2buildMarker = '.n2build-package.json';
 for (const name of present) {
-  const allowed = required.includes(name) || (expectPrecompressed && siblings.includes(name));
+  const allowed = required.includes(name) || name === n2buildMarker || (expectPrecompressed && siblings.includes(name));
   expect(allowed, `unexpected file ${name} (the package is ${required.join(', ')}${expectPrecompressed ? ' and their .br/.gz siblings' : ''} only)`);
 }
 let manifest = null;

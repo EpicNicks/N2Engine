@@ -10,6 +10,44 @@ list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/network/n2net/")
 # n2security (the shared admission policy, token files and crypto wrappers) is its own library too, below
 list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/security/")
 
+# The particles and soft-body modules (N2ENGINE_USE_PARTICLES, N2ENGINE_USE_SOFTBODIES; docs/project-modules.html). A module
+# is its simulation: the backends (CPU, WebGPU, and the PhysX GPU one with its driver), and for particles the emitter and the
+# billboards, for soft bodies the tetrahedraliser. Off, those sources are not compiled at all, so nothing can still reach
+# them. What stays is the component (ParticleSystem.cpp, SoftBody.cpp: fields, registration, Lua's methods), the backend
+# selection and the usage counts of the health rows. The few files that name a module's code get its definition on
+# themselves only (below), like Box2D's, so the headers and every other file are the same whatever the options.
+set(N2ENGINE_PARTICLES_SOURCES
+    src/particles/CpuParticleBackend.cpp
+    src/particles/ParticleBillboards.cpp
+    src/particles/ParticleEmitter.cpp
+    src/particles/PbdParticleBackend.cpp
+    src/particles/PbdPresets.cpp
+    src/particles/WebGpuParticleBackend.cpp
+    src/physics/physx/PhysXPbdDriver.cpp
+)
+set(N2ENGINE_SOFTBODIES_SOURCES
+    src/physics/CpuSoftBodyBackend.cpp
+    src/softbody/DeformableSoftBodyBackend.cpp
+    src/softbody/Tetrahedraliser.cpp
+    src/softbody/WebGpuSoftBodyBackend.cpp
+    src/physics/physx/DeformableCooking.cpp
+    src/physics/physx/PhysXDeformableDriver.cpp
+)
+foreach(_n2_module PARTICLES SOFTBODIES)
+    foreach(_n2_source IN LISTS N2ENGINE_${_n2_module}_SOURCES)
+        if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_n2_source}")
+            message(FATAL_ERROR "N2ENGINE_${_n2_module}_SOURCES names a file that does not exist: ${_n2_source}")
+        endif()
+        if(NOT N2ENGINE_USE_${_n2_module})
+            list(REMOVE_ITEM ENGINE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/${_n2_source}")
+        endif()
+    endforeach()
+    if(N2ENGINE_USE_${_n2_module})
+        set_property(SOURCE src/rendering/ParticleSystem.cpp src/physics/SoftBody.cpp src/physics/physx/PhysXBackend.cpp
+                     src/Application.cpp APPEND PROPERTY COMPILE_DEFINITIONS N2ENGINE_${_n2_module}_ENABLED=1)
+    endif()
+endforeach()
+
 add_library(engine STATIC
     ${ENGINE_SOURCES}
 )

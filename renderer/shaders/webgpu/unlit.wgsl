@@ -1,5 +1,6 @@
 // The WebGPU port of renderer/shaders/vulkan/unlit.{vert,frag} (itself the port of OpenGLRenderer.cpp's unlitVert and
-// unlitFrag): uAlbedo x texture x vertex colour, alpha-tested against uAlphaCutoff (0 keeps every fragment). One module
+// unlitFrag): uAlbedo x texture x vertex colour, alpha-tested against uAlphaCutoff (0 keeps every fragment), then the colour
+// effects (uSaturation, uFlash). One module
 // with both entry points (vs_main, fs_main), hand-written (design W1 of #155), tied to renderer/common/GpuShaderInterface.hpp
 // by tests/renderer/webgpu/WebGpuShaderParityTests.cpp (which reads this file as text) and validated by Tint and naga in CI
 // (scripts/validate-wgsl.sh).
@@ -33,6 +34,9 @@ struct Material {
     uAlbedo: vec4<f32>,
     uHasTexture: i32,
     uAlphaCutoff: f32,
+    // Common::ColorEffects (see colorEffected); uFlash is at offset 32, a vec4's alignment
+    uSaturation: f32,
+    uFlash: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> perDraw: PerDraw;
@@ -58,6 +62,19 @@ fn screenTinted(rgb: vec3<f32>, fragCoord: vec4<f32>) -> vec3<f32> {
 }
 
 @group(1) @binding(0) var<uniform> material: Material;
+
+// Common::ColorEffects: saturation (1 none, 0 grey; clamped at once, as the software renderer packs before the dim
+// and tint), then the flash colour mixed over by its alpha (0 none)
+fn colorEffected(rgbIn: vec3<f32>) -> vec3<f32> {
+    var rgb = rgbIn;
+    if (material.uSaturation != 1.0) {
+        rgb = clamp(mix(vec3<f32>(dot(rgb, vec3<f32>(0.299, 0.587, 0.114))), rgb, material.uSaturation), vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+    if (material.uFlash.a > 0.0) {
+        rgb = mix(rgb, material.uFlash.rgb, min(material.uFlash.a, 1.0));
+    }
+    return rgb;
+}
 @group(1) @binding(1) var uTexture: texture_2d<f32>;
 @group(1) @binding(6) var uTextureSampler: sampler;
 
@@ -103,5 +120,5 @@ fn fs_main(input: FragmentInput) -> @location(0) vec4<f32> {
     if (color.a < material.uAlphaCutoff) {
         discard;
     }
-    return vec4<f32>(screenTinted(stageDimmed(color.rgb), input.fragCoord), color.a);
+    return vec4<f32>(screenTinted(stageDimmed(colorEffected(color.rgb)), input.fragCoord), color.a);
 }
