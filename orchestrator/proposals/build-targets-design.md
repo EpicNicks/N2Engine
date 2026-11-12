@@ -29,6 +29,15 @@ every stage. Stages still run in the order of section 5, each after the stages i
 - Stage 6 (platform layer), branch `feat-bt6-platform-host`: `Platform::IPlatformHost` (surface, window, lifecycle, loop
   ownership, input device, paths); `desktop-glfw` (Window.cpp's GLFW code, moved as it was) and `headless` backends; `Window`
   on the host; the web build has no stand-in GLFW (`glfw_stub.c` deleted). `docs/platform.html`.
+- Stage 7 (renderer surfaces), PR #342: `Renderer::Common::Surface` (the native surface and the window-system operations the
+  platform supplies); `IRenderer::Initialize` takes it; no renderer calls GLFW; the software renderer can hand its pixels to
+  the platform (`presentPixels`) instead of presenting through GL.
+- Stage 8 (Android player), branch `feat-bt8-android-player`: `targets/android`, `players/android` (GameActivity backend,
+  Gradle template), n2build's Android flow (`tools/n2build/lib/android.mjs`: cook, Gradle, APK), the `android` CI job (debug
+  APK of lua_project, emulator smoke). Deviations from the plan: the software renderer's frame is copied into the
+  `ANativeWindow` on the CPU, not presented through EGL/GLES; audio is OpenAL Soft's OpenSL ES backend (AAudio through Oboe
+  is a follow-up); rumble does nothing yet; the phone frame rate is a device-checklist item (`docs/android.html#checklist`),
+  not measured.
 
 ## 1. Goal
 

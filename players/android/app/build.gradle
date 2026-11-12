@@ -49,6 +49,11 @@ android {
         }
     }
 
+    // The pack is stored as it is (already compressed where it helps): the player seeks in it (AndroidMain.cpp, SamePack)
+    androidResources {
+        noCompress 'n2pack'
+    }
+
     sourceSets {
         main {
             // game.n2pack (n2build's cook step) is the APK's only asset

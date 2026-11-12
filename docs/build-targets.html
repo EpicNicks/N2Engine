@@ -66,6 +66,7 @@
 <li><a href="build-targets.html" aria-current="page">Build targets</a></li>
 <li><a href="platform.html">The platform layer</a></li>
 <li><a href="packs.html">Packs &amp; the virtual filesystem</a></li>
+<li><a href="android.html">Android</a></li>
 </ul>
 </div>
 </nav>
@@ -136,6 +137,7 @@ node tools/n2build/n2build.mjs run    --target web --project path/to/game   # bu
 <tr><td><code>windows</code></td><td>Windows</td><td>Visual Studio's x64 C++ tools (found with <code>vswhere</code>; <code>vcvars64.bat</code> sets the environment), CMake 3.25+, Ninja (Visual Studio's own copies count). Optional: the Vulkan SDK</td><td>A folder: the game's executable, <code>OpenAL32.dll</code> and PhysX's DLLs when PhysX is built, and <code>game/</code></td></tr>
 <tr><td><code>linux</code></td><td>Linux</td><td>GCC 14 or newer (or Clang with libstdc++ 14) for <code>std::generator</code>, CMake 3.25+, Ninja, and the usual X11, GL and ALSA development packages. Optional: Vulkan headers and <code>glslangValidator</code> or <code>glslc</code></td><td>A folder: the executable (it finds its libraries beside it, <code>$ORIGIN</code>), <code>libopenal.so.1</code>, and <code>game/</code></td></tr>
 <tr><td><code>web</code></td><td>Windows, Linux, macOS</td><td>emsdk with Emscripten 4.0.10 activated (<code>EMSDK</code>, else <code>~/emsdk</code>), CMake, Ninja</td><td>The static web package (<a href="web-build.html#hosting">hosting</a>)</td></tr>
+<tr><td><code>android</code></td><td>Windows, Linux, macOS</td><td>The Android SDK, NDK 27.0.12077973, a JDK 17 to 21, Gradle 8.9 or newer, CMake 3.25+, Ninja (<a href="android.html#toolchains">details</a>)</td><td>A folder with the APK, <code>&lt;Game&gt;.apk</code> (<a href="android.html">Android</a>)</td></tr>
 </tbody>
 </table>
 </div>
@@ -260,7 +262,7 @@ node tools/n2build/n2build.mjs run    --target web --project path/to/game   # bu
 <li><strong>Packs</strong> are stage 4: a package carries <code>game.n2pack</code> (zip by default, <code>--pack stored|7z|folder</code>), and <code>n2build cook</code> makes one alone (<a href="packs.html">Packs &amp; the virtual filesystem</a>).</li>
 <li><strong>CI</strong> builds and runs the Linux package through n2build. The Windows and web packages are built through n2build locally only; CI still builds those with CMake directly.</li>
 <li><strong>Package size on Windows.</strong> A build with PhysX ships <code>PhysXGpu_64.dll</code> (about 360 MB of the 374 MB <code>lua_project</code> package, measured 2026-11-10), because the engine's PhysX build always lists it. A game that does not use GPU physics (<code>physics.gpu</code>) does not need it; leaving it out is a follow-up. A project with <code>"physics3d": "none"</code> or <code>"jolt"</code> ships no PhysX at all.</li>
-<li><strong>Android, iOS, macOS</strong> and private targets: later stages of the plan.</li>
+<li><strong>Android</strong> builds an APK (stage 8, <a href="android.html">Android</a>); signing, the AAB and installing on a device are stage 9. <strong>iOS, macOS</strong> and private targets: later stages of the plan.</li>
 </ul>
 
 <div class="page-footer">

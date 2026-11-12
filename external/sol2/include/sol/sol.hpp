@@ -19413,11 +19413,22 @@ namespace sol { namespace function_detail {
 		}
 	};
 
+	// N2Engine local patch (Android NDK r27, clang 18): upstream sol2 3.2.3 gives upvalue_this_member_variable's call
+	// and real_call noexcept(std::is_nothrow_copy_assignable_v<T>). Clang 18 rejects taking their address as a lua_CFunction
+	// ("address of overloaded function 'call' does not match required type 'int (lua_State *)'") for every member-variable
+	// binding; clang 19 and newer, GCC and MSVC accept it. On clang before 19 the functions are not noexcept: a throw then
+	// reaches sol2's exception handling instead of std::terminate.
+#if defined(__clang__) && !defined(__apple_build_version__) && __clang_major__ < 19
+#define N2_SOL_MEMBER_VARIABLE_NOEXCEPT(T) false
+#else
+#define N2_SOL_MEMBER_VARIABLE_NOEXCEPT(T) std::is_nothrow_copy_assignable_v<T>
+#endif
+
 	template <typename T, typename Function>
 	struct upvalue_this_member_variable {
 		typedef std::remove_pointer_t<std::decay_t<Function>> function_type;
 
-		static int real_call(lua_State* L) noexcept(std::is_nothrow_copy_assignable_v<T>) {
+		static int real_call(lua_State* L) noexcept(N2_SOL_MEMBER_VARIABLE_NOEXCEPT(T)) {
 			// Layout:
 			// idx 1...n: verbatim data of member variable pointer
 			auto memberdata = stack::stack_detail::get_as_upvalues<function_type>(L);
@@ -19433,7 +19444,7 @@ namespace sol { namespace function_detail {
 		}
 
 		template <bool is_yielding, bool no_trampoline>
-		static int call(lua_State* L) noexcept(std::is_nothrow_copy_assignable_v<T>) {
+		static int call(lua_State* L) noexcept(N2_SOL_MEMBER_VARIABLE_NOEXCEPT(T)) {
 			int nr;
 			if constexpr (no_trampoline) {
 				nr = real_call(L);
@@ -19449,7 +19460,7 @@ namespace sol { namespace function_detail {
 			}
 		}
 
-		int operator()(lua_State* L) noexcept(std::is_nothrow_copy_assignable_v<T>) {
+		int operator()(lua_State* L) noexcept(N2_SOL_MEMBER_VARIABLE_NOEXCEPT(T)) {
 			return call(L);
 		}
 	};
@@ -19459,7 +19470,7 @@ namespace sol { namespace function_detail {
 		typedef std::remove_pointer_t<std::decay_t<Function>> function_type;
 		typedef lua_bind_traits<function_type> traits_type;
 
-		static int real_call(lua_State* L) noexcept(std::is_nothrow_copy_assignable_v<T>) {
+		static int real_call(lua_State* L) noexcept(N2_SOL_MEMBER_VARIABLE_NOEXCEPT(T)) {
 			// Layout:
 			// idx 1...n: verbatim data of member variable pointer
 			auto memberdata = stack::stack_detail::get_as_upvalues<function_type>(L);
@@ -19473,7 +19484,7 @@ namespace sol { namespace function_detail {
 		}
 
 		template <bool is_yielding, bool no_trampoline>
-		static int call(lua_State* L) noexcept(std::is_nothrow_copy_assignable_v<T>) {
+		static int call(lua_State* L) noexcept(N2_SOL_MEMBER_VARIABLE_NOEXCEPT(T)) {
 			int nr;
 			if constexpr (no_trampoline) {
 				nr = real_call(L);
@@ -19489,7 +19500,7 @@ namespace sol { namespace function_detail {
 			}
 		}
 
-		int operator()(lua_State* L) noexcept(std::is_nothrow_copy_assignable_v<T>) {
+		int operator()(lua_State* L) noexcept(N2_SOL_MEMBER_VARIABLE_NOEXCEPT(T)) {
 			return call(L);
 		}
 	};

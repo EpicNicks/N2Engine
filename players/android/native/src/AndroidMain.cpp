@@ -4,6 +4,7 @@
 //
 // The game is one pack, game.n2pack, in the APK's assets. It is copied once to the app's files folder (an APK asset is not
 // a file the pack reader can seek in) and mounted where the game's folder would be, as on the desktop.
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -84,23 +85,62 @@ namespace
         __android_log_print(priority, LogTag, "%.*s", static_cast<int>(message.size()), message.data());
     }
 
-    /// game.n2pack from the APK's assets, copied to dest unless a copy of the same size is there
+    /// Whether the copy at dest is the APK's pack: the same size and the same last 64 KiB. A pack's index is at its end (a
+    /// zip's central directory holds every file's CRC; a 7z's header is there too), so a changed game changes its tail.
+    /// The asset is stored uncompressed (players/android/app/build.gradle: noCompress), so the seek is cheap
+    bool SamePack(AAsset *asset, const std::filesystem::path &dest)
+    {
+        const auto size = static_cast<std::uintmax_t>(AAsset_getLength64(asset));
+        std::error_code error;
+        if (std::filesystem::file_size(dest, error) != size || error)
+        {
+            return false;
+        }
+        const std::size_t tail = static_cast<std::size_t>(std::min<std::uintmax_t>(size, 64 * 1024));
+        std::vector<char> fromApk(tail);
+        std::vector<char> fromCopy(tail);
+        if (AAsset_seek64(asset, static_cast<off64_t>(size - tail), SEEK_SET) < 0)
+        {
+            return false;
+        }
+        std::size_t got = 0;
+        while (got < tail)
+        {
+            const int read = AAsset_read(asset, fromApk.data() + got, tail - got);
+            if (read <= 0)
+            {
+                return false;
+            }
+            got += static_cast<std::size_t>(read);
+        }
+        std::ifstream copy(dest, std::ios::binary);
+        copy.seekg(static_cast<std::streamoff>(size - tail));
+        copy.read(fromCopy.data(), static_cast<std::streamsize>(tail));
+        return copy && fromApk == fromCopy;
+    }
+
+    /// game.n2pack from the APK's assets, copied to dest unless the copy there is the same pack (SamePack)
     bool ExtractPack(AAssetManager *assets, const std::filesystem::path &dest)
     {
-        AAsset *asset = AAssetManager_open(assets, "game.n2pack", AASSET_MODE_STREAMING);
-        if (asset == nullptr)
+        AAsset *probe = AAssetManager_open(assets, "game.n2pack", AASSET_MODE_RANDOM);
+        if (probe == nullptr)
         {
             Logger::Error("The APK has no assets/game.n2pack (n2build puts the game's pack there)");
             return false;
         }
-        const auto size = static_cast<std::uintmax_t>(AAsset_getLength64(asset));
-        std::error_code error;
-        if (std::filesystem::file_size(dest, error) == size && !error)
+        const bool same = SamePack(probe, dest);
+        AAsset_close(probe);
+        if (same)
         {
-            AAsset_close(asset);
-            return true; // the same pack as last time (a new APK version replaces it: its size differs, or n2build's
-                         // manifest changes it; a reinstall clears the folder)
+            return true;
         }
+        AAsset *asset = AAssetManager_open(assets, "game.n2pack", AASSET_MODE_STREAMING);
+        if (asset == nullptr)
+        {
+            Logger::Error("The APK's assets/game.n2pack could not be opened");
+            return false;
+        }
+        std::error_code error;
         std::filesystem::create_directories(dest.parent_path(), error);
         const auto partial = std::filesystem::path(dest).concat(".part");
         {
