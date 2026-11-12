@@ -31,6 +31,8 @@ android {
                 arguments '-DANDROID_STL=c++_shared',
                           "-DN2ENGINE_PROJECT=${n2('project', '')}",
                           '-DN2ENGINE_TARGET=android',
+                          // build.targets.android.renderer "vulkan": the Vulkan renderer too (stage 12)
+                          "-DN2ENGINE_ANDROID_VULKAN=${n2('vulkan', 'OFF')}",
                           '-DN2ENGINE_BUILD_TESTS=OFF',
                           "-DCMAKE_BUILD_TYPE=${n2('cmakeBuildType', 'Release')}"
             }

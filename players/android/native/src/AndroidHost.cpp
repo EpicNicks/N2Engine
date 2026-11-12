@@ -10,6 +10,11 @@
 #include <game-activity/GameActivity.h>
 #include <game-activity/native_app_glue/android_native_app_glue.h>
 
+#if N2ENGINE_ANDROID_VULKAN
+#define VK_USE_PLATFORM_ANDROID_KHR 1
+#include <vulkan/vulkan.h>
+#endif
+
 namespace N2Engine::Android
 {
     using Input::GamepadAxis;
@@ -210,6 +215,25 @@ namespace N2Engine::Android
         // The window comes and goes (the background): each frame looks it up again rather than keeping this one
         surface.presentPixels = [this](const std::uint8_t *rgba, const int width, const int height) { Present(rgba, width, height); };
         surface.framebufferSize = [this] { return std::pair<int, int>{SurfaceWidth(), SurfaceHeight()}; };
+#if N2ENGINE_ANDROID_VULKAN
+        // The Vulkan renderer (stage 12) makes its VkSurfaceKHR on the window of the moment: after the app comes back
+        // from the background that is a new ANativeWindow (Window hands the renderer this Surface again: OnSurfaceRecreated)
+        surface.vulkanInstanceExtensions = [] {
+            return std::vector<const char *>{VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_ANDROID_SURFACE_EXTENSION_NAME};
+        };
+        surface.createVulkanSurface = [this](void *instance, void *surfaceOut) {
+            std::lock_guard windowLock(_windowMutex);
+            if (_app->window == nullptr)
+            {
+                return static_cast<int>(VK_ERROR_SURFACE_LOST_KHR);
+            }
+            VkAndroidSurfaceCreateInfoKHR info{};
+            info.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
+            info.window = _app->window;
+            return static_cast<int>(vkCreateAndroidSurfaceKHR(static_cast<VkInstance>(instance), &info, nullptr,
+                                                              static_cast<VkSurfaceKHR *>(surfaceOut)));
+        };
+#endif
         return surface;
     }
 
