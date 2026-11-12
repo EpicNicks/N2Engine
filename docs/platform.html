@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The platform layer · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="physics2d.html">2D physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="particles.html">Particles</a></li>
+<li><a href="soft-bodies.html">Soft bodies</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+<li><a href="netcode.html">Netcode (n2net)</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+<li><a href="editor-extensions.html">Lua editor extensions</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="editor.html">Editor projects</a></li>
+<li><a href="mcp.html">MCP bridge (n2-mcp)</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+<li><a href="web-build.html">Web build</a></li>
+<li><a href="project-modules.html">Project modules</a></li>
+<li><a href="build-targets.html">Build targets</a></li>
+<li><a href="platform.html" aria-current="page">The platform layer</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>The platform layer</h1>
+<p class="lead">Everything the engine asks of the platform it runs on (a window or surface, its events, the lifecycle, who owns the frame loop, the input devices and the folders) goes through one interface, <code>Platform::IPlatformHost</code>, with one backend per platform. GLFW is used only inside the desktop backend. This is stage 6 of the <a href="build-targets.html">build targets</a> plan <span class="badge">PR #TBD</span>; it changes no behaviour on the platforms that exist.</p>
+
+<h2 id="interface">The interface</h2>
+<p><code>engine/include/engine/platform/PlatformHost.hpp</code>:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Part</th><th>What a backend provides</th></tr></thead>
+<tbody>
+<tr><td>The surface</td><td><code>CreateSurface</code> (title, size, an OpenGL context or not, sRGB, visible), <code>DestroySurface</code>, <code>Surface()</code> (a <code>NativeSurface</code>: its kind and handle, for the renderer), its size in pixels, the content scale, the safe-area insets, and a resize handler</td></tr>
+<tr><td>The window</td><td>Title, window mode (windowed, fullscreen, borderless), cursor, clipboard, the soft keyboard (text input on and off), keeping the screen on; no-ops where there is no window</td></tr>
+<tr><td>Events and the lifecycle</td><td><code>PollEvents</code> once a frame; <code>ShouldClose</code>; a handler for <code>LifecycleEvent</code>s: Paused, Resumed, SurfaceLost, SurfaceRecreated, LowMemory, QuitRequested, BackRequested</td></tr>
+<tr><td>The loop</td><td><code>OwnsLoop()</code>: false where the engine runs its own loop (desktop, headless); true where the OS calls the engine once a frame (the web, Android, iOS)</td></tr>
+<tr><td>Input</td><td><code>Input()</code>: the <a href="input.html#devices">input device</a>, in engine codes, or null (input is then injected)</td></tr>
+<tr><td>Paths</td><td>The project root (or a pack's mount point; <a href="packs.html">Packs</a>), <code>user://</code>, and a temporary folder</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="backends">Backends</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Backend</th><th>Where</th><th>What it is</th></tr></thead>
+<tbody>
+<tr><td><code>desktop-glfw</code></td><td>Windows, Linux, macOS</td><td>A GLFW window (<code>engine/src/platform/DesktopGlfwHost.cpp</code>), its events, window modes and monitors, and the GLFW input device. Moved from <code>Window.cpp</code> as it was: the window's size (half the primary monitor, else 1280 x 720), its hints and its modes behave exactly as before.</td></tr>
+<tr><td><code>headless</code></td><td>Everywhere</td><td>No window, no surface, no input device (<code>engine/src/platform/HeadlessHost.cpp</code>). The editor host (Docker included), <code>n2server</code>, the test suites, the replay legs and the web player run on it. A program can hand it lifecycle events with <code>PostLifecycleEvent</code> (tests, or a host that relays a browser tab's visibility).</td></tr>
+<tr><td><code>android</code>, <code>ios</code></td><td>Stages 8 and 10</td><td>Their own surfaces, lifecycle and input behind the same interface; the OS owns the loop</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>Window</code> chooses the backend in <code>InitWindow</code>: <code>RenderBackend::NONE</code> and the windowless renderers (<code>Window::UsesNoWindow</code>) run on the headless backend, everything else on the desktop one. <code>Window::GetPlatformHost()</code> returns it, <code>Window::GetInputDevice()</code> its input device, and <code>Window::SetLifecycleHandler</code> receives its lifecycle events. The desktop backend sends none today.</p>
+
+<h2 id="web">The web build has no GLFW</h2>
+<p>The web build compiles neither the desktop backend nor the GLFW input device, and the software renderer's window present is compiled out there, so no GLFW function is called. <code>external/web-stubs</code> no longer has a stand-in GLFW: only GLFW's headers remain, because the renderers' interface still names <code>GLFWwindow</code> until <a href="build-targets.html">stage 7</a> gives them native surfaces. Its <code>&lt;generator&gt;</code> shim stays: every libc++ toolchain (Emscripten, the NDK, Apple's) needs it.</p>
+
+<h2 id="tests">Tests</h2>
+<ul>
+<li><code>tests/engine/platform/PlatformHostTests.cpp</code>: the headless backend; every lifecycle event's name; a windowless <code>Window</code> on the headless backend forwarding lifecycle events; a fake mobile backend written against the interface alone (the OS owns the loop, the surface is lost and recreated around the background, insets, the soft keyboard).</li>
+<li>Every existing test, smoke plan, web package smoke and web budget passes unchanged: the stage changes no behaviour.</li>
+</ul>
+
+<div class="page-footer">
+<span>Describes the build targets plan through stage 6 (PR #TBD).</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>

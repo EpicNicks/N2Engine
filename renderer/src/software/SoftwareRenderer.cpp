@@ -1066,11 +1066,15 @@ SoftwareRenderer::~SoftwareRenderer()
 bool SoftwareRenderer::Initialize(GLFWwindow *windowHandle, uint32_t width, uint32_t height)
 {
     m_window = windowHandle;
+#ifndef N2ENGINE_PLATFORM_WEB
+    // A desktop window: the frame is presented through its OpenGL context. The web has no window (its page draws the
+    // frames it reads back) and no GLFW (build targets stage 6)
     if (windowHandle)
     {
         glfwMakeContextCurrent(windowHandle);
         if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return false;
     }
+#endif
 
     Resize(width, height);
     if (windowHandle)
@@ -1225,7 +1229,9 @@ void SoftwareRenderer::Present()
     glBindVertexArray(0);
     glEnable(GL_DEPTH_TEST);
 
+#ifndef N2ENGINE_PLATFORM_WEB
     if (m_window) glfwSwapBuffers(m_window);
+#endif
 }
 
 IShader* SoftwareRenderer::CreateShaderProgram(const char *, const char *)

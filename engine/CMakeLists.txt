@@ -48,6 +48,13 @@ foreach(_n2_module PARTICLES SOFTBODIES)
     endif()
 endforeach()
 
+# The desktop platform backend and the GLFW input device are GLFW's only callers (build targets stage 6): not in the web
+# build, which has no GLFW (its player runs on the headless backend)
+if (N2ENGINE_PLATFORM_WEB)
+    list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/platform/DesktopGlfwHost\.cpp$")
+    list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/input/GlfwInputDevice\.cpp$")
+endif ()
+
 add_library(engine STATIC
     ${ENGINE_SOURCES}
 )

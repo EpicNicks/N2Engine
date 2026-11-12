@@ -70,8 +70,11 @@ bool OpenGLRenderer::Initialize(GLFWwindow *windowHandle, const uint32_t width, 
     m_width = width;
     m_height = height;
 
-    // Make context current
+    // Make context current. The web has no GLFW (build targets stage 6) and no desktop GL context; as with the stand-in
+    // GLFW it had before, gladLoadGL then finds no GL and the renderer is not usable there
+#ifndef N2ENGINE_PLATFORM_WEB
     glfwMakeContextCurrent(m_window);
+#endif
 
     if (!gladLoadGL())
     {
@@ -253,7 +256,9 @@ void OpenGLRenderer::EndFrame()
 
 void OpenGLRenderer::Present()
 {
+#ifndef N2ENGINE_PLATFORM_WEB
     glfwSwapBuffers(m_window);
+#endif
 }
 
 Renderer::Common::IMesh* OpenGLRenderer::CreateMesh(const Common::MeshData &meshData)
