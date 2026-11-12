@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <atomic>
+#include <format>
 #include <utility>
 
 #include "engine/Window.hpp"
@@ -159,10 +160,15 @@ bool Window::InitWindow(const Config::ApplicationOptions &options)
     // Framebuffer resizes (pixels) reach the renderer and the camera
     _host->SetResizeHandler([this](const int width, const int height) { OnWindowResize(width, height); });
 
-    // Create renderer based on configuration
-    _renderer = nullptr;
+    // Create renderer based on configuration, unless the platform brings its own (a private target's: build targets
+    // stage 11, docs/private-targets.html)
+    _renderer = _host->CreateRenderer();
 
-    if (options.renderBackend == Config::ApplicationOptions::RenderBackend::VULKAN)
+    if (_renderer)
+    {
+        Logger::Log(std::format("Using the {} platform's own renderer", _host->Name()), Logger::LogLevel::Info);
+    }
+    else if (options.renderBackend == Config::ApplicationOptions::RenderBackend::VULKAN)
     {
 #if N2ENGINE_RENDERER_VULKAN
         _renderer = std::make_unique<Renderer::Vulkan::VulkanRenderer>();
