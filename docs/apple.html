@@ -108,7 +108,7 @@ node tools/n2build/n2build.mjs build  --target macos --project path/to/game</cod
 <p><code>run</code> works like this:</p>
 <ol>
 <li>It picks the booted simulator, else the newest iPhone (booting it), and installs the app.</li>
-<li>It launches the app with its console, streaming each line as a log event with <code>"stream": "console"</code>.</li>
+<li>It waits for the simulator to finish booting, then launches the app and follows its log through the simulator's <code>log stream</code> (the app's process, its <code>N2Engine</code> lines), sending each line as a log event with <code>"stream": "console"</code>. The player writes its log to the system log as well as stdout. On CI runners, neither <code>simctl launch --console-pty</code> nor <code>--stdout</code> delivered the output while the app ran. Whether the app still runs is checked on its process: a simulator app is a process of the Mac.</li>
 <li>It ends when the app exits, or after <code>--seconds</code>.</li>
 </ol>
 <p>The doctor checks Xcode (<code>xcodebuild -version</code>) and CMake. For macOS it checks the compiler, CMake and Ninja, as on Linux.</p>

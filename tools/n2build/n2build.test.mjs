@@ -1138,22 +1138,56 @@ test('the simulator: the booted one, else the newest iPhone; install, launch, th
   assert.equal(pickSimulator('{"devices": {}}'), null);
   assert.equal(pickSimulator('not json'), null);
 
+  // The game's log comes through the simulator's log stream (the app's process, its N2Engine lines); the app is a process
+  // of this Mac for two checks, then is gone
   const calls = [];
+  let checks = 0;
+  let stopped = false;
   const exec = async (command, args) => {
     calls.push(args.join(' '));
-    return args[1] === 'list' ? { code: 0, stdout: list(false), stderr: '' } : { code: 0, stdout: '', stderr: '' };
+    if (args[1] === 'list') return { code: 0, stdout: list(false), stderr: '' };
+    if (args[1] === 'launch') return { code: 0, stdout: 'com.example.tri: 4242\n', stderr: '' };
+    return { code: 0, stdout: '', stderr: '' };
   };
   const stream = (command, args, { onLine }) => {
     calls.push(args.join(' '));
-    onLine('N2Engine info: N2Engine iOS player: first frame');
-    return { stop: () => {}, done: Promise.resolve() };
+    onLine('Timestamp               Ty Process[PID:TID]');
+    onLine('2026-11-12 13:06:58.898 Df N2Game[4242:181b4] N2Engine info: N2Engine iOS player: first frame');
+    onLine('2026-11-12 13:07:05.125 Df N2Game[4242:181b4] N2Engine info: N2Engine iOS player: 15 frames, 3.0 fps');
+    return { stop: () => { stopped = true; }, done: Promise.resolve() };
+  };
+  const isAlive = (pid) => {
+    assert.equal(pid, 4242, 'the pid simctl launch printed');
+    checks += 1;
+    return checks <= 2;
   };
   const { reporter, lines } = capture();
-  const outcome = await runInSimulator({ app: '/out/Tri.app', bundleId: 'com.example.tri', env: {}, reporter, exec, stream, sleep: async () => {} });
-  assert.deepEqual(outcome, { device: 'NEW', reason: 'exited' });
-  assert.deepEqual(calls, ['simctl list devices available --json', 'simctl boot NEW', 'simctl install NEW /out/Tri.app',
-    'simctl launch --console-pty --terminate-running-process NEW com.example.tri']);
-  assert.deepEqual(lines.filter((l) => l.type === 'log').map((l) => [l.stream, l.text]), [['console', 'N2Engine info: N2Engine iOS player: first frame']]);
+  const outcome = await runInSimulator({ app: '/out/Tri.app', bundleId: 'com.example.tri', env: {}, reporter, exec, stream, isAlive, sleep: async () => {} });
+  assert.deepEqual(outcome, { device: 'NEW', pid: '4242', reason: 'exited' });
+  assert.deepEqual(calls.slice(0, 6), ['simctl list devices available --json', 'simctl boot NEW', 'simctl bootstatus NEW -b',
+    'simctl install NEW /out/Tri.app',
+    'simctl spawn NEW log stream --style compact --level info --predicate process == "N2Game" AND eventMessage BEGINSWITH "N2Engine"',
+    'simctl launch --terminate-running-process NEW com.example.tri']);
+  assert.equal(checks, 3, 'the process is checked until it is gone');
+  assert.ok(stopped, 'the log stream is stopped at the end');
+  assert.ok(!calls.some((c) => c.includes('terminate NEW')), 'an app that exited is not terminated');
+  assert.deepEqual(lines.filter((l) => l.type === 'log').map((l) => [l.stream, l.text]), [
+    ['console', 'N2Engine info: N2Engine iOS player: first frame'], ['console', 'N2Engine info: N2Engine iOS player: 15 frames, 3.0 fps']]);
+
+  // --seconds: the app is stopped when the time is up
+  const timed = [];
+  const keepRunning = async (command, args) => {
+    timed.push(args.join(' '));
+    if (args[1] === 'list') return { code: 0, stdout: list(true), stderr: '' };
+    return { code: 0, stdout: 'com.example.tri: 7\n', stderr: '' };
+  };
+  const quiet = () => ({ stop: () => {}, done: Promise.resolve() });
+  const timedOut = await runInSimulator({ app: '/out/Tri.app', bundleId: 'com.example.tri', env: {}, reporter: capture().reporter, exec: keepRunning,
+    stream: quiet, isAlive: () => true, seconds: 3, sleep: async () => {} });
+  assert.equal(timedOut.reason, 'time');
+  assert.ok(timed.includes('simctl terminate NEW com.example.tri'));
+  assert.ok(!timed.includes('simctl boot NEW'), 'a booted simulator is not booted again');
+  assert.ok(timed.includes('simctl bootstatus NEW -b'), 'but it is waited for until it is ready');
 });
 
 /** A fake git for the game's repository */
