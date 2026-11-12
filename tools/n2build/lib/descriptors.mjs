@@ -7,9 +7,11 @@ import path from 'node:path';
 import { BuildError } from './report.mjs';
 
 export const DESCRIPTOR_FORMAT = 1;
-export const KNOWN_TOOLCHAINS = ['cmake', 'ninja', 'msvc', 'cxx', 'emsdk', 'vulkan-sdk', 'android-sdk', 'android-ndk', 'jdk', 'gradle'];
-export const PACKAGE_KINDS = ['desktop', 'web', 'android'];
-export const RUN_KINDS = ['executable', 'web-server', 'android-device'];
+export const KNOWN_TOOLCHAINS = ['cmake', 'ninja', 'msvc', 'cxx', 'emsdk', 'vulkan-sdk', 'android-sdk', 'android-ndk', 'jdk', 'gradle', 'xcode', 'gh'];
+export const PACKAGE_KINDS = ['desktop', 'web', 'android', 'ios'];
+export const RUN_KINDS = ['executable', 'web-server', 'android-device', 'ios-simulator'];
+// A target that builds elsewhere when this machine cannot (decision D7: Apple targets in GitHub Actions)
+export const REMOTE_KINDS = ['github-actions'];
 export const PACK_KINDS = ['zip', 'stored', '7z', 'folder'];
 export const PHYSICS3D_VALUES = ['none', 'physx', 'jolt', 'both'];
 const NAME = /^[a-z][a-z0-9-]{0,31}$/;
@@ -86,6 +88,17 @@ export function validateDescriptor(raw, file) {
   if (pack.pack !== undefined && !PACK_KINDS.includes(pack.pack)) fail(`package.pack must be one of ${PACK_KINDS.join(', ')}`);
   const run = raw.run;
   if (run === null || typeof run !== 'object' || !RUN_KINDS.includes(run.kind)) fail(`run.kind must be one of ${RUN_KINDS.join(', ')}`);
+  // remote: where the target builds when this machine's system is not in hostSystems (docs/apple.html#remote)
+  if (raw.remote !== undefined) {
+    const remote = raw.remote;
+    if (remote === null || typeof remote !== 'object' || !REMOTE_KINDS.includes(remote.kind)) fail(`remote.kind must be one of ${REMOTE_KINDS.join(', ')}`);
+    if (typeof remote.workflow !== 'string' || !/^[A-Za-z0-9._-]+\.ya?ml$/.test(remote.workflow)) fail('remote.workflow must be a workflow file name such as n2build-apple.yml');
+    if (typeof remote.artifact !== 'string' || !/^[A-Za-z0-9._-]+$/.test(remote.artifact)) fail('remote.artifact must name the artifact the workflow uploads');
+    stringList(remote.toolchains ?? [], 'remote.toolchains');
+    for (const id of remote.toolchains ?? []) {
+      if (!KNOWN_TOOLCHAINS.includes(id)) fail(`remote.toolchains: unknown toolchain '${id}'`);
+    }
+  }
 
   return {
     ...raw,

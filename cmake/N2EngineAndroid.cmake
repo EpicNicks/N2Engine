@@ -10,6 +10,9 @@
 #   * OpenAL Soft is built from source as on the desktop; on Android it plays through OpenSL ES.
 
 set(N2ENGINE_USE_PHYSX OFF CACHE BOOL "Use PhysX physics backend" FORCE)
+# Jolt is the 3D physics here (no PhysX): on unless the project's build.modules.physics3d says otherwise (N2EngineModules.cmake
+# sets a plain variable then, which wins over this cache value)
+set(N2ENGINE_USE_JOLT ON CACHE BOOL "Build the vendored Jolt Physics library and the engine's Jolt physics backend" FORCE)
 set(N2ENGINE_RENDERER_VULKAN OFF CACHE BOOL "" FORCE)
 set(N2ENGINE_RENDERER_WEBGPU OFF CACHE BOOL "" FORCE)
 add_compile_definitions(N2ENGINE_PLATFORM_ANDROID=1)

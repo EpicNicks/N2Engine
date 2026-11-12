@@ -1560,7 +1560,7 @@ namespace N2Engine::Scripting
                 const auto &refValue = value["$ref"];
                 if (refValue.is_null())
                 {
-                    _scriptInstance[fieldName] = sol::nil;
+                    _scriptInstance[fieldName] = sol::lua_nil;
                     continue;
                 }
 
@@ -1590,7 +1590,7 @@ namespace N2Engine::Scripting
                     }
                     else
                     {
-                        _scriptInstance[fieldName] = sol::nil;
+                        _scriptInstance[fieldName] = sol::lua_nil;
                         _hasUnresolvedReferences = true;
                         Logger::Warn(std::format("Failed to resolve GameObject reference for field '{}'", fieldName));
                     }
@@ -1605,7 +1605,7 @@ namespace N2Engine::Scripting
                     }
                     else
                     {
-                        _scriptInstance[fieldName] = sol::nil;
+                        _scriptInstance[fieldName] = sol::lua_nil;
                         _hasUnresolvedReferences = true;
                         Logger::Warn(std::format("Failed to resolve Component reference for field '{}'", fieldName));
                     }

@@ -22,7 +22,9 @@ import { ANDROID_SIGNING_ENV, androidSigningEnv, resolveAndroidSigning, signingP
 import { MANIFEST_NAME, cookPack, crc32, findSevenZip, packFiles, writeZip } from './lib/cook.mjs';
 import { resolveRequest } from './lib/serve.mjs';
 import { applyEnv, checkToolchains, commandInvocation, findOnPath, parseVersion, systemProbe, versionAtLeast } from './lib/toolchains.mjs';
-import { ENGINE_ROOT, main, markerInfo, parseArguments, resolveConfig, UsageError } from './n2build.mjs';
+import { buildsRemotely, checkedToolchains, ENGINE_ROOT, main, markerInfo, parseArguments, resolveConfig, UsageError } from './n2build.mjs';
+import { findAppBundle, iosConfigureArgs, iosSettings, packageIos, pickSimulator, runInSimulator } from './lib/apple.mjs';
+import { checkPushed, dispatchAndFollow, gitState, pickRun, workflowInputs, workflowTemplate } from './lib/remote.mjs';
 
 const tmp = (prefix) => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 
@@ -89,7 +91,7 @@ function capture() {
 
 test('the repository\'s descriptors load and are valid', () => {
   const descriptors = loadDescriptors(ENGINE_ROOT);
-  assert.deepEqual([...descriptors.keys()].sort(), ['android', 'linux', 'web', 'windows']);
+  assert.deepEqual([...descriptors.keys()].sort(), ['android', 'ios', 'linux', 'macos', 'web', 'windows']);
   for (const d of descriptors.values()) {
     assert.equal(d.source, 'targets/');
     assert.ok(d.cmake.configs.debug && d.cmake.configs.release, `${d.name} has debug and release`);
@@ -427,7 +429,7 @@ test('list --json reports every target and whether it builds here', async () => 
   const code = await main(['list', '--json'], { ctx: fakeProbe({ platform: 'linux', env: { HOME: tmp('n2build-home-') } }), reporter });
   assert.equal(code, 0);
   const targets = lines.find((l) => l.type === 'targets').targets;
-  assert.deepEqual(targets.map((t) => [t.name, t.buildableHere]), [['android', true], ['linux', true], ['web', true], ['windows', false]]);
+  assert.deepEqual(targets.map((t) => [t.name, t.buildableHere]), [['android', true], ['ios', true], ['linux', true], ['macos', true], ['web', true], ['windows', false]]);
   assert.deepEqual(lines.at(-1), { type: 'result', ok: true });
 });
 
@@ -1071,6 +1073,184 @@ test('run --target android refuses an unsigned package, and picks the device thr
   assert.equal(await main(['run', '--target', 'android', '--project', projectDir, '--out', packageDir, '--no-build', '--json'], { ctx, reporter: ran.reporter }), 0, JSON.stringify(ran.lines.at(-1)));
   assert.deepEqual(ran.lines.at(-1), { type: 'result', ok: true, output: packageDir, device: 'emulator-5554', pid: '4242', ended: 'exited' });
   assert.ok(adb.calls[0].startsWith('install -r ') && adb.calls[0].endsWith('Tri.apk'));
+});
+
+// --- Apple targets (build targets stage 10) ------------------------------------------------------------------------
+
+test('the apple descriptors: ios is an app built with Xcode, macos a desktop player; both build in GitHub Actions off a Mac', () => {
+  const descriptors = loadDescriptors(ENGINE_ROOT);
+  const ios = descriptors.get('ios');
+  assert.equal(ios.package.kind, 'ios');
+  assert.equal(ios.cmake.generator, 'Xcode');
+  assert.equal(ios.cmake.options.CMAKE_SYSTEM_NAME, 'iOS');
+  assert.deepEqual(ios.physics3d, ['none', 'jolt']);
+  assert.equal(ios.remote.workflow, 'n2build-apple.yml');
+  assert.equal(descriptors.get('macos').package.kind, 'desktop');
+  assert.ok(buildsRemotely(ios, 'win32') && buildsRemotely(ios, 'linux') && !buildsRemotely(ios, 'darwin'));
+  assert.ok(!buildsRemotely(descriptors.get('linux'), 'win32'), 'a target without remote never builds remotely');
+  const bad = JSON.parse(fs.readFileSync(path.join(ENGINE_ROOT, 'targets', 'ios', 'target.json'), 'utf8'));
+  assert.throws(() => validateDescriptor({ ...bad, remote: { ...bad.remote, kind: 'ssh' } }, 'x'), /remote\.kind/);
+  assert.throws(() => validateDescriptor({ ...bad, remote: { ...bad.remote, workflow: '../evil.yml' } }, 'x'), /remote\.workflow/);
+});
+
+test('doctor off a Mac: ios checks only gh and its login, and says the build runs in GitHub Actions', () => {
+  const descriptor = loadDescriptors(ENGINE_ROOT).get('ios');
+  const loggedIn = fakeProbe({ platform: 'win32', env: { PATH: 'C:\\gh', PATHEXT: '.EXE' }, files: ['C:\\gh\\gh.exe'],
+    commands: { gh: (args) => (args[0] === '--version' ? { status: 0, stdout: 'gh version 2.63.0 (2026-10-01)', stderr: '' } : { status: 0, stdout: '', stderr: 'Logged in to github.com account someone' }) } });
+  const ok = checkedToolchains(descriptor, loggedIn);
+  assert.deepEqual(ok.checks.map((c) => [c.id, c.ok]), [['gh', true]]);
+  assert.equal(ok.checks[0].version, '2.63.0');
+  const loggedOut = fakeProbe({ platform: 'linux', files: ['/usr/bin/gh'], commands: { gh: (args) => (args[0] === '--version' ? 'gh version 2.63.0' : { status: 1, stdout: '', stderr: 'You are not logged into any GitHub hosts' }) } });
+  const notOk = checkedToolchains(descriptor, loggedOut).checks[0];
+  assert.equal(notOk.ok, false);
+  assert.match(notOk.fix, /gh auth login/);
+  const onMac = checkedToolchains(descriptor, fakeProbe({ platform: 'darwin', files: ['/usr/bin/cmake'], commands: { xcodebuild: 'Xcode 16.2\nBuild version 16C5032a', cmake: 'cmake version 3.31.0' } }));
+  assert.deepEqual(onMac.checks.map((c) => [c.id, c.ok, c.version]), [['cmake', true, '3.31.0'], ['xcode', true, '16.2']]);
+});
+
+test('ios settings and configure options; the Xcode build names its configuration', () => {
+  assert.deepEqual(iosSettings({}, 'Tri'), { appId: 'com.n2engine.tri', orientation: 'any' });
+  assert.throws(() => iosSettings({ appId: 'tri' }, 'Tri'), /appId/);
+  assert.throws(() => iosSettings({ orientation: 'up' }, 'Tri'), /orientation/);
+  const args = iosConfigureArgs({ settings: { appId: 'com.example.tri', version: '1.2.3', buildNumber: 9, orientation: 'landscape', displayName: 'Tri Like' }, gameName: 'Tri', packFile: '/tree/game.n2pack' });
+  assert.deepEqual(args, ['-DN2ENGINE_IOS_PACK=/tree/game.n2pack', '-DN2ENGINE_IOS_BUNDLE_ID=com.example.tri', '-DN2ENGINE_IOS_NAME=Tri Like',
+    '-DN2ENGINE_IOS_VERSION=1.2.3', '-DN2ENGINE_IOS_BUILD=9', '-DN2ENGINE_IOS_ORIENTATION=landscape']);
+  const descriptor = loadDescriptors(ENGINE_ROOT).get('ios');
+  const plan = planBuild({ engineRoot: ENGINE_ROOT, projectDir: makeProject({ name: 'Tri' }), descriptor, config: 'release', modules: undefined, present: new Set(),
+    buildRoot: tmp('n2build-ios-'), gameName: 'Tri', extraConfigureArgs: args });
+  assert.ok(plan.configureArgs.includes('Xcode'));
+  assert.ok(plan.configureArgs.includes('-DCMAKE_SYSTEM_NAME=iOS'));
+  assert.ok(plan.configureArgs.includes('-DN2ENGINE_IOS_BUNDLE_ID=com.example.tri'));
+  assert.deepEqual(plan.buildArgs.slice(2, 6), ['--target', 'n2ios', '--config', 'Release']);
+  assert.equal(packPath({ descriptor, packageDir: '/out', treeDir: plan.treeDir }), path.join(plan.treeDir, 'game.n2pack'));
+});
+
+test('the iOS package: the app Xcode built, found in its configuration\'s folder, named after the game', () => {
+  const tree = tmp('n2build-ios-tree-');
+  write(path.join(tree, 'players', 'ios', 'Debug-iphonesimulator', 'N2Game.app', 'N2Game'), 'debug');
+  write(path.join(tree, 'players', 'ios', 'Release-iphonesimulator', 'N2Game.app', 'N2Game'), 'release');
+  write(path.join(tree, 'players', 'ios', 'Release-iphonesimulator', 'N2Game.app', 'game.n2pack'), 'PK');
+  assert.ok(findAppBundle(tree, 'release').includes('Release-iphonesimulator'));
+  assert.ok(findAppBundle(tree, 'debug').includes('Debug-iphonesimulator'));
+  const packageDir = tmp('n2build-ios-out-');
+  assert.equal(packageIos({ treeDir: tree, config: 'release', packageDir, gameName: 'Tri Like!' }), 'Tri Like_.app');
+  assert.equal(fs.readFileSync(path.join(packageDir, 'Tri Like_.app', 'N2Game'), 'utf8'), 'release');
+  assert.ok(fs.existsSync(path.join(packageDir, 'Tri Like_.app', 'game.n2pack')));
+  assert.throws(() => packageIos({ treeDir: tmp('n2build-empty-'), config: 'release', packageDir, gameName: 'Tri' }), /did not produce the app/);
+});
+
+test('the simulator: the booted one, else the newest iPhone; install, launch, the console as log events', async () => {
+  const list = (booted) => JSON.stringify({ devices: {
+    'com.apple.CoreSimulator.SimRuntime.iOS-17-5': [{ udid: 'OLD', name: 'iPhone 15', state: 'Shutdown', isAvailable: true }],
+    'com.apple.CoreSimulator.SimRuntime.iOS-18-2': [{ udid: 'IPAD', name: 'iPad Air', state: 'Shutdown', isAvailable: true },
+      { udid: 'NEW', name: 'iPhone 16', state: booted ? 'Booted' : 'Shutdown', isAvailable: true }],
+    'com.apple.CoreSimulator.SimRuntime.watchOS-11-2': [{ udid: 'W', name: 'Apple Watch', state: 'Booted' }],
+  } });
+  assert.deepEqual(pickSimulator(list(false)), { udid: 'NEW', name: 'iPhone 16', booted: false });
+  assert.deepEqual(pickSimulator(list(true)), { udid: 'NEW', name: 'iPhone 16', booted: true });
+  assert.equal(pickSimulator('{"devices": {}}'), null);
+  assert.equal(pickSimulator('not json'), null);
+
+  const calls = [];
+  const exec = async (command, args) => {
+    calls.push(args.join(' '));
+    return args[1] === 'list' ? { code: 0, stdout: list(false), stderr: '' } : { code: 0, stdout: '', stderr: '' };
+  };
+  const stream = (command, args, { onLine }) => {
+    calls.push(args.join(' '));
+    onLine('N2Engine info: N2Engine iOS player: first frame');
+    return { stop: () => {}, done: Promise.resolve() };
+  };
+  const { reporter, lines } = capture();
+  const outcome = await runInSimulator({ app: '/out/Tri.app', bundleId: 'com.example.tri', env: {}, reporter, exec, stream, sleep: async () => {} });
+  assert.deepEqual(outcome, { device: 'NEW', reason: 'exited' });
+  assert.deepEqual(calls, ['simctl list devices available --json', 'simctl boot NEW', 'simctl install NEW /out/Tri.app',
+    'simctl launch --console-pty --terminate-running-process NEW com.example.tri']);
+  assert.deepEqual(lines.filter((l) => l.type === 'log').map((l) => [l.stream, l.text]), [['console', 'N2Engine info: N2Engine iOS player: first frame']]);
+});
+
+/** A fake git for the game's repository */
+function fakeGit({ dirty = '', pushed = 'abc123', head = 'abc123', branch = 'main', remote = 'git@github.com:me/game.git', root = '/repo' } = {}) {
+  return (args) => {
+    const command = args.slice(2).join(' ');
+    if (command === 'rev-parse --show-toplevel') return { status: 0, stdout: `${root}\n` };
+    if (command === 'rev-parse --abbrev-ref HEAD') return { status: 0, stdout: `${branch}\n` };
+    if (command === 'rev-parse HEAD') return { status: 0, stdout: `${head}\n` };
+    if (command.startsWith('rev-parse --verify --quiet origin/')) return pushed ? { status: 0, stdout: `${pushed}\n` } : { status: 1, stdout: '' };
+    if (command.startsWith('status --porcelain')) return { status: 0, stdout: dirty };
+    if (command === 'remote get-url origin') return remote ? { status: 0, stdout: `${remote}\n` } : { status: 2, stdout: '' };
+    return null;
+  };
+}
+
+test('a remote build needs the game committed and pushed to GitHub', () => {
+  const projectDir = path.resolve('/repo/games/tri');
+  const state = gitState(projectDir, fakeGit({ root: path.resolve('/repo') }));
+  assert.equal(state.projectPath, 'games/tri');
+  assert.equal(state.branch, 'main');
+  assert.doesNotThrow(() => checkPushed(state));
+  assert.throws(() => checkPushed(gitState(projectDir, fakeGit({ root: path.resolve('/repo'), dirty: ' M assets/scene.lua\n' }))), /not committed/);
+  assert.throws(() => checkPushed(gitState(projectDir, fakeGit({ root: path.resolve('/repo'), pushed: null }))), /not on GitHub yet: push it \(git push -u origin main\)/);
+  assert.throws(() => checkPushed(gitState(projectDir, fakeGit({ root: path.resolve('/repo'), head: 'def456' }))), /not pushed/);
+  assert.throws(() => checkPushed(gitState(projectDir, fakeGit({ root: path.resolve('/repo'), remote: 'https://gitlab.com/me/game.git' }))), /no GitHub remote/);
+  assert.throws(() => gitState(projectDir, () => ({ status: 128, stdout: '' })), /not in a git repository/);
+  assert.throws(() => gitState(projectDir, fakeGit({ branch: 'HEAD' })), /detached HEAD/);
+});
+
+test('the workflow run: dispatched with plain inputs, found, followed, its artifact downloaded', async () => {
+  const descriptor = loadDescriptors(ENGINE_ROOT).get('ios');
+  assert.deepEqual(workflowInputs({ target: 'ios', config: 'release', projectPath: 'games/tri', engineRef: 'e1' }),
+    ['-f', 'target=ios', '-f', 'config=release', '-f', 'project=games/tri', '-f', 'engine_ref=e1']);
+  const t0 = Date.parse('2026-11-11T10:00:00Z');
+  const runs = JSON.stringify([{ databaseId: 1, createdAt: '2026-11-11T09:00:00Z', url: 'u1' }, { databaseId: 2, createdAt: '2026-11-11T10:00:03Z', url: 'u2' }]);
+  assert.equal(pickRun(runs, t0).databaseId, 2);
+  assert.equal(pickRun('[]', t0), null);
+
+  const calls = [];
+  const exec = async (args) => {
+    calls.push(args.join(' '));
+    return args[0] === 'run' && args[1] === 'list' ? { code: 0, stdout: runs, stderr: '' } : { code: 0, stdout: '', stderr: '' };
+  };
+  const stream = async (args, onLine) => { calls.push(args.join(' ')); onLine('build: ✓'); return 0; };
+  const { reporter, lines } = capture();
+  const outcome = await dispatchAndFollow({ descriptor, state: { branch: 'main', projectPath: 'games/tri' }, config: 'release', engineRef: 'e1',
+    packageDir: '/out', reporter, exec, stream, sleep: async () => {}, now: () => t0 });
+  assert.deepEqual(outcome, { run: 2, url: 'u2' });
+  assert.equal(calls[0], 'workflow run n2build-apple.yml --ref main -f target=ios -f config=release -f project=games/tri -f engine_ref=e1');
+  assert.ok(calls.includes('run watch 2 --exit-status --interval 10'));
+  assert.equal(calls.at(-1), 'run download 2 --name n2build-ios --dir /out');
+  assert.deepEqual(lines.filter((l) => l.type === 'step').map((l) => l.id), ['dispatch', 'remote', 'download']);
+
+  const failing = async (args) => { calls.push(args.join(' ')); return 1; };
+  await assert.rejects(dispatchAndFollow({ descriptor, state: { branch: 'main', projectPath: '.' }, config: 'debug', packageDir: '/out',
+    reporter: capture().reporter, exec, stream: failing, sleep: async () => {}, now: () => t0 }), /GitHub Actions build failed: u2/);
+  const missing = async () => ({ code: 1, stdout: '', stderr: 'HTTP 404: workflow n2build-apple.yml not found' });
+  await assert.rejects(dispatchAndFollow({ descriptor, state: { branch: 'main', projectPath: '.' }, config: 'debug', packageDir: '/out',
+    reporter: capture().reporter, exec: missing, stream, sleep: async () => {}, now: () => t0 }), /n2build apple-workflow writes it/);
+});
+
+test('the workflow template: dispatch inputs only, a pinned macOS runner, n2build build and the simulator run, the artifact', () => {
+  const text = workflowTemplate();
+  assert.ok(text.startsWith('# Written by n2build apple-workflow'));
+  for (const piece of ['workflow_dispatch:', 'runs-on: macos-15', 'n2build.mjs build --target', 'n2build.mjs run --target ios',
+    "name: 'n2build-${{ inputs.target }}'", 'repository: EpicNicks/N2Engine', 'include-hidden-files: true']) {
+    assert.ok(text.includes(piece), piece);
+  }
+  assert.ok(!/\$\{\{\s*secrets\./.test(text), 'no secret is used by the simulator workflow');
+});
+
+test('build --target ios --dry-run off a Mac prints the workflow it would start', async () => {
+  const projectDir = makeProject({ name: 'Tri' });
+  const ctx = fakeProbe({ platform: 'linux', files: ['/usr/bin/gh'], commands: { gh: (args) => (args[0] === '--version' ? 'gh version 2.63.0' : { status: 0, stdout: '', stderr: '' }) } });
+  const git = fakeGit({ root: path.dirname(projectDir) });
+  const baseRun = ctx.run;
+  ctx.run = (command, args, options) => (command === 'git' ? git(args) : baseRun(command, args, options));
+  const { reporter, lines } = capture();
+  const code = await main(['build', '--target', 'ios', '--project', projectDir, '--dry-run', '--json'], { ctx, reporter });
+  assert.equal(code, 0, JSON.stringify(lines.at(-1)));
+  const logs = lines.filter((l) => l.type === 'log').map((l) => l.text);
+  assert.ok(logs.some((t) => t.startsWith('gh workflow run n2build-apple.yml --ref main -f target=ios -f config=release -f project=')), logs.join('\n'));
+  assert.equal(lines.at(-1).remote, true);
 });
 
 // --- PhysX's GPU library only for GPU physics (follow-up of the build targets plan) ----------------------------------

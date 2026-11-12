@@ -226,6 +226,32 @@ const CHECKS = {
     },
   },
 
+  xcode: {
+    title: 'Xcode (iOS and macOS)',
+    check(ctx, pins, env) {
+      const fix = 'Install Xcode from the App Store, open it once, then: sudo xcode-select -s /Applications/Xcode.app';
+      if (ctx.platform !== 'darwin') return { ok: false, detail: 'Xcode runs on macOS only', fix: 'Build on a Mac, or in GitHub Actions (docs/apple.html#remote)' };
+      const result = ctx.run('xcodebuild', ['-version'], { env });
+      const version = /Xcode\s+(\d+(?:\.\d+)*)/.exec(result?.stdout ?? '')?.[1];
+      if (!result || result.status !== 0 || !version) return { ok: false, detail: 'xcodebuild -version failed (only the command line tools?)', fix };
+      return { ok: true, version, detail: 'xcodebuild' };
+    },
+  },
+
+  gh: {
+    title: 'GitHub CLI, logged in (builds in GitHub Actions)',
+    check(ctx, pins, env) {
+      const fix = 'Install the GitHub CLI (https://cli.github.com), then run: gh auth login';
+      const exe = findOnPath('gh', env, ctx);
+      if (!exe) return { ok: false, detail: 'gh not found on PATH', fix };
+      const version = /gh version (\d+(?:\.\d+)*)/.exec(ctx.run(exe, ['--version'], { env })?.stdout ?? '')?.[1] ?? null;
+      // gh auth status exits non-zero when no account is logged in; its output names the account, never a token
+      const auth = ctx.run(exe, ['auth', 'status', '--hostname', 'github.com'], { env });
+      if (!auth || auth.status !== 0) return { ok: false, version, detail: 'not logged in to github.com', fix: 'Run: gh auth login' };
+      return { ok: true, version, detail: exe, info: { gh: exe } };
+    },
+  },
+
   msvc: {
     title: 'Visual Studio C++ (x64)',
     check(ctx) {
@@ -368,7 +394,7 @@ const CHECKS = {
 };
 
 // msvc, emsdk, the SDK and the JDK first: they change the environment the other checks look in
-const ORDER = ['msvc', 'emsdk', 'android-sdk', 'jdk', 'cmake', 'ninja', 'cxx', 'vulkan-sdk', 'android-ndk', 'gradle'];
+const ORDER = ['msvc', 'emsdk', 'android-sdk', 'jdk', 'cmake', 'ninja', 'cxx', 'vulkan-sdk', 'android-ndk', 'gradle', 'xcode', 'gh'];
 
 /**
  * Runs the checks a descriptor names, in dependency order.

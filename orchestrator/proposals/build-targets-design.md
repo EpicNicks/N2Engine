@@ -38,6 +38,14 @@ every stage. Stages still run in the order of section 5, each after the stages i
   `ANativeWindow` on the CPU, not presented through EGL/GLES; audio is OpenAL Soft's OpenSL ES backend (AAudio through Oboe
   is a follow-up); rumble does nothing yet; the phone frame rate is a device-checklist item (`docs/android.html#checklist`),
   not measured.
+- Stage 9 (Android deploy), branch `feat-bt9-android-deploy`: signing profiles in the user's `n2build.json` (passwords from
+  an environment variable, a file or text; to Gradle only in its process environment; hidden in every output line), a
+  signed release APK and AAB, `n2build run` on a device through adb with logcat as log events. `docs/android.html#signing`.
+- Stage 10 (iOS and macOS), branch `feat-bt10-apple-players`: `targets/ios` (an app for the simulator from `players/ios`, a
+  UIKit backend whose software-rendered frame is the view's layer contents) and `targets/macos` (the desktop player);
+  `cmake/N2EngineApple.cmake`; off a Mac both build in the game repository's `n2build-apple` workflow (`n2build
+  apple-workflow` writes it; `gh` starts, follows and downloads it). Verified only in CI (no Mac here). Device signing waits
+  for a developer account (D7). `docs/apple.html`.
 
 ## 1. Goal
 

@@ -47,7 +47,12 @@ if(WIN32)
     endforeach()
 else()
     # Shared libraries are looked for beside the executable, so a package folder runs wherever it is unpacked
-    set_target_properties(n2player PROPERTIES BUILD_RPATH "\$ORIGIN" INSTALL_RPATH "\$ORIGIN")
+    # (@executable_path is macOS's spelling of $ORIGIN)
+    if(APPLE)
+        set_target_properties(n2player PROPERTIES BUILD_RPATH "@executable_path" INSTALL_RPATH "@executable_path")
+    else()
+        set_target_properties(n2player PROPERTIES BUILD_RPATH "\$ORIGIN" INSTALL_RPATH "\$ORIGIN")
+    endif()
 endif()
 
 # OpenAL Soft (fetched by the root CMakeLists.txt after this folder, so only generator expressions name it): when it is a

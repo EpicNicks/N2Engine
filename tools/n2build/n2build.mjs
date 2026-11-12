@@ -26,10 +26,12 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
-  archivePackage, checkPhysics, engineRevision, needsConfigure, packageDesktop, packageWeb, packPath, planBuild,
+  archivePackage, checkPhysics, engineRevision, needsConfigure, packageDesktop, packageWeb, packBeforeConfigure, packPath, planBuild, safeName,
   preparePackageDir, readMarker, readProject, recordConfigure, resolvePackFormat, runProcess, writeMarker,
 } from './lib/build.mjs';
-import { findAdb, parseDevices, pickDevice, runOnDevice } from './lib/adb.mjs';
+import { findAdb, parseDevices, pickDevice, runOnDevice, streamLines } from './lib/adb.mjs';
+import { captureProcess, iosConfigureArgs, iosSettings, packageIos, runInSimulator } from './lib/apple.mjs';
+import { checkPushed, dispatchAndFollow, gitState, workflowInputs, workflowTemplate } from './lib/remote.mjs';
 import { cmakeInstallDir, gradleInvocation, packageAndroid, planAndroid, prepareGradleTree } from './lib/android.mjs';
 import { PACK_EXTENSION, cookPack, findSevenZip } from './lib/cook.mjs';
 import { PACK_KINDS } from './lib/descriptors.mjs';
@@ -40,7 +42,7 @@ import { androidSigningEnv, resolveAndroidSigning, signingProfileName, withoutSi
 import { checkToolchains, findOnPath, systemProbe } from './lib/toolchains.mjs';
 
 export const ENGINE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const COMMANDS = ['list', 'doctor', 'build', 'run', 'cook'];
+const COMMANDS = ['list', 'doctor', 'build', 'run', 'cook', 'apple-workflow'];
 const VALUE_OPTIONS = new Set(['--target', '--project', '--config', '--out', '--build-dir', '--archive', '--jobs', '--frames', '--port', '--targets-dir', '--pack',
   '--signing', '--device', '--seconds']);
 const FLAG_OPTIONS = new Set(['--json', '--dry-run', '--no-build', '--help']);
@@ -53,6 +55,8 @@ export const USAGE = `Usage: n2build <command> [options]
   run    --target T --project DIR [--config debug|release] [--no-build] [--frames N] [--port N]
          [--device SERIAL] [--seconds N]   (android: the device, and how long to follow the game's log)
   cook   --target T --project DIR [--out FILE] [--pack zip|stored|7z]
+  apple-workflow --project DIR   writes .github/workflows/n2build-apple.yml into the game's repository (iOS and
+         macOS build there when this machine is not a Mac; docs/apple.html#remote)
          build also takes --pack zip|stored|7z|folder (how the game's files are packaged)
          and --signing PROFILE (a signing profile in your n2build.json; default: the project's)
 Common: --json (JSON lines for the editor), --targets-dir DIR (more targets)`;
@@ -105,8 +109,8 @@ export function parseArguments(argv) {
   if (options.archive !== undefined && !['zip', '7z'].includes(options.archive)) throw new UsageError('--archive must be zip or 7z');
   if (options.pack !== undefined && !PACK_KINDS.includes(options.pack)) throw new UsageError(`--pack must be one of ${PACK_KINDS.join(', ')}`);
   if (command === 'cook' && options.pack === 'folder') throw new UsageError('cook makes a pack: --pack zip, stored or 7z');
-  if (command !== 'list' && !options.target) throw new UsageError(`${command} needs --target`);
-  if ((command === 'build' || command === 'run' || command === 'cook') && !options.project) throw new UsageError(`${command} needs --project`);
+  if (command !== 'list' && command !== 'apple-workflow' && !options.target) throw new UsageError(`${command} needs --target`);
+  if ((command === 'build' || command === 'run' || command === 'cook' || command === 'apple-workflow') && !options.project) throw new UsageError(`${command} needs --project`);
   return { command, options };
 }
 
@@ -134,11 +138,24 @@ export function extraTargetFolders(options, env, platform) {
   return [...(settings.targetFolders ?? []), ...fromEnv, ...options.targetsDir].map((f) => path.resolve(f));
 }
 
+/** Whether this machine builds the target in GitHub Actions: it cannot build it here, and the target says where else (D7) */
+export function buildsRemotely(descriptor, platform) {
+  return !descriptor.hostSystems.includes(platform) && descriptor.remote !== undefined;
+}
+
+/** The toolchains to check here: a remote build needs only its own (gh), the rest are the workflow runner's */
+export function checkedToolchains(descriptor, ctx) {
+  if (!buildsRemotely(descriptor, ctx.platform)) return checkToolchains(descriptor, ctx);
+  return checkToolchains({ ...descriptor, toolchains: { required: descriptor.remote.toolchains ?? [], optional: [] } }, ctx);
+}
+
 function doctorReport(descriptor, toolchains, platform, physicsProblem) {
-  const hostOk = descriptor.hostSystems.includes(platform);
+  const remote = buildsRemotely(descriptor, platform);
+  const hostOk = descriptor.hostSystems.includes(platform) || remote;
   const checks = [
     { id: 'host', title: `Host system (${platform})`, required: true, ok: hostOk, version: null,
-      detail: hostOk ? '' : `${descriptor.name} builds on ${descriptor.hostSystems.join(', ')} only`, fix: hostOk ? null : `Build on ${descriptor.hostSystems.join(' or ')}` },
+      detail: remote ? `builds in GitHub Actions (${descriptor.remote.workflow}; docs/apple.html#remote)` : hostOk ? '' : `${descriptor.name} builds on ${descriptor.hostSystems.join(', ')} only`,
+      fix: hostOk ? null : `Build on ${descriptor.hostSystems.join(' or ')}` },
     ...toolchains.checks,
   ];
   if (physicsProblem !== undefined) {
@@ -155,7 +172,7 @@ async function build(descriptor, options, ctx, reporter) {
     reporter.warning(`The ${descriptor.name} target is turned off in this project (build.targets.${descriptor.name}.enabled); building it anyway`);
   }
   const physicsProblem = checkPhysics(project.modules, descriptor);
-  const toolchains = checkToolchains(descriptor, ctx);
+  const toolchains = checkedToolchains(descriptor, ctx);
   const report = doctorReport(descriptor, toolchains, ctx.platform, physicsProblem);
   if (!report.ok || options.json) reporter.doctor(report);
   for (const check of toolchains.checks) {
@@ -173,15 +190,25 @@ async function build(descriptor, options, ctx, reporter) {
   if (packFormat === '7z' && !sevenZip && !options.dryRun) {
     throw new BuildError("A 7z pack needs 7-Zip's command line (7z, 7za or 7zz on PATH): install 7-Zip, or build with --pack zip");
   }
+  if (buildsRemotely(descriptor, ctx.platform)) {
+    return buildRemote({ descriptor, options, ctx, reporter, projectDir, project, config, toolchains, ready: report.ok });
+  }
   if (descriptor.package.kind === 'android') {
     return buildAndroid({ descriptor, options, ctx, reporter, project, projectDir, config, toolchains, packFormat, sevenZip, ready: report.ok });
   }
-  const plan = planBuild({
+  if (descriptor.package.kind === 'ios' && packFormat === 'folder') throw new BuildError('An iOS app holds the game as one pack: build with --pack zip, stored or 7z');
+  // iOS: the pack and the app's identity are configure options (players/ios/CMakeLists.txt)
+  const treeForPack = (plan) => packPath({ descriptor, packageDir: plan.packageDir, treeDir: plan.treeDir });
+  const planOptions = {
     engineRoot: ENGINE_ROOT, projectDir, descriptor, config: config, modules: project.modules,
     present: toolchains.present, toolchainFile: toolchains.toolchainFile ?? (options.dryRun ? '<Emscripten.cmake from emsdk>' : null),
     buildRoot: options.buildDir ? path.resolve(options.buildDir) : null, outDir: options.out,
     jobs: options.jobs ?? os.availableParallelism(), gameName: project.name, packFormat,
-  });
+  };
+  let plan = planBuild(planOptions);
+  if (descriptor.package.kind === 'ios') {
+    plan = planBuild({ ...planOptions, extraConfigureArgs: iosConfigureArgs({ settings: project.settings, gameName: project.name, packFile: treeForPack(plan) }) });
+  }
   const gamePack = packFormat === 'folder' ? null : packPath({ descriptor, packageDir: plan.packageDir, treeDir: plan.treeDir });
   if (options.dryRun) {
     reporter.step('plan', `Plan for ${descriptor.name} (${config})`);
@@ -194,8 +221,8 @@ async function build(descriptor, options, ctx, reporter) {
   }
 
   const cmake = findOnPath('cmake', toolchains.env, ctx) ?? 'cmake';
-  // The web package preloads the pack (N2ENGINE_WEB_PACK), so it is cooked before CMake configures and builds
-  if (descriptor.package.kind === 'web' && gamePack) {
+  // The web package preloads the pack (N2ENGINE_WEB_PACK) and the iOS app bundles it, so it is cooked before CMake runs
+  if (packBeforeConfigure(descriptor) && gamePack) {
     reporter.step('cook', `Packing the game (${packFormat}) into ${gamePack}`);
     fs.mkdirSync(plan.treeDir, { recursive: true });
     cookPack({ projectDir, outFile: gamePack, format: packFormat, target: descriptor.name, game: project.name, sevenZip, env: toolchains.env });
@@ -217,16 +244,52 @@ async function build(descriptor, options, ctx, reporter) {
       pack: { format: packFormat, sevenZip, env: toolchains.env },
       physicsGpu: project.project.settings?.physics?.gpu,
       onLeftOut: (left) => reporter.log('stdout', `Not packaged: ${left.join(', ')} (the project's physics.gpu is off; set it to on or auto for GPU physics)`) })
-    : packageWeb({ treeDir: plan.treeDir, descriptor, packageDir: plan.packageDir });
-  writeMarker(plan.packageDir, markerInfo({
-    descriptor, config, entry, project, engine: engineRevision(ENGINE_ROOT), builtAt: new Date().toISOString(),
-  }));
+    : descriptor.package.kind === 'ios'
+      ? packageIos({ treeDir: plan.treeDir, config, packageDir: plan.packageDir, gameName: project.name })
+      : packageWeb({ treeDir: plan.treeDir, descriptor, packageDir: plan.packageDir });
+  writeMarker(plan.packageDir, {
+    ...markerInfo({ descriptor, config, entry, project, engine: engineRevision(ENGINE_ROOT), builtAt: new Date().toISOString() }),
+    ...(descriptor.package.kind === 'ios' ? { appId: iosSettings(project.settings, project.name).appId, sdk: 'iphonesimulator' } : {}),
+  });
   let archive;
   if (options.archive) {
     reporter.step('archive', `Writing a .${options.archive} archive`);
     archive = archivePackage({ packageDir: plan.packageDir, format: options.archive, cmake, env: toolchains.env });
   }
   return { ok: true, output: plan.packageDir, entry, ...(archive ? { archive } : {}) };
+}
+
+/**
+ * A build in GitHub Actions (docs/apple.html#remote): the game's repository must be pushed; the workflow runs n2build on a
+ * macOS runner and uploads the package, which lands in the package folder here
+ */
+async function buildRemote({ descriptor, options, ctx, reporter, projectDir, project, config, toolchains, ready }) {
+  const runGit = (args) => ctx.run('git', args, { env: ctx.env });
+  const state = gitState(projectDir, runGit);
+  const engineRef = engineRevision(ENGINE_ROOT);
+  const packageDir = options.out ? path.resolve(options.out) : path.join(projectDir, '.n2', 'out', `${descriptor.name}-${config}`, safeName(project.name));
+  if (options.dryRun) {
+    reporter.step('plan', `Plan for ${descriptor.name} (${config}) in GitHub Actions`);
+    reporter.log('stdout', `gh workflow run ${descriptor.remote.workflow} --ref ${state.branch} ${workflowInputs({ target: descriptor.name, config, projectPath: state.projectPath, engineRef }).join(' ')}`);
+    reporter.log('stdout', `artifact: ${descriptor.remote.artifact}`);
+    reporter.log('stdout', `package: ${packageDir}`);
+    return { ok: ready, dryRun: true, remote: true, output: packageDir, ...(ready ? {} : { error: 'Not ready (see the doctor report)' }) };
+  }
+  checkPushed(state);
+  preparePackageDir(packageDir);
+  const gh = toolchains.info.gh ?? 'gh';
+  const followed = await dispatchAndFollow({
+    descriptor, state, config, engineRef, packageDir, reporter,
+    ...(ctx.remote ?? {
+      exec: (args) => captureProcess(gh, args, { env: ctx.env }),
+      stream: (args, onLine) => runProcess(gh, args, { env: ctx.env, cwd: state.root, reporter: { log: (_s, line) => onLine(line) } }),
+      sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
+    }),
+  });
+  // The workflow's own n2build wrote the marker; it is checked like any package
+  const marker = readMarker(packageDir);
+  if (marker.target !== descriptor.name) throw new BuildError(`The workflow's artifact holds a ${marker.target} package, not ${descriptor.name}`);
+  return { ok: true, output: packageDir, entry: marker.entry, remote: followed.url };
 }
 
 /**
@@ -339,6 +402,15 @@ async function run(descriptor, options, ctx, reporter) {
     return { ok: true, output: packageDir };
   }
 
+  if (descriptor.run.kind === 'ios-simulator') {
+    if (ctx.platform !== 'darwin') {
+      throw new BuildError('The iOS simulator runs on a Mac only. Off a Mac, the n2build-apple workflow runs the app in the simulator for 30 seconds (docs/apple.html#remote)');
+    }
+    const outcome = await runInSimulator({ app: path.join(packageDir, marker.entry), bundleId: marker.appId, env: ctx.env, reporter,
+      seconds: options.seconds ?? null, ...(ctx.simulator ?? { exec: captureProcess, stream: streamLines }) });
+    return { ok: true, output: packageDir, device: outcome.device, ended: outcome.reason };
+  }
+
   if (descriptor.run.kind === 'android-device') {
     if (!marker.signed) throw new BuildError(`${marker.entry} is unsigned, and Android installs only signed APKs: build debug, or name a signing profile`);
     const sdk = checkToolchains({ ...descriptor, toolchains: { required: ['android-sdk'], optional: [] } }, ctx).info.androidSdk;
@@ -389,16 +461,28 @@ export async function main(argv, { ctx = systemProbe(), reporter } = {}) {
     const descriptors = loadDescriptors(ENGINE_ROOT, extraTargetFolders(options, ctx.env, ctx.platform));
     if (command === 'list') {
       r.targets([...descriptors.values()].map((d) => ({
-        name: d.name, displayName: d.displayName, hostSystems: d.hostSystems, buildableHere: d.hostSystems.includes(ctx.platform), source: d.source,
+        name: d.name, displayName: d.displayName, hostSystems: d.hostSystems, buildableHere: d.hostSystems.includes(ctx.platform) || buildsRemotely(d, ctx.platform),
+        ...(buildsRemotely(d, ctx.platform) ? { remote: d.remote.kind } : {}), source: d.source,
       })));
       r.result({ ok: true });
+      return 0;
+    }
+    if (command === 'apple-workflow') {
+      const state = gitState(path.resolve(options.project), (args) => ctx.run('git', args, { env: ctx.env }));
+      const file = path.join(state.root, '.github', 'workflows', 'n2build-apple.yml');
+      if (fs.existsSync(file) && !fs.readFileSync(file, 'utf8').startsWith('# Written by n2build apple-workflow')) {
+        throw new BuildError(`${file} exists and was not written by n2build; move it away first`);
+      }
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, workflowTemplate());
+      r.result({ ok: true, output: file, next: 'Commit and push it; then build --target ios or macos' });
       return 0;
     }
     const descriptor = findTarget(descriptors, options.target);
     if (command === 'doctor') {
       let physicsProblem;
       if (options.project) physicsProblem = checkPhysics(readProject(path.resolve(options.project), descriptor.name).modules, descriptor);
-      const report = doctorReport(descriptor, checkToolchains(descriptor, ctx), ctx.platform, physicsProblem);
+      const report = doctorReport(descriptor, checkedToolchains(descriptor, ctx), ctx.platform, physicsProblem);
       r.doctor(report);
       r.result({ ok: report.ok, ...(report.ok ? {} : { error: `Not ready to build ${descriptor.name}` }) });
       return report.ok ? 0 : 1;
