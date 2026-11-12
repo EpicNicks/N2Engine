@@ -14,6 +14,7 @@
       "CMAKE_SYSTEM_NAME": "iOS",
       "CMAKE_OSX_SYSROOT": "iphonesimulator",
       "CMAKE_OSX_ARCHITECTURES": "arm64",
+      "CMAKE_OSX_DEPLOYMENT_TARGET": "16.3",
       "N2ENGINE_BUILD_TESTS": "OFF"
     },
     "configs": {
