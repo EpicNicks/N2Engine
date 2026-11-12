@@ -7,9 +7,9 @@ import path from 'node:path';
 import { BuildError } from './report.mjs';
 
 export const DESCRIPTOR_FORMAT = 1;
-export const KNOWN_TOOLCHAINS = ['cmake', 'ninja', 'msvc', 'cxx', 'emsdk', 'vulkan-sdk'];
-export const PACKAGE_KINDS = ['desktop', 'web'];
-export const RUN_KINDS = ['executable', 'web-server'];
+export const KNOWN_TOOLCHAINS = ['cmake', 'ninja', 'msvc', 'cxx', 'emsdk', 'vulkan-sdk', 'android-sdk', 'android-ndk', 'jdk', 'gradle'];
+export const PACKAGE_KINDS = ['desktop', 'web', 'android'];
+export const RUN_KINDS = ['executable', 'web-server', 'android-device'];
 export const PACK_KINDS = ['zip', 'stored', '7z', 'folder'];
 export const PHYSICS3D_VALUES = ['none', 'physx', 'jolt', 'both'];
 const NAME = /^[a-z][a-z0-9-]{0,31}$/;

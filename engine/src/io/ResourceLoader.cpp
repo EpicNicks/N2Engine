@@ -35,8 +35,8 @@ namespace N2Engine::IO
         /// (as it was before the state file): two saves of a file a second apart, with the same size, are two changes.
         uint64_t UnixMilliseconds(const std::filesystem::file_time_type fileTime)
         {
-#ifdef N2ENGINE_PLATFORM_WEB
-            // libc++ (Emscripten) has no clock_cast; its file clock counts from the Unix epoch, so the same duration
+#if defined(N2ENGINE_PLATFORM_WEB) || defined(_LIBCPP_VERSION)
+            // libc++ (Emscripten, the NDK, Apple) has no clock_cast; its file clock counts from the Unix epoch, so the same duration
             // since the epoch is the system clock's time
             const std::chrono::sys_time<std::filesystem::file_time_type::duration> systemTime(fileTime.time_since_epoch());
 #else

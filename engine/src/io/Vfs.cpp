@@ -13,8 +13,8 @@ namespace N2Engine::IO
 {
     std::uint64_t FileTimeToUnixMilliseconds(const std::filesystem::file_time_type fileTime)
     {
-#ifdef N2ENGINE_PLATFORM_WEB
-        // libc++ (Emscripten) has no clock_cast; its file clock counts from the Unix epoch
+#if defined(N2ENGINE_PLATFORM_WEB) || defined(_LIBCPP_VERSION)
+        // libc++ (Emscripten, the NDK, Apple) has no clock_cast; its file clock counts from the Unix epoch
         const std::chrono::sys_time<std::filesystem::file_time_type::duration> systemTime(fileTime.time_since_epoch());
 #else
         const auto systemTime = std::chrono::clock_cast<std::chrono::system_clock>(fileTime);

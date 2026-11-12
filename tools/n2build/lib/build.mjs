@@ -183,9 +183,9 @@ export function recordConfigure(treeDir, configureArgs) {
 }
 
 /** Runs a tool with its output streamed line by line to the reporter; resolves with the exit code */
-export function runProcess(command, args, { env, cwd, reporter }) {
+export function runProcess(command, args, { env, cwd, reporter, spawnOptions = {} }) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { env, cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(command, args, { env, cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], ...spawnOptions });
     const pipe = (stream, name) => {
       let pending = '';
       stream.setEncoding('utf8');

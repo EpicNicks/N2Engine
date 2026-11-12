@@ -13,10 +13,13 @@ import {
   packPath, readProject, readTargetSettings, recordConfigure, resolveOptions, resolvePackFormat, runtimeFilesFor, safeName, writeMarker, PACKAGE_MARKER,
 } from './lib/build.mjs';
 import { loadDescriptors, readUserSettings, userSettingsFile, validateDescriptor } from './lib/descriptors.mjs';
+import {
+  androidSettings, cmakeInstallDir, defaultAppId, gradleInvocation, isAppId, packageAndroid, planAndroid, prepareGradleTree, propertiesPath,
+} from './lib/android.mjs';
 import { BuildError, Reporter } from './lib/report.mjs';
 import { MANIFEST_NAME, cookPack, crc32, findSevenZip, packFiles, writeZip } from './lib/cook.mjs';
 import { resolveRequest } from './lib/serve.mjs';
-import { applyEnv, checkToolchains, findOnPath, parseVersion, versionAtLeast } from './lib/toolchains.mjs';
+import { applyEnv, checkToolchains, commandInvocation, findOnPath, parseVersion, versionAtLeast } from './lib/toolchains.mjs';
 import { ENGINE_ROOT, main, markerInfo, parseArguments, resolveConfig, UsageError } from './n2build.mjs';
 
 const tmp = (prefix) => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -84,7 +87,7 @@ function capture() {
 
 test('the repository\'s descriptors load and are valid', () => {
   const descriptors = loadDescriptors(ENGINE_ROOT);
-  assert.deepEqual([...descriptors.keys()].sort(), ['linux', 'web', 'windows']);
+  assert.deepEqual([...descriptors.keys()].sort(), ['android', 'linux', 'web', 'windows']);
   for (const d of descriptors.values()) {
     assert.equal(d.source, 'targets/');
     assert.ok(d.cmake.configs.debug && d.cmake.configs.release, `${d.name} has debug and release`);
@@ -422,7 +425,7 @@ test('list --json reports every target and whether it builds here', async () => 
   const code = await main(['list', '--json'], { ctx: fakeProbe({ platform: 'linux', env: { HOME: tmp('n2build-home-') } }), reporter });
   assert.equal(code, 0);
   const targets = lines.find((l) => l.type === 'targets').targets;
-  assert.deepEqual(targets.map((t) => [t.name, t.buildableHere]), [['linux', true], ['web', true], ['windows', false]]);
+  assert.deepEqual(targets.map((t) => [t.name, t.buildableHere]), [['android', true], ['linux', true], ['web', true], ['windows', false]]);
   assert.deepEqual(lines.at(-1), { type: 'result', ok: true });
 });
 
@@ -647,6 +650,193 @@ test('the web plan preloads the pack: N2ENGINE_WEB_PACK names it in the build tr
   assert.equal(packPath({ descriptor: web, packageDir: '/out', treeDir: plan.treeDir }), path.join(plan.treeDir, 'game.n2pack'));
   const folder = planBuild({ engineRoot: '/engine', projectDir, descriptor: web, config: 'release', modules: null, present: new Set(), toolchainFile: '/em.cmake', gameName: 'Tri', packFormat: 'folder' });
   assert.ok(!folder.configureArgs.some((a) => a.startsWith('-DN2ENGINE_WEB_PACK')));
+});
+
+// --- Android (build targets stage 8) -------------------------------------------------------------------------------
+
+/** A Linux machine with everything the android target needs; overrides change one piece */
+function androidProbe({ env = {}, files = [], commands = {}, dirs = {}, platform = 'linux' } = {}) {
+  return fakeProbe({
+    platform,
+    env: { HOME: '/home/u', ANDROID_HOME: '/sdk', JAVA_HOME: '/jdk', ...env },
+    files: ['/sdk/platform-tools', '/jdk/bin/java', '/usr/bin/gradle', '/usr/bin/cmake', '/usr/bin/ninja', ...files],
+    dirs: { '/sdk/ndk': ['26.3.11579264', '27.0.12077973'], ...dirs },
+    commands: {
+      java: { status: 0, stdout: '', stderr: 'openjdk version "21.0.4" 2024-07-16' },
+      gradle: 'Gradle 8.10.2',
+      cmake: 'cmake version 3.30.0',
+      ninja: '1.12.1',
+      ...commands,
+    },
+  });
+}
+
+function androidDescriptor() {
+  return loadDescriptors(ENGINE_ROOT).get('android');
+}
+
+test('the android descriptor: Jolt or no 3D physics, a pinned NDK, an APK from players/android', () => {
+  const d = androidDescriptor();
+  assert.equal(d.package.kind, 'android');
+  assert.equal(d.package.from, 'players/android');
+  assert.equal(d.package.pack, 'zip');
+  assert.equal(d.run.kind, 'android-device');
+  assert.deepEqual(d.physics3d, ['none', 'jolt']);
+  assert.match(d.pins['android-ndk'], /^\d+\.\d+\.\d+$/);
+  assert.ok(fs.existsSync(path.join(ENGINE_ROOT, d.package.from, 'app', 'build.gradle')));
+  assert.match(checkPhysics({ physics3d: 'physx' }, d), /can build only: none, jolt/);
+});
+
+test('doctor for android: the SDK, the pinned NDK, a JDK 17 to 21 and Gradle 8.9 or newer', () => {
+  const ok = checkToolchains(androidDescriptor(), androidProbe());
+  assert.equal(ok.ok, true, JSON.stringify(ok.checks, null, 1));
+  assert.equal(ok.info.androidSdk, '/sdk');
+  assert.equal(ok.info.androidNdk, '27.0.12077973');
+  assert.equal(ok.info.gradle, '/usr/bin/gradle');
+  assert.equal(ok.env.JAVA_HOME, '/jdk');
+  assert.equal(ok.env.ANDROID_HOME, '/sdk');
+
+  const check = (probe, id) => checkToolchains(androidDescriptor(), probe).checks.find((c) => c.id === id);
+  assert.match(check(androidProbe({ dirs: { '/sdk/ndk': ['28.2.13676358'] } }), 'android-ndk').detail, /27\.0\.12077973 is not installed \(found: 28/);
+  assert.match(check(androidProbe({ env: { ANDROID_HOME: '/nowhere' } }), 'android-sdk').fix, /ANDROID_HOME/);
+  const java26 = check(androidProbe({ commands: { java: { status: 0, stdout: '', stderr: 'openjdk version "26" 2026-03-17' } } }), 'jdk');
+  assert.equal(java26.ok, false);
+  assert.match(java26.detail, /\/jdk \(26\)/);
+  assert.equal(check(androidProbe({ commands: { java: { status: 0, stdout: '', stderr: 'java version "1.8.0_402"' } } }), 'jdk').ok, false);
+  const oldGradle = check(androidProbe({ commands: { gradle: 'Gradle 7.4' } }), 'gradle');
+  assert.equal(oldGradle.ok, false);
+  assert.match(oldGradle.detail, /older than 8\.9/);
+});
+
+test('doctor on Windows runs gradle.bat through cmd.exe, never with a shell string it did not check', () => {
+  const seen = [];
+  const probe = fakeProbe({
+    platform: 'win32',
+    env: { PATH: 'C:\\Gradle\\bin', PATHEXT: '.EXE;.BAT' },
+    files: ['C:\\Gradle\\bin\\gradle.bat'],
+    commands: { cmd: (args) => { seen.push(args); return { status: 0, stdout: 'Gradle 8.11.1', stderr: '' }; } },
+  });
+  const gradle = checkToolchains(validateDescriptor({ ...JSON.parse(fs.readFileSync(path.join(ENGINE_ROOT, 'targets', 'android', 'target.json'), 'utf8')),
+    toolchains: { required: ['gradle'] } }, 'android/target.json'), probe).checks[0];
+  assert.equal(gradle.ok, true, gradle.detail);
+  assert.equal(gradle.version, '8.11.1');
+  assert.deepEqual(seen[0], ['/d', '/s', '/c', '"C:\\Gradle\\bin\\gradle.bat --version"']);
+});
+
+test('commandInvocation: a .bat goes through cmd.exe quoted; a character cmd.exe would read is refused', () => {
+  assert.deepEqual(commandInvocation('/usr/bin/gradle', ['a b'], 'linux'), { command: '/usr/bin/gradle', args: ['a b'], options: {} });
+  assert.deepEqual(commandInvocation('C:\\x\\gradle.exe', ['a'], 'win32').command, 'C:\\x\\gradle.exe');
+  const bat = commandInvocation('C:\\Program Files\\Gradle\\bin\\gradle.bat', ['-p', 'C:\\My Games\\tree', '-Pn2.version=1.0.0'], 'win32');
+  assert.equal(bat.command, 'cmd.exe');
+  assert.deepEqual(bat.args, ['/d', '/s', '/c', '""C:\\Program Files\\Gradle\\bin\\gradle.bat" -p "C:\\My Games\\tree" -Pn2.version=1.0.0"']);
+  assert.equal(bat.options.windowsVerbatimArguments, true);
+  for (const bad of ['100%', 'a&b', 'a|b', 'a"b', 'x^y', 'a<b', 'a>b', 'wow!', 'two\nlines']) {
+    assert.equal(commandInvocation('C:\\g\\gradle.bat', [bad], 'win32'), null, bad);
+  }
+  assert.throws(() => gradleInvocation('C:\\g\\gradle.bat', ['-Pn2.displayName=Rock & Roll'], 'win32'), BuildError);
+});
+
+test('app ids: the editor\'s rule plus no Java keyword; a default from the game\'s name', () => {
+  for (const good of ['com.example.game', 'io.n2.Tri_Like2', 'a.b']) assert.ok(isAppId(good), good);
+  for (const bad of ['game', 'com..game', 'com.1game', 'com.example.class', 'com.ex-ample.game', '.com.game', 'com.game.', `a.${'b'.repeat(150)}`, 42]) {
+    assert.ok(!isAppId(bad), String(bad));
+  }
+  assert.equal(defaultAppId('Triangle-Like!'), 'com.n2engine.trianglelike');
+  assert.equal(defaultAppId('2048'), 'com.n2engine.game2048');
+  assert.equal(defaultAppId(''), 'com.n2engine.game');
+  assert.equal(defaultAppId('Class'), 'com.n2engine.class_');
+  assert.ok(isAppId(defaultAppId('Class')));
+});
+
+test('build.targets.android: appId, orientation and abis are checked', () => {
+  assert.deepEqual(androidSettings({}, 'Tri'), { appId: 'com.n2engine.tri', orientation: 'any', abis: ['arm64-v8a', 'x86_64'] });
+  assert.deepEqual(androidSettings({ appId: 'com.example.tri', orientation: 'landscape', abis: ['arm64-v8a'] }, 'Tri'),
+    { appId: 'com.example.tri', orientation: 'landscape', abis: ['arm64-v8a'] });
+  assert.throws(() => androidSettings({ appId: 'tri' }, 'Tri'), /appId/);
+  assert.throws(() => androidSettings({ orientation: 'sideways' }, 'Tri'), /orientation/);
+  assert.throws(() => androidSettings({ abis: ['mips'] }, 'Tri'), /abis/);
+  assert.throws(() => androidSettings({ abis: [] }, 'Tri'), /abis/);
+  assert.throws(() => androidSettings({ abis: ['x86_64', 'x86_64'] }, 'Tri'), /abis/);
+});
+
+test('the android plan: cook into the tree, Gradle properties from the project, the APK path per configuration', () => {
+  const projectDir = makeProject({ name: 'Tri Like' });
+  const buildRoot = tmp('n2build-android-');
+  const base = { engineRoot: ENGINE_ROOT, projectDir, descriptor: androidDescriptor(), modules: undefined, buildRoot, gameName: 'Tri Like',
+    info: { androidSdk: 'C:\\Users\\me\\Android\\Sdk', androidNdk: '27.0.12077973' }, cmakeDir: 'C:\\Program Files\\CMake' };
+  const release = planAndroid({ ...base, config: 'release', settings: { appId: 'com.example.tri', version: '1.2.3', buildNumber: 7, orientation: 'landscape' } });
+  assert.equal(release.packFile, path.join(release.treeDir, 'assets', 'game.n2pack'));
+  assert.equal(release.gradleDir, path.join(release.treeDir, 'gradle'));
+  assert.ok(release.treeDir.startsWith(buildRoot));
+  assert.equal(release.gradleArgs[0], '-p');
+  assert.ok(release.gradleArgs.includes('assembleRelease'));
+  assert.ok(release.gradleArgs.includes('--no-daemon'));
+  for (const property of ['-Pn2.appId=com.example.tri', '-Pn2.version=1.2.3', '-Pn2.buildNumber=7', '-Pn2.orientation=sensorLandscape',
+    '-Pn2.abis=arm64-v8a,x86_64', '-Pn2.ndkVersion=27.0.12077973', '-Pn2.cmakeBuildType=Release', '-Pn2.displayName=Tri Like',
+    `-Pn2.project=${path.resolve(projectDir)}`, `-Pn2.assetsDir=${release.assetsDir}`]) {
+    assert.ok(release.gradleArgs.includes(property), `${property} in ${release.gradleArgs.join(' ')}`);
+  }
+  assert.equal(release.apk, path.join(release.gradleDir, 'app', 'build', 'outputs', 'apk', 'release', 'app-release-unsigned.apk'));
+  assert.equal(release.signed, false);
+  assert.equal(release.localProperties, '# Written by n2build for this build tree\nsdk.dir=C\\:/Users/me/Android/Sdk\ncmake.dir=C\\:/Program Files/CMake\n');
+
+  const debug = planAndroid({ ...base, config: 'debug', settings: {} });
+  assert.ok(debug.gradleArgs.includes('assembleDebug'));
+  assert.ok(debug.gradleArgs.includes('-Pn2.appId=com.n2engine.trilike'));
+  assert.ok(debug.gradleArgs.includes('-Pn2.orientation=fullUser'));
+  assert.equal(debug.signed, true);
+  assert.notEqual(debug.treeDir, release.treeDir);
+  assert.notEqual(planAndroid({ ...base, config: 'debug', settings: { abis: ['x86_64'] } }).treeDir, debug.treeDir, 'the ABIs are part of the tree');
+
+  assert.throws(() => planAndroid({ ...base, config: 'profile', settings: {} }), /debug or release/);
+  assert.throws(() => planAndroid({ ...base, config: 'debug', settings: { displayName: '100% Fun' } }), /n2\.displayName.*cannot pass/);
+  assert.equal(propertiesPath('/opt/android-sdk'), '/opt/android-sdk');
+  assert.equal(cmakeInstallDir(path.join('opt', 'cmake', 'bin', 'cmake')), path.join('opt', 'cmake'));
+});
+
+test('the Gradle tree: the template copied over (its build output and local.properties left out), local.properties written', () => {
+  const template = tmp('n2build-template-');
+  write(path.join(template, 'settings.gradle'), 'rootProject.name = "N2Player"');
+  write(path.join(template, 'app', 'build.gradle'), 'android {}');
+  write(path.join(template, 'app', 'build', 'stale.apk'), 'x');
+  write(path.join(template, 'native', 'CMakeLists.txt'), 'native is built from the engine root');
+  write(path.join(template, 'local.properties'), 'sdk.dir=/someone/elses');
+  const treeDir = tmp('n2build-tree-');
+  const plan = { template, gradleDir: path.join(treeDir, 'gradle'), assetsDir: path.join(treeDir, 'assets'), localProperties: 'sdk.dir=/sdk\n' };
+  write(path.join(plan.gradleDir, 'app', 'build', 'intermediates', 'kept.txt'), 'incremental');
+  prepareGradleTree(plan);
+  assert.equal(fs.readFileSync(path.join(plan.gradleDir, 'app', 'build.gradle'), 'utf8'), 'android {}');
+  assert.equal(fs.readFileSync(path.join(plan.gradleDir, 'local.properties'), 'utf8'), 'sdk.dir=/sdk\n');
+  assert.ok(!fs.existsSync(path.join(plan.gradleDir, 'app', 'build', 'stale.apk')));
+  assert.ok(!fs.existsSync(path.join(plan.gradleDir, 'native')));
+  assert.ok(fs.existsSync(path.join(plan.gradleDir, 'app', 'build', 'intermediates', 'kept.txt')), 'Gradle\'s output stays for the next build');
+  assert.ok(fs.statSync(plan.assetsDir).isDirectory());
+});
+
+test('the android package: the APK named after the game, -unsigned when it is not signed', () => {
+  const dir = tmp('n2build-apk-');
+  const apk = path.join(dir, 'app-release-unsigned.apk');
+  write(apk, 'PK');
+  const packageDir = path.join(dir, 'out');
+  fs.mkdirSync(packageDir);
+  assert.equal(packageAndroid({ plan: { apk, signed: false }, packageDir, gameName: 'Tri Like!' }), 'Tri Like_-unsigned.apk');
+  assert.equal(packageAndroid({ plan: { apk, signed: true }, packageDir, gameName: 'Tri' }), 'Tri.apk');
+  assert.throws(() => packageAndroid({ plan: { apk: path.join(dir, 'none.apk'), signed: true }, packageDir, gameName: 'Tri' }), /Gradle did not produce/);
+});
+
+test('build --target android --dry-run prints the Gradle command, and refuses --pack folder', async () => {
+  const projectDir = makeProject({ name: 'Tri', build: { targets: { android: { appId: 'com.example.tri' } } } });
+  const { reporter, lines } = capture();
+  const code = await main(['build', '--target', 'android', '--project', projectDir, '--config', 'debug', '--dry-run', '--json'], { ctx: androidProbe(), reporter });
+  assert.equal(code, 0, JSON.stringify(lines.at(-1)));
+  const logs = lines.filter((l) => l.type === 'log').map((l) => l.text);
+  assert.ok(logs.some((t) => t.startsWith('gradle -p ') && t.includes('assembleDebug') && t.includes('-Pn2.appId=com.example.tri')), logs.join('\n'));
+  assert.ok(logs.some((t) => t.startsWith('game: zip pack ') && t.endsWith('game.n2pack')));
+  assert.ok(!fs.existsSync(path.join(projectDir, '.n2')));
+
+  const refused = capture();
+  assert.equal(await main(['build', '--target', 'android', '--project', projectDir, '--pack', 'folder', '--dry-run', '--json'], { ctx: androidProbe(), reporter: refused.reporter }), 1);
+  assert.match(refused.lines.at(-1).error, /one pack/);
 });
 
 // --- PhysX's GPU library only for GPU physics (follow-up of the build targets plan) ----------------------------------

@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Android · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="physics2d.html">2D physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="sprite2d.html">Sprites &amp; 2D shapes</a></li>
+<li><a href="particles.html">Particles</a></li>
+<li><a href="soft-bodies.html">Soft bodies</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+<li><a href="netcode.html">Netcode (n2net)</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+<li><a href="editor-extensions.html">Lua editor extensions</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="editor.html">Editor projects</a></li>
+<li><a href="mcp.html">MCP bridge (n2-mcp)</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+<li><a href="web-build.html">Web build</a></li>
+<li><a href="project-modules.html">Project modules</a></li>
+<li><a href="build-targets.html">Build targets</a></li>
+<li><a href="platform.html">The platform layer</a></li>
+<li><a href="packs.html">Packs &amp; the virtual filesystem</a></li>
+<li><a href="android.html" aria-current="page">Android</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Android</h1>
+<p class="lead">The <code>android</code> target builds a game into an APK: the engine and the game's module list compiled with the NDK into <code>libn2game.so</code>, the game's pack in the APK's assets, and a small <code>GameActivity</code> around them. n2build drives Gradle; the editor's Build Settings panel drives n2build. This is stage 8 of the <a href="build-targets.html">build targets</a> plan <span class="badge">PR #343</span>.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#build">Building an APK</a></li>
+<li><a href="#toolchains">What the machine needs</a></li>
+<li><a href="#settings">Project settings</a></li>
+<li><a href="#player">The player</a></li>
+<li><a href="#limits">What is not there yet</a></li>
+<li><a href="#ci">CI</a></li>
+<li><a href="#checklist">Device checklist</a></li>
+</ol>
+</div>
+
+<h2 id="build">Building an APK</h2>
+<pre class="lang-shell"><code>node tools/n2build/n2build.mjs doctor --target android --project path/to/game
+node tools/n2build/n2build.mjs build  --target android --project path/to/game [--config debug|release] [--out DIR] [--pack zip|stored|7z]</code></pre>
+<p>The build runs in the target's build tree (<code>.n2/build/android-&lt;config&gt;-&lt;hash&gt;</code>, one per configuration, module list and ABI list), in four steps:</p>
+<ol>
+<li><strong>Cook:</strong> the game's pack, <code>game.n2pack</code> (zip by default; see <a href="packs.html">Packs</a>), into <code>&lt;tree&gt;/assets</code>.</li>
+<li><strong>The Gradle project:</strong> <code>players/android</code> is copied into <code>&lt;tree&gt;/gradle</code>, over what is there, so Gradle's own output stays and the next build is incremental. n2build writes <code>local.properties</code> with the SDK folder and <code>cmake.dir</code>: the CMake that n2build found, because the SDK's own CMake (3.22) is older than the 3.25 the engine needs.</li>
+<li><strong>Gradle:</strong> <code>gradle -p &lt;tree&gt;/gradle assembleDebug</code> (or <code>assembleRelease</code>), with the game's settings as properties (<code>-Pn2.appId</code>, <code>-Pn2.project</code>, <code>-Pn2.assetsDir</code>, <code>-Pn2.abis</code> and so on). Gradle's CMake step configures the engine repository itself with the NDK's toolchain and the GameActivity prefab and builds <code>libn2game.so</code> once per ABI, in <code>&lt;tree&gt;/native</code>.</li>
+<li><strong>Package:</strong> the APK goes into the package folder as <code>&lt;Game&gt;.apk</code> (<code>&lt;Game&gt;-unsigned.apk</code> for a release build), with n2build's marker. The marker also records the app id and the ABIs.</li>
+</ol>
+<p>A debug APK is signed with the SDK's debug key and installs on any device with USB debugging on. A release APK is unsigned until signing profiles arrive (stage 9); Android does not install an unsigned APK.</p>
+<p class="src">Source: <code>tools/n2build/lib/android.mjs</code> — <code>planAndroid</code>, <code>prepareGradleTree</code>, <code>packageAndroid</code>; <code>targets/android/target.json</code>; <code>players/android</code></p>
+
+<div class="callout note">
+<p class="callout-title">Gradle on Windows</p>
+<p>Gradle is <code>gradle.bat</code> on Windows, which only <code>cmd.exe</code> can start. n2build passes it a quoted command line and refuses to start it when a path or setting holds a character <code>cmd.exe</code> would interpret (<code>" % ! ^ &amp; | &lt; &gt;</code>). The error names the setting, so you can rename the folder or change the setting.</p>
+</div>
+
+<h2 id="toolchains">What the machine needs</h2>
+<table>
+<thead><tr><th>Check</th><th>What n2build looks for</th></tr></thead>
+<tbody>
+<tr><td>Android SDK</td><td><code>ANDROID_HOME</code>, <code>ANDROID_SDK_ROOT</code>, else the SDK Manager's default folder (<code>%LOCALAPPDATA%\Android\Sdk</code>, <code>~/Library/Android/sdk</code>, <code>~/Android/Sdk</code>)</td></tr>
+<tr><td>Android NDK</td><td>The pinned version, <code>27.0.12077973</code>, in the SDK's <code>ndk/</code> folder (<code>sdkmanager "ndk;27.0.12077973"</code>)</td></tr>
+<tr><td>Java</td><td>A JDK 17 to 21 for the Android Gradle plugin 8.7: <code>N2BUILD_JAVA_HOME</code>, <code>JAVA_HOME</code>, else Android Studio's bundled one. A newer JDK is refused by name.</td></tr>
+<tr><td>Gradle</td><td>8.9 or newer on <code>PATH</code></td></tr>
+<tr><td>CMake, Ninja</td><td>As for the desktop targets: CMake 3.25 or newer</td></tr>
+</tbody>
+</table>
+<p>The physics check allows <code>physics3d</code> <code>none</code> or <code>jolt</code> only: there is no PhysX on mobile (decision D8). Box2D is always available.</p>
+
+<h2 id="settings">Project settings</h2>
+<p><code>build.targets.android</code> in <code>project.n2proj</code> (<a href="build-targets.html#settings">all target settings</a>):</p>
+<table>
+<thead><tr><th>Key</th><th>Default</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td><code>appId</code></td><td><code>com.n2engine.&lt;name&gt;</code></td><td>The application id. A reverse-domain id; no segment may be a Java keyword.</td></tr>
+<tr><td><code>displayName</code></td><td>The project's name</td><td>The name under the launcher icon, and the APK's file name</td></tr>
+<tr><td><code>version</code>, <code>buildNumber</code></td><td><code>1.0.0</code>, <code>1</code></td><td><code>versionName</code> and <code>versionCode</code></td></tr>
+<tr><td><code>orientation</code></td><td><code>any</code></td><td><code>any</code>, <code>landscape</code> or <code>portrait</code> (the activity's <code>fullUser</code>, <code>sensorLandscape</code> or <code>sensorPortrait</code>)</td></tr>
+<tr><td><code>abis</code></td><td><code>["arm64-v8a", "x86_64"]</code></td><td>The ABIs to build: <code>arm64-v8a</code>, <code>armeabi-v7a</code>, <code>x86_64</code>, <code>x86</code>. Each one is a separate engine build, so build fewer to build faster.</td></tr>
+<tr><td><code>config</code>, <code>modules</code>, <code>pack</code></td><td></td><td>As for every target</td></tr>
+</tbody>
+</table>
+
+<h2 id="player">The player</h2>
+<p><code>players/android/native</code> holds the platform backend (<code>AndroidHost</code>, an <code>IPlatformHost</code>; see <a href="platform.html">the platform layer</a>) and <code>android_main</code>. The OS owns the loop: the engine starts when the first window arrives and runs one frame per pass of the activity's event loop while the app is in the foreground.</p>
+<ul>
+<li><strong>Drawing:</strong> the software renderer draws each frame, and the backend copies it into the window's buffer (<code>ANativeWindow_lock</code>), so no EGL context is needed. The window can go away (the app goes to the background, or the screen turns off) and come back: the engine gets <code>SurfaceLost</code> and <code>SurfaceRecreated</code>, and frames are dropped while there is no window.</li>
+<li><strong>Lifecycle:</strong> <code>Paused</code>, <code>Resumed</code>, <code>LowMemory</code> and <code>QuitRequested</code> reach the engine as lifecycle events. The loop blocks while the app is paused.</li>
+<li><strong>Input:</strong> touches go to the Touchscreen (the first finger also moves the mouse, as on the web). Keys and gamepad buttons arrive in engine codes; sticks and triggers come from joystick motion events. Back is Escape and also raises <code>BackRequested</code>.</li>
+<li><strong>Safe area:</strong> <code>Insets()</code> combines the system bars and the display cutout. The activity is immersive: the bars hide until the player swipes them in.</li>
+<li><strong>Files:</strong> the game's pack is copied out of the APK into the app's files folder the first time the game starts, because an APK asset cannot be read at random positions. It is copied again when the APK's pack differs from the copy: a different size, or a different index at the pack's end, where a zip lists every file's CRC. The APK stores the pack uncompressed, so this check is a cheap seek. The pack is mounted where the game's folder would be. <code>user://</code> is <code>files/user</code>.</li>
+</ul>
+<p class="src">Source: <code>players/android/native/src/AndroidMain.cpp</code>, <code>AndroidHost.cpp</code>; <code>players/android/app</code> (<code>N2Activity</code>)</p>
+
+<h2 id="limits">What is not there yet</h2>
+<ul>
+<li><strong>Signing, AAB, install and run:</strong> stage 9. Signing profiles, a release AAB, <code>adb</code> install and run, and <code>logcat</code> in the editor. Until then, <code>n2build run --target android</code> stops after the build and prints the <code>adb</code> commands.</li>
+<li><strong>Rendering:</strong> the software renderer only. Vulkan on Android is stage 12.</li>
+<li><strong>Audio:</strong> OpenAL Soft plays through its OpenSL ES backend. AAudio through Oboe is a follow-up.</li>
+<li><strong>Rumble:</strong> does nothing yet. The manifest asks for <code>VIBRATE</code>, so adding it later does not change the APK's permissions.</li>
+</ul>
+
+<h2 id="ci">CI</h2>
+<p>The <code>android</code> job in <code>.github/workflows/tests.yml</code> builds <code>lua_project</code> into a debug APK through n2build, for the emulator's ABI only (<code>x86_64</code>). It checks that the APK holds the pack and the native libraries. It then installs the APK on an API 30 emulator with no GPU, where <code>scripts/android-emulator-smoke.sh</code> passes when the game logs its first frame and a frame-rate line and is still running.</p>
+
+<h2 id="checklist">Device checklist</h2>
+<p>CI runs the game only on an emulator. Check these on a real phone before a release, and record the results in the PR or the release notes.</p>
+<table>
+<thead><tr><th>#</th><th>Check</th><th>How</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Installs and starts</td><td><code>adb install -r &lt;Game&gt;.apk</code>, then start it from the launcher; the first scene appears</td></tr>
+<tr><td>2</td><td>Frame rate</td><td><code>adb logcat -s N2Engine</code>: the player logs <code>N frames, X fps</code> every five seconds. Record the phone, its Android version and the rate.</td></tr>
+<tr><td>3</td><td>Touch</td><td>Taps, drags and two fingers at once reach the game; touch controls respond</td></tr>
+<tr><td>4</td><td>Gamepad</td><td>A Bluetooth gamepad: buttons, both sticks and the triggers</td></tr>
+<tr><td>5</td><td>Back</td><td>The back gesture or button reaches the game as Escape (a pause menu, say) and does not kill the app</td></tr>
+<tr><td>6</td><td>Background and back</td><td>Home, then return: the game resumes where it was, with no black screen</td></tr>
+<tr><td>7</td><td>Screen off and on</td><td>The window is lost and recreated; the game draws again</td></tr>
+<tr><td>8</td><td>Rotation</td><td>With <code>orientation</code> <code>any</code>, the game follows the phone and the size updates; with <code>landscape</code>, it stays landscape</td></tr>
+<tr><td>9</td><td>Cutout and bars</td><td>UI anchored to the safe area stays clear of the notch and the swiped-in bars</td></tr>
+<tr><td>10</td><td>Audio</td><td>Sound plays, stops in the background and resumes</td></tr>
+<tr><td>11</td><td>Saves</td><td>Save, force-stop the app (<code>adb shell am force-stop &lt;appId&gt;</code>), start again: the save is there</td></tr>
+<tr><td>12</td><td>Update</td><td>Install a build with a changed game over the old one: the new pack is used</td></tr>
+</tbody>
+</table>
+
+<div class="page-footer">
+<span>Describes the build targets branches through stage 8.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>

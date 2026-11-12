@@ -60,6 +60,27 @@ export function findOnPath(name, env, ctx) {
   return null;
 }
 
+// eslint-disable-next-line no-control-regex
+const CMD_UNSAFE = /[\u0000-\u001f"%!^&|<>]/;
+
+/** Whether cmd.exe would read nothing in this argument: no quote, %, !, ^, &, |, <, > or control character */
+export function cmdSafe(text) {
+  return !CMD_UNSAFE.test(text);
+}
+
+/**
+ * How to start a program. A Windows .bat or .cmd (gradle.bat) starts only through cmd.exe: the line is quoted for it,
+ * and null is returned when an argument holds a character cmd.exe would read, so nothing is ever run through a shell
+ * that could change its meaning. Anything else starts directly.
+ */
+export function commandInvocation(command, args, platform = process.platform) {
+  if (platform !== 'win32' || !/\.(bat|cmd)$/i.test(command)) return { command, args, options: {} };
+  if (![command, ...args].every(cmdSafe)) return null;
+  const quote = (text) => (/[\s()]/.test(text) || text === '' ? `"${text}"` : text);
+  const line = [command, ...args].map(quote).join(' ');
+  return { command: 'cmd.exe', args: ['/d', '/s', '/c', `"${line}"`], options: { windowsVerbatimArguments: true } };
+}
+
 /** "3.30.1" -> [3, 30, 1] */
 export function parseVersion(text) {
   const match = /(\d+)\.(\d+)(?:\.(\d+))?/.exec(text ?? '');
@@ -103,7 +124,100 @@ function visualStudio(ctx) {
   return ctx._vs;
 }
 
+/** The Android SDK folder: ANDROID_HOME, ANDROID_SDK_ROOT, else the SDK manager's default per system; null when absent */
+function androidSdk(ctx, env) {
+  const join = ctx.platform === 'win32' ? path.win32.join : path.posix.join;
+  const home = env.USERPROFILE ?? env.HOME ?? os.homedir();
+  const candidates = [env.ANDROID_HOME, env.ANDROID_SDK_ROOT,
+    ctx.platform === 'win32' ? join(env.LOCALAPPDATA ?? join(home, 'AppData', 'Local'), 'Android', 'Sdk')
+      : ctx.platform === 'darwin' ? join(home, 'Library', 'Android', 'sdk') : join(home, 'Android', 'Sdk')];
+  for (const dir of candidates) {
+    if (dir && ctx.exists(join(dir, 'platform-tools'))) return dir;
+  }
+  return null;
+}
+
+/** The major version of a JDK's java (8 for "1.8.0_..."), or null */
+function javaMajor(ctx, javaExe) {
+  const result = ctx.run(javaExe, ['-version']);
+  const text = `${result?.stderr ?? ''}${result?.stdout ?? ''}`;
+  const match = /version "(\d+)(?:\.(\d+))?/.exec(text);
+  if (!match) return null;
+  return match[1] === '1' ? Number(match[2]) : Number(match[1]);
+}
+
+/** The JDK range the Android Gradle plugin 8.7 runs on */
+export const ANDROID_JDK = { min: 17, max: 21 };
+export const MIN_GRADLE = [8, 9, 0];
+
 const CHECKS = {
+  'android-sdk': {
+    title: 'Android SDK',
+    check(ctx, pins, env) {
+      const fix = 'Install Android Studio (its SDK Manager installs the SDK), or the command-line tools, and set ANDROID_HOME to the SDK folder';
+      const dir = androidSdk(ctx, env);
+      if (!dir) return { ok: false, detail: 'no SDK found (ANDROID_HOME, ANDROID_SDK_ROOT, or the SDK manager\'s default folder)', fix };
+      return { ok: true, detail: dir, env: { set: { ANDROID_HOME: dir, ANDROID_SDK_ROOT: dir } }, info: { androidSdk: dir } };
+    },
+  },
+
+  'android-ndk': {
+    title: 'Android NDK',
+    check(ctx, pins, env) {
+      const pinned = pins['android-ndk'];
+      const dir = androidSdk(ctx, env);
+      const join = ctx.platform === 'win32' ? path.win32.join : path.posix.join;
+      const fix = `In Android Studio's SDK Manager (SDK Tools, "Show Package Details"), install NDK ${pinned ?? '(side by side)'}; or: sdkmanager "ndk;${pinned ?? '<version>'}"`;
+      if (!dir) return { ok: false, detail: 'no Android SDK, so no NDK', fix };
+      const versions = ctx.listDir(join(dir, 'ndk')).sort();
+      const chosen = pinned ? versions.find((v) => v === pinned) : versions[versions.length - 1];
+      if (!chosen) {
+        return { ok: false, detail: versions.length ? `NDK ${pinned} is not installed (found: ${versions.join(', ')})` : 'no NDK installed', fix };
+      }
+      return { ok: true, version: chosen, detail: join(dir, 'ndk', chosen), info: { androidNdk: chosen } };
+    },
+  },
+
+  jdk: {
+    title: `Java ${ANDROID_JDK.min} to ${ANDROID_JDK.max} (the Android Gradle plugin)`,
+    check(ctx, pins, env) {
+      const join = ctx.platform === 'win32' ? path.win32.join : path.posix.join;
+      const exeName = ctx.platform === 'win32' ? 'java.exe' : 'java';
+      const fix = `Install a JDK ${ANDROID_JDK.min} to ${ANDROID_JDK.max} (Temurin 17 or 21, or Android Studio's bundled one) and set JAVA_HOME to it`;
+      const homes = [env.N2BUILD_JAVA_HOME, env.JAVA_HOME,
+        ctx.platform === 'win32' ? join(env.ProgramFiles ?? 'C:\\Program Files', 'Android', 'Android Studio', 'jbr')
+          : ctx.platform === 'darwin' ? '/Applications/Android Studio.app/Contents/jbr/Contents/Home' : '/opt/android-studio/jbr'];
+      const seen = [];
+      for (const home of homes) {
+        if (!home) continue;
+        const exe = join(home, 'bin', exeName);
+        if (!ctx.exists(exe)) continue;
+        const major = javaMajor(ctx, exe);
+        seen.push(`${home} (${major ?? '?'})`);
+        if (major !== null && major >= ANDROID_JDK.min && major <= ANDROID_JDK.max) {
+          return { ok: true, version: String(major), detail: home, env: { set: { JAVA_HOME: home }, prependPath: [join(home, 'bin')] } };
+        }
+      }
+      return { ok: false, detail: seen.length ? `no JDK ${ANDROID_JDK.min} to ${ANDROID_JDK.max}: ${seen.join(', ')}` : 'no JDK found (JAVA_HOME)', fix };
+    },
+  },
+
+  gradle: {
+    title: 'Gradle',
+    check(ctx, pins, env) {
+      const fix = `Install Gradle ${MIN_GRADLE.join('.')} or newer (https://gradle.org/install/) and put it on PATH`;
+      const exe = findOnPath('gradle', env, ctx);
+      if (!exe) return { ok: false, detail: 'not found on PATH', fix };
+      const invocation = commandInvocation(exe, ['--version'], ctx.platform);
+      if (!invocation) return { ok: false, detail: `${exe}: its path holds a character n2build cannot pass to cmd.exe`, fix };
+      const result = ctx.run(invocation.command, invocation.args, { env, ...invocation.options });
+      const version = parseVersion(/Gradle\s+([\d.]+)/.exec(result?.stdout ?? '')?.[1]);
+      if (!version) return { ok: false, detail: `${exe} --version gave no version`, fix };
+      if (!versionAtLeast(version, MIN_GRADLE)) return { ok: false, version: version.join('.'), detail: `older than ${MIN_GRADLE.join('.')}`, fix };
+      return { ok: true, version: version.join('.'), detail: exe, info: { gradle: exe } };
+    },
+  },
+
   msvc: {
     title: 'Visual Studio C++ (x64)',
     check(ctx) {
@@ -245,8 +359,8 @@ const CHECKS = {
   },
 };
 
-// msvc and emsdk first: they change the environment the other checks look in
-const ORDER = ['msvc', 'emsdk', 'cmake', 'ninja', 'cxx', 'vulkan-sdk'];
+// msvc, emsdk, the SDK and the JDK first: they change the environment the other checks look in
+const ORDER = ['msvc', 'emsdk', 'android-sdk', 'jdk', 'cmake', 'ninja', 'cxx', 'vulkan-sdk', 'android-ndk', 'gradle'];
 
 /**
  * Runs the checks a descriptor names, in dependency order.
@@ -259,6 +373,7 @@ export function checkToolchains(descriptor, ctx) {
   ]);
   let env = { ...ctx.env };
   let toolchainFile = null;
+  const info = {};
   const checks = [];
   const present = new Set();
   for (const id of ORDER) {
@@ -269,8 +384,9 @@ export function checkToolchains(descriptor, ctx) {
       present.add(id);
       env = applyEnv(env, outcome.env ? { ...outcome.env, delimiter: ctx.platform === 'win32' ? ';' : ':' } : null);
       if (outcome.toolchainFile) toolchainFile = outcome.toolchainFile;
+      Object.assign(info, outcome.info ?? {});
     }
     checks.push({ id, title: CHECKS[id].title, required, ok: outcome.ok, version: outcome.version ?? null, detail: outcome.detail ?? '', fix: outcome.ok ? null : outcome.fix ?? null });
   }
-  return { checks, ok: checks.every((c) => c.ok || !c.required), env, toolchainFile, present };
+  return { checks, ok: checks.every((c) => c.ok || !c.required), env, toolchainFile, present, info };
 }

@@ -90,8 +90,9 @@ namespace N2Engine::Platform
         return true;
     }
 
-#ifdef N2ENGINE_PLATFORM_WEB
-    // The web has no GLFW (its page owns the canvas): no desktop host, and GLFW is never initialised
+#ifdef N2ENGINE_NO_GLFW
+    // The web and Android have no GLFW: no desktop host (a player hands in its own: Window::SetPlatformHost), and GLFW
+    // is never initialised
     std::unique_ptr<IPlatformHost> MakeDesktopGlfwHost(HostPaths)
     {
         return nullptr;

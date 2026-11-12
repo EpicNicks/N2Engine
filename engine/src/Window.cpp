@@ -140,7 +140,7 @@ bool Window::InitWindow(const Config::ApplicationOptions &options)
     // A window: the desktop platform backend (GLFW). Vulkan has no OpenGL context; the OpenGL renderer's linear lighting
     // needs an sRGB-capable framebuffer (GL_FRAMEBUFFER_SRGB, turned on only for the lit shader); the software renderer
     // presents its own buffer through the context, so its window is left as it was
-    _host = Platform::MakeDesktopGlfwHost();
+    _host = _pendingHost ? std::move(_pendingHost) : Platform::MakeDesktopGlfwHost();
     if (!_host)
     {
         return FailInit("This build has no window backend (no GLFW); run headless");

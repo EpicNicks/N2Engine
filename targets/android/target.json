@@ -1,0 +1,23 @@
+{
+  "formatVersion": 1,
+  "name": "android",
+  "displayName": "Android (APK)",
+  "hostSystems": ["win32", "linux", "darwin"],
+  "toolchains": {
+    "required": ["android-sdk", "android-ndk", "jdk", "gradle", "cmake", "ninja"]
+  },
+  "pins": { "android-ndk": "27.0.12077973" },
+  "physics3d": ["none", "jolt"],
+  "cmake": {
+    "target": "n2game",
+    "options": {
+      "N2ENGINE_BUILD_TESTS": "OFF"
+    },
+    "configs": {
+      "debug": { "CMAKE_BUILD_TYPE": "Debug" },
+      "release": { "CMAKE_BUILD_TYPE": "Release" }
+    }
+  },
+  "package": { "kind": "android", "from": "players/android", "pack": "zip" },
+  "run": { "kind": "android-device" }
+}
