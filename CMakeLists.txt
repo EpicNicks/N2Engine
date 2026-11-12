@@ -384,6 +384,10 @@ list(FILTER LUA_SOURCES EXCLUDE REGEX ".*lua\\.c$")
 list(FILTER LUA_SOURCES EXCLUDE REGEX ".*luac\\.c$")
 
 add_library(lua STATIC ${LUA_SOURCES})
+if(N2ENGINE_PLATFORM_IOS)
+    # iOS has no system(): Lua's own switch makes os.execute report that no shell is there
+    target_compile_definitions(lua PRIVATE LUA_USE_IOS)
+endif()
 target_include_directories(lua PUBLIC ${CMAKE_SOURCE_DIR}/external/lua)
 
 if(WIN32)
