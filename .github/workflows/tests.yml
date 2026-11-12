@@ -912,6 +912,8 @@ jobs:
         run: |
           set +e
           export VK_ICD_FILENAMES="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
+          # The layer's manifest names its library bare (libVkLayer_khronos_validation.dylib): dlopen finds it in Homebrew's lib
+          export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix)/lib:/usr/local/lib:/usr/lib"
           # Homebrew's layer folder is already on the loader's search path (adding it again made a duplicate the loader drops)
           ls "$(brew --prefix)/share/vulkan/explicit_layer.d" || true
           # One test with the loader's own diagnostics, so a layer or driver that will not load says why
