@@ -82,6 +82,24 @@ foreach(DLL IN LISTS PHYSX_DLLS)
     endif()
 endforeach()
 string(APPEND _n2_player_files "$<${_n2_openal_shared}:\n$<PATH:GET_FILENAME,${_n2_openal_file}>>")
+
+# macOS with the Vulkan renderer on MoltenVK (cmake/N2EngineApple.cmake; build targets stage 13): MoltenVK is copied beside
+# the player and the player loads it from there (its install name rewritten to @executable_path), so a package runs on a
+# Mac with nothing installed. Rewriting a binary breaks its signature, which Apple silicon refuses to run: both are signed
+# again (ad hoc; a release is signed by its own identity later)
+if(APPLE AND N2ENGINE_APPLE_MOLTENVK_LINKED)
+    add_custom_command(TARGET n2player POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy "${N2_MOLTENVK_LIBRARY}" "$<TARGET_FILE_DIR:n2player>/libMoltenVK.dylib"
+        COMMAND chmod u+w "$<TARGET_FILE_DIR:n2player>/libMoltenVK.dylib"
+        COMMAND install_name_tool -id @executable_path/libMoltenVK.dylib "$<TARGET_FILE_DIR:n2player>/libMoltenVK.dylib"
+        COMMAND sh -c "install_name_tool -change \"$(otool -D '${N2_MOLTENVK_LIBRARY}' | tail -1)\" @executable_path/libMoltenVK.dylib '$<TARGET_FILE:n2player>'"
+        COMMAND codesign --force --sign - "$<TARGET_FILE_DIR:n2player>/libMoltenVK.dylib"
+        COMMAND codesign --force --sign - "$<TARGET_FILE:n2player>"
+        COMMENT "MoltenVK beside the player"
+        VERBATIM
+    )
+    string(APPEND _n2_player_files "\nlibMoltenVK.dylib")
+endif()
 file(GENERATE
     OUTPUT "$<TARGET_FILE_DIR:n2player>/n2player-files.txt"
     CONTENT "${_n2_player_files}\n"

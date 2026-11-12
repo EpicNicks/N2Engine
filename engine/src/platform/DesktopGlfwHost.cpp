@@ -37,6 +37,11 @@ namespace N2Engine::Platform
             bool CreateSurface(const SurfaceOptions &options) override
             {
                 _error.clear();
+#if N2ENGINE_APPLE_MOLTENVK && N2ENGINE_RENDERER_VULKAN
+                // macOS links MoltenVK itself, with no Vulkan loader for GLFW to find (build targets stage 13): GLFW takes
+                // MoltenVK's entry point for its Vulkan calls (the instance extensions, the window surface)
+                glfwInitVulkanLoader(vkGetInstanceProcAddr);
+#endif
                 if (!glfwInit())
                 {
                     _error = "Failed to initialize GLFW";

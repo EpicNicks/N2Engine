@@ -802,6 +802,7 @@ bool VulkanRenderer::CreateLogicalDevice()
 
     // A portability device (MoltenVK) must have VK_KHR_portability_subset enabled when it offers it
     std::vector<const char*> extensions;
+    bool portabilitySubset = false;
     {
         uint32_t count = 0;
         if (vkEnumerateDeviceExtensionProperties(_physicalDevice, nullptr, &count, nullptr) == VK_SUCCESS && count > 0)
@@ -816,11 +817,46 @@ bool VulkanRenderer::CreateLogicalDevice()
                     if (std::strcmp(available[i].extensionName, "VK_KHR_portability_subset") == 0)
                     {
                         extensions.push_back("VK_KHR_portability_subset");
+                        portabilitySubset = true;
                     }
                 }
             }
         }
     }
+    // What a portability device leaves out (build targets stage 13): image views with a component swizzle, which the
+    // one- and two-channel textures use, are allowed only with imageViewFormatSwizzle (MoltenVK reports it false). The
+    // struct is VkPhysicalDevicePortabilitySubsetFeaturesKHR, from vulkan_beta.h, which not every SDK the engine builds
+    // with ships: its layout is spelt out here. vkGetPhysicalDeviceFeatures2 is Vulkan 1.1, so it is looked up (Android
+    // links the 1.0 loader)
+    _imageViewSwizzle = !_noImageViewSwizzleForTest;
+    if (portabilitySubset)
+    {
+        struct PortabilitySubsetFeatures
+        {
+            VkStructureType sType;
+            void* pNext;
+            VkBool32 constantAlphaColorBlendFactors, events, imageViewFormatReinterpretation, imageViewFormatSwizzle,
+                imageView2DOn3DImage, multisampleArrayImage, mutableComparisonSamplers, pointPolygons, samplerMipLodBias,
+                separateStencilMaskRef, shaderSampleRateInterpolationFunctions, tessellationIsolines, tessellationPointMode,
+                triangleFans, vertexAttributeAccessBeyondStride;
+        } portability{};
+        portability.sType = static_cast<VkStructureType>(1000163000); // ..._PORTABILITY_SUBSET_FEATURES_KHR
+        VkPhysicalDeviceFeatures2 features2{};
+        features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        features2.pNext = &portability;
+        const auto getFeatures2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
+            vkGetInstanceProcAddr(_instance, "vkGetPhysicalDeviceFeatures2"));
+        if (getFeatures2 != nullptr)
+        {
+            getFeatures2(_physicalDevice, &features2);
+            _imageViewSwizzle = _imageViewSwizzle && portability.imageViewFormatSwizzle == VK_TRUE;
+        }
+        else
+        {
+            _imageViewSwizzle = false; // unknown: the safe choice
+        }
+    }
+
     // The swapchain extension only with a surface (PickPhysicalDevice checked the device offers it)
     if (_surface != VK_NULL_HANDLE)
     {
