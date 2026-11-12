@@ -889,8 +889,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install MoltenVK, the Vulkan loader and headers, glslang, Ninja
-        run: brew install ninja molten-vk vulkan-loader vulkan-headers vulkan-tools glslang || true
+      # The validation layer too: the renderer's tests run with it on (they skip without it, as the first spike run showed)
+      - name: Install MoltenVK, the Vulkan loader, headers, tools and validation layer, glslang, Ninja
+        run: brew install ninja molten-vk vulkan-loader vulkan-headers vulkan-tools vulkan-validationlayers glslang || true
 
       - name: Configure and build renderer_tests with the Vulkan renderer
         id: build
@@ -911,6 +912,8 @@ jobs:
         run: |
           set +e
           export VK_ICD_FILENAMES="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
+          export VK_ADD_LAYER_PATH="$(brew --prefix vulkan-validationlayers)/share/vulkan/explicit_layer.d"
+          ls "$VK_ADD_LAYER_PATH" || true
           # What the loader sees (vulkan-tools' vulkaninfo): the device MoltenVK reports, or why there is none
           vulkaninfo --summary 2>&1 | head -40
           ./build/bin/renderer_tests --gtest_filter='Vulkan*' --gtest_brief=0 > vulkan-tests.log 2>&1
