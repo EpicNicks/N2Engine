@@ -78,4 +78,7 @@ documented portability limit with a contained fix.
 
 ## The pick
 
-PICK (the user's decision)
+**MoltenVK**, picked by the user on 2026-11-12. The Vulkan renderer becomes the GPU renderer on macOS and iOS through
+MoltenVK. What follows, in its own PR: the swizzle limit fixed (one- and two-channel textures stored as RGBA where the device
+cannot swizzle), MoltenVK linked into the macOS player and the iOS app, and the Apple backends' Metal surface for it. A
+native Metal backend is not planned.
