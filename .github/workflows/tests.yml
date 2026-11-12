@@ -741,7 +741,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v7
 
@@ -807,7 +807,40 @@ jobs:
           target: google_apis
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           disable-animations: true
-          script: bash scripts/android-emulator-smoke.sh "$RUNNER_TEMP/package/LuaDemo" 90
+          # The smoke script first, then the same through n2build run (stage 9: adb install, start, logcat as log events)
+          script: |
+            bash scripts/android-emulator-smoke.sh "$RUNNER_TEMP/package/LuaDemo" 90
+            node tools/n2build/n2build.mjs run --target android --project "$RUNNER_TEMP/lua_project" --out "$RUNNER_TEMP/package/LuaDemo" --no-build --seconds 45 --json > "$RUNNER_TEMP/run.jsonl"
+            node -e 'const l=require("fs").readFileSync(process.argv[1],"utf8").trim().split("\n").map(JSON.parse); const r=l.at(-1); const log=l.filter(e=>e.type==="log"&&e.stream==="logcat").map(e=>e.text); console.log(log.slice(-20).join("\n")); if(!r.ok||!log.some(t=>t.includes("N2Engine Android player: first frame"))){console.error(JSON.stringify(r));process.exit(1)}' "$RUNNER_TEMP/run.jsonl"
+
+      # Stage 9: a release build signed with a signing profile, made here with a throwaway keystore. The password goes to
+      # keytool and to n2build only through environment variables (keytool's -storepass:env), never a command line; the
+      # profile in n2build.json names the variable, not the password. The build must give a signed APK and an AAB, and the
+      # password must appear in none of n2build's output.
+      - name: A throwaway keystore and a signing profile
+        run: |
+          echo "N2_CI_STORE_PASSWORD=$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+          echo "XDG_DATA_HOME=$RUNNER_TEMP/xdg" >> "$GITHUB_ENV"
+
+      - name: n2build build (android, release, signed with the profile)
+        run: |
+          keytool -genkeypair -keystore "$RUNNER_TEMP/ci.jks" -storetype PKCS12 -alias upload -keyalg RSA -keysize 2048 -validity 2 \
+            -dname "CN=N2Engine CI" -storepass:env N2_CI_STORE_PASSWORD -noprompt
+          mkdir -p "$XDG_DATA_HOME/n2engine"
+          node -e '
+            const fs = require("fs");
+            fs.writeFileSync(process.argv[1], JSON.stringify({ signingProfiles: { ci: { android: {
+              keystore: process.argv[2], keyAlias: "upload", storePassword: { env: "N2_CI_STORE_PASSWORD" } } } } }, null, 2));
+          ' "$XDG_DATA_HOME/n2engine/n2build.json" "$RUNNER_TEMP/ci.jks"
+          node tools/n2build/n2build.mjs build --target android --project "$RUNNER_TEMP/lua_project" --config release --signing ci --build-dir "$RUNNER_TEMP/n2build" --out "$RUNNER_TEMP/package/LuaDemoRelease" --json > "$RUNNER_TEMP/release.jsonl"
+          tail -1 "$RUNNER_TEMP/release.jsonl"
+          if grep -qF "$N2_CI_STORE_PASSWORD" "$RUNNER_TEMP/release.jsonl"; then echo "::error::The signing password appeared in n2build's output"; exit 1; fi
+          pkg="$RUNNER_TEMP/package/LuaDemoRelease"
+          ls -la "$pkg"
+          test -f "$pkg/lua_project.aab"
+          if grep -qF "ci.jks" "$pkg/.n2build-package.json"; then echo "::error::The marker names the keystore"; exit 1; fi
+          "$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner" verify --print-certs "$pkg/lua_project.apk" | tee certs.txt
+          grep -q "CN=N2Engine CI" certs.txt
 
   # The Apple targets (build targets stage 10, decision D7; docs/apple.html): built and run on a pinned macOS runner, the
   # same commands the n2build-apple workflow runs for a game (tools/n2build/lib/remote.mjs). macOS: the desktop player,
