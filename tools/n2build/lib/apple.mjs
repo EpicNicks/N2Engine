@@ -95,10 +95,11 @@ export function pickSimulator(listJson) {
  * Install and launch in the simulator, the app's output streamed as log events ("stream": "console") until it exits or
  * `seconds` pass. The app writes its stdout and stderr to a file the simulator fills (simctl launch --stdout/--stderr),
  * which is followed here: `simctl launch --console-pty` proved unreliable on CI runners (its stream can end at once while
- * the app keeps running). Whether the app still runs is asked of the simulator's launchd (launchctl list).
- * `exec` (a whole-output runner), `readFile` (text or null) and `sleep` are injectable for tests.
+ * the app keeps running). Whether the app still runs: a simulator app is a process of this Mac, and simctl launch prints its
+ * pid (the simulator's launchctl list does not list apps). `exec` (a whole-output runner), `readFile` (text or null),
+ * `isAlive` (pid -> boolean) and `sleep` are injectable for tests.
  */
-export async function runInSimulator({ app, bundleId, env, reporter, seconds = null, exec, readFile = readTextFile, outFile = null,
+export async function runInSimulator({ app, bundleId, env, reporter, seconds = null, exec, readFile = readTextFile, outFile = null, isAlive = processAlive,
   sleep = (ms) => new Promise((r) => { setTimeout(r, ms); }) }) {
   const simctl = async (args, what) => {
     const result = await exec('xcrun', ['simctl', ...args], { env });
@@ -135,10 +136,8 @@ export async function runInSimulator({ app, bundleId, env, reporter, seconds = n
     pending = lines.pop();
     for (const line of lines) reporter.log('console', line);
   };
-  const running = async () => {
-    const listed = await exec('xcrun', ['simctl', 'spawn', device.udid, 'launchctl', 'list'], { env });
-    return listed.code !== 0 || listed.stdout.includes(bundleId); // a failed query is not taken for an exit
-  };
+  // Without a pid (simctl printed none) the run lasts until --seconds
+  const running = async () => pid === null || isAlive(Number(pid));
 
   let waited = 0;
   let reason = 'time';
@@ -155,6 +154,16 @@ export async function runInSimulator({ app, bundleId, env, reporter, seconds = n
   follow();
   if (pending !== '') reporter.log('console', pending);
   return { device: device.udid, pid, reason };
+}
+
+/** Whether a process of this machine exists (signal 0 checks without sending; EPERM: it exists, it is not ours) */
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
 }
 
 function readTextFile(file) {
