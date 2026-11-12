@@ -75,6 +75,9 @@ android {
 }
 
 dependencies {
+    // One Kotlin standard library: appcompat brings kotlin-stdlib 1.8, an older dependency kotlin-stdlib-jdk8 1.6, whose
+    // classes collide (checkDebugDuplicateClasses). The BOM lines them up
+    implementation platform('org.jetbrains.kotlin:kotlin-bom:1.8.22')
     implementation 'androidx.appcompat:appcompat:1.7.0'
     implementation 'androidx.core:core:1.13.1'
     implementation 'androidx.games:games-activity:3.0.5'

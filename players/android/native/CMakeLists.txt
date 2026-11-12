@@ -15,6 +15,8 @@ add_library(n2game SHARED
 target_include_directories(n2game PRIVATE src)
 target_link_libraries(n2game PRIVATE
     engine
+    renderer
+    MathCore::math
     game-activity::game-activity_static
     android
     log
