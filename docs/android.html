@@ -84,6 +84,8 @@
 <li><a href="#build">Building an APK</a></li>
 <li><a href="#toolchains">What the machine needs</a></li>
 <li><a href="#settings">Project settings</a></li>
+<li><a href="#signing">Signing and the AAB</a></li>
+<li><a href="#run">Running on a device</a></li>
 <li><a href="#player">The player</a></li>
 <li><a href="#limits">What is not there yet</a></li>
 <li><a href="#ci">CI</a></li>
@@ -101,7 +103,7 @@ node tools/n2build/n2build.mjs build  --target android --project path/to/game [-
 <li><strong>Gradle:</strong> <code>gradle -p &lt;tree&gt;/gradle assembleDebug</code> (or <code>assembleRelease</code>), with the game's settings as properties (<code>-Pn2.appId</code>, <code>-Pn2.project</code>, <code>-Pn2.assetsDir</code>, <code>-Pn2.abis</code> and so on). Gradle's CMake step configures the engine repository itself with the NDK's toolchain and the GameActivity prefab and builds <code>libn2game.so</code> once per ABI, in <code>&lt;tree&gt;/native</code>.</li>
 <li><strong>Package:</strong> the APK goes into the package folder as <code>&lt;Game&gt;.apk</code> (<code>&lt;Game&gt;-unsigned.apk</code> for a release build), with n2build's marker. The marker also records the app id and the ABIs.</li>
 </ol>
-<p>A debug APK is signed with the SDK's debug key and installs on any device with USB debugging on. A release APK is unsigned until signing profiles arrive (stage 9); Android does not install an unsigned APK.</p>
+<p>A debug APK is signed with the SDK's debug key and installs on any device with USB debugging on. A release build is signed with a <a href="#signing">signing profile</a> and also gives an AAB. Without a profile, the release APK is unsigned, and Android does not install an unsigned APK.</p>
 <p class="src">Source: <code>tools/n2build/lib/android.mjs</code> — <code>planAndroid</code>, <code>prepareGradleTree</code>, <code>packageAndroid</code>; <code>targets/android/target.json</code>; <code>players/android</code></p>
 
 <div class="callout note">
@@ -136,6 +138,40 @@ node tools/n2build/n2build.mjs build  --target android --project path/to/game [-
 </tbody>
 </table>
 
+<h2 id="signing">Signing and the AAB <span class="badge">PR #TBD</span></h2>
+<p>A project names a signing profile and nothing more: <code>build.targets.android.signing</code> is <code>{"profile": "release"}</code>, and the editor refuses anything else there, because project files are committed and shared. The profile itself lives in your own <code>n2build.json</code>, beside the engine's user data (<code>%APPDATA%\N2Engine\n2build.json</code>, or <code>~/.local/share/n2engine/n2build.json</code>):</p>
+<pre class="lang-json"><code>{
+  "signingProfiles": {
+    "release": {
+      "android": {
+        "keystore": "C:/Users/me/keys/game.jks",
+        "keyAlias": "upload",
+        "storePassword": { "env": "GAME_STORE_PASSWORD" },
+        "keyPassword": { "file": "C:/Users/me/keys/key.pass" }
+      }
+    }
+  }
+}</code></pre>
+<ul>
+<li>A password is <code>{"env": "NAME"}</code> (an environment variable), <code>{"file": "/absolute/path"}</code> (the file's first line) or plain text. Prefer the first two: then <code>n2build.json</code> holds no password at all. <code>keyPassword</code> defaults to the store password.</li>
+<li><code>--signing NAME</code> picks a profile for one build instead of the project's.</li>
+<li>The profile is read only when a release build runs, never by <code>--dry-run</code>. A missing profile, keystore or variable fails the build before anything is compiled, with a message that names the key and never a password.</li>
+</ul>
+<div class="callout guarantee">
+<p class="callout-title">Where the secrets go</p>
+<p>The keystore path, alias and passwords reach Gradle only in the environment of its process (<code>N2_SIGNING_STORE_FILE</code>, <code>N2_SIGNING_STORE_PASSWORD</code>, <code>N2_SIGNING_KEY_ALIAS</code>, <code>N2_SIGNING_KEY_PASSWORD</code>). They are never on a command line, in a file in the build tree, in the project, in the package marker (it records the profile's name) or in an editor protocol message. n2build replaces both passwords with <code>****</code> in every line it prints, JSON events included. No other tool gets the variables, and a debug build never does. Tests: <code>n2build.test.mjs</code>, the signing and reporter tests.</p>
+</div>
+<p>A signed release build runs <code>assembleRelease bundleRelease</code> and puts <code>&lt;Game&gt;.apk</code> and <code>&lt;Game&gt;.aab</code> in the package folder. The AAB is what Google Play takes; the APK installs directly.</p>
+
+<h2 id="run">Running on a device <span class="badge">PR #TBD</span></h2>
+<pre class="lang-shell"><code>node tools/n2build/n2build.mjs run --target android --project path/to/game [--config debug] [--device SERIAL] [--seconds N] [--no-build]</code></pre>
+<ol>
+<li><strong>The device:</strong> <code>adb devices -l</code> (the SDK's <code>platform-tools/adb</code>). With one device attached, that one; with several, name it with <code>--device</code>. An unauthorized device says so: accept the USB debugging prompt on it.</li>
+<li><strong>Install and start:</strong> <code>adb install -r</code>, then <code>am start -W</code> on the game's activity. An unsigned APK is refused before adb is asked.</li>
+<li><strong>The log:</strong> <code>adb logcat --pid=&lt;the game's process&gt;</code>, each line a log event with <code>"stream": "logcat"</code> (<a href="build-targets.html#json">JSON events</a>), so the editor shows the game's log as it shows a build's. The run ends when the game's process ends, or after <code>--seconds</code> (then the game is stopped).</li>
+</ol>
+<p class="src">Source: <code>tools/n2build/lib/adb.mjs</code> — <code>pickDevice</code>, <code>runOnDevice</code>; <code>tools/n2build/lib/signing.mjs</code></p>
+
 <h2 id="player">The player</h2>
 <p><code>players/android/native</code> holds the platform backend (<code>AndroidHost</code>, an <code>IPlatformHost</code>; see <a href="platform.html">the platform layer</a>) and <code>android_main</code>. The OS owns the loop: the engine starts when the first window arrives and runs one frame per pass of the activity's event loop while the app is in the foreground.</p>
 <ul>
@@ -149,7 +185,6 @@ node tools/n2build/n2build.mjs build  --target android --project path/to/game [-
 
 <h2 id="limits">What is not there yet</h2>
 <ul>
-<li><strong>Signing, AAB, install and run:</strong> stage 9. Signing profiles, a release AAB, <code>adb</code> install and run, and <code>logcat</code> in the editor. Until then, <code>n2build run --target android</code> stops after the build and prints the <code>adb</code> commands.</li>
 <li><strong>Rendering:</strong> the software renderer only. Vulkan on Android is stage 12.</li>
 <li><strong>Audio:</strong> OpenAL Soft plays through its OpenSL ES backend. AAudio through Oboe is a follow-up.</li>
 <li><strong>Rumble:</strong> does nothing yet. The manifest asks for <code>VIBRATE</code>, so adding it later does not change the APK's permissions.</li>
