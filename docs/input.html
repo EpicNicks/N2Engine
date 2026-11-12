@@ -211,11 +211,11 @@ if (input)
 <tr><td><code>KeyboardButtonBinding</code> (<code>KeyboardButton</code>)</td><td>One key via <code>glfwGetKey</code></td><td><code>bool</code>: pressed</td></tr>
 <tr><td><code>MouseButtonBinding</code> (<code>MouseButton</code>)</td><td>One mouse button via <code>glfwGetMouseButton</code></td><td><code>bool</code></td></tr>
 <tr><td><code>GamepadButtonBinding</code> (<code>GamepadButton</code>)</td><td>One button of gamepad <code>gamepadId</code> (default 0)</td><td><code>bool</code>; <code>false</code> if <code>glfwGetGamepadState</code> fails (no pad, or no mapping)</td></tr>
-<tr><td><code>AxisBinding</code> (<code>GamepadAxis</code>)</td><td>One axis of gamepad <code>gamepadId</code>; optionally one half of it (<code>direction</code>) and as a button (<code>pressPoint</code>) <span class="badge">PR #TBD</span></td><td><code>float</code> after <a href="#deadzones"><code>NormalizeAxis</code></a>; <code>0</code> without a pad. With <code>direction</code> <code>Positive</code> or <code>Negative</code>, that half as a 0 to 1 magnitude (the other half reads 0). With a <code>pressPoint</code> above 0, a <code>bool</code> that is true at or past it, with or without a pad (<a href="#axis-shape"><code>AxisBinding::Shape</code></a>)</td></tr>
+<tr><td><code>AxisBinding</code> (<code>GamepadAxis</code>)</td><td>One axis of gamepad <code>gamepadId</code>; optionally one half of it (<code>direction</code>) and as a button (<code>pressPoint</code>) <span class="badge">PR #330</span></td><td><code>float</code> after <a href="#deadzones"><code>NormalizeAxis</code></a>; <code>0</code> without a pad. With <code>direction</code> <code>Positive</code> or <code>Negative</code>, that half as a 0 to 1 magnitude (the other half reads 0). With a <code>pressPoint</code> above 0, a <code>bool</code> that is true at or past it, with or without a pad (<a href="#axis-shape"><code>AxisBinding::Shape</code></a>)</td></tr>
 <tr><td><code>GamepadStickBinding</code> (<code>GamepadStick</code>)</td><td>Two axes (<code>xAxis</code>, <code>yAxis</code>), optional per-axis inversion</td><td><code>Vector2</code> with a radial deadzone; zero vector without a pad</td></tr>
 <tr><td><code>Vector2CompositeBinding</code> (<code>Vector2Composite</code>)</td><td>Four keys: <code>up</code>, <code>down</code>, <code>left</code>, <code>right</code></td><td><code>Vector2</code>: right +x, left −x, up +y, down −y; opposite keys cancel. A diagonal is <code>(±1, ±1)</code> at the binding level; the action clamps it (see below).</td></tr>
-<tr><td><code>GamepadButtonCompositeBinding</code> (<code>GamepadButtonComposite</code>) <span class="badge">PR #TBD</span></td><td>Four buttons of gamepad <code>gamepadId</code>: <code>up</code>, <code>down</code>, <code>left</code>, <code>right</code> (the D-pad, or the face buttons as a second stick)</td><td><code>Vector2</code>, combined as <code>Vector2Composite</code> combines keys; zero vector without a pad</td></tr>
-<tr><td><code>ChordBinding</code> (<code>Chord</code>) <span class="badge">PR #TBD</span></td><td>Two nested bindings: <code>modifier</code> and <code>binding</code> (Unity's "One Modifier" composite, such as one stick click that needs the other stick clicked too)</td><td>The main binding's value while the modifier reads as pressed; otherwise that value's zero of the same type (<code>false</code>, <code>0</code> or <code>(0, 0)</code>). The main binding is read every frame. The order the two are pressed in does not matter. Chords nest up to <code>MaxChordDepth</code> (4) levels.</td></tr>
+<tr><td><code>GamepadButtonCompositeBinding</code> (<code>GamepadButtonComposite</code>) <span class="badge">PR #330</span></td><td>Four buttons of gamepad <code>gamepadId</code>: <code>up</code>, <code>down</code>, <code>left</code>, <code>right</code> (the D-pad, or the face buttons as a second stick)</td><td><code>Vector2</code>, combined as <code>Vector2Composite</code> combines keys; zero vector without a pad</td></tr>
+<tr><td><code>ChordBinding</code> (<code>Chord</code>) <span class="badge">PR #330</span></td><td>Two nested bindings: <code>modifier</code> and <code>binding</code> (Unity's "One Modifier" composite, such as one stick click that needs the other stick clicked too)</td><td>The main binding's value while the modifier reads as pressed; otherwise that value's zero of the same type (<code>false</code>, <code>0</code> or <code>(0, 0)</code>). The main binding is read every frame. The order the two are pressed in does not matter. Chords nest up to <code>MaxChordDepth</code> (4) levels.</td></tr>
 </tbody>
 </table>
 </div>
@@ -273,7 +273,7 @@ if (input)
 <p class="callout-title">Guarantee</p>
 <p>A released trigger reads 0, a fully pulled one reads 1, a half-pulled one reads more than 0; stick drift within ±0.05 reads 0 and ±1 reads ±1.</p>
 </div>
-<h3 id="axis-shape">Axis halves and press points: <code>AxisBinding::Shape</code> <span class="badge">PR #TBD</span></h3>
+<h3 id="axis-shape">Axis halves and press points: <code>AxisBinding::Shape</code> <span class="badge">PR #330</span></h3>
 <p>After <code>NormalizeAxis</code>, a <code>GamepadAxis</code> binding applies its <code>direction</code> and <code>pressPoint</code>. <code>Both</code> (the default) keeps the signed value. <code>Positive</code> keeps <code>max(0, v)</code> and <code>Negative</code> keeps <code>max(0, -v)</code>, so a stick pushed left can be its own action. A <code>pressPoint</code> above 0 turns the result into a <code>bool</code>: true when its magnitude is at or past the press point. The press point compares against the deadzone-rescaled value. Unity's default press point is 0.5; a trigger bound with <code>"pressPoint": 0.5</code> fires as Unity's does, and without a press point any pull past the deadzone counts as pressed.</p>
 <p class="src">Source: <code>engine/src/input/InputBinding.cpp</code> — <code>AxisBinding::NormalizeAxis</code>, <code>AxisBinding::Shape</code>, <code>GamepadStickBinding::getValue</code>; tests: <code>AxisBindingTest.ReleasedTriggerReadsZero</code>, <code>AxisBindingTest.StickAxisHasDeadzoneAndKeepsRange</code>, <code>AxisBindingTest.DirectionKeepsOneHalf</code>, <code>AxisBindingTest.PressPointMakesAButton</code>, <code>AxisBindingTest.DirectionAndPressPointParseAndRoundTrip</code>, <code>GamepadButtonCompositeTest.*</code>, <code>ChordBindingTest.*</code></p>
 
@@ -342,7 +342,7 @@ if (input)
 </div>
 <p class="src">Source: <code>engine/src/input/ActionMap.cpp</code> — <code>InputAction::HandleDisabledTransition</code>, <code>InputAction::SetDisabled</code>, <code>InputAction::CancelIfActive</code>, <code>ActionMap::Update</code>, <code>ActionMap::CancelActiveActions</code>; <code>engine/src/input/InputSystem.cpp</code> — <code>InputSystem::LoadActionMap</code></p>
 
-<h2 id="keyboard">Raw keys and typed text: <code>Keyboard</code> <span class="badge">PR #TBD</span></h2>
+<h2 id="keyboard">Raw keys and typed text: <code>Keyboard</code> <span class="badge">PR #331</span></h2>
 <p>Action maps are the way to read game input. For text fields, debug consoles and key rebinding the input system also keeps a <code>Keyboard</code> (<code>InputSystem::GetKeyboard()</code>, <code>Keyboard::Get()</code>), sampled once per frame in <code>InputSystem::Update</code> before the action maps, as the <code>Mouse</code> is.</p>
 <ul>
 <li><code>GetKey(key)</code> is the key as it is this frame; <code>GetKeyDown</code> and <code>GetKeyUp</code> are true for the one frame in which it went down or up. Keys come from the installed <a href="#key-source"><code>KeySource</code></a> when there is one, else from the window, with GLFW's sticky keys on so a press shorter than a frame is still seen once. <code>Key::Unknown</code> is never pressed.</li>
@@ -357,7 +357,7 @@ if (input)
 end
 </code></pre>
 <p class="src">Source: <code>engine/include/engine/input/Keyboard.hpp</code>, <code>engine/src/input/Keyboard.cpp</code>; <code>engine/src/input/InputSystem.cpp</code> &mdash; <code>InputSystem::Update</code>; <code>engine/src/scripting/bindings/LuaInputBindings.cpp</code> &mdash; <code>KeyState</code>; tests: <code>KeyboardTest.*</code>, <code>KeyboardLuaTest.UnknownKeyNamesAreLuaErrors</code> (<code>tests/engine/input/KeyboardTests.cpp</code>)</p>
-<h2 id="touch">Touches: <code>Touchscreen</code> <span class="badge">PR #TBD</span></h2>
+<h2 id="touch">Touches: <code>Touchscreen</code> <span class="badge">PR #332</span></h2>
 <p>Unity&rsquo;s <code>Input.touches</code>: the fingers on the screen this frame. <code>Input::Touchscreen::Get()</code> (<code>engine/include/engine/input/Touchscreen.hpp</code>) is fed finger events by a host with <code>Down(id, position)</code> (a new id begins a touch, a known one moves), <code>Up(id, position)</code>, <code>Cancel(id)</code> and <code>CancelAll()</code>, at any time; <code>InputSystem::Update</code> publishes them once per frame, right after the mouse, so the list stays the same while scripts read it.</p>
 <ul>
 <li>Each <code>Touch</code> has an <code>id</code> that stays the same while the finger is down, a <code>position</code> in render pixels (top-left origin, y down, as <code>Mouse::GetPosition</code>) and a <code>phase</code>: <code>Began</code>, <code>Moved</code>, <code>Stationary</code>, <code>Ended</code> or <code>Canceled</code>. <code>Ended</code> and <code>Canceled</code> are reported for one frame, then the touch is gone.</li>
@@ -372,7 +372,7 @@ end
 end
 </code></pre>
 <p class="src">Source: <code>engine/src/input/Touchscreen.cpp</code>; <code>engine/src/input/InputSystem.cpp</code> &mdash; <code>InputSystem::Update</code>; <code>engine/src/scripting/bindings/LuaInputBindings.cpp</code>; <code>web/player/WebPlayer.cpp</code> &mdash; <code>OnTouch</code>; tests: <code>TouchscreenTest.*</code>, <code>TouchscreenLuaTest.TouchesFromLua</code> (<code>tests/engine/input/TouchscreenTests.cpp</code>)</p>
-<h2 id="rumble">Gamepad rumble: <code>Rumble</code> <span class="badge">PR #TBD</span></h2>
+<h2 id="rumble">Gamepad rumble: <code>Rumble</code> <span class="badge">PR #333</span></h2>
 <p>Unity&rsquo;s <code>Gamepad.SetMotorSpeeds</code>: two motors per gamepad, the low-frequency (left, heavy) one and the high-frequency (right, light) one, each 0 to 1. GLFW has no rumble, so <code>Input::Rumble</code> (<code>engine/include/engine/input/Rumble.hpp</code>) writes to the platform directly:</p>
 <table>
 <tr><th>Platform</th><th>Output</th></tr>
@@ -541,11 +541,11 @@ public:
 <tr><td><code>KeyboardButton</code></td><td><code>key</code></td><td>—</td></tr>
 <tr><td><code>MouseButton</code></td><td><code>button</code></td><td>—</td></tr>
 <tr><td><code>GamepadButton</code></td><td><code>button</code></td><td><code>gamepadId</code> (0)</td></tr>
-<tr><td><code>GamepadAxis</code></td><td><code>axis</code></td><td><code>gamepadId</code> (0), <code>direction</code> (<code>"Both"</code>; or <code>"Positive"</code>, <code>"Negative"</code>), <code>pressPoint</code> (0: not a button; a number from 0 to 1) <span class="badge">PR #TBD</span>. <code>Serialize</code> writes <code>direction</code> and <code>pressPoint</code> only when they are not the default.</td></tr>
+<tr><td><code>GamepadAxis</code></td><td><code>axis</code></td><td><code>gamepadId</code> (0), <code>direction</code> (<code>"Both"</code>; or <code>"Positive"</code>, <code>"Negative"</code>), <code>pressPoint</code> (0: not a button; a number from 0 to 1) <span class="badge">PR #330</span>. <code>Serialize</code> writes <code>direction</code> and <code>pressPoint</code> only when they are not the default.</td></tr>
 <tr><td><code>GamepadStick</code></td><td><code>xAxis</code>, <code>yAxis</code></td><td><code>gamepadId</code> (0), <code>deadzone</code> (0.15), <code>invertX</code> (false), <code>invertY</code> (false)</td></tr>
 <tr><td><code>Vector2Composite</code></td><td><code>up</code>, <code>down</code>, <code>left</code>, <code>right</code></td><td>—</td></tr>
-<tr><td><code>GamepadButtonComposite</code> <span class="badge">PR #TBD</span></td><td><code>up</code>, <code>down</code>, <code>left</code>, <code>right</code> (gamepad button names)</td><td><code>gamepadId</code> (0)</td></tr>
-<tr><td><code>Chord</code> <span class="badge">PR #TBD</span></td><td><code>modifier</code>, <code>binding</code> (binding objects)</td><td>—</td></tr>
+<tr><td><code>GamepadButtonComposite</code> <span class="badge">PR #330</span></td><td><code>up</code>, <code>down</code>, <code>left</code>, <code>right</code> (gamepad button names)</td><td><code>gamepadId</code> (0)</td></tr>
+<tr><td><code>Chord</code> <span class="badge">PR #330</span></td><td><code>modifier</code>, <code>binding</code> (binding objects)</td><td>—</td></tr>
 </tbody>
 </table>
 </div>
@@ -589,9 +589,9 @@ public:
 <tr><td><code>type</code> not a known binding type name (e.g. <code>"Keyboard"</code>)</td><td><code>InvalidType</code></td></tr>
 <tr><td>Required field missing (<code>key</code> / <code>button</code> / <code>axis</code> or either stick axis / any composite direction)</td><td><code>MissingKey</code> / <code>MissingButton</code> / <code>MissingAxis</code> / <code>MissingCompositeKeys</code></td></tr>
 <tr><td>A key, button or axis name that is not an enumerator (e.g. <code>"Escpae"</code>), or not a string</td><td><code>InvalidValue</code></td></tr>
-<tr><td>A <code>Chord</code> without an object <code>modifier</code> and <code>binding</code> <span class="badge">PR #TBD</span></td><td><code>MissingChordBinding</code></td></tr>
-<tr><td>A <code>Chord</code> nested deeper than <code>MaxChordDepth</code> (4) <span class="badge">PR #TBD</span></td><td><code>ChordTooDeep</code>. An invalid binding inside a chord reports its own error.</td></tr>
-<tr><td>An optional field the binding type reads is present with the wrong type: <code>gamepadId</code> not an integer from 0 to <code>INT_MAX</code>, <code>deadzone</code> not a number, <code>invertX</code>/<code>invertY</code> not a boolean, <code>direction</code> not <code>Both</code>, <code>Positive</code> or <code>Negative</code>, <code>pressPoint</code> not a number from 0 to 1 <span class="badge">PR #TBD</span> (e.g. <code>"deadzone": "0.2"</code>, <code>"invertY": 1</code>, <code>"gamepadId": 1.5</code>, <code>null</code>) <span class="badge">PR #37</span></td><td><code>InvalidOptionalField</code></td></tr>
+<tr><td>A <code>Chord</code> without an object <code>modifier</code> and <code>binding</code> <span class="badge">PR #330</span></td><td><code>MissingChordBinding</code></td></tr>
+<tr><td>A <code>Chord</code> nested deeper than <code>MaxChordDepth</code> (4) <span class="badge">PR #330</span></td><td><code>ChordTooDeep</code>. An invalid binding inside a chord reports its own error.</td></tr>
+<tr><td>An optional field the binding type reads is present with the wrong type: <code>gamepadId</code> not an integer from 0 to <code>INT_MAX</code>, <code>deadzone</code> not a number, <code>invertX</code>/<code>invertY</code> not a boolean, <code>direction</code> not <code>Both</code>, <code>Positive</code> or <code>Negative</code>, <code>pressPoint</code> not a number from 0 to 1 <span class="badge">PR #330</span> (e.g. <code>"deadzone": "0.2"</code>, <code>"invertY": 1</code>, <code>"gamepadId": 1.5</code>, <code>null</code>) <span class="badge">PR #37</span></td><td><code>InvalidOptionalField</code></td></tr>
 </tbody>
 </table>
 </div>
@@ -629,8 +629,8 @@ public:
 <tr><td><code>Input.GetMousePosition()</code> <span class="badge">PR #48</span></td><td>The cursor as a <code>Vector2</code> in window coordinates (top-left origin, y down); <code>(0, 0)</code> without a window.</td></tr>
 <tr><td><code>Input.GetMouseButton(b)</code>, <code>GetMouseButtonDown(b)</code>, <code>GetMouseButtonUp(b)</code> <span class="badge">PR #48</span></td><td>As <code>Mouse::GetButton*</code> (0 left, 1 right, 2 middle); <code>false</code> without a window.</td></tr>
 <tr><td><code>Input.IsPointerOverUI()</code> <span class="badge">PR #48</span></td><td><code>PointerDispatcher::IsPointerOverUI()</code>: whether the pointer was over a UI element (a raycast-target graphic under a canvas) in the last pointer update <span class="badge">PR #50</span>.</td></tr>
-<tr><td><code>Input.GetTouchCount()</code>, <code>Input.GetTouch(i)</code> <span class="badge">PR #TBD</span></td><td>This frame&rsquo;s <a href="#touch">touches</a>: <code>{ id, x, y, phase }</code>, 1-based, <code>nil</code> past the count.</td></tr>
-<tr><td><code>Input.SetGamepadRumble(low, high, seconds, gamepad)</code>, <code>Input.StopGamepadRumble(gamepad)</code> <span class="badge">PR #TBD</span></td><td><a href="#rumble"><code>Rumble::Start</code>, <code>Stop</code>/<code>StopAll</code></a>: motors 0..1, real-time duration (optional), gamepad 0 by default; returns whether the platform took it.</td></tr>
+<tr><td><code>Input.GetTouchCount()</code>, <code>Input.GetTouch(i)</code> <span class="badge">PR #332</span></td><td>This frame&rsquo;s <a href="#touch">touches</a>: <code>{ id, x, y, phase }</code>, 1-based, <code>nil</code> past the count.</td></tr>
+<tr><td><code>Input.SetGamepadRumble(low, high, seconds, gamepad)</code>, <code>Input.StopGamepadRumble(gamepad)</code> <span class="badge">PR #333</span></td><td><a href="#rumble"><code>Rumble::Start</code>, <code>Stop</code>/<code>StopAll</code></a>: motors 0..1, real-time duration (optional), gamepad 0 by default; returns whether the platform took it.</td></tr>
 </tbody>
 </table>
 </div>

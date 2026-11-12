@@ -668,7 +668,7 @@ namespace N2Engine::Scripting
             if (!script)
             {
                 Logger::Error(std::format("Failed to require module: {}", moduleName));
-                return sol::nil;
+                return sol::lua_nil;
             }
 
             return LoadScriptAsModule(path, script.get());

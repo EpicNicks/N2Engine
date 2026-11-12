@@ -3,11 +3,16 @@
 #   * macOS: the desktop player, as on Windows and Linux (GLFW, OpenGL and the software renderer), with AppleClang;
 #   * iOS (CMAKE_SYSTEM_NAME iOS, Xcode generator): players/ios, a UIKit app whose software renderer's frame is shown as its
 #     view's layer contents. No GLFW, no desktop OpenGL library, no editor tools or tests;
+#   * the oldest systems: iOS 16.3 and macOS 13.3 (the targets' CMAKE_OSX_DEPLOYMENT_TARGET), where Apple's libc++ first has
+#     floating-point std::to_chars, which std::format uses;
 #   * both: no PhysX (decision D8 for iOS; no PhysX build for macOS is vendored), no Vulkan renderer (stage 13 decides
 #     between MoltenVK and Metal), no WebGPU. Apple's libc++ has no std::generator: external/web-stubs/include/generator
 #     stands in, as on the web and Android.
 
 set(N2ENGINE_USE_PHYSX OFF CACHE BOOL "Use PhysX physics backend" FORCE)
+# Jolt is the 3D physics here (no PhysX): on unless the project's build.modules.physics3d says otherwise (N2EngineModules.cmake
+# sets a plain variable then, which wins over this cache value)
+set(N2ENGINE_USE_JOLT ON CACHE BOOL "Build the vendored Jolt Physics library and the engine's Jolt physics backend" FORCE)
 set(N2ENGINE_RENDERER_VULKAN OFF CACHE BOOL "" FORCE)
 set(N2ENGINE_RENDERER_WEBGPU OFF CACHE BOOL "" FORCE)
 

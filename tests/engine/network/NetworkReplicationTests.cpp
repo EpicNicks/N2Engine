@@ -1898,5 +1898,5 @@ TEST(NetworkReplicationTest, LuaQueriesAndInterestPoliciesUseTheBoundAuthoritati
     )",sol::script_pass_on_error);
     if(!result.valid()) {const sol::error error=result;FAIL()<<error.what();}
     EXPECT_EQ(session.serverSide.world.Find(NetworkId{2})->GetInterestPolicy().relevance,Relevance::OwnerOnly);
-    lua["b8910Object"]=sol::nil;lua["b8910Client"]=sol::nil;lua["b8910Time"]=sol::nil;
+    lua["b8910Object"]=sol::lua_nil;lua["b8910Client"]=sol::lua_nil;lua["b8910Time"]=sol::lua_nil;
 }

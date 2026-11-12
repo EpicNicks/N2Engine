@@ -241,7 +241,9 @@ async function build(descriptor, options, ctx, reporter) {
   preparePackageDir(plan.packageDir);
   const entry = descriptor.package.kind === 'desktop'
     ? packageDesktop({ treeDir: plan.treeDir, descriptor, projectDir, packageDir: plan.packageDir, gameName: project.name, platform: ctx.platform,
-      pack: { format: packFormat, sevenZip, env: toolchains.env } })
+      pack: { format: packFormat, sevenZip, env: toolchains.env },
+      physicsGpu: project.project.settings?.physics?.gpu,
+      onLeftOut: (left) => reporter.log('stdout', `Not packaged: ${left.join(', ')} (the project's physics.gpu is off; set it to on or auto for GPU physics)`) })
     : descriptor.package.kind === 'ios'
       ? packageIos({ treeDir: plan.treeDir, config, packageDir: plan.packageDir, gameName: project.name })
       : packageWeb({ treeDir: plan.treeDir, descriptor, packageDir: plan.packageDir });
