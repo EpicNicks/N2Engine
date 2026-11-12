@@ -65,6 +65,7 @@
 <li><a href="project-modules.html">Project modules</a></li>
 <li><a href="build-targets.html" aria-current="page">Build targets</a></li>
 <li><a href="platform.html">The platform layer</a></li>
+<li><a href="packs.html">Packs &amp; the virtual filesystem</a></li>
 </ul>
 </div>
 </nav>
@@ -145,10 +146,8 @@ node tools/n2build/n2build.mjs run    --target web --project path/to/game   # bu
 <pre class="lang-text"><code>&lt;game&gt;/                    a desktop package
   &lt;game&gt;.exe               n2player, named after the game (no .exe on Linux)
   OpenAL32.dll             and any other file players/desktop lists in n2player-files.txt
-  game/
-    project.n2proj
-    assets/
-    .import/               when the project has one: the stored asset UUIDs and import settings
+  game.n2pack             the game: project.n2proj, assets/ and .import/ in one zip (stage 4; docs/packs.html)
+  game.n2pack.manifest.json  every file's size and SHA-256
   .n2build-package.json    what was built: target, configuration, game, engine commit, time (no local paths:
                            a web package is uploaded with it)</code></pre>
 <div class="callout guarantee"><p class="callout-title">Guarantee: n2build only replaces a folder it made</p><p>A package folder is emptied before it is written only when it is empty or holds <code>.n2build-package.json</code>. Any other folder is refused, so a mistyped <code>--out</code> cannot delete files. Test: <code>a package folder is only ever emptied when n2build made it</code>.</p></div>
@@ -157,7 +156,7 @@ node tools/n2build/n2build.mjs run    --target web --project path/to/game   # bu
 <p><code>players/desktop</code> builds <code>n2player</code>, the program a desktop package ships. <code>lua_project</code> stays a demo project with its own executable; the player takes what it solved (decision D4).</p>
 <pre class="lang-text"><code>n2player [game folder] [--renderer opengl|vulkan|software] [--console-log] [--frames N] [--help]</code></pre>
 <ul>
-<li><strong>The game folder</strong> defaults to <code>game/</code> beside the executable (found from the executable's own path, not the working directory). A folder without <code>project.n2proj</code> is refused with the reason and the usage.</li>
+<li><strong>The game folder</strong> defaults to <code>game/</code> beside the executable (found from the executable's own path, not the working directory). A folder without <code>project.n2proj</code> is refused with the reason and the usage. When the folder is not there and <code>game.n2pack</code> is, the pack is mounted where the folder would be; a pack can also be named directly (<a href="packs.html#players">How a player finds its game</a>).</li>
 <li><strong>Start:</strong> the project's <code>startupScene</code> (a <code>.scene</code> file) when it names one, else <code>assets/scene.lua</code> in an empty scene named after the game, as <code>lua_project</code> and the web player start.</li>
 <li><strong>The project</strong> is opened as the editor host opens it: its <code>projectId</code> is the asset UUID namespace, <code>user://</code> is its own folder, and its settings apply (<code>physics.backend</code> among them; the player itself asks for no backend).</li>
 <li><strong>The window's title</strong> is the game's name; a Debug build adds the renderer.</li>
@@ -245,7 +244,7 @@ node tools/n2build/n2build.mjs run    --target web --project path/to/game   # bu
 <table>
 <thead><tr><th><code>type</code></th><th>Fields</th></tr></thead>
 <tbody>
-<tr><td><code>step</code></td><td><code>id</code> (<code>configure</code>, <code>compile</code>, <code>package</code>, <code>archive</code>, <code>run</code>, <code>serve</code>, <code>plan</code>), <code>title</code></td></tr>
+<tr><td><code>step</code></td><td><code>id</code> (<code>configure</code>, <code>compile</code>, <code>cook</code>, <code>package</code>, <code>archive</code>, <code>run</code>, <code>serve</code>, <code>plan</code>), <code>title</code></td></tr>
 <tr><td><code>log</code></td><td><code>stream</code> (<code>stdout</code>, <code>stderr</code>), <code>text</code>: one line from a tool n2build runs, or from the game</td></tr>
 <tr><td><code>warning</code></td><td><code>text</code></td></tr>
 <tr><td><code>doctor</code></td><td><code>target</code>, <code>displayName</code>, <code>ok</code>, <code>checks</code> (each: <code>id</code>, <code>title</code>, <code>required</code>, <code>ok</code>, <code>version</code>, <code>detail</code>, <code>fix</code>)</td></tr>
@@ -258,7 +257,7 @@ node tools/n2build/n2build.mjs run    --target web --project path/to/game   # bu
 <h2 id="not-yet">Not done yet</h2>
 <ul>
 <li><strong>The editor.</strong> The Build Settings panel (stage 3, in the frontend). n2build already reads the per-target settings (<a href="#settings-n2build">above</a>).</li>
-<li><strong>Packs.</strong> A package carries the game's folder as it is; zip and 7z packs come in stage 4.</li>
+<li><strong>Packs</strong> are stage 4: a package carries <code>game.n2pack</code> (zip by default, <code>--pack stored|7z|folder</code>), and <code>n2build cook</code> makes one alone (<a href="packs.html">Packs &amp; the virtual filesystem</a>).</li>
 <li><strong>CI</strong> builds and runs the Linux package through n2build. The Windows and web packages are built through n2build locally only; CI still builds those with CMake directly.</li>
 <li><strong>Package size on Windows.</strong> A build with PhysX ships <code>PhysXGpu_64.dll</code> (about 360 MB of the 374 MB <code>lua_project</code> package, measured 2026-11-10), because the engine's PhysX build always lists it. n2build leaves it out of the package unless the project's <code>physics.gpu</code> is <code>on</code> or <code>auto</code> (the default is <code>off</code>), and logs that it did; the build tree still has it, so turning GPU physics on needs only a new package (<code>runtimeFilesFor</code> in <code>tools/n2build/lib/build.mjs</code>). A project with <code>"physics3d": "none"</code> or <code>"jolt"</code> ships no PhysX at all.</li>
 <li><strong>Android, iOS, macOS</strong> and private targets: later stages of the plan.</li>

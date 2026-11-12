@@ -5,6 +5,7 @@
 #include <fstream>
 
 #include "engine/base/Asset.hpp"
+#include "engine/io/Vfs.hpp"
 #include "nlohmann/json.hpp"
 
 namespace N2Engine
@@ -43,17 +44,13 @@ namespace N2Engine
 
         bool Load(const std::filesystem::path& path) override
         {
-            std::ifstream file(path);
-            if (!file.is_open())
+            // Through the virtual filesystem: a folder, or a pack (docs/packs.html)
+            auto text = IO::Vfs::Instance().ReadText(path);
+            if (!text)
             {
                 return false;
             }
-
-            _sourceCode = std::string{
-                std::istreambuf_iterator<char>(file),
-                std::istreambuf_iterator<char>()
-            };
-
+            _sourceCode = std::move(*text);
             return !_sourceCode.empty();
         }
     };

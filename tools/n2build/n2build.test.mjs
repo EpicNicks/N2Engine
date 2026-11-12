@@ -10,10 +10,11 @@ import test from 'node:test';
 
 import {
   archivePackage, buildKey, checkPhysics, needsConfigure, packageDesktop, packageWeb, planBuild, preparePackageDir,
-  readProject, readTargetSettings, recordConfigure, resolveOptions, runtimeFilesFor, safeName, writeMarker, PACKAGE_MARKER,
+  packPath, readProject, readTargetSettings, recordConfigure, resolveOptions, resolvePackFormat, runtimeFilesFor, safeName, writeMarker, PACKAGE_MARKER,
 } from './lib/build.mjs';
 import { loadDescriptors, readUserSettings, userSettingsFile, validateDescriptor } from './lib/descriptors.mjs';
 import { BuildError, Reporter } from './lib/report.mjs';
+import { MANIFEST_NAME, cookPack, crc32, findSevenZip, packFiles, writeZip } from './lib/cook.mjs';
 import { resolveRequest } from './lib/serve.mjs';
 import { applyEnv, checkToolchains, findOnPath, parseVersion, versionAtLeast } from './lib/toolchains.mjs';
 import { ENGINE_ROOT, main, markerInfo, parseArguments, resolveConfig, UsageError } from './n2build.mjs';
@@ -539,6 +540,113 @@ test("build --dry-run uses the target's config and name, and warns when the targ
   assert.ok(logs.some((t) => t.includes('-DCMAKE_BUILD_TYPE=Debug')), logs.join('\n'));
   assert.ok(logs.some((t) => t.includes('-DN2ENGINE_TARGET=linux')));
   assert.equal(lines.at(-1).output, path.join(projectDir, '.n2', 'out', 'linux-debug', 'Tri Linux'));
+});
+
+// --- packs (build targets stage 4; docs/packs.html) ----------------------------------------------------------------
+
+function packProject() {
+  return makeProject({ name: 'Packed', projectId: '00000000-0000-0000-0000-000000000002', build: { modules: { physics3d: 'none' } } }, {
+    'assets/scripts/main.lua': 'return { answer = 42 }\n'.repeat(50),
+    'assets/sub/ünïcödé.txt': 'text\n',
+    'assets/data.bin': Buffer.from(Array.from({ length: 1024 }, (_, i) => i % 256)),
+    '.import/scripts/main.lua.meta': '{"uuid":"x"}',
+    '.n2/asset-state.json': '{}',
+    'editor/tool.lua': '-- an editor extension: not part of the game',
+  });
+}
+
+/** Lists and extracts an archive with CMake's own archiver (libarchive), so the test does not trust our own reader */
+function extract(archive) {
+  const dir = tmp('n2build-extract-');
+  const result = spawnSync('cmake', ['-E', 'tar', 'xf', archive], { cwd: dir, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  return dir;
+}
+
+test('the pack holds project.n2proj, assets/ and .import/, nothing else, in name order', () => {
+  const projectDir = packProject();
+  assert.deepEqual(packFiles(projectDir).map((f) => f.name), [
+    '.import/scripts/main.lua.meta', 'assets/data.bin', 'assets/scene.lua', 'assets/scripts/main.lua', 'assets/sub/ünïcödé.txt', 'project.n2proj',
+  ]);
+});
+
+test('a zip pack: deflate where it saves bytes, CRCs, and the same bytes from the same project', { skip: !haveCmake && 'cmake is not on PATH' }, () => {
+  const projectDir = packProject();
+  const out = tmp('n2build-pack-');
+  const manifest = cookPack({ projectDir, outFile: path.join(out, 'a.n2pack'), format: 'zip', target: 'linux', game: 'Packed' });
+  cookPack({ projectDir, outFile: path.join(out, 'b.n2pack'), format: 'zip', target: 'linux', game: 'Packed' });
+  assert.ok(fs.readFileSync(path.join(out, 'a.n2pack')).equals(fs.readFileSync(path.join(out, 'b.n2pack'))), 'reproducible');
+  assert.equal(manifest.fileCount, 6);
+  assert.equal(manifest.format, 'zip');
+  const lua = manifest.files.find((f) => f.path === 'assets/scripts/main.lua');
+  assert.equal(lua.size, 'return { answer = 42 }\n'.length * 50);
+  assert.match(lua.sha256, /^[0-9a-f]{64}$/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(out, 'a.n2pack.manifest.json'), 'utf8')), manifest);
+
+  const extracted = extract(path.join(out, 'a.n2pack'));
+  assert.equal(fs.readFileSync(path.join(extracted, 'assets', 'scripts', 'main.lua'), 'utf8'), 'return { answer = 42 }\n'.repeat(50));
+  assert.equal(fs.readFileSync(path.join(extracted, 'assets', 'sub', 'ünïcödé.txt'), 'utf8'), 'text\n');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(extracted, MANIFEST_NAME), 'utf8')), manifest);
+  assert.ok(!fs.existsSync(path.join(extracted, '.n2')) && !fs.existsSync(path.join(extracted, 'editor')));
+  const packed = fs.statSync(path.join(out, 'a.n2pack')).size;
+  assert.ok(packed < manifest.totalSize, `deflate made it smaller (${packed} < ${manifest.totalSize})`);
+
+  // stored: no compression at all (the web's server compresses the download)
+  cookPack({ projectDir, outFile: path.join(out, 'c.n2pack'), format: 'stored', target: 'web', game: 'Packed' });
+  const stored = fs.readFileSync(path.join(out, 'c.n2pack'));
+  assert.ok(stored.includes(Buffer.from('return { answer = 42 }\n'.repeat(50))), 'stored bytes are the file');
+  assert.equal(crc32(Buffer.from('123456789')), 0xcbf43926, 'the standard CRC-32 check value');
+});
+
+test('the cook step refuses a project that uses a module its list leaves out', () => {
+  const projectDir = makeProject({ name: 'G', build: { modules: { physics3d: 'none' } } }, { 'assets/a.lua': 'go:AddComponent("Rigidbody")' });
+  assert.throws(() => cookPack({ projectDir, outFile: path.join(tmp('n2build-pack-'), 'g.n2pack'), format: 'zip', target: 'linux', game: 'G' }),
+    /modules do not fit[\s\S]*Rigidbody/);
+});
+
+const sevenZip = findSevenZip();
+test('a 7z pack is non-solid: one block per file', { skip: !sevenZip && '7-Zip is not installed' }, () => {
+  const projectDir = packProject();
+  const pack = path.join(tmp('n2build-pack-'), 'g.n2pack');
+  cookPack({ projectDir, outFile: pack, format: '7z', target: 'android', game: 'Packed', sevenZip });
+  const listing = spawnSync(sevenZip, ['l', '-slt', pack], { encoding: 'utf8' });
+  assert.equal(listing.status, 0, listing.stderr);
+  assert.match(listing.stdout, /Solid = -/);
+  assert.match(listing.stdout, /Path = assets[\\/]scripts[\\/]main\.lua/);
+});
+
+test('the pack format: --pack, the target\'s setting, the descriptor, then zip for desktop and stored for the web', () => {
+  const descriptors = loadDescriptors(ENGINE_ROOT);
+  assert.equal(resolvePackFormat(descriptors.get('linux'), {}, undefined), 'zip');
+  assert.equal(resolvePackFormat(descriptors.get('web'), {}, undefined), 'stored');
+  assert.equal(resolvePackFormat(descriptors.get('linux'), { pack: '7z' }, undefined), '7z');
+  assert.equal(resolvePackFormat(descriptors.get('linux'), { pack: '7z' }, 'folder'), 'folder');
+  assert.throws(() => readTargetSettings({ build: { targets: { linux: { pack: 'rar' } } } }, 'linux'), /pack must be one of/);
+  assert.throws(() => parseArguments(['build', '--target', 'linux', '--project', 'p', '--pack', 'rar']), UsageError);
+  assert.throws(() => parseArguments(['cook', '--target', 'linux', '--project', 'p', '--pack', 'folder']), UsageError);
+});
+
+test('a desktop package carries game.n2pack beside the player; --pack folder keeps the folder', () => {
+  const projectDir = packProject();
+  const tree = fakeTree({ 'n2player-files.txt': 'n2player\n', n2player: 'exe' });
+  const packaged = path.join(tmp('n2build-out-'), 'Packed');
+  preparePackageDir(packaged);
+  packageDesktop({ treeDir: tree, descriptor: descriptor(), projectDir, packageDir: packaged, gameName: 'Packed', platform: 'linux', pack: { format: 'zip' } });
+  assert.deepEqual(fs.readdirSync(packaged).sort(), ['Packed', 'game.n2pack', 'game.n2pack.manifest.json']);
+  const folder = path.join(tmp('n2build-out-'), 'Packed');
+  preparePackageDir(folder);
+  packageDesktop({ treeDir: tree, descriptor: descriptor(), projectDir, packageDir: folder, gameName: 'Packed', platform: 'linux', pack: { format: 'folder' } });
+  assert.deepEqual(fs.readdirSync(folder).sort(), ['Packed', 'game']);
+});
+
+test('the web plan preloads the pack: N2ENGINE_WEB_PACK names it in the build tree', () => {
+  const projectDir = makeProject({ name: 'Tri' });
+  const web = loadDescriptors(ENGINE_ROOT).get('web');
+  const plan = planBuild({ engineRoot: '/engine', projectDir, descriptor: web, config: 'release', modules: null, present: new Set(), toolchainFile: '/em.cmake', gameName: 'Tri', packFormat: 'stored' });
+  assert.ok(plan.configureArgs.includes(`-DN2ENGINE_WEB_PACK=${path.join(plan.treeDir, 'game.n2pack')}`), plan.configureArgs.join(' '));
+  assert.equal(packPath({ descriptor: web, packageDir: '/out', treeDir: plan.treeDir }), path.join(plan.treeDir, 'game.n2pack'));
+  const folder = planBuild({ engineRoot: '/engine', projectDir, descriptor: web, config: 'release', modules: null, present: new Set(), toolchainFile: '/em.cmake', gameName: 'Tri', packFormat: 'folder' });
+  assert.ok(!folder.configureArgs.some((a) => a.startsWith('-DN2ENGINE_WEB_PACK')));
 });
 
 // --- PhysX's GPU library only for GPU physics (follow-up of the build targets plan) ----------------------------------

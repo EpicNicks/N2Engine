@@ -224,10 +224,35 @@ namespace N2Engine::AssetImport
             return text;
         }
 
-        /// Reads up to `maxBytes` of a file, or nullopt (with the reason in `error`)
+        /// Reads up to `maxBytes` of a file, or nullopt (with the reason in `error`); through `reader` when it is set
         std::optional<std::vector<std::uint8_t>> ReadFileCapped(const fs::path &path, const std::size_t wanted,
-                                                                const std::size_t maxBytes, std::string &error)
+                                                                const std::size_t maxBytes, std::string &error,
+                                                                const ModelFileReader &reader)
         {
+            if (reader)
+            {
+                if (wanted > maxBytes)
+                {
+                    error = std::format("{} is {} bytes, over the {}-byte limit", PathText(path), wanted, maxBytes);
+                    return std::nullopt;
+                }
+                auto read = reader(path, maxBytes);
+                if (!read)
+                {
+                    error = std::format("can't read {}: {}", PathText(path), read.error());
+                    return std::nullopt;
+                }
+                if (read->size() < wanted)
+                {
+                    error = std::format("{} is {} bytes, shorter than the {} the model says", PathText(path), read->size(), wanted);
+                    return std::nullopt;
+                }
+                if (wanted != 0)
+                {
+                    read->resize(wanted);
+                }
+                return std::move(*read);
+            }
             std::ifstream file(path, std::ios::binary | std::ios::ate);
             if (!file.is_open())
             {
@@ -321,7 +346,7 @@ namespace N2Engine::AssetImport
 
         /// Gives every buffer its data: the GLB BIN chunk, a base64 data: URI, or an external file under
         /// baseDirectory. cgltf_load_buffers isn't used: it would open any path the file names.
-        std::optional<ModelImportError> LoadBuffers(cgltf_data &data, const fs::path &baseDirectory)
+        std::optional<ModelImportError> LoadBuffers(cgltf_data &data, const fs::path &baseDirectory, const ModelFileReader &reader)
         {
             std::size_t total = 0;
             for (cgltf_size i = 0; i < data.buffers_count; ++i)
@@ -400,7 +425,7 @@ namespace N2Engine::AssetImport
                                                             "the model's folder are read", i, decodedUri)};
                     }
                     std::string error;
-                    auto read = ReadFileCapped(path, buffer.size, kMaxModelBufferBytes, error);
+                    auto read = ReadFileCapped(path, buffer.size, kMaxModelBufferBytes, error, reader);
                     if (!read)
                     {
                         return ModelImportError{ModelImportErrorCode::BufferLoadFailed,
@@ -1444,7 +1469,7 @@ namespace N2Engine::AssetImport
         /// Reads every image's bytes. One image over kMaxModelImageBytes, or that can't be read, is skipped with a
         /// warning; all of them over kMaxModelTotalImageBytes is an error (many images can name one big view).
         std::optional<ModelImportError> ReadImages(const cgltf_data &data, const fs::path &baseDirectory,
-                                                   ImportedScene &scene, Warnings &warnings)
+                                                   ImportedScene &scene, Warnings &warnings, const ModelFileReader &reader)
         {
             std::size_t total = 0;
             const auto charge = [&total](const std::size_t size)
@@ -1517,18 +1542,23 @@ namespace N2Engine::AssetImport
                                              "folder are read", label, image.uri));
                     continue;
                 }
+                // With a reader the file is charged once read (below); the disk tells its size first
                 std::error_code sizeError;
-                const std::uintmax_t fileSize = fs::file_size(path, sizeError);
-                if (!sizeError && fileSize <= kMaxModelImageBytes && !charge(static_cast<std::size_t>(fileSize)))
+                const std::uintmax_t fileSize = reader ? 0 : fs::file_size(path, sizeError);
+                if (!reader && !sizeError && fileSize <= kMaxModelImageBytes && !charge(static_cast<std::size_t>(fileSize)))
                 {
                     return ImagesTooLarge();
                 }
                 std::string error;
-                auto read = ReadFileCapped(path, 0, kMaxModelImageBytes, error);
+                auto read = ReadFileCapped(path, 0, kMaxModelImageBytes, error, reader);
                 if (!read)
                 {
                     warnings.Add(std::format("image '{}' is skipped: {}", label, error));
                     continue;
+                }
+                if (reader && !charge(read->size()))
+                {
+                    return ImagesTooLarge();
                 }
                 image.bytes = std::move(*read);
             }
@@ -1778,7 +1808,7 @@ namespace N2Engine::AssetImport
             {
                 return std::unexpected(std::move(*error));
             }
-            if (auto error = LoadBuffers(*data, baseDirectory))
+            if (auto error = LoadBuffers(*data, baseDirectory, settings.readFile))
             {
                 return std::unexpected(std::move(*error));
             }
@@ -1806,7 +1836,7 @@ namespace N2Engine::AssetImport
             ImageUse use;
             if (settings.importMaterials)
             {
-                if (auto error = ReadImages(*data, baseDirectory, scene, warnings))
+                if (auto error = ReadImages(*data, baseDirectory, scene, warnings, settings.readFile))
                 {
                     return std::unexpected(std::move(*error));
                 }

@@ -44,6 +44,7 @@
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourcePath.hpp"
 #include "engine/io/ResourceUUID.hpp"
+#include "engine/io/Vfs.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
@@ -491,6 +492,26 @@ int main(int argc, char *argv[])
                 "Unknown option '{}'. Usage: [--project DIR] [--frames N] [--size WxH] [--renderer software|webgpu]", arg));
         }
     }
+
+    // A package made from the game's pack (n2build; web/CMakeLists.txt's N2ENGINE_WEB_PACK) preloads one file,
+    // /game.n2pack, instead of the project folder: it is mounted where the folder would be (docs/packs.html). A web pack
+    // is a zip (stored, as the server compresses the download), so only the zip reader is in the player, and only in a
+    // package built with a pack (N2_WEB_GAME_PACK): a folder-preloaded build carries no reader at all.
+#ifdef N2_WEB_GAME_PACK
+    {
+        std::error_code error;
+        const std::filesystem::path pack = "/game.n2pack";
+        if (std::filesystem::is_regular_file(pack, error) && !std::filesystem::is_directory(projectDir, error))
+        {
+            auto mount = IO::Pack::OpenZip(pack);
+            if (!mount)
+            {
+                return Fail("The game's pack can't be read: " + mount.error());
+            }
+            IO::Vfs::Instance().Mount(projectDir, std::move(*mount));
+        }
+    }
+#endif
 
     g_player.webgpu = renderBackend == Config::ApplicationOptions::RenderBackend::WEBGPU;
     Application &application = Application::GetInstance();

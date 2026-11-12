@@ -3,6 +3,7 @@
 #include <fstream>
 #include <cstring>
 #include <algorithm>
+#include <limits>
 
 #define DR_WAV_IMPLEMENTATION
 #include <dr_libs/dr_wav.h>
@@ -17,6 +18,7 @@
 #include <stb_vorbis/stb_vorbis.c>
 
 #include "engine/Logger.hpp"
+#include "engine/io/Vfs.hpp"
 
 namespace N2Engine::Audio
 {
@@ -28,8 +30,10 @@ namespace N2Engine::Audio
     {
         AudioData result;
 
+        // The whole file through the virtual filesystem (a folder or a pack), decoded from memory
+        const auto bytes = IO::Vfs::Instance().ReadBytes(path);
         drwav wav;
-        if (!drwav_init_file(&wav, path.string().c_str(), nullptr))
+        if (!bytes || !drwav_init_memory(&wav, bytes->data(), bytes->size(), nullptr))
         {
             Logger::Error(std::format("Failed to open WAV file: {}", path.string()));
             return result;
@@ -74,14 +78,13 @@ namespace N2Engine::Audio
     {
         AudioData result;
 
-        int channels, sampleRate;
-        short *output;
-        int numSamples = stb_vorbis_decode_filename(
-            path.string().c_str(),
-            &channels,
-            &sampleRate,
-            &output
-        );
+        int channels = 0, sampleRate = 0;
+        short *output = nullptr;
+        const auto bytes = IO::Vfs::Instance().ReadBytes(path);
+        // stb_vorbis takes an int length
+        int numSamples = bytes && bytes->size() <= static_cast<std::size_t>(std::numeric_limits<int>::max())
+                             ? stb_vorbis_decode_memory(bytes->data(), static_cast<int>(bytes->size()), &channels, &sampleRate, &output)
+                             : -1;
 
         if (numSamples <= 0)
         {
@@ -118,12 +121,14 @@ namespace N2Engine::Audio
 
         drmp3_config config;
         drmp3_uint64 totalFrameCount;
-        drmp3_int16 *pSampleData = drmp3_open_file_and_read_pcm_frames_s16(
-            path.string().c_str(),
+        const auto bytes = IO::Vfs::Instance().ReadBytes(path);
+        drmp3_int16 *pSampleData = bytes ? drmp3_open_memory_and_read_pcm_frames_s16(
+            bytes->data(),
+            bytes->size(),
             &config,
             &totalFrameCount,
             nullptr
-        );
+        ) : nullptr;
 
         if (pSampleData == nullptr)
         {
@@ -161,13 +166,15 @@ namespace N2Engine::Audio
         unsigned int channels;
         unsigned int sampleRate;
         drflac_uint64 totalFrameCount;
-        drflac_int16 *pSampleData = drflac_open_file_and_read_pcm_frames_s16(
-            path.string().c_str(),
+        const auto bytes = IO::Vfs::Instance().ReadBytes(path);
+        drflac_int16 *pSampleData = bytes ? drflac_open_memory_and_read_pcm_frames_s16(
+            bytes->data(),
+            bytes->size(),
             &channels,
             &sampleRate,
             &totalFrameCount,
             nullptr
-        );
+        ) : nullptr;
 
         if (pSampleData == nullptr)
         {

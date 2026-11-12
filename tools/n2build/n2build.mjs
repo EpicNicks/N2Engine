@@ -6,6 +6,11 @@
 //   node tools/n2build/n2build.mjs build  --target <name> --project DIR [--config debug|release] [--out DIR]
 //                                         [--build-dir DIR] [--archive zip|7z] [--jobs N] [--dry-run]
 //   node tools/n2build/n2build.mjs run    --target <name> --project DIR [--config ...] [--no-build] [--frames N] [--port N]
+//   node tools/n2build/n2build.mjs cook   --target <name> --project DIR [--out FILE] [--pack zip|stored|7z]
+//
+// --pack (build, cook): how the game's files are packaged (docs/packs.html): zip, stored (an uncompressed zip), 7z
+// (non-solid, through 7-Zip) or folder (the project folder as it is). Default: the target's build.targets pack, else the
+// descriptor's package.pack, else zip for desktop and stored for the web.
 //
 // Common: --json (one JSON event per line on stdout, for the editor), --targets-dir DIR (more target descriptors; also
 // N2BUILD_TARGET_DIRS and "targetFolders" in the user's n2build.json).
@@ -20,17 +25,19 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
-  archivePackage, checkPhysics, engineRevision, needsConfigure, packageDesktop, packageWeb, planBuild,
-  preparePackageDir, readMarker, readProject, recordConfigure, runProcess, writeMarker,
+  archivePackage, checkPhysics, engineRevision, needsConfigure, packageDesktop, packageWeb, packPath, planBuild,
+  preparePackageDir, readMarker, readProject, recordConfigure, resolvePackFormat, runProcess, writeMarker,
 } from './lib/build.mjs';
+import { PACK_EXTENSION, cookPack, findSevenZip } from './lib/cook.mjs';
+import { PACK_KINDS } from './lib/descriptors.mjs';
 import { findTarget, loadDescriptors, readUserSettings, userSettingsFile } from './lib/descriptors.mjs';
 import { BuildError, Reporter } from './lib/report.mjs';
 import { serveFolder } from './lib/serve.mjs';
 import { checkToolchains, findOnPath, systemProbe } from './lib/toolchains.mjs';
 
 export const ENGINE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const COMMANDS = ['list', 'doctor', 'build', 'run'];
-const VALUE_OPTIONS = new Set(['--target', '--project', '--config', '--out', '--build-dir', '--archive', '--jobs', '--frames', '--port', '--targets-dir']);
+const COMMANDS = ['list', 'doctor', 'build', 'run', 'cook'];
+const VALUE_OPTIONS = new Set(['--target', '--project', '--config', '--out', '--build-dir', '--archive', '--jobs', '--frames', '--port', '--targets-dir', '--pack']);
 const FLAG_OPTIONS = new Set(['--json', '--dry-run', '--no-build', '--help']);
 
 export const USAGE = `Usage: n2build <command> [options]
@@ -39,6 +46,8 @@ export const USAGE = `Usage: n2build <command> [options]
   build  --target T --project DIR [--config debug|release] [--out DIR] [--build-dir DIR]
          [--archive zip|7z] [--jobs N] [--dry-run]
   run    --target T --project DIR [--config debug|release] [--no-build] [--frames N] [--port N]
+  cook   --target T --project DIR [--out FILE] [--pack zip|stored|7z]
+         build also takes --pack zip|stored|7z|folder (how the game's files are packaged)
 Common: --json (JSON lines for the editor), --targets-dir DIR (more targets)`;
 
 export class UsageError extends Error {}
@@ -87,8 +96,10 @@ export function parseArguments(argv) {
     }
   }
   if (options.archive !== undefined && !['zip', '7z'].includes(options.archive)) throw new UsageError('--archive must be zip or 7z');
+  if (options.pack !== undefined && !PACK_KINDS.includes(options.pack)) throw new UsageError(`--pack must be one of ${PACK_KINDS.join(', ')}`);
+  if (command === 'cook' && options.pack === 'folder') throw new UsageError('cook makes a pack: --pack zip, stored or 7z');
   if (command !== 'list' && !options.target) throw new UsageError(`${command} needs --target`);
-  if ((command === 'build' || command === 'run') && !options.project) throw new UsageError(`${command} needs --project`);
+  if ((command === 'build' || command === 'run' || command === 'cook') && !options.project) throw new UsageError(`${command} needs --project`);
   return { command, options };
 }
 
@@ -147,22 +158,38 @@ async function build(descriptor, options, ctx, reporter) {
     throw new BuildError(physicsProblem ?? `This machine cannot build the ${descriptor.name} target yet (see above, or run n2build doctor --target ${descriptor.name})`);
   }
 
+  const packFormat = resolvePackFormat(descriptor, project.settings, options.pack);
+  const sevenZip = packFormat === '7z' ? findSevenZip(toolchains.env ?? ctx.env, ctx) : null;
+  if (packFormat === '7z' && descriptor.package.kind === 'web') {
+    throw new BuildError('The web player reads zip packs only (stored or zip): build the web target with --pack stored or zip');
+  }
+  if (packFormat === '7z' && !sevenZip && !options.dryRun) {
+    throw new BuildError("A 7z pack needs 7-Zip's command line (7z, 7za or 7zz on PATH): install 7-Zip, or build with --pack zip");
+  }
   const plan = planBuild({
     engineRoot: ENGINE_ROOT, projectDir, descriptor, config: config, modules: project.modules,
     present: toolchains.present, toolchainFile: toolchains.toolchainFile ?? (options.dryRun ? '<Emscripten.cmake from emsdk>' : null),
     buildRoot: options.buildDir ? path.resolve(options.buildDir) : null, outDir: options.out,
-    jobs: options.jobs ?? os.availableParallelism(), gameName: project.name,
+    jobs: options.jobs ?? os.availableParallelism(), gameName: project.name, packFormat,
   });
+  const gamePack = packFormat === 'folder' ? null : packPath({ descriptor, packageDir: plan.packageDir, treeDir: plan.treeDir });
   if (options.dryRun) {
     reporter.step('plan', `Plan for ${descriptor.name} (${config})`);
     reporter.log('stdout', `build tree: ${plan.treeDir}`);
     reporter.log('stdout', `cmake ${plan.configureArgs.join(' ')}`);
     reporter.log('stdout', `cmake ${plan.buildArgs.join(' ')}`);
     reporter.log('stdout', `package: ${plan.packageDir}`);
+    reporter.log('stdout', `game: ${gamePack ? `${packFormat} pack ${gamePack}` : 'the project folder, copied'}`);
     return { ok: report.ok, dryRun: true, output: plan.packageDir, treeDir: plan.treeDir, ...(report.ok ? {} : { error: 'Not ready (see the doctor report)' }) };
   }
 
   const cmake = findOnPath('cmake', toolchains.env, ctx) ?? 'cmake';
+  // The web package preloads the pack (N2ENGINE_WEB_PACK), so it is cooked before CMake configures and builds
+  if (descriptor.package.kind === 'web' && gamePack) {
+    reporter.step('cook', `Packing the game (${packFormat}) into ${gamePack}`);
+    fs.mkdirSync(plan.treeDir, { recursive: true });
+    cookPack({ projectDir, outFile: gamePack, format: packFormat, target: descriptor.name, game: project.name, sevenZip, env: toolchains.env });
+  }
   if (needsConfigure(plan.treeDir, plan.configureArgs)) {
     reporter.step('configure', `Configuring ${descriptor.displayName} (${config}) in ${plan.treeDir}`);
     const code = await runProcess(cmake, plan.configureArgs, { env: toolchains.env, cwd: ENGINE_ROOT, reporter });
@@ -177,6 +204,7 @@ async function build(descriptor, options, ctx, reporter) {
   preparePackageDir(plan.packageDir);
   const entry = descriptor.package.kind === 'desktop'
     ? packageDesktop({ treeDir: plan.treeDir, descriptor, projectDir, packageDir: plan.packageDir, gameName: project.name, platform: ctx.platform,
+      pack: { format: packFormat, sevenZip, env: toolchains.env },
       physicsGpu: project.project.settings?.physics?.gpu,
       onLeftOut: (left) => reporter.log('stdout', `Not packaged: ${left.join(', ')} (the project's physics.gpu is off; set it to on or auto for GPU physics)`) })
     : packageWeb({ treeDir: plan.treeDir, descriptor, packageDir: plan.packageDir });
@@ -189,6 +217,18 @@ async function build(descriptor, options, ctx, reporter) {
     archive = archivePackage({ packageDir: plan.packageDir, format: options.archive, cmake, env: toolchains.env });
   }
   return { ok: true, output: plan.packageDir, entry, ...(archive ? { archive } : {}) };
+}
+
+/** n2build cook: the game's pack alone (what build puts in a package), with its manifest beside it */
+async function cook(descriptor, options, ctx, reporter) {
+  const projectDir = path.resolve(options.project);
+  const project = readProject(projectDir, descriptor.name);
+  const format = resolvePackFormat(descriptor, project.settings, options.pack);
+  if (format === 'folder') throw new BuildError(`The ${descriptor.name} target packages the project folder as it is; choose --pack zip, stored or 7z`);
+  const outFile = path.resolve(options.out ?? path.join(projectDir, '.n2', 'out', `${descriptor.name}-game${PACK_EXTENSION}`));
+  reporter.step('cook', `Packing the game (${format}) into ${outFile}`);
+  const manifest = cookPack({ projectDir, outFile, format, target: descriptor.name, game: project.name, sevenZip: findSevenZip(ctx.env, ctx), env: ctx.env });
+  return { ok: true, output: outFile, files: manifest.fileCount, size: fs.statSync(outFile).size, uncompressedSize: manifest.totalSize };
 }
 
 async function run(descriptor, options, ctx, reporter) {
@@ -268,7 +308,9 @@ export async function main(argv, { ctx = systemProbe(), reporter } = {}) {
       r.result({ ok: report.ok, ...(report.ok ? {} : { error: `Not ready to build ${descriptor.name}` }) });
       return report.ok ? 0 : 1;
     }
-    const result = command === 'build' ? await build(descriptor, options, ctx, r) : await run(descriptor, options, ctx, r);
+    const result = command === 'build' ? await build(descriptor, options, ctx, r)
+      : command === 'cook' ? await cook(descriptor, options, ctx, r)
+        : await run(descriptor, options, ctx, r);
     if (result) r.result(result);
     return result && !result.ok ? 1 : 0;
   } catch (error) {

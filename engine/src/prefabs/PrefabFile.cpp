@@ -8,6 +8,7 @@
 
 #include "engine/Logger.hpp"
 #include "engine/io/Resources.hpp"
+#include "engine/io/Vfs.hpp"
 #include "engine/serialization/JsonLimits.hpp"
 
 namespace N2Engine
@@ -39,13 +40,13 @@ namespace N2Engine
 
     bool PrefabFile::Load(const std::filesystem::path &path)
     {
-        std::ifstream file(path, std::ios::binary);
-        if (!file)
+        const auto read = IO::Vfs::Instance().ReadText(path);
+        if (!read)
         {
             Logger::Error(std::format("Cannot read prefab file {}", IO::PathToUtf8(path)));
             return false;
         }
-        const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        const std::string &text = *read;
         auto parsed = Parse(text);
         if (!parsed)
         {
