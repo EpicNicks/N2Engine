@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
-project(. VERSION 1.0.0 LANGUAGES CXX C)
+# Named: the Xcode generator writes <name>.xcodeproj (a project named "." made "..xcodeproj", which xcodebuild refuses)
+project(N2Engine VERSION 1.0.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -128,6 +129,18 @@ if(ANDROID)
     include(${CMAKE_SOURCE_DIR}/cmake/N2EngineAndroid.cmake)
 else()
     set(N2ENGINE_PLATFORM_ANDROID OFF)
+endif()
+
+# == Apple platforms (build targets stage 10) ==
+# iOS from the toolchain (-DCMAKE_SYSTEM_NAME=iOS with the Xcode generator); macOS is a desktop platform. Both:
+# cmake/N2EngineApple.cmake and docs/apple.html.
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(N2ENGINE_PLATFORM_IOS ON)
+else()
+    set(N2ENGINE_PLATFORM_IOS OFF)
+endif()
+if(APPLE)
+    include(${CMAKE_SOURCE_DIR}/cmake/N2EngineApple.cmake)
 endif()
 
 # == PhysX setup ==
@@ -371,6 +384,10 @@ list(FILTER LUA_SOURCES EXCLUDE REGEX ".*lua\\.c$")
 list(FILTER LUA_SOURCES EXCLUDE REGEX ".*luac\\.c$")
 
 add_library(lua STATIC ${LUA_SOURCES})
+if(N2ENGINE_PLATFORM_IOS)
+    # iOS has no system(): Lua's own switch makes os.execute report that no shell is there
+    target_compile_definitions(lua PRIVATE LUA_USE_IOS)
+endif()
 target_include_directories(lua PUBLIC ${CMAKE_SOURCE_DIR}/external/lua)
 
 if(WIN32)
@@ -402,7 +419,11 @@ if(N2ENGINE_PLATFORM_ANDROID)
     # repository for an APK
     add_subdirectory(players/android/native)
 endif()
-if(NOT N2ENGINE_PLATFORM_WEB AND NOT N2ENGINE_PLATFORM_ANDROID)
+if(N2ENGINE_PLATFORM_IOS)
+    # The iOS player, an app bundle (players/ios)
+    add_subdirectory(players/ios)
+endif()
+if(NOT N2ENGINE_PLATFORM_WEB AND NOT N2ENGINE_PLATFORM_ANDROID AND NOT N2ENGINE_PLATFORM_IOS)
 add_subdirectory(test_project)
 add_subdirectory(lua_project)
 # The desktop player that tools/n2build packages for the windows and linux targets (docs/build-targets.html)

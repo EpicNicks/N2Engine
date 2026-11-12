@@ -67,6 +67,7 @@
 <li><a href="platform.html">The platform layer</a></li>
 <li><a href="packs.html">Packs &amp; the virtual filesystem</a></li>
 <li><a href="android.html">Android</a></li>
+<li><a href="apple.html">iOS &amp; macOS</a></li>
 </ul>
 </div>
 </nav>
@@ -138,6 +139,8 @@ node tools/n2build/n2build.mjs run    --target web --project path/to/game   # bu
 <tr><td><code>linux</code></td><td>Linux</td><td>GCC 14 or newer (or Clang with libstdc++ 14) for <code>std::generator</code>, CMake 3.25+, Ninja, and the usual X11, GL and ALSA development packages. Optional: Vulkan headers and <code>glslangValidator</code> or <code>glslc</code></td><td>A folder: the executable (it finds its libraries beside it, <code>$ORIGIN</code>), <code>libopenal.so.1</code>, and <code>game/</code></td></tr>
 <tr><td><code>web</code></td><td>Windows, Linux, macOS</td><td>emsdk with Emscripten 4.0.10 activated (<code>EMSDK</code>, else <code>~/emsdk</code>), CMake, Ninja</td><td>The static web package (<a href="web-build.html#hosting">hosting</a>)</td></tr>
 <tr><td><code>android</code></td><td>Windows, Linux, macOS</td><td>The Android SDK, NDK 27.0.12077973, a JDK 17 to 21, Gradle 8.9 or newer, CMake 3.25+, Ninja (<a href="android.html#toolchains">details</a>)</td><td>A folder with the APK, <code>&lt;Game&gt;.apk</code> (<a href="android.html">Android</a>)</td></tr>
+<tr><td><code>ios</code></td><td>macOS; elsewhere in GitHub Actions</td><td>Xcode and CMake on a Mac; off a Mac the GitHub CLI, logged in (<a href="apple.html#remote">remote builds</a>)</td><td>A folder with the simulator app, <code>&lt;Game&gt;.app</code> (<a href="apple.html">iOS &amp; macOS</a>)</td></tr>
+<tr><td><code>macos</code></td><td>macOS; elsewhere in GitHub Actions</td><td>AppleClang, CMake, Ninja; off a Mac the GitHub CLI</td><td>A folder: the executable and <code>game.n2pack</code></td></tr>
 </tbody>
 </table>
 </div>
@@ -164,6 +167,7 @@ node tools/n2build/n2build.mjs run    --target web --project path/to/game   # bu
 <li><strong>The window's title</strong> is the game's name; a Debug build adds the renderer.</li>
 <li><strong>Windows:</strong> a Release player is a windowed program, with no console window behind the game. <code>--console-log</code> still prints the log when it is started from a console or by <code>n2build run</code>. Debug keeps the console.</li>
 <li><strong><code>--frames N</code></strong> runs N frames through <code>Application::BeginRun</code>/<code>RunFrame</code>/<code>EndRun</code> and quits, for smoke runs.</li>
+<li><strong><code>--headless</code></strong> runs with no window: the software renderer draws offscreen. It is for machines with no display or no GPU, such as CI runners. With any other <code>--renderer</code> it is refused.</li>
 </ul>
 <p class="src">Source: <code>players/desktop/src/Main.cpp</code>, <code>players/desktop/src/PlayerOptions.cpp</code>; tests: <code>tests/players/PlayerOptionsTests.cpp</code></p>
 
@@ -262,7 +266,7 @@ node tools/n2build/n2build.mjs run    --target web --project path/to/game   # bu
 <li><strong>Packs</strong> are stage 4: a package carries <code>game.n2pack</code> (zip by default, <code>--pack stored|7z|folder</code>), and <code>n2build cook</code> makes one alone (<a href="packs.html">Packs &amp; the virtual filesystem</a>).</li>
 <li><strong>CI</strong> builds and runs the Linux package through n2build. The Windows and web packages are built through n2build locally only; CI still builds those with CMake directly.</li>
 <li><strong>Package size on Windows.</strong> A build with PhysX ships <code>PhysXGpu_64.dll</code> (about 360 MB of the 374 MB <code>lua_project</code> package, measured 2026-11-10), because the engine's PhysX build always lists it. n2build leaves it out of the package unless the project's <code>physics.gpu</code> is <code>on</code> or <code>auto</code> (the default is <code>off</code>), and logs that it did; the build tree still has it, so turning GPU physics on needs only a new package (<code>runtimeFilesFor</code> in <code>tools/n2build/lib/build.mjs</code>). A project with <code>"physics3d": "none"</code> or <code>"jolt"</code> ships no PhysX at all.</li>
-<li><strong>Android</strong> builds an APK, and with a signing profile a signed release APK and AAB; <code>run</code> installs it on a device and streams its log (<a href="android.html">Android</a>). <strong>iOS, macOS</strong> and private targets: later stages of the plan.</li>
+<li><strong>Android</strong> builds an APK, and with a signing profile a signed release APK and AAB; <code>run</code> installs it on a device and streams its log (<a href="android.html">Android</a>). <strong>iOS and macOS</strong> build on a Mac, or in GitHub Actions from any machine (stage 10, <a href="apple.html">iOS &amp; macOS</a>). Private targets: a later stage.</li>
 </ul>
 
 <div class="page-footer">

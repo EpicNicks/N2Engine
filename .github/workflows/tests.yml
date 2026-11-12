@@ -842,6 +842,66 @@ jobs:
           "$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner" verify --print-certs "$pkg/lua_project.apk" | tee certs.txt
           grep -q "CN=N2Engine CI" certs.txt
 
+  # The Apple targets (build targets stage 10, decision D7; docs/apple.html): built and run on a pinned macOS runner, the
+  # same commands the n2build-apple workflow runs for a game (tools/n2build/lib/remote.mjs). macOS: the desktop player,
+  # run for 60 frames. iOS: the app for the simulator, run there until it has logged a first frame and a frame rate.
+  apple:
+    name: apple (${{ matrix.target }} package of lua_project)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: macos-15
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [macos, ios]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install Ninja
+        run: brew install ninja
+
+      - name: n2build doctor
+        run: node tools/n2build/n2build.mjs doctor --target ${{ matrix.target }} --project lua_project
+
+      - name: n2build build (${{ matrix.target }}, debug)
+        run: node tools/n2build/n2build.mjs build --target ${{ matrix.target }} --project lua_project --config debug --build-dir "$RUNNER_TEMP/n2build" --out "$RUNNER_TEMP/package/LuaDemo"
+
+      - name: Check the package
+        run: |
+          pkg="$RUNNER_TEMP/package/LuaDemo"
+          ls -la "$pkg"
+          cat "$pkg/.n2build-package.json"
+          if [ "${{ matrix.target }}" = ios ]; then
+            app="$(ls -d "$pkg"/*.app)"
+            test -f "$app/game.n2pack"
+            plutil -p "$app/Info.plist" | tee plist.txt
+            grep -q '"CFBundleIdentifier" => "com.n2engine.lua_project"' plist.txt
+          else
+            test -x "$pkg/lua_project"
+            test -f "$pkg/game.n2pack"
+            otool -L "$pkg/lua_project" | tee otool.txt
+          fi
+
+      - name: Run (macOS, 60 frames, no window)
+        if: matrix.target == 'macos'
+        # The runner is a VM with no GPU, so no OpenGL context: the game runs without a window (--headless, the software
+        # renderer offscreen). The window path on a Mac is a checklist item (docs/apple.html#checklist)
+        run: |
+          "$RUNNER_TEMP/package/LuaDemo/lua_project" --console-log --headless --frames 60 | tee run.txt
+          grep -q "Using Software renderer, headless" run.txt
+
+      - name: Run in the simulator (first frame and a frame rate)
+        if: matrix.target == 'ios'
+        run: |
+          node tools/n2build/n2build.mjs run --target ios --project lua_project --config debug --out "$RUNNER_TEMP/package/LuaDemo" --no-build --seconds 60 | tee run.txt
+          grep -q "N2Engine iOS player: first frame" run.txt
+          grep -Eq "N2Engine iOS player: [0-9]+ frames, [0-9.]+ fps" run.txt
+
   # The same Linux build and tests on arm64 (ubuntu-24.04-arm, aarch64): the math library's x86 SIMD paths are compiled out
   # there and the scalar versions run; PhysX runs its own aarch64 build. Not a required check yet.
   linux-arm64:

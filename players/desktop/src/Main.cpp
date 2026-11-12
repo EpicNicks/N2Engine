@@ -174,7 +174,8 @@ int main(int argc, char *argv[])
         .projectPath = options.projectDir.string(),
         .physicsBackend = Config::ApplicationOptions::PhysicsBackend::AUTO,
         .renderBackend = options.renderBackend,
-        .isHeadless = false,
+        // --headless: no window at all, the software renderer offscreen (Window::UsesNoWindow)
+        .isHeadless = options.headless,
     });
     if (!application.GetWindow().IsValid())
     {

@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>iOS and macOS · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="physics2d.html">2D physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="sprite2d.html">Sprites &amp; 2D shapes</a></li>
+<li><a href="particles.html">Particles</a></li>
+<li><a href="soft-bodies.html">Soft bodies</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+<li><a href="netcode.html">Netcode (n2net)</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+<li><a href="editor-extensions.html">Lua editor extensions</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="editor.html">Editor projects</a></li>
+<li><a href="mcp.html">MCP bridge (n2-mcp)</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+<li><a href="web-build.html">Web build</a></li>
+<li><a href="project-modules.html">Project modules</a></li>
+<li><a href="build-targets.html">Build targets</a></li>
+<li><a href="platform.html">The platform layer</a></li>
+<li><a href="packs.html">Packs &amp; the virtual filesystem</a></li>
+<li><a href="android.html">Android</a></li>
+<li><a href="apple.html" aria-current="page">iOS &amp; macOS</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>iOS and macOS</h1>
+<p class="lead">The <code>ios</code> target builds a game into an app for the iOS simulator; the <code>macos</code> target builds the desktop player for Apple-silicon Macs. On a Mac, n2build builds both with Xcode and CMake. Anywhere else, it builds them in GitHub Actions, on a macOS runner, and downloads the result (decision D7: no Mac is needed). This is stage 10 of the <a href="build-targets.html">build targets</a> plan <span class="badge">PR #TBD</span>.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#build">Building on a Mac</a></li>
+<li><a href="#remote">Building in GitHub Actions</a></li>
+<li><a href="#settings">Project settings</a></li>
+<li><a href="#player">The iOS player</a></li>
+<li><a href="#macos">macOS</a></li>
+<li><a href="#signing">Devices and signing</a></li>
+<li><a href="#ci">CI and what was verified</a></li>
+<li><a href="#checklist">Checklist</a></li>
+</ol>
+</div>
+
+<h2 id="build">Building on a Mac</h2>
+<pre class="lang-shell"><code>node tools/n2build/n2build.mjs doctor --target ios --project path/to/game
+node tools/n2build/n2build.mjs build  --target ios --project path/to/game [--config debug|release]
+node tools/n2build/n2build.mjs run    --target ios --project path/to/game [--no-build] [--seconds N]
+node tools/n2build/n2build.mjs build  --target macos --project path/to/game</code></pre>
+<p>For iOS:</p>
+<ol>
+<li><strong>Cook:</strong> the game's pack goes into the build tree first.</li>
+<li><strong>Configure and build:</strong> CMake's Xcode generator configures the engine with <code>CMAKE_SYSTEM_NAME=iOS</code>, the simulator SDK and <code>arm64</code>. <code>players/ios</code> puts the pack into the app bundle and the game's settings into its <code>Info.plist</code>. <code>cmake --build --config Release</code> builds the app.</li>
+<li><strong>Package:</strong> the app goes into the package folder as <code>&lt;Game&gt;.app</code>.</li>
+</ol>
+<p><code>run</code> works like this:</p>
+<ol>
+<li>It picks the booted simulator, else the newest iPhone (booting it), and installs the app.</li>
+<li>It launches the app with its console, streaming each line as a log event with <code>"stream": "console"</code>.</li>
+<li>It ends when the app exits, or after <code>--seconds</code>.</li>
+</ol>
+<p>The doctor checks Xcode (<code>xcodebuild -version</code>) and CMake. For macOS it checks the compiler, CMake and Ninja, as on Linux.</p>
+<p>The oldest systems: iOS 16.3 and macOS 13.3 (<code>CMAKE_OSX_DEPLOYMENT_TARGET</code> in the targets). They are the first where Apple's C++ library formats floating-point numbers (<code>std::format</code> uses <code>std::to_chars</code>).</p>
+<p class="src">Source: <code>tools/n2build/lib/apple.mjs</code>; <code>targets/ios</code>, <code>targets/macos</code>; <code>players/ios</code>; <code>cmake/N2EngineApple.cmake</code></p>
+
+<h2 id="remote">Building in GitHub Actions</h2>
+<p>When the machine is not a Mac, the <code>ios</code> and <code>macos</code> targets build in a workflow of the game's own GitHub repository:</p>
+<ol>
+<li><strong>Once:</strong> <code>n2build apple-workflow --project path/to/game</code> writes <code>.github/workflows/n2build-apple.yml</code> into the game's repository. Commit and push it.</li>
+<li><strong>The doctor</strong> checks only the GitHub CLI and its login (<code>gh auth status</code>). Xcode is the runner's.</li>
+<li><strong><code>build</code></strong> refuses a project with uncommitted or unpushed changes, because the workflow builds what is on GitHub. It then runs <code>gh workflow run n2build-apple.yml</code> with four plain inputs: the target, the configuration, the project's folder in the repository, and the engine revision.</li>
+<li><strong>It follows the run</strong> (<code>gh run watch</code>, its output as log events), then downloads the package artifact into the package folder. The package holds the marker that the workflow's own n2build wrote.</li>
+</ol>
+<p>The workflow runs on a pinned <code>macos-15</code> runner. It checks out the game and the engine at the requested revision, runs <code>n2build build</code>, and for iOS also runs the app in the simulator for 30 seconds, as a smoke test. <code>build --dry-run</code> prints the <code>gh</code> command without running it.</p>
+<p class="src">Source: <code>tools/n2build/lib/remote.mjs</code> — <code>gitState</code>, <code>checkPushed</code>, <code>dispatchAndFollow</code>, <code>workflowTemplate</code></p>
+
+<h2 id="settings">Project settings</h2>
+<p><code>build.targets.ios</code> (<a href="build-targets.html#settings">all target settings</a>):</p>
+<table>
+<thead><tr><th>Key</th><th>Default</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td><code>appId</code></td><td><code>com.n2engine.&lt;name&gt;</code></td><td>The bundle identifier</td></tr>
+<tr><td><code>displayName</code></td><td>The project's name</td><td>The name under the icon</td></tr>
+<tr><td><code>version</code>, <code>buildNumber</code></td><td><code>1.0.0</code>, <code>1</code></td><td><code>CFBundleShortVersionString</code> and <code>CFBundleVersion</code></td></tr>
+<tr><td><code>orientation</code></td><td><code>any</code></td><td><code>any</code>, <code>landscape</code> or <code>portrait</code> (the supported interface orientations)</td></tr>
+</tbody>
+</table>
+<p>Both targets allow <code>physics3d</code> <code>none</code> or <code>jolt</code>: no PhysX (D8 for iOS; no PhysX build for macOS is vendored).</p>
+
+<h2 id="player">The iOS player</h2>
+<ul>
+<li><strong>The app:</strong> one window and one view. The engine starts when the view appears; a <code>CADisplayLink</code> runs one frame per screen refresh while the app is active. The OS owns the loop.</li>
+<li><strong>Drawing:</strong> the software renderer's frame becomes the view's layer contents (a <code>CGImage</code>, flipped to top-down rows). No GPU API is needed, so this works on the simulator and on a device alike. Metal is stage 13.</li>
+<li><strong>Input:</strong> every touch goes to the Touchscreen, in pixels; the first finger is also the mouse. A hardware keyboard and game controllers are follow-ups.</li>
+<li><strong>Lifecycle:</strong> <code>Paused</code>, <code>Resumed</code>, <code>LowMemory</code> and <code>QuitRequested</code>. The display link pauses in the background.</li>
+<li><strong>Safe area and scale:</strong> <code>Insets()</code> is the view's safe area, in pixels; <code>ContentScale()</code> is the screen's scale.</li>
+<li><strong>Files:</strong> the pack is read where it is in the app bundle (bundle files are ordinary files, so there is no copy, unlike Android). <code>user://</code> is <code>Application Support/user</code>.</li>
+<li><strong>Audio:</strong> OpenAL Soft on Core Audio, with the ambient audio session (it mixes with other apps and follows the silent switch).</li>
+<li><strong>Log:</strong> the engine's log goes to stdout. The player logs <code>first frame</code> and then <code>N frames, X fps</code> every five seconds.</li>
+</ul>
+<p class="src">Source: <code>players/ios/src/IosMain.mm</code>, <code>IosHost.hpp</code></p>
+
+<h2 id="macos">macOS</h2>
+<p>macOS uses the desktop player (<code>players/desktop</code>), with GLFW, the OpenGL and software renderers, and AppleClang. The libc++ <code>&lt;generator&gt;</code> stand-in is the web build's. The package is a folder: the executable, which finds its libraries beside it (<code>@executable_path</code>), and <code>game.n2pack</code>. An <code>.app</code> bundle for macOS is a follow-up.</p>
+
+<h2 id="signing">Devices and signing</h2>
+<p>The app is built for the simulator and is not signed. A device build needs an Apple Developer account, which the plan defers (D7). When it comes, signing happens only inside the workflow, from the repository's own secrets. Nothing is read on this machine and nothing goes into the project.</p>
+
+<h2 id="ci">CI and what was verified</h2>
+<p>The <code>apple</code> jobs in <code>.github/workflows/tests.yml</code> run on <code>macos-15</code>, with the same commands as the game workflow:</p>
+<ul>
+<li><strong>macOS:</strong> builds lua_project's package and runs it for 60 frames with <code>--headless</code>. The runner is a virtual machine with no GPU, so it has no OpenGL context. The windowed run on a Mac is checklist item 5.</li>
+<li><strong>iOS:</strong> builds the simulator app, checks its bundle (the pack and the bundle identifier), and runs it in the simulator. The run must log a first frame and a frame rate.</li>
+</ul>
+<div class="callout note">
+<p class="callout-title">Verified only in CI</p>
+<p>This machine has no Mac, so every Apple build and run on this page was verified only in CI. n2build's Apple and GitHub Actions logic is unit tested anywhere (<code>n2build.test.mjs</code>): the descriptors, the doctor off and on a Mac, the configure options, finding and packaging the app, the simulator choice and run, and the git checks and the <code>gh</code> flow against a fake <code>gh</code>.</p>
+</div>
+
+<h2 id="checklist">Checklist</h2>
+<table>
+<thead><tr><th>#</th><th>Check</th><th>How</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>A remote build from Windows</td><td>Run <code>n2build apple-workflow</code>, push, then <code>n2build build --target ios</code>. The package folder gets <code>&lt;Game&gt;.app</code> and the marker.</td></tr>
+<tr><td>2</td><td>Simulator: touch</td><td>On a Mac, <code>n2build run --target ios</code>. Taps and drags reach the game.</td></tr>
+<tr><td>3</td><td>Simulator: rotation and safe area</td><td>Rotate the simulator. The game follows <code>orientation</code>, and safe-area UI clears the notch.</td></tr>
+<tr><td>4</td><td>Simulator: background</td><td>Home, then back. The game resumes, and the frame rate line restarts.</td></tr>
+<tr><td>5</td><td>macOS</td><td>The package runs on an Apple-silicon Mac from any folder.</td></tr>
+<tr><td>6</td><td>Device</td><td>Needs a developer account (deferred).</td></tr>
+</tbody>
+</table>
+
+<div class="page-footer">
+<span>Describes the build targets branches through stage 10.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>

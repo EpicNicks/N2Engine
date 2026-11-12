@@ -1,0 +1,30 @@
+{
+  "formatVersion": 1,
+  "name": "macos",
+  "displayName": "macOS (Apple silicon)",
+  "hostSystems": ["darwin"],
+  "toolchains": {
+    "required": ["cxx", "cmake", "ninja"]
+  },
+  "physics3d": ["none", "jolt"],
+  "cmake": {
+    "target": "n2player",
+    "options": {
+      "N2ENGINE_BUILD_TESTS": "OFF",
+      "CMAKE_OSX_ARCHITECTURES": "arm64",
+      "CMAKE_OSX_DEPLOYMENT_TARGET": "13.3"
+    },
+    "configs": {
+      "debug": { "CMAKE_BUILD_TYPE": "Debug" },
+      "release": { "CMAKE_BUILD_TYPE": "Release" }
+    }
+  },
+  "package": { "kind": "desktop", "from": "bin", "fileList": "n2player-files.txt" },
+  "run": { "kind": "executable" },
+  "remote": {
+    "kind": "github-actions",
+    "workflow": "n2build-apple.yml",
+    "artifact": "n2build-macos",
+    "toolchains": ["gh"]
+  }
+}

@@ -84,7 +84,7 @@ export class Reporter {
       return;
     }
     for (const t of list) {
-      const where = t.buildableHere ? '' : `  (builds on ${t.hostSystems.join(', ')} only)`;
+      const where = t.remote ? '  (builds in GitHub Actions)' : t.buildableHere ? '' : `  (builds on ${t.hostSystems.join(', ')} only)`;
       this.out(`${t.name.padEnd(10)} ${t.displayName}${where}${t.source === 'targets/' ? '' : `  [${t.source}]`}`);
     }
   }
