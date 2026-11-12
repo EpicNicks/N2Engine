@@ -1063,22 +1063,56 @@ SoftwareRenderer::~SoftwareRenderer()
     m_renderThread.Stop();
 }
 
-bool SoftwareRenderer::Initialize(GLFWwindow *windowHandle, uint32_t width, uint32_t height)
+// The OpenGL present (a window's context, the blit texture and quad) is compiled only where a window can have one: the web
+// has none (its page draws the frames it reads back), and leaving the path out keeps glad's loader and the blit out of the
+// web player's wasm (build targets stage 7: about 160 KB raw, 34 KB brotli in the size profile)
+#if defined(N2ENGINE_PLATFORM_WEB)
+#define N2_SOFTWARE_GL_PRESENT 0
+#else
+#define N2_SOFTWARE_GL_PRESENT 1
+#endif
+
+#if N2_SOFTWARE_GL_PRESENT
+namespace
 {
-    m_window = windowHandle;
-    if (windowHandle)
+    // glad takes a plain function pointer; the platform's lookup is a std::function, reached through this
+    thread_local const std::function<void *(const char *)> *t_getProcAddress = nullptr;
+    void *LoadGlFunction(const char *name) { return (*t_getProcAddress)(name); }
+}
+#endif
+
+bool SoftwareRenderer::Initialize(const Common::Surface &surface, uint32_t width, uint32_t height)
+{
+    m_window = surface;
+    // A window: the frame is presented through its OpenGL context (the platform's operations). Offscreen (headless, the
+    // web) frames are only read back
+    // A platform that takes the frame from the CPU (presentPixels) needs no OpenGL context at all
+    if (m_window.HasWindow() && !m_window.presentPixels)
     {
-        glfwMakeContextCurrent(windowHandle);
-        if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return false;
+#if N2_SOFTWARE_GL_PRESENT
+        if (!m_window.makeContextCurrent || !m_window.getProcAddress)
+        {
+            return false;
+        }
+        m_window.makeContextCurrent();
+        t_getProcAddress = &m_window.getProcAddress;
+        const bool loaded = gladLoadGLLoader(reinterpret_cast<GLADloadproc>(&LoadGlFunction)) != 0;
+        t_getProcAddress = nullptr;
+        if (!loaded) return false;
+#else
+        return false; // no OpenGL present in this build: a window must take the pixels (presentPixels)
+#endif
     }
 
     Resize(width, height);
-    if (windowHandle)
+#if N2_SOFTWARE_GL_PRESENT
+    if (m_window.HasWindow() && !m_window.presentPixels)
     {
-        // Headless there is no context: no blit resources, and Present never calls GL
+        // Headless (or a platform that takes the pixels) there is no context: no blit resources, and Present never calls GL
         if (!SetupBlitResources()) return false;
         m_glReady = true;
     }
+#endif
 
     m_renderThread.Start();
     return true;
@@ -1096,6 +1130,7 @@ void SoftwareRenderer::Shutdown()
     m_materials.clear();
     m_shaders.clear();
 
+#if N2_SOFTWARE_GL_PRESENT
     if (m_glReady)
     {
         glDeleteTextures(1, &m_blitTex);
@@ -1104,8 +1139,9 @@ void SoftwareRenderer::Shutdown()
         glDeleteProgram(m_blitProg);
         m_glReady = false;
     }
+#endif
     m_blitTex = m_blitVAO = m_blitVBO = m_blitProg = 0;
-    m_window = nullptr;
+    m_window = Common::Surface();
 }
 
 void SoftwareRenderer::Resize(uint32_t w, uint32_t h)
@@ -1117,11 +1153,13 @@ void SoftwareRenderer::Resize(uint32_t w, uint32_t h)
     m_height = h;
     m_colorBuffer.assign(w * h, 0xFF000000);
     m_depthBuffer.assign(w * h, 1.0f);
+#if N2_SOFTWARE_GL_PRESENT
     if (m_glReady && m_blitTex)
     {
         glBindTexture(GL_TEXTURE_2D, m_blitTex);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     }
+#endif
 }
 
 void SoftwareRenderer::OnResize(int w, int h) { Resize((uint32_t)w, (uint32_t)h); }
@@ -1201,8 +1239,17 @@ void SoftwareRenderer::Present()
     // Wait for the render thread to finish rasterizing into m_colorBuffer
     m_renderThread.WaitForFrame();
 
+    // The platform copies the frame itself (Android's window buffer)
+    if (m_window.presentPixels)
+    {
+        m_window.presentPixels(reinterpret_cast<const std::uint8_t *>(m_colorBuffer.data()), static_cast<int>(m_width),
+                               static_cast<int>(m_height));
+        return;
+    }
+
     // Headless: the frame stays in m_colorBuffer for ReadFramebuffer; there is nothing to show it on
     if (!m_glReady) return;
+#if N2_SOFTWARE_GL_PRESENT
 
     // Upload CPU framebuffer to GL texture (main thread — context is current here)
     glBindTexture(GL_TEXTURE_2D, m_blitTex);
@@ -1225,7 +1272,8 @@ void SoftwareRenderer::Present()
     glBindVertexArray(0);
     glEnable(GL_DEPTH_TEST);
 
-    if (m_window) glfwSwapBuffers(m_window);
+    if (m_window.swapBuffers) m_window.swapBuffers();
+#endif
 }
 
 IShader* SoftwareRenderer::CreateShaderProgram(const char *, const char *)
@@ -1685,6 +1733,7 @@ void SoftwareRenderer::TransformNormal(const float *model, const float *n, float
     }
 }
 
+#if N2_SOFTWARE_GL_PRESENT
 bool SoftwareRenderer::SetupBlitResources()
 {
     // Fullscreen quad — pos (xy) + uv
@@ -1743,5 +1792,6 @@ void main(){ frag = texture(uTex, vUV); })";
 
     return true;
 }
+#endif
 
 void SoftwareRenderer::SetWireframe(bool e) { m_wireframe = e; }

@@ -7,7 +7,7 @@
 #include "engine/Application.hpp"
 
 #include "engine/input/InputSystem.hpp"
-#include "input/GlfwInputDevice.hpp"
+#include "platform/DesktopGlfwHost.hpp"
 #include "engine/input/ActionMap.hpp"
 #include "engine/input/InputBinding.hpp"
 
@@ -21,28 +21,14 @@
 
 using namespace N2Engine;
 
-namespace
-{
-    // Process-wide, as GLFW's own state is: set by a successful glfwInit, cleared by glfwTerminate
-    std::atomic<bool> g_glfwInitialized{false};
-
-    void TerminateGlfw()
-    {
-        glfwTerminate(); // does nothing when GLFW isn't initialised (windowless, or after a failed init)
-        g_glfwInitialized = false;
-    }
-}
-
 bool Window::HasGlfw()
 {
-    return g_glfwInitialized;
+    return Platform::GlfwInitialized();
 }
 
 Window::Window()
-    : _window(nullptr),
-      _renderer(nullptr),
-      clearColor(Common::Color::Black),
-      _windowMode(WindowMode::Windowed)
+    : _renderer(nullptr),
+      clearColor(Common::Color::Black)
 {
 }
 
@@ -55,17 +41,26 @@ bool Window::FailInit(const std::string &error)
 
     // Leave nothing half-initialized: callers check IsValid() and every accessor handles null
     _inputSystem.reset();
-    _inputDevice.reset();
     _renderer.reset();
     _windowless = false;
     _windowlessSize = {0, 0};
-    if (_window)
+    _windowed = false;
+    if (_host)
     {
-        glfwDestroyWindow(_window);
-        _window = nullptr;
+        _host->DestroySurface();
+        _host.reset();
     }
-    TerminateGlfw();
     return false;
+}
+
+void Window::ConnectLifecycle()
+{
+    _host->SetLifecycleHandler([this](const Platform::LifecycleEvent event) {
+        if (_lifecycleHandler)
+        {
+            _lifecycleHandler(event);
+        }
+    });
 }
 
 bool Window::UsesNoWindow(const Config::ApplicationOptions &options)
@@ -80,6 +75,7 @@ bool Window::InitWindow(const Config::ApplicationOptions &options)
     _rendererFailed = false;
     _renderSize.reset();
     _windowless = false;
+    _windowed = false;
     _windowlessSize = {0, 0};
 
     if (options.renderBackend == Config::ApplicationOptions::RenderBackend::NONE)
@@ -87,6 +83,8 @@ bool Window::InitWindow(const Config::ApplicationOptions &options)
         // A dedicated server: no GLFW, no window and no renderer. IsValid() stays false (it needs a renderer), so a host
         // that would draw checks it; Tick with render off and no event polling runs as usual. The input system exists
         // (scripts may ask for a key and get nothing), exactly as it does on a windowless renderer.
+        _host = Platform::MakeHeadlessHost();
+        ConnectLifecycle();
         _windowless = true;
         _windowlessSize = {0, 0};
         Logger::Log("No renderer and no window (headless server)", Logger::LogLevel::Info);
@@ -127,6 +125,9 @@ bool Window::InitWindow(const Config::ApplicationOptions &options)
             return FailInit(webGpu ? "Failed to initialize the WebGPU renderer (see the log)" : "Failed to initialize renderer");
         }
         _renderer = std::move(renderer);
+        _host = Platform::MakeHeadlessHost();
+        _host->CreateSurface({});
+        ConnectLifecycle();
         _windowless = true;
         _windowlessSize = {FallbackWidth, FallbackHeight};
         Logger::Log(webGpu ? "Using WebGPU renderer, headless (no window)" : "Using Software renderer, headless (no window)",
@@ -136,65 +137,27 @@ bool Window::InitWindow(const Config::ApplicationOptions &options)
         return true;
     }
 
-    if (!glfwInit())
+    // A window: the desktop platform backend (GLFW). Vulkan has no OpenGL context; the OpenGL renderer's linear lighting
+    // needs an sRGB-capable framebuffer (GL_FRAMEBUFFER_SRGB, turned on only for the lit shader); the software renderer
+    // presents its own buffer through the context, so its window is left as it was
+    _host = Platform::MakeDesktopGlfwHost();
+    if (!_host)
     {
-        _initError = "Failed to initialize GLFW";
-        Logger::Log(_initError, Logger::LogLevel::Error);
-        return false;
+        return FailInit("This build has no window backend (no GLFW); run headless");
     }
-    g_glfwInitialized = true;
-
-    // Configure GLFW hints based on chosen renderer
-    if (options.renderBackend == Config::ApplicationOptions::RenderBackend::VULKAN)
+    Platform::SurfaceOptions surface;
+    surface.title = "N2Engine";
+    surface.openGlContext = options.renderBackend != Config::ApplicationOptions::RenderBackend::VULKAN;
+    surface.srgb = options.renderBackend == Config::ApplicationOptions::RenderBackend::OPENGL;
+    surface.visible = !options.isHeadless;
+    if (!_host->CreateSurface(surface))
     {
-        // Configure for Vulkan - no OpenGL context needed
-        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+        return FailInit(_host->LastError());
     }
-    else
-    {
-        // Configure for OpenGL 3.3 (software renderer also uses glfw to present the framebuffer to the graphics card)
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-        // The OpenGL renderer's linear lighting needs an sRGB-capable framebuffer (GL_FRAMEBUFFER_SRGB, which it
-        // turns on only for the lit shader); it stores what is written as it is while that is off. The software
-        // renderer only blits its own buffer, so its window is left as it was.
-        if (options.renderBackend == Config::ApplicationOptions::RenderBackend::OPENGL)
-        {
-            glfwWindowHint(GLFW_SRGB_CAPABLE, GLFW_TRUE);
-        }
-
-#ifdef __APPLE__
-        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-#endif
-    }
-
-    if (options.isHeadless)
-    {
-        glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
-    }
-
-    // No monitor is attached on some headless machines; fall back to a fixed size
-    GLFWmonitor *primaryMonitor = glfwGetPrimaryMonitor();
-    const GLFWvidmode *vidMode = primaryMonitor ? glfwGetVideoMode(primaryMonitor) : nullptr;
-    const int WIDTH = vidMode ? vidMode->width / 2 : FallbackWidth;
-    const int HEIGHT = vidMode ? vidMode->height / 2 : FallbackHeight;
-
-    _window = glfwCreateWindow(WIDTH, HEIGHT, "N2Engine", nullptr, nullptr);
-    if (!_window)
-    {
-        return FailInit("Failed to create GLFW window");
-    }
-
-    // Initialize windowed state with current window properties
-    windowData.width = WIDTH;
-    windowData.height = HEIGHT;
-    glfwGetWindowPos(_window, &windowData.posX, &windowData.posY);
-
-    // Framebuffer size is in pixels, which is what the renderer needs (window size is in screen
-    // coordinates, which differ on HiDPI displays)
-    glfwSetFramebufferSizeCallback(_window, FramebufferSizeCallback);
-    glfwSetWindowUserPointer(_window, this);
+    _windowed = true;
+    ConnectLifecycle();
+    // Framebuffer resizes (pixels) reach the renderer and the camera
+    _host->SetResizeHandler([this](const int width, const int height) { OnWindowResize(width, height); });
 
     // Create renderer based on configuration
     _renderer = nullptr;
@@ -219,32 +182,27 @@ bool Window::InitWindow(const Config::ApplicationOptions &options)
         Logger::Log("Using OpenGL renderer", Logger::LogLevel::Info);
     }
 
-    // Initialize the chosen renderer
-    // The renderer works in pixels; on HiDPI displays the framebuffer is larger than the window size
-    int framebufferWidth = WIDTH;
-    int framebufferHeight = HEIGHT;
-    glfwGetFramebufferSize(_window, &framebufferWidth, &framebufferHeight);
-
-    if (!_renderer || !_renderer->Initialize(_window, static_cast<uint32_t>(framebufferWidth),
-                                             static_cast<uint32_t>(framebufferHeight)))
+    // Initialize the chosen renderer, in pixels: on HiDPI displays the framebuffer is larger than the window
+    // The renderer takes the platform's surface and its operations (build targets stage 7): no renderer calls GLFW
+    const Platform::NativeSurface native = _host->Surface();
+    if (!_renderer || !_renderer->Initialize(_host->RenderSurface(), static_cast<uint32_t>(native.width),
+                                             static_cast<uint32_t>(native.height)))
     {
         _rendererFailed = true;
         return FailInit("Failed to initialize renderer");
     }
 
-    _inputDevice = Input::MakeGlfwInputDevice(_window);
     _inputSystem = std::make_unique<Input::InputSystem>(*this);
     return true;
 }
 
 Vector2i Window::GetWindowDimensions() const
 {
-    if (!_window)
+    if (!_windowed || !_host)
     {
         return _windowless ? _windowlessSize : Vector2i{0, 0};
     }
-    int width, height;
-    glfwGetWindowSize(_window, &width, &height);
+    const auto [width, height] = Platform::DesktopWindowSize(*_host);
     return {width, height};
 }
 
@@ -269,10 +227,10 @@ Input::InputSystem *Window::GetInputSystem() const
 
 void Window::PollEvents()
 {
-    // GLFW is terminated when the window fails to open, and never initialised without one
-    if (_window)
+    // The platform's events (a window's input, resize and close); a headless host has none
+    if (_host)
     {
-        glfwPollEvents();
+        _host->PollEvents();
     }
     if (_inputSystem)
     {
@@ -282,30 +240,29 @@ void Window::PollEvents()
 
 void Window::Shutdown()
 {
-    // Before the window: ~Mouse and ~Keyboard drop their handlers, and the device its GLFW callbacks
+    // Before the window: ~Mouse and ~Keyboard drop their device handlers, and the renderer lets go of the surface
     _inputSystem.reset();
-    _inputDevice.reset();
     _renderSize.reset();
     if (_renderer)
     {
         _renderer->Shutdown();
         _renderer.reset();
     }
-    if (_window)
+    if (_host)
     {
-        glfwDestroyWindow(_window);
-        _window = nullptr;
+        _host->DestroySurface();
+        _host.reset();
     }
+    _windowed = false;
     _windowless = false;
     _windowlessSize = {0, 0};
-    TerminateGlfw();
 }
 
 bool Window::ShouldClose() const
 {
-    if (_window)
+    if (_windowed && _host)
     {
-        return glfwWindowShouldClose(_window);
+        return _host->ShouldClose();
     }
     // A window that failed to open (or was shut down) has nothing to keep running for; a windowless one has
     // nothing that could close (RenderBackend::NONE is windowless without being valid: it never closes either)
@@ -315,17 +272,9 @@ bool Window::ShouldClose() const
 void Window::SetTitle(const std::string &title)
 {
     _title = title;
-    if (_window)
+    if (_host)
     {
-        glfwSetWindowTitle(_window, _title.c_str());
-    }
-}
-
-void Window::FramebufferSizeCallback(GLFWwindow *window, int width, int height)
-{
-    if (Window *windowInstance = static_cast<Window *>(glfwGetWindowUserPointer(window)))
-    {
-        windowInstance->OnWindowResize(width, height);
+        _host->SetTitle(_title);
     }
 }
 
@@ -386,103 +335,14 @@ Vector2i Window::GetRenderDimensions() const
 
 void Window::SetWindowMode(WindowMode windowMode)
 {
-    if (!_window || _windowMode == windowMode)
+    if (!_windowed || !_host)
     {
         return;
     }
-
-    // Save current windowed state if transitioning from windowed mode
-    if (_windowMode == WindowMode::Windowed)
-    {
-        SaveWindowedState();
-    }
-
     switch (windowMode)
     {
-    case WindowMode::Windowed:
-    {
-        // Restore to windowed mode
-        glfwSetWindowMonitor(_window, nullptr, windowData.posX, windowData.posY, windowData.width, windowData.height, 0);
-        break;
+    case WindowMode::Windowed: _host->SetWindowMode(Platform::WindowMode::Windowed); break;
+    case WindowMode::Fullscreen: _host->SetWindowMode(Platform::WindowMode::Fullscreen); break;
+    case WindowMode::BorderlessWindowed: _host->SetWindowMode(Platform::WindowMode::BorderlessWindowed); break;
     }
-    case WindowMode::Fullscreen:
-    {
-        // Find which monitor the window is currently on
-        GLFWmonitor *monitor = GetCurrentMonitor();
-        const GLFWvidmode *mode = glfwGetVideoMode(monitor);
-
-        glfwSetWindowMonitor(_window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
-        break;
-    }
-    case WindowMode::BorderlessWindowed:
-    {
-        GLFWmonitor *monitor = GetCurrentMonitor();
-        const GLFWvidmode *mode = glfwGetVideoMode(monitor);
-
-        int monitorX, monitorY;
-        glfwGetMonitorPos(monitor, &monitorX, &monitorY);
-        glfwSetWindowAttrib(_window, GLFW_DECORATED, GLFW_FALSE);
-        // prevent minimizing when losing focus
-        glfwSetWindowAttrib(_window, GLFW_AUTO_ICONIFY, GLFW_FALSE);
-        glfwSetWindowMonitor(_window, nullptr, monitorX, monitorY, mode->width, mode->height, 0);
-
-        break;
-    }
-    }
-
-    // If transitioning back to windowed, restore decorations
-    if (windowMode == WindowMode::Windowed && _windowMode == WindowMode::BorderlessWindowed)
-    {
-        glfwSetWindowAttrib(_window, GLFW_DECORATED, GLFW_TRUE);
-        glfwSetWindowAttrib(_window, GLFW_FLOATING, GLFW_FALSE);
-    }
-
-    _windowMode = windowMode;
-}
-
-void Window::SaveWindowedState()
-{
-    if (_windowMode == WindowMode::Windowed)
-    {
-        glfwGetWindowPos(_window, &windowData.posX, &windowData.posY);
-        glfwGetWindowSize(_window, &windowData.width, &windowData.height);
-    }
-}
-
-GLFWmonitor *Window::GetCurrentMonitor()
-{
-    int windowX, windowY, windowWidth, windowHeight;
-    glfwGetWindowPos(_window, &windowX, &windowY);
-    glfwGetWindowSize(_window, &windowWidth, &windowHeight);
-
-    int monitorCount;
-    GLFWmonitor **monitors = glfwGetMonitors(&monitorCount);
-
-    GLFWmonitor *bestMonitor = nullptr;
-    int bestOverlap = 0;
-
-    for (int i = 0; i < monitorCount; i++)
-    {
-        GLFWmonitor *monitor = monitors[i];
-        const GLFWvidmode *mode = glfwGetVideoMode(monitor);
-        int monitorX, monitorY;
-        glfwGetMonitorPos(monitor, &monitorX, &monitorY);
-
-        // Calculate overlap between window and monitor
-        int overlapLeft = std::max(windowX, monitorX);
-        int overlapTop = std::max(windowY, monitorY);
-        int overlapRight = std::min(windowX + windowWidth, monitorX + mode->width);
-        int overlapBottom = std::min(windowY + windowHeight, monitorY + mode->height);
-
-        int overlapArea = std::max(0, overlapRight - overlapLeft) * std::max(0, overlapBottom - overlapTop);
-
-        if (overlapArea > bestOverlap)
-        {
-            bestOverlap = overlapArea;
-            bestMonitor = monitor;
-        }
-    }
-
-    // Fallback to primary monitor if no overlap found
-    return bestMonitor ? bestMonitor : glfwGetPrimaryMonitor();
 }

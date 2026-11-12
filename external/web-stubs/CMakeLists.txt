@@ -31,8 +31,11 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(n2_glfw_headers n2_openal_headers)
 
-add_library(glfw STATIC glfw_stub.c)
-target_include_directories(glfw SYSTEM PUBLIC "${n2_glfw_headers_SOURCE_DIR}/include")
+# GLFW's headers only: the web build calls no GLFW function and, since build targets stage 7 (renderers take a platform
+# Surface), includes no GLFW header in its own sources either. The target stays for the targets that list glfw among their
+# libraries; it adds an include path and nothing else.
+add_library(glfw INTERFACE)
+target_include_directories(glfw SYSTEM INTERFACE "${n2_glfw_headers_SOURCE_DIR}/include")
 
 if(N2ENGINE_WEB_AUDIO STREQUAL "webaudio")
     # The headers are OpenAL Soft's (the engine's AudioSystem.hpp includes <AL/alext.h> for the loopback types, which

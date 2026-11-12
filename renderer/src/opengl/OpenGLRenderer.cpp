@@ -13,7 +13,7 @@
 using namespace Renderer::OpenGL;
 
 OpenGLRenderer::OpenGLRenderer()
-    : m_window(nullptr), m_width(0), m_height(0), m_standardUnlitShader(nullptr), m_standardLitShader(nullptr),
+    : m_window(), m_width(0), m_height(0), m_standardUnlitShader(nullptr), m_standardLitShader(nullptr),
       m_viewMatrix{}, m_projectionMatrix{}, m_currentShader(0), m_wireframeEnabled(false), m_clearColor{}
 {
     // Initialize matrices to identity
@@ -64,14 +64,19 @@ namespace
     }
 }
 
-bool OpenGLRenderer::Initialize(GLFWwindow *windowHandle, const uint32_t width, const uint32_t height)
+bool OpenGLRenderer::Initialize(const Common::Surface &surface, const uint32_t width, const uint32_t height)
 {
-    m_window = windowHandle;
+    m_window = surface;
     m_width = width;
     m_height = height;
 
-    // Make context current
-    glfwMakeContextCurrent(m_window);
+    // The window's context, current on this thread (the platform's operation: GLFW on the desktop, EGL on Android)
+    if (!m_window.makeContextCurrent)
+    {
+        std::cerr << "The OpenGL renderer needs a window with an OpenGL context" << std::endl;
+        return false;
+    }
+    m_window.makeContextCurrent();
 
     if (!gladLoadGL())
     {
@@ -253,7 +258,10 @@ void OpenGLRenderer::EndFrame()
 
 void OpenGLRenderer::Present()
 {
-    glfwSwapBuffers(m_window);
+    if (m_window.swapBuffers)
+    {
+        m_window.swapBuffers();
+    }
 }
 
 Renderer::Common::IMesh* OpenGLRenderer::CreateMesh(const Common::MeshData &meshData)

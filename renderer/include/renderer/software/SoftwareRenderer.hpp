@@ -85,7 +85,7 @@ namespace Renderer::Software
         // Lifecycle
         /// With a window: makes its context current, loads GL (false if that fails) and creates the blit
         /// resources. With windowHandle null: headless (see the class comment); always succeeds.
-        bool Initialize(GLFWwindow *windowHandle, uint32_t width, uint32_t height) override;
+        bool Initialize(const Common::Surface &surface, uint32_t width, uint32_t height) override;
         /// Stops the render thread and frees every resource, and the GL blit objects if they were created.
         /// Safe headless, without Initialize, and twice.
         void Shutdown() override;
@@ -202,7 +202,8 @@ namespace Renderer::Software
         float m_clearR = 0, m_clearG = 0, m_clearB = 0, m_clearA = 1;
 
         // GL blit. None of it exists headless (m_glReady false), and then no GL function is ever called.
-        GLFWwindow *m_window = nullptr;
+        /// The window it presents to through its OpenGL context; none (offscreen) for headless and the web
+        Common::Surface m_window;
         bool m_glReady = false;
         unsigned int m_blitTex = 0, m_blitVAO = 0, m_blitVBO = 0, m_blitProg = 0;
         bool SetupBlitResources();

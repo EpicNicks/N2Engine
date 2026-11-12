@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -14,6 +15,7 @@
 #include "engine/config/ApplicationOptions.hpp"
 #include "engine/common/Color.hpp"
 #include "engine/input/InputDevice.hpp"
+#include "engine/platform/PlatformHost.hpp"
 
 namespace N2Engine
 {
@@ -38,32 +40,29 @@ namespace N2Engine
         BorderlessWindowed
     };
 
-    struct WindowData
-    {
-        int width, height, posX, posY;
-    };
-
     class Window
     {
     private:
-        GLFWwindow *_window;
+        /// The platform backend (build targets stage 6; docs/platform.html): desktop-glfw with a window, headless without
+        /// one. It owns the window, its events and the input device; it outlives the renderer and the input system.
+        std::unique_ptr<Platform::IPlatformHost> _host;
         std::unique_ptr<Renderer::Common::IRenderer> _renderer;
-        /// The window's input device (GLFW's; build targets stage 5), before the input system so it outlives it
-        std::unique_ptr<Input::InputDevice> _inputDevice;
         std::unique_ptr<Input::InputSystem> _inputSystem;
         std::string _title{"N2Engine Application"};
-        WindowMode _windowMode{WindowMode::Windowed};
-        WindowData windowData{};
         std::string _initError;
+        // InitWindow made a window (the desktop host's surface)
+        bool _windowed = false;
+        std::function<void(Platform::LifecycleEvent)> _lifecycleHandler;
+        /// Hands the host's lifecycle events to _lifecycleHandler
+        void ConnectLifecycle();
         bool _rendererFailed = false;
         // Set by SetRenderSize: frames render at this size, whatever the window's
         std::optional<Vector2i> _renderSize;
-        // InitWindow took the no-window path (UsesNoWindow): there is a renderer but no GLFW window
+        // InitWindow took the no-window path (UsesNoWindow): there is a renderer but no window
         bool _windowless = false;
         // The size the windowless renderer started at, which GetWindowDimensions reports in place of a window's
         Vector2i _windowlessSize{0, 0};
 
-        static void FramebufferSizeCallback(GLFWwindow *window, int width, int height);
         void OnWindowResize(int width, int height);
 
     public:
@@ -103,7 +102,7 @@ namespace N2Engine
         bool InitWindow(const Config::ApplicationOptions &options);
         /// True once InitWindow has succeeded and until Shutdown: a window and a renderer, or (windowless) a
         /// renderer alone
-        [[nodiscard]] bool IsValid() const { return (_window != nullptr || _windowless) && _renderer != nullptr; }
+        [[nodiscard]] bool IsValid() const { return (_windowed || _windowless) && _renderer != nullptr; }
         /// True when InitWindow took a no-window path (UsesNoWindow, or RenderBackend::NONE), until Shutdown
         [[nodiscard]] bool IsWindowless() const { return _windowless; }
         [[nodiscard]] const std::string& GetInitError() const { return _initError; }
@@ -120,7 +119,12 @@ namespace N2Engine
         [[nodiscard]] Renderer::Common::IRenderer* GetRenderer() const;
         [[nodiscard]] Input::InputSystem* GetInputSystem() const;
         /// Where input is read from: GLFW's device while a window is open, null without one (input is then injected)
-        [[nodiscard]] Input::InputDevice* GetInputDevice() const { return _inputDevice.get(); }
+        [[nodiscard]] Input::InputDevice* GetInputDevice() const { return _host ? _host->Input() : nullptr; }
+        /// The platform backend InitWindow chose (desktop-glfw or headless), or null before it and after Shutdown
+        [[nodiscard]] Platform::IPlatformHost* GetPlatformHost() const { return _host.get(); }
+        /// Called with the platform's lifecycle events (pause, resume, surface loss, quit; Platform::LifecycleEvent). The
+        /// desktop sends none today; Android and iOS send them all. Set it before or after InitWindow.
+        void SetLifecycleHandler(std::function<void(Platform::LifecycleEvent)> handler) { _lifecycleHandler = std::move(handler); }
 
         /// The window's size in screen coordinates; windowless, the size the renderer started at; {0, 0} without either
         [[nodiscard]] Vector2i GetWindowDimensions() const;
@@ -154,7 +158,5 @@ namespace N2Engine
 
     private:
         bool FailInit(const std::string &error);
-        void SaveWindowedState();
-        GLFWmonitor* GetCurrentMonitor();
     };
 }

@@ -180,7 +180,7 @@ namespace
             return const_cast<FakeShader *>(&_shader);
         }
 
-        bool Initialize(GLFWwindow *, uint32_t, uint32_t) override { return true; }
+        bool Initialize(const Renderer::Common::Surface &, uint32_t, uint32_t) override { return true; }
         void Shutdown() override {}
         void Resize(uint32_t, uint32_t) override {}
         void Clear(float, float, float, float) override {}
