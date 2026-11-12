@@ -840,12 +840,7 @@ jobs:
             node -e 'const l=require("fs").readFileSync(process.argv[1],"utf8").trim().split("\n").map(JSON.parse); const r=l.at(-1); const log=l.filter(e=>e.type==="log"&&e.stream==="logcat").map(e=>e.text); console.log(log.slice(-20).join("\n")); if(!r.ok||!log.some(t=>t.includes("N2Engine Android player: first frame"))){console.error(JSON.stringify(r));process.exit(1)}' "$RUNNER_TEMP/run.jsonl"
             bash scripts/android-emulator-smoke.sh "$RUNNER_TEMP/package/LuaDemoVk" 90
             adb logcat -d | grep -E "N2Engine Android player: the (Vulkan|software) renderer|Using Vulkan renderer|Vulkan renderer:" | tail -5
-            adb shell input keyevent KEYCODE_HOME
-            sleep 3
-            adb shell am start -n com.n2engine.luademovk/com.n2engine.player.N2Activity
-            sleep 8
-            adb logcat -d | grep -E "surface was lost|N2Engine Android player: [0-9]+ frames" | tail -5
-            adb shell pidof com.n2engine.luademovk
+            bash scripts/android-resume-check.sh com.n2engine.luademovk
 
       # Stage 9: a release build signed with a signing profile, made here with a throwaway keystore. The password goes to
       # keytool and to n2build only through environment variables (keytool's -storepass:env), never a command line; the
