@@ -978,9 +978,13 @@ jobs:
             otool -L "$pkg/lua_project" | tee otool.txt
           fi
 
-      - name: Run (macOS, 60 frames)
+      - name: Run (macOS, 60 frames, no window)
         if: matrix.target == 'macos'
-        run: node tools/n2build/n2build.mjs run --target macos --project lua_project --out "$RUNNER_TEMP/package/LuaDemo" --no-build --frames 60
+        # The runner is a VM with no GPU, so no OpenGL context: the game runs without a window (--headless, the software
+        # renderer offscreen). The window path on a Mac is a checklist item (docs/apple.html#checklist)
+        run: |
+          "$RUNNER_TEMP/package/LuaDemo/lua_project" --console-log --headless --frames 60 | tee run.txt
+          grep -q "Using Software renderer, headless" run.txt
 
       - name: Run in the simulator (first frame and a frame rate)
         if: matrix.target == 'ios'
