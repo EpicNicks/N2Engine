@@ -54,7 +54,27 @@ needed.
 
 ## Results
 
-RESULTS (filled in from the `metal-spike` job of the stage 13 PR)
+From the `metal-spike` job of PR #350 (macos-15 runner, 2026-11-12):
+
+- **Built:** the Vulkan renderer and `renderer_tests` built for macOS against Homebrew's MoltenVK 1.4.2, Vulkan loader
+  1.4.363, headers and glslang, with no source change beyond the portability enumeration below.
+- **The device:** the loader found MoltenVK's "Apple Paravirtual device" (the runner is a virtual machine; an integrated
+  GPU type, Vulkan 1.4, 7168 MiB, `VK_EXT_headless_surface` and `VK_EXT_metal_surface` offered).
+- **The suite, with the validation layer on** (`renderer_tests --gtest_filter=Vulkan*`, the same tests the Linux jobs run on
+  lavapipe): 309 tests ran, **262 passed, 46 failed, 1 skipped**.
+  - **All 46 failures have one cause, a Vulkan Portability limit.** MoltenVK reports `imageViewFormatSwizzle` as false, and
+    the renderer gives its one- and two-channel textures (the text atlas among them) a component swizzle in their image
+    views (`renderer/src/vulkan/VulkanResources.cpp`, the R and RG views). The validation layer flags each of those views
+    (`VkPhysicalDevicePortabilitySubsetFeaturesKHR::imageViewFormatSwizzle`). That is 19 text-shader tests, 23 text golden
+    tests across three suites (10, 7 and 6), and 4 resource tests.
+  - The fix is small and does not change other platforms: where the device lacks `imageViewFormatSwizzle`, store such
+    textures as RGBA (expand on upload) or apply the swizzle in the shader.
+  - The one skip is the no-compiled-shaders fallback test, which skips on every platform with compiled shaders.
+- **Not measured yet:** frame rate (MoltenVK against the software renderer, and against Metal if B is built), MoltenVK's size
+  in an app, and an iOS app on MoltenVK (static XCFramework, `VK_EXT_metal_surface` from the iOS backend).
+
+The spike's evidence supports the recommendation: the existing renderer runs on MoltenVK as it is, apart from one
+documented portability limit with a contained fix.
 
 ## The pick
 
