@@ -715,10 +715,16 @@ jobs:
       - name: Check the package
         run: |
           pkg="$RUNNER_TEMP/package/LuaDemo"
-          ls -la "$pkg" "$pkg/game"
+          ls -la "$pkg"
           test -x "$pkg/lua_project"
-          test -f "$pkg/game/project.n2proj"
-          test -f "$pkg/game/assets/scene.lua"
+          # The game is one pack beside the player (build targets stage 4, docs/packs.html), not a folder
+          test -f "$pkg/game.n2pack"
+          test -f "$pkg/game.n2pack.manifest.json"
+          test ! -e "$pkg/game"
+          unzip -l "$pkg/game.n2pack" | tee pack.txt
+          grep -q " project.n2proj$" pack.txt
+          grep -q " assets/scene.lua$" pack.txt
+          grep -q " n2pack-manifest.json$" pack.txt
           test -f "$pkg.zip"
           ldd "$pkg/lua_project" | tee ldd.txt
           if grep -q "not found" ldd.txt; then echo "::error::The packaged player is missing a shared library"; exit 1; fi
@@ -812,6 +818,116 @@ jobs:
       - name: n2build run (web, node smoke, 30 frames)
         if: matrix.target == 'web'
         run: node tools/n2build/n2build.mjs run --target web --project lua_project --out "$RUNNER_TEMP/package/LuaDemo" --no-build --frames 30
+
+  # The Android target (build targets stage 8; docs/android.html): lua_project built into a debug APK through n2build
+  # (Gradle, the NDK's clang and the GameActivity prefab), then installed on an x86_64 emulator, where it must log its
+  # first frame and a frame rate (scripts/android-emulator-smoke.sh). The emulator has no GPU here: the player draws with
+  # the software renderer into the window buffer, as on a phone. One ABI (x86_64, the emulator's) keeps the job short.
+  android:
+    name: android (APK of lua_project, emulator smoke)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.11.1
+
+      - name: Install build dependencies and the pinned NDK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build
+          ndk="$(node -e 'console.log(require("./targets/android/target.json").pins["android-ndk"])')"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk" > /dev/null
+
+      - name: The project, for the emulator's ABI only
+        run: |
+          cp -r lua_project "$RUNNER_TEMP/lua_project"
+          node -e '
+            const fs = require("fs"); const file = process.argv[1];
+            const p = JSON.parse(fs.readFileSync(file, "utf8"));
+            p.build = p.build ?? {}; p.build.targets = p.build.targets ?? {};
+            p.build.targets.android = { ...(p.build.targets.android ?? {}), appId: "com.n2engine.luademo", abis: ["x86_64"] };
+            fs.writeFileSync(file, JSON.stringify(p, null, 2));
+          ' "$RUNNER_TEMP/lua_project/project.n2proj"
+
+      - name: n2build doctor
+        run: node tools/n2build/n2build.mjs doctor --target android --project "$RUNNER_TEMP/lua_project"
+
+      - name: n2build build (android, debug APK)
+        run: node tools/n2build/n2build.mjs build --target android --project "$RUNNER_TEMP/lua_project" --config debug --build-dir "$RUNNER_TEMP/n2build" --out "$RUNNER_TEMP/package/LuaDemo"
+
+      - name: Check the package
+        run: |
+          pkg="$RUNNER_TEMP/package/LuaDemo"
+          ls -la "$pkg"
+          cat "$pkg/.n2build-package.json"
+          apk="$(ls "$pkg"/*.apk)"
+          unzip -l "$apk" | tee apk.txt
+          grep -q " assets/game.n2pack$" apk.txt
+          grep -q " lib/x86_64/libn2game.so$" apk.txt
+          grep -q " lib/x86_64/libc++_shared.so$" apk.txt
+
+      - name: Enable KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Emulator smoke (install, start, first frame and a frame rate)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          target: google_apis
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          disable-animations: true
+          # The smoke script first, then the same through n2build run (stage 9: adb install, start, logcat as log events)
+          script: |
+            bash scripts/android-emulator-smoke.sh "$RUNNER_TEMP/package/LuaDemo" 90
+            node tools/n2build/n2build.mjs run --target android --project "$RUNNER_TEMP/lua_project" --out "$RUNNER_TEMP/package/LuaDemo" --no-build --seconds 45 --json > "$RUNNER_TEMP/run.jsonl"
+            node -e 'const l=require("fs").readFileSync(process.argv[1],"utf8").trim().split("\n").map(JSON.parse); const r=l.at(-1); const log=l.filter(e=>e.type==="log"&&e.stream==="logcat").map(e=>e.text); console.log(log.slice(-20).join("\n")); if(!r.ok||!log.some(t=>t.includes("N2Engine Android player: first frame"))){console.error(JSON.stringify(r));process.exit(1)}' "$RUNNER_TEMP/run.jsonl"
+
+      # Stage 9: a release build signed with a signing profile, made here with a throwaway keystore. The password goes to
+      # keytool and to n2build only through environment variables (keytool's -storepass:env), never a command line; the
+      # profile in n2build.json names the variable, not the password. The build must give a signed APK and an AAB, and the
+      # password must appear in none of n2build's output.
+      - name: A throwaway keystore and a signing profile
+        run: |
+          echo "N2_CI_STORE_PASSWORD=$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+          echo "XDG_DATA_HOME=$RUNNER_TEMP/xdg" >> "$GITHUB_ENV"
+
+      - name: n2build build (android, release, signed with the profile)
+        run: |
+          keytool -genkeypair -keystore "$RUNNER_TEMP/ci.jks" -storetype PKCS12 -alias upload -keyalg RSA -keysize 2048 -validity 2 \
+            -dname "CN=N2Engine CI" -storepass:env N2_CI_STORE_PASSWORD -noprompt
+          mkdir -p "$XDG_DATA_HOME/n2engine"
+          node -e '
+            const fs = require("fs");
+            fs.writeFileSync(process.argv[1], JSON.stringify({ signingProfiles: { ci: { android: {
+              keystore: process.argv[2], keyAlias: "upload", storePassword: { env: "N2_CI_STORE_PASSWORD" } } } } }, null, 2));
+          ' "$XDG_DATA_HOME/n2engine/n2build.json" "$RUNNER_TEMP/ci.jks"
+          node tools/n2build/n2build.mjs build --target android --project "$RUNNER_TEMP/lua_project" --config release --signing ci --build-dir "$RUNNER_TEMP/n2build" --out "$RUNNER_TEMP/package/LuaDemoRelease" --json > "$RUNNER_TEMP/release.jsonl"
+          tail -1 "$RUNNER_TEMP/release.jsonl"
+          if grep -qF "$N2_CI_STORE_PASSWORD" "$RUNNER_TEMP/release.jsonl"; then echo "::error::The signing password appeared in n2build's output"; exit 1; fi
+          pkg="$RUNNER_TEMP/package/LuaDemoRelease"
+          ls -la "$pkg"
+          test -f "$pkg/lua_project.aab"
+          if grep -qF "ci.jks" "$pkg/.n2build-package.json"; then echo "::error::The marker names the keystore"; exit 1; fi
+          "$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner" verify --print-certs "$pkg/lua_project.apk" | tee certs.txt
+          grep -q "CN=N2Engine CI" certs.txt
 
   # The same Linux build and tests on arm64 (ubuntu-24.04-arm, aarch64): the math library's x86 SIMD paths are compiled out
   # there and the scalar versions run; PhysX runs its own aarch64 build. Not a required check yet.

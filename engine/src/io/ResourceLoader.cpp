@@ -4,6 +4,7 @@
 #include "engine/audio/AudioClip.hpp"
 #include "engine/scripting/LuaScript.hpp"
 #include "engine/io/ProjectFile.hpp"
+#include "engine/io/Vfs.hpp"
 #include "engine/rendering/Material.hpp"
 #include "engine/rendering/Model.hpp"
 #include "engine/rendering/Texture.hpp"
@@ -34,8 +35,8 @@ namespace N2Engine::IO
         /// (as it was before the state file): two saves of a file a second apart, with the same size, are two changes.
         uint64_t UnixMilliseconds(const std::filesystem::file_time_type fileTime)
         {
-#ifdef N2ENGINE_PLATFORM_WEB
-            // libc++ (Emscripten) has no clock_cast; its file clock counts from the Unix epoch, so the same duration
+#if defined(N2ENGINE_PLATFORM_WEB) || defined(_LIBCPP_VERSION)
+            // libc++ (Emscripten, the NDK, Apple) has no clock_cast; its file clock counts from the Unix epoch, so the same duration
             // since the epoch is the system clock's time
             const std::chrono::sys_time<std::filesystem::file_time_type::duration> systemTime(fileTime.time_since_epoch());
 #else
@@ -108,7 +109,9 @@ namespace N2Engine::IO
         _metadataRoot = projectRoot / ".import";
         _userDataRoot = userDataRoot.empty() ? ProjectFile::UserDataBase() : userDataRoot;
 
-        if (!_readOnly)
+        // A project in a pack is read from the pack, never written (IsReadOnly)
+        _packed = Vfs::Instance().IsMounted(projectRoot);
+        if (!IsReadOnly())
         {
             std::filesystem::create_directories(_metadataRoot);
         }
@@ -138,7 +141,7 @@ namespace N2Engine::IO
     ResourceLoader::RescanResult ResourceLoader::RescanAssets()
     {
         RescanResult result;
-        if (!std::filesystem::exists(_assetsRoot))
+        if (!Vfs::Instance().Exists(_assetsRoot))
         {
             Logger::Warn("Assets directory not found");
             _fingerprint = {};
@@ -228,7 +231,8 @@ namespace N2Engine::IO
         {
             std::error_code existsError;
             const std::filesystem::path sourcePath = Resolve(item.second.parent);
-            return sourcePath.empty() || !std::filesystem::exists(sourcePath, existsError);
+            (void)existsError;
+            return sourcePath.empty() || !Vfs::Instance().Exists(sourcePath);
         });
 
         std::sort(result.added.begin(), result.added.end());
@@ -240,6 +244,16 @@ namespace N2Engine::IO
     void ResourceLoader::ScanDirectory(const std::filesystem::path &directory, RescanResult &result,
                                        std::unordered_set<ResourcePath, ResourcePath::Hash> &seen)
     {
+        if (_packed)
+        {
+            // A pack: its directory lists every file, and nothing can be unreadable part way (docs/packs.html)
+            for (const VfsEntry &file : Vfs::Instance().ListFiles(directory))
+            {
+                const std::filesystem::path path = directory / PathFromUtf8(file.path);
+                ScanOne(path, result, seen);
+            }
+            return;
+        }
         // Error codes, not exceptions, and unreadable folders skipped (as ComputeFingerprint does). A walk that fails
         // part way throws below instead of returning: the files it didn't reach would otherwise look deleted.
         std::error_code walkError;
@@ -253,25 +267,37 @@ namespace N2Engine::IO
             if (!entry.is_regular_file(entryError) || entryError)
                 continue;
 
-            if (entry.path().extension() == ".meta")
-                continue;
+            ScanOne(entry.path(), result, seen);
+        }
+        if (walkError)
+        {
+            throw std::filesystem::filesystem_error("can't scan the assets folder", directory, walkError);
+        }
+    }
+
+    void ResourceLoader::ScanOne(const std::filesystem::path &sourcePath, RescanResult &result,
+                                 std::unordered_set<ResourcePath, ResourcePath::Hash> &seen)
+    {
+        {
+            if (sourcePath.extension() == ".meta")
+                return;
 
             // One file whose name can't be converted (or whose metadata fails) is skipped, never the rest of the scan
             try
             {
-                std::string ext = PathToUtf8(entry.path().extension());
+                std::string ext = PathToUtf8(sourcePath.extension());
                 std::ranges::transform(ext, ext.begin(), [](const unsigned char c)
                 {
                     return static_cast<char>(std::tolower(c));
                 });
 
                 if (_loaders.find(ext) == _loaders.end())
-                    continue;
+                    return;
 
                 // Before the metadata: a file whose .meta can't be written still exists, so it isn't "removed"
-                seen.insert(MakeResourcePath(entry.path()));
+                seen.insert(MakeResourcePath(sourcePath));
 
-                AssetMetadata meta = CreateOrUpdateMetadata(entry.path());
+                AssetMetadata meta = CreateOrUpdateMetadata(sourcePath);
                 if (const auto previous = _metadata.find(meta.resourcePath); previous == _metadata.end())
                 {
                     result.added.push_back(meta.resourcePath);
@@ -289,19 +315,21 @@ namespace N2Engine::IO
             catch (const std::exception &e)
             {
                 // PathToUtf8 never throws, unlike string() for a name the code page can't spell
-                Logger::Warn(std::format("Skipping asset {}: {}", PathToUtf8(entry.path()), e.what()));
+                Logger::Warn(std::format("Skipping asset {}: {}", PathToUtf8(sourcePath), e.what()));
             }
-        }
-        if (walkError)
-        {
-            throw std::filesystem::filesystem_error("can't scan the assets folder", directory, walkError);
         }
     }
 
     AssetMetadata ResourceLoader::CreateOrUpdateMetadata(const std::filesystem::path &sourcePath)
     {
-        const uint64_t timestamp = UnixMilliseconds(std::filesystem::last_write_time(sourcePath));
-        auto fileSize = std::filesystem::file_size(sourcePath);
+        // Through the virtual filesystem: the disk's size and time, or the pack's
+        const auto stat = Vfs::Instance().Stat(sourcePath);
+        if (!stat || stat->directory)
+        {
+            throw std::runtime_error("can't read " + PathToUtf8(sourcePath));
+        }
+        const uint64_t timestamp = stat->modified;
+        auto fileSize = static_cast<std::size_t>(stat->size);
 
         ResourcePath resourcePath = MakeResourcePath(sourcePath);
         std::filesystem::path metaPath = GetMetadataPath(sourcePath);
@@ -310,7 +338,7 @@ namespace N2Engine::IO
 
         bool haveMeta = false;
         bool metaFileFound = false;
-        if (std::filesystem::exists(metaPath))
+        if (Vfs::Instance().Exists(metaPath))
         {
             metaFileFound = true;
             try
@@ -411,7 +439,7 @@ namespace N2Engine::IO
 
             meta.resourceType = ResourceTypeFor(sourcePath);
             PersistMeta(meta, metaPath);
-            if (lastSeen && !metaFileFound && !_readOnly)
+            if (lastSeen && !metaFileFound && !IsReadOnly())
             {
                 // Seen by an earlier scan (.n2/asset-state.json), so it had a .meta: deleted, or never committed (a
                 // read-only loader writes none, so it can't tell)
@@ -434,9 +462,21 @@ namespace N2Engine::IO
         return meta;
     }
 
+    std::filesystem::path ResourceLoader::AssetsRelative(const std::filesystem::path &path) const
+    {
+        if (_packed)
+        {
+            // Inside a mount nothing is on disk: the filesystem's relative() would probe every component, fail, and
+            // fall back to the same lexical answer, many times slower (docs/packs.html#measured). Empty when unrelated.
+            const std::filesystem::path relative = path.lexically_normal().lexically_relative(_assetsRoot.lexically_normal());
+            return relative.empty() ? std::filesystem::path("..") : relative;
+        }
+        return std::filesystem::relative(path, _assetsRoot);
+    }
+
     std::filesystem::path ResourceLoader::GetMetadataPath(const std::filesystem::path &sourcePath) const
     {
-        auto relative = std::filesystem::relative(sourcePath, _assetsRoot);
+        auto relative = AssetsRelative(sourcePath);
         // Appended as a path, not a narrow string: a file name the code page can't spell keeps its .meta beside it
         std::filesystem::path metaName = relative.filename();
         metaName += ".meta";
@@ -479,7 +519,7 @@ namespace N2Engine::IO
 
     ResourcePath ResourceLoader::MakeResourcePath(const std::filesystem::path &physicalPath) const
     {
-        auto relative = std::filesystem::relative(physicalPath, _assetsRoot);
+        auto relative = AssetsRelative(physicalPath);
         // UTF-8, as every res:// path is (the .meta keys, the editor's wire paths)
         if (!PathToUtf8(relative).starts_with(".."))
         {
@@ -538,12 +578,11 @@ namespace N2Engine::IO
             return false;
 
         auto sourcePath = Resolve(resourcePath);
-        if (!std::filesystem::exists(sourcePath))
+        const auto stat = Vfs::Instance().Stat(sourcePath);
+        if (!stat)
             return false;
 
-        const uint64_t timestamp = UnixMilliseconds(std::filesystem::last_write_time(sourcePath));
-
-        return timestamp != meta->lastModified;
+        return stat->modified != meta->lastModified;
     }
 
     bool ResourceLoader::Reload(const ResourcePath &resourcePath)
@@ -557,7 +596,7 @@ namespace N2Engine::IO
         }
 
         auto sourcePath = Resolve(resourcePath);
-        if (sourcePath.empty() || !std::filesystem::exists(sourcePath))
+        if (sourcePath.empty() || !Vfs::Instance().Exists(sourcePath))
         {
             return false;
         }
@@ -678,8 +717,7 @@ namespace N2Engine::IO
                                                    ? GetMetadataPath(sourcePath)
                                                    : std::filesystem::path{};
         // customData as the file has it now: it may have been edited (import settings) since the scan read it
-        std::error_code existsError;
-        if (!metaPath.empty() && std::filesystem::exists(metaPath, existsError))
+        if (!metaPath.empty() && Vfs::Instance().Exists(metaPath))
         {
             try
             {
@@ -841,10 +879,8 @@ namespace N2Engine::IO
             {
                 continue;
             }
-            std::error_code existsError;
             const std::filesystem::path sourcePath = Resolve(path);
-            if (!HasCurrentSubAssetIndex(meta) && !sourcePath.empty() &&
-                std::filesystem::exists(sourcePath, existsError))
+            if (!HasCurrentSubAssetIndex(meta) && !sourcePath.empty() && Vfs::Instance().Exists(sourcePath))
             {
                 if (!_loaders.contains(LowerExtension(sourcePath)))
                 {
@@ -876,8 +912,7 @@ namespace N2Engine::IO
             return RefreshResult::Missing;
         }
         const std::filesystem::path sourcePath = Resolve(resourcePath);
-        std::error_code error;
-        if (sourcePath.empty() || !std::filesystem::is_regular_file(sourcePath, error) ||
+        if (sourcePath.empty() || !Vfs::Instance().IsRegularFile(sourcePath) ||
             sourcePath.extension() == ".meta" || !_loaders.contains(LowerExtension(sourcePath)))
         {
             return RefreshResult::Missing;
@@ -911,8 +946,26 @@ namespace N2Engine::IO
     {
         DirectoryFingerprint fingerprint;
         std::error_code error;
-        if (_assetsRoot.empty() || !std::filesystem::exists(_assetsRoot, error))
+        if (_assetsRoot.empty() || !Vfs::Instance().Exists(_assetsRoot))
         {
+            return fingerprint;
+        }
+        if (_packed)
+        {
+            // A pack never changes while it is open; its listing still makes the fingerprint, for one code path
+            for (const VfsEntry &file : Vfs::Instance().ListFiles(_assetsRoot))
+            {
+                const std::filesystem::path path = _assetsRoot / PathFromUtf8(file.path);
+                if (path.extension() == ".meta" || !_loaders.contains(LowerExtension(path)))
+                {
+                    continue;
+                }
+                uint64_t hash = std::hash<std::string>{}(PathToUtf8(path));
+                hash = Mix(hash ^ Mix(file.size));
+                hash = Mix(hash ^ Mix(file.modified));
+                fingerprint.sum += hash;
+                ++fingerprint.count;
+            }
             return fingerprint;
         }
 
@@ -964,6 +1017,10 @@ namespace N2Engine::IO
 
     void ResourceLoader::LoadAssetState()
     {
+        if (_packed)
+        {
+            return; // a pack holds no .n2 state, and a packed project is never written
+        }
         std::ifstream file(GetAssetStatePath(), std::ios::binary);
         if (!file)
         {
@@ -992,12 +1049,12 @@ namespace N2Engine::IO
 
     bool ResourceLoader::PersistMeta(const AssetMetadata &meta, const std::filesystem::path &path) const
     {
-        return _readOnly || meta.SaveToFile(path);
+        return IsReadOnly() || meta.SaveToFile(path);
     }
 
     void ResourceLoader::SaveAssetState()
     {
-        if (!_assetStateDirty || _projectRoot.empty() || _readOnly)
+        if (!_assetStateDirty || _projectRoot.empty() || IsReadOnly())
         {
             return;
         }
@@ -1062,7 +1119,7 @@ namespace N2Engine::IO
         {
             return std::unexpected("can't resolve " + resourcePath.ToString());
         }
-        if (_readOnly)
+        if (IsReadOnly())
         {
             return std::unexpected("the project is open read-only: " + resourcePath.ToString() + " was not changed");
         }
@@ -1346,7 +1403,7 @@ namespace N2Engine::IO
         const ResourcePath &from, const ResourcePath &to,
         const std::function<std::expected<void, std::string>()> &renameOnDisk)
     {
-        if (_readOnly)
+        if (IsReadOnly())
         {
             return std::unexpected("the project is open read-only: nothing was moved");
         }

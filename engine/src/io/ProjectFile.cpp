@@ -18,6 +18,7 @@
 
 #include "engine/Version.hpp"
 #include "engine/io/ResourcePath.hpp"
+#include "engine/io/Vfs.hpp"
 #include "engine/scripting/LuaScriptTemplate.hpp"
 
 namespace N2Engine::IO
@@ -92,20 +93,6 @@ namespace N2Engine::IO
                 return std::nullopt;
             }
             return version;
-        }
-
-        std::string ReadWholeFile(const std::filesystem::path &path, bool &ok)
-        {
-            std::ifstream file(path, std::ios::binary);
-            if (!file)
-            {
-                ok = false;
-                return {};
-            }
-            std::ostringstream text;
-            text << file.rdbuf();
-            ok = !file.bad();
-            return std::move(text).str();
         }
 
         std::string EmptySceneText(const std::string &sceneName)
@@ -274,18 +261,18 @@ namespace N2Engine::IO
     std::expected<ProjectFile, std::string> ProjectFile::Load(const std::filesystem::path &projectDir)
     {
         const std::filesystem::path path = PathIn(projectDir);
-        std::error_code error;
-        if (!std::filesystem::is_regular_file(path, error))
+        // Through the virtual filesystem: a project folder, or a game's pack mounted where its folder would be
+        if (!Vfs::Instance().IsRegularFile(path))
         {
             return std::unexpected(std::format("{} not found: {} is not a project (create one with "
                                                "N2EditorHost --create)", FileName, PathText(projectDir)));
         }
-        bool ok = true;
-        const std::string text = ReadWholeFile(path, ok);
-        if (!ok)
+        const auto read = Vfs::Instance().ReadText(path);
+        if (!read)
         {
             return std::unexpected(std::format("can't read {}", PathText(path)));
         }
+        const std::string &text = *read;
         auto project = Parse(text);
         if (!project)
         {

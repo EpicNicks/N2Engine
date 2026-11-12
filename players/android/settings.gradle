@@ -1,0 +1,18 @@
+// The Android player (build targets stage 8; docs/android.html): an APK around libn2game.so, which Gradle builds from the
+// engine repository's own CMakeLists.txt with the NDK. tools/n2build drives it; open the folder in Android Studio to debug.
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = 'N2Player'
+include ':app'

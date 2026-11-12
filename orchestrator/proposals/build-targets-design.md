@@ -16,6 +16,11 @@ every stage. Stages still run in the order of section 5, each after the stages i
   the default, `modules` per target through `-DN2ENGINE_TARGET` (`cmake/N2EngineModules.cmake` reads
   `build.targets.<target>.modules` over `build.modules`, key by key), and `scripts/project-modules.mjs --target`. The frontend
   half (the Build Settings panel) is a frontend PR.
+- Stage 4 (packs), branch `feat-bt4-vfs-packs`: `IO::Vfs` with folder, zip (miniz inflate) and 7z (the LZMA SDK's
+  decoder) mounts; every read of game data goes through it; a project whose root is a mount is packed and read-only; the
+  cook step (`n2build cook`, and `build` packages `game.n2pack`: zip for desktop, stored for the web, 7z non-solid
+  through 7-Zip); the desktop and web players mount the pack. The audit of `std::filesystem` call sites is in
+  `docs/packs.html#audit`. Persistent web saves (IDBFS on `user://`) are the documented gap.
 - The Triangle-Like input branches (needed by stage 5): #330 to #336 merged on 2026-11-11.
 - Stage 5 (engine input codes), branch `feat-bt5-engine-input-codes`: `Input::InputDevice` in engine codes; GLFW's device
   (`engine/src/input/GlfwInputDevice.cpp`) is the only code that knows GLFW's key, button and axis numbers, its tables
@@ -24,6 +29,15 @@ every stage. Stages still run in the order of section 5, each after the stages i
 - Stage 6 (platform layer), branch `feat-bt6-platform-host`: `Platform::IPlatformHost` (surface, window, lifecycle, loop
   ownership, input device, paths); `desktop-glfw` (Window.cpp's GLFW code, moved as it was) and `headless` backends; `Window`
   on the host; the web build has no stand-in GLFW (`glfw_stub.c` deleted). `docs/platform.html`.
+- Stage 7 (renderer surfaces), PR #342: `Renderer::Common::Surface` (the native surface and the window-system operations the
+  platform supplies); `IRenderer::Initialize` takes it; no renderer calls GLFW; the software renderer can hand its pixels to
+  the platform (`presentPixels`) instead of presenting through GL.
+- Stage 8 (Android player), branch `feat-bt8-android-player`: `targets/android`, `players/android` (GameActivity backend,
+  Gradle template), n2build's Android flow (`tools/n2build/lib/android.mjs`: cook, Gradle, APK), the `android` CI job (debug
+  APK of lua_project, emulator smoke). Deviations from the plan: the software renderer's frame is copied into the
+  `ANativeWindow` on the CPU, not presented through EGL/GLES; audio is OpenAL Soft's OpenSL ES backend (AAudio through Oboe
+  is a follow-up); rumble does nothing yet; the phone frame rate is a device-checklist item (`docs/android.html#checklist`),
+  not measured.
 
 ## 1. Goal
 

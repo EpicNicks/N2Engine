@@ -4,9 +4,11 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <functional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "assetimport/ImportedScene.hpp"
 
@@ -72,6 +74,14 @@ namespace N2Engine::AssetImport
         Always
     };
 
+    /**
+     * Reads a file a model names (an external buffer or image): the whole file, or the reason it can't (refused, without
+     * reading it, when it is larger than maxBytes). The engine reads through its virtual filesystem, so a model in a pack
+     * finds its .bin and images there (docs/packs.html).
+     */
+    using ModelFileReader =
+        std::function<std::expected<std::vector<std::uint8_t>, std::string>(const std::filesystem::path &path, std::size_t maxBytes)>;
+
     struct ModelImportSettings
     {
         /// Multiplies every position and node translation (a model in centimetres takes 0.01). Must be finite
@@ -83,6 +93,8 @@ namespace N2Engine::AssetImport
         TangentGeneration generateTangents = TangentGeneration::IfMissing;
         /// Join a mesh's primitives that share a material into one submesh each
         bool mergeSubmeshesByMaterial = false;
+        /// How external files are read; empty: from the disk
+        ModelFileReader readFile;
     };
 
     enum class ModelImportErrorCode

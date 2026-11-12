@@ -50,7 +50,8 @@ endforeach()
 
 # The desktop platform backend and the GLFW input device are GLFW's only callers (build targets stage 6): not in the web
 # build, which has no GLFW (its player runs on the headless backend)
-if (N2ENGINE_PLATFORM_WEB)
+if (N2ENGINE_PLATFORM_WEB OR N2ENGINE_PLATFORM_ANDROID)
+    set(N2ENGINE_NO_GLFW ON)
     list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/platform/DesktopGlfwHost\.cpp$")
     list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/input/GlfwInputDevice\.cpp$")
 endif ()
@@ -77,6 +78,9 @@ set_target_properties(engine PROPERTIES
     CXX_STANDARD_REQUIRED ON
     CXX_EXTENSIONS OFF
 )
+
+# The pack readers (engine/src/io/Pack*.cpp; docs/packs.html): zip inflate and the 7z decoder, private to the engine
+target_link_libraries(engine PRIVATE n2_miniz n2_lzma7z)
 
 # The engine version (engine/Version.hpp): the root project's (engine declares no project of its own)
 target_compile_definitions(engine PRIVATE N2ENGINE_VERSION="${PROJECT_VERSION}")
@@ -153,9 +157,13 @@ if (WIN32)
     target_link_libraries(engine PRIVATE psapi)
 endif ()
 
-# Web: the standard library has no std::generator (external/web-stubs/include/generator stands in for it)
-if (N2ENGINE_PLATFORM_WEB)
+# Web and Android (libc++): the standard library has no std::generator (external/web-stubs/include/generator stands in)
+if (N2ENGINE_PLATFORM_WEB OR N2ENGINE_PLATFORM_ANDROID)
     target_link_libraries(engine PUBLIC n2_web_cxx_compat)
+endif ()
+# No GLFW in this build (the web, Android): the platform layer's desktop backend is not compiled (HeadlessHost.cpp)
+if (N2ENGINE_NO_GLFW)
+    target_compile_definitions(engine PRIVATE N2ENGINE_NO_GLFW=1)
 endif ()
 
 target_link_libraries(engine

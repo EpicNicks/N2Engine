@@ -1,0 +1,102 @@
+// The game's APK. Every game setting comes from n2build as a Gradle property (-Pn2.<name>=...), from project.n2proj's
+// build.targets.android (docs/build-targets.html#settings): nothing here is a particular game's.
+plugins {
+    id 'com.android.application'
+}
+
+def n2 = { String key, String fallback -> (project.findProperty("n2.${key}") ?: fallback).toString() }
+def engineRoot = file(n2('engineRoot', '../../..'))
+
+android {
+    namespace 'com.n2engine.player'
+    compileSdk 35
+    ndkVersion n2('ndkVersion', '27.0.12077973')
+
+    defaultConfig {
+        applicationId n2('appId', 'com.n2engine.game')
+        // AAudio and ANativeWindow's RGBA buffers: Android 8.0
+        minSdk 26
+        targetSdk 35
+        versionCode Integer.parseInt(n2('buildNumber', '1'))
+        versionName n2('version', '1.0.0')
+        resValue 'string', 'app_name', n2('displayName', 'N2Engine Game')
+        // build.targets.android.orientation: fullUser (any), sensorLandscape or sensorPortrait
+        manifestPlaceholders = [n2Orientation: n2('orientation', 'fullUser')]
+        ndk {
+            abiFilters(*n2('abis', 'arm64-v8a,x86_64').split(','))
+        }
+        externalNativeBuild {
+            cmake {
+                targets 'n2game'
+                arguments '-DANDROID_STL=c++_shared',
+                          "-DN2ENGINE_PROJECT=${n2('project', '')}",
+                          '-DN2ENGINE_TARGET=android',
+                          '-DN2ENGINE_BUILD_TESTS=OFF',
+                          "-DCMAKE_BUILD_TYPE=${n2('cmakeBuildType', 'Release')}"
+            }
+        }
+    }
+
+    buildFeatures {
+        prefab true
+    }
+
+    externalNativeBuild {
+        cmake {
+            // The engine repository itself: its root CMakeLists.txt adds players/android/native when ANDROID is set
+            path file("${engineRoot}/CMakeLists.txt")
+            buildStagingDirectory file(n2('nativeBuildDir', "${buildDir}/n2native"))
+        }
+    }
+
+    // The pack is stored as it is (already compressed where it helps): the player seeks in it (AndroidMain.cpp, SamePack)
+    androidResources {
+        noCompress 'n2pack'
+    }
+
+    sourceSets {
+        main {
+            // game.n2pack (n2build's cook step) is the APK's only asset
+            assets.srcDirs = [n2('assetsDir', "${buildDir}/n2assets")]
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    // n2build's signing profile (docs/android.html#signing), resolved from the user's n2build.json when the build runs and
+    // handed to this process in its environment only: never a -P property (a command line is visible to other programs),
+    // never a file in the build tree. Without it a release build is unsigned
+    def signingEnv = { String name -> System.getenv(name) }
+    def profileKeystore = signingEnv('N2_SIGNING_STORE_FILE')
+    signingConfigs {
+        if (profileKeystore) {
+            n2profile {
+                storeFile file(profileKeystore)
+                storePassword signingEnv('N2_SIGNING_STORE_PASSWORD')
+                keyAlias signingEnv('N2_SIGNING_KEY_ALIAS')
+                keyPassword signingEnv('N2_SIGNING_KEY_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (profileKeystore) {
+                signingConfig signingConfigs.n2profile
+            }
+        }
+    }
+}
+
+dependencies {
+    // One Kotlin standard library: appcompat brings kotlin-stdlib 1.8, an older dependency kotlin-stdlib-jdk8 1.6, whose
+    // classes collide (checkDebugDuplicateClasses). The BOM lines them up
+    implementation platform('org.jetbrains.kotlin:kotlin-bom:1.8.22')
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.core:core:1.13.1'
+    implementation 'androidx.games:games-activity:3.0.5'
+}

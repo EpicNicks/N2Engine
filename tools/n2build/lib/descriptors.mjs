@@ -7,9 +7,10 @@ import path from 'node:path';
 import { BuildError } from './report.mjs';
 
 export const DESCRIPTOR_FORMAT = 1;
-export const KNOWN_TOOLCHAINS = ['cmake', 'ninja', 'msvc', 'cxx', 'emsdk', 'vulkan-sdk'];
-export const PACKAGE_KINDS = ['desktop', 'web'];
-export const RUN_KINDS = ['executable', 'web-server'];
+export const KNOWN_TOOLCHAINS = ['cmake', 'ninja', 'msvc', 'cxx', 'emsdk', 'vulkan-sdk', 'android-sdk', 'android-ndk', 'jdk', 'gradle'];
+export const PACKAGE_KINDS = ['desktop', 'web', 'android'];
+export const RUN_KINDS = ['executable', 'web-server', 'android-device'];
+export const PACK_KINDS = ['zip', 'stored', '7z', 'folder'];
 export const PHYSICS3D_VALUES = ['none', 'physx', 'jolt', 'both'];
 const NAME = /^[a-z][a-z0-9-]{0,31}$/;
 const CMAKE_VARIABLE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -80,6 +81,9 @@ export function validateDescriptor(raw, file) {
     fail(`package.kind must be one of ${PACKAGE_KINDS.join(', ')}`);
   }
   if (typeof pack.from !== 'string' || pack.from === '') fail('package.from must name the folder in the build tree to package');
+  // The game's pack (docs/packs.html): zip, stored (an uncompressed zip), 7z, or folder (the project folder as it is).
+  // Absent: zip for a desktop package, stored for the web (its server compresses the download)
+  if (pack.pack !== undefined && !PACK_KINDS.includes(pack.pack)) fail(`package.pack must be one of ${PACK_KINDS.join(', ')}`);
   const run = raw.run;
   if (run === null || typeof run !== 'object' || !RUN_KINDS.includes(run.kind)) fail(`run.kind must be one of ${RUN_KINDS.join(', ')}`);
 

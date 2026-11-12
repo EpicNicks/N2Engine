@@ -42,7 +42,7 @@ if(N2ENGINE_RENDERER_VULKAN)
 endif()
 # Web: no OpenGL library and no GLFW to build. external/web-stubs (added by the root CMakeLists.txt first) defines the
 # `glfw` and `OpenGL::GL` targets the renderer links: GLFW's real headers with no-op functions, and nothing for GL
-if(NOT N2ENGINE_PLATFORM_WEB)
+if(NOT N2ENGINE_PLATFORM_WEB AND NOT N2ENGINE_PLATFORM_ANDROID)
 find_package(OpenGL REQUIRED)
 endif()
 
@@ -56,7 +56,8 @@ if(UNIX AND NOT APPLE)
     set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "" FORCE)
 endif()
 
-if(NOT N2ENGINE_PLATFORM_WEB)
+# Android (cmake/N2EngineAndroid.cmake) has no GLFW either: an empty `glfw` target stands in
+if(NOT N2ENGINE_PLATFORM_WEB AND NOT N2ENGINE_PLATFORM_ANDROID)
 FetchContent_Declare(
     glfw
     GIT_REPOSITORY https://github.com/glfw/glfw.git

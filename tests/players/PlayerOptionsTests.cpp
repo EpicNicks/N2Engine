@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <filesystem>
 #include <initializer_list>
 #include <string_view>
 #include <vector>
@@ -91,4 +93,47 @@ TEST(PlayerOptionsTest, RendererTitles)
     EXPECT_EQ(RenderBackendTitle(RenderBackend::OPENGL), "OpenGL");
     EXPECT_EQ(RenderBackendTitle(RenderBackend::VULKAN), "Vulkan");
     EXPECT_EQ(RenderBackendTitle(RenderBackend::SOFTWARE), "software");
+}
+
+// Where the game is (build targets stage 4; docs/packs.html): a folder, a pack named directly, or the pack beside a
+// missing folder
+namespace
+{
+    struct FakeDisk
+    {
+        std::vector<std::filesystem::path> folders;
+        std::vector<std::filesystem::path> files;
+
+        GameLocation Resolve(const std::filesystem::path &arg) const
+        {
+            return ResolveGame(
+                arg, [&](const std::filesystem::path &p) { return std::ranges::find(folders, p) != folders.end(); },
+                [&](const std::filesystem::path &p) { return std::ranges::find(files, p) != files.end(); });
+        }
+    };
+}
+
+TEST(PlayerOptionsTest, AGameIsAFolderOrAPack)
+{
+    const std::filesystem::path dir = std::filesystem::path("pkg");
+    // The folder on disk: no pack
+    FakeDisk folder{{dir / "game"}, {dir / "game.n2pack"}};
+    EXPECT_EQ(folder.Resolve(dir / "game").projectDir, dir / "game");
+    EXPECT_TRUE(folder.Resolve(dir / "game").pack.empty()) << "an unpacked folder wins over a pack beside it";
+
+    // No folder, a pack beside where it would be: mounted there
+    FakeDisk packed{{}, {dir / "game.n2pack"}};
+    const GameLocation game = packed.Resolve(dir / "game");
+    EXPECT_EQ(game.projectDir, dir / "game");
+    EXPECT_EQ(game.pack, dir / "game.n2pack");
+
+    // The pack named directly
+    const GameLocation named = packed.Resolve(dir / "game.n2pack");
+    EXPECT_EQ(named.projectDir, dir / "game");
+    EXPECT_EQ(named.pack, dir / "game.n2pack");
+
+    // Neither: the folder, which the project load then reports as missing
+    FakeDisk none;
+    EXPECT_EQ(none.Resolve(dir / "game").projectDir, dir / "game");
+    EXPECT_TRUE(none.Resolve(dir / "game").pack.empty());
 }

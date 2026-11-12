@@ -5,6 +5,27 @@
 
 namespace N2Engine::Player
 {
+    GameLocation ResolveGame(const std::filesystem::path &folderOrPack,
+                             const std::function<bool(const std::filesystem::path &)> &isDirectory,
+                             const std::function<bool(const std::filesystem::path &)> &isFile)
+    {
+        if (folderOrPack.extension() == PackExtension && isFile(folderOrPack))
+        {
+            // game.n2pack: mounted where its folder would be ("game" beside it)
+            return {folderOrPack.parent_path() / folderOrPack.stem(), folderOrPack};
+        }
+        if (!isDirectory(folderOrPack))
+        {
+            std::filesystem::path pack = folderOrPack;
+            pack += PackExtension;
+            if (isFile(pack))
+            {
+                return {folderOrPack, pack};
+            }
+        }
+        return {folderOrPack, {}};
+    }
+
     namespace
     {
         std::optional<RenderBackend> ParseRenderBackend(const std::string_view name)
@@ -51,7 +72,8 @@ namespace N2Engine::Player
     {
         return std::format(
             "Usage: {} [game folder] [--renderer opengl|vulkan|software] [--console-log] [--frames N]\n"
-            "  game folder     the folder holding project.n2proj and assets/ (default: the 'game' folder beside the player)\n"
+            "  game folder     the folder holding project.n2proj and assets/, or a game.n2pack (default: the 'game'\n"
+            "                  folder beside the player, else game.n2pack there)\n"
             "  --renderer      the renderer (default: software)\n"
             "  --console-log   print log lines on the console in a Release build too\n"
             "  --frames N      run N frames, then quit (smoke runs)",
