@@ -111,6 +111,9 @@ export async function runInSimulator({ app, bundleId, env, reporter, seconds = n
     reporter.step('boot', `Booting the ${device.name} simulator`);
     await simctl(['boot', device.udid], 'Booting the simulator');
   }
+  // simctl boot returns before the system has finished starting: an app launched then is killed as SpringBoard comes up
+  // (on CI it exited at once, with no output and no crash report). bootstatus -b waits until the device is ready
+  await simctl(['bootstatus', device.udid, '-b'], 'Waiting for the simulator to finish booting');
   reporter.step('install', `Installing ${path.basename(app)} on ${device.name}`);
   await simctl(['install', device.udid, app], 'Installing the app');
 

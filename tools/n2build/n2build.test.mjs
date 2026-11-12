@@ -1159,8 +1159,8 @@ test('the simulator: the booted one, else the newest iPhone; install, launch, th
   const outcome = await runInSimulator({ app: '/out/Tri.app', bundleId: 'com.example.tri', env: {}, reporter, exec, outFile: '/tmp/console.txt',
     readFile: (file) => (file === '/tmp/console.txt' ? output : null), sleep: async () => {} });
   assert.deepEqual(outcome, { device: 'NEW', pid: '4242', reason: 'exited' });
-  assert.deepEqual(calls.slice(0, 4), ['simctl list devices available --json', 'simctl boot NEW', 'simctl install NEW /out/Tri.app',
-    'simctl launch --terminate-running-process --stdout=/tmp/console.txt --stderr=/tmp/console.txt NEW com.example.tri']);
+  assert.deepEqual(calls.slice(0, 5), ['simctl list devices available --json', 'simctl boot NEW', 'simctl bootstatus NEW -b',
+    'simctl install NEW /out/Tri.app', 'simctl launch --terminate-running-process --stdout=/tmp/console.txt --stderr=/tmp/console.txt NEW com.example.tri']);
   assert.equal(checks, 3, 'launchd is asked until the app is gone');
   assert.ok(!calls.some((c) => c.includes('terminate NEW')), 'an app that exited is not terminated');
   assert.deepEqual(lines.filter((l) => l.type === 'log').map((l) => [l.stream, l.text]), [
@@ -1179,7 +1179,8 @@ test('the simulator: the booted one, else the newest iPhone; install, launch, th
     outFile: '/tmp/none.txt', readFile: () => null, seconds: 3, sleep: async () => {} });
   assert.equal(stopped.reason, 'time');
   assert.ok(timed.includes('simctl terminate NEW com.example.tri'));
-  assert.ok(!timed.includes('simctl boot NEW'), 'a booted simulator is used as it is');
+  assert.ok(!timed.includes('simctl boot NEW'), 'a booted simulator is not booted again');
+  assert.ok(timed.includes('simctl bootstatus NEW -b'), 'but it is waited for until it is ready');
 });
 
 /** A fake git for the game's repository */
