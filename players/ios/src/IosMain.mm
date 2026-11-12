@@ -1,6 +1,8 @@
 // The iOS player (build targets stage 10; docs/apple.html): a UIKit app with one view. The engine starts when the view is
 // on screen, then a CADisplayLink runs one frame per screen refresh while the app is active (the OS owns the loop:
-// Application::BeginRun, RunFrame, EndRun). The software renderer's frame becomes the view's layer contents.
+// Application::BeginRun, RunFrame, EndRun). The software renderer's frame becomes the view's layer contents; in an app built
+// with MoltenVK (build targets stage 13) the Vulkan renderer draws into the view's CAMetalLayer instead, where MoltenVK
+// finds a GPU.
 //
 // The game is one pack, game.n2pack, in the app bundle. Bundle files are ordinary files, so the pack is mounted where it is
 // (no copy, unlike Android's APK assets).
@@ -8,6 +10,13 @@
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
 #include <os/log.h>
+
+#include <renderer/common/RendererConfig.hpp>
+#if N2ENGINE_RENDERER_VULKAN
+// MoltenVK's Vulkan, with its Metal surface (VK_EXT_metal_surface: a CAMetalLayer)
+#define VK_USE_PLATFORM_METAL_EXT 1
+#include <vulkan/vulkan.h>
+#endif
 
 #include <chrono>
 #include <cstdint>
@@ -43,6 +52,7 @@ namespace
     struct PlayerState
     {
         Ios::IosHost *host = nullptr; // owned by the Window once the engine started
+        bool vulkan = false; // the Vulkan renderer on MoltenVK (decided before the view is made: its layer class)
         bool engineStarted = false;
         bool engineFailed = false;
         bool ended = false;
@@ -110,6 +120,33 @@ namespace
     {
         return std::filesystem::path(std::string(path.UTF8String));
     }
+
+    /**
+     * Whether to draw with Vulkan (build targets stage 13): only in an app built with MoltenVK (N2ENGINE_IOS_MOLTENVK), and
+     * only where MoltenVK finds a Metal GPU. Otherwise the software renderer, as before.
+     */
+    bool DeviceHasVulkan()
+    {
+#if N2ENGINE_RENDERER_VULKAN
+        VkApplicationInfo app{};
+        app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+        app.apiVersion = VK_API_VERSION_1_1;
+        VkInstanceCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+        info.pApplicationInfo = &app;
+        VkInstance instance = VK_NULL_HANDLE;
+        if (vkCreateInstance(&info, nullptr, &instance) != VK_SUCCESS)
+        {
+            return false;
+        }
+        uint32_t devices = 0;
+        const bool found = vkEnumeratePhysicalDevices(instance, &devices, nullptr) == VK_SUCCESS && devices > 0;
+        vkDestroyInstance(instance, nullptr);
+        return found;
+#else
+        return false;
+#endif
+    }
 }
 
 // ---- the view: shows frames, reports touches ------------------------------------------------------------------------
@@ -123,12 +160,20 @@ namespace
     int _nextTouchId;
 }
 
+/// A Metal layer for the Vulkan renderer (MoltenVK draws into it), a plain one for the software renderer's frames
++ (Class)layerClass
+{
+    return g_state.vulkan ? [CAMetalLayer class] : [CALayer class];
+}
+
 - (instancetype)initWithFrame:(CGRect)frame
 {
     if ((self = [super initWithFrame:frame]))
     {
         self.multipleTouchEnabled = YES;
         self.backgroundColor = UIColor.blackColor;
+        // The layer's pixels are the view's pixels (MoltenVK sizes its drawables from the bounds and this scale)
+        self.layer.contentsScale = UIScreen.mainScreen.scale;
         self.layer.contentsGravity = kCAGravityResize;
         // The frame is the view's size in pixels: no smoothing when the layer shows it
         self.layer.magnificationFilter = kCAFilterNearest;
@@ -329,6 +374,31 @@ namespace
         [weakView showFrame:rgba width:width height:height];
     };
     bridge.keepScreenOn = [](const bool on) { UIApplication.sharedApplication.idleTimerDisabled = on ? YES : NO; };
+#if N2ENGINE_RENDERER_VULKAN
+    if (g_state.vulkan)
+    {
+        bridge.vulkanInstanceExtensions = [] {
+            return std::vector<const char *>{VK_KHR_SURFACE_EXTENSION_NAME, VK_EXT_METAL_SURFACE_EXTENSION_NAME};
+        };
+        bridge.createVulkanSurface = [weakView](void *instance, void *surfaceOut) {
+            N2View *v = weakView;
+            if (v == nil || ![v.layer isKindOfClass:[CAMetalLayer class]])
+            {
+                return static_cast<int>(VK_ERROR_SURFACE_LOST_KHR);
+            }
+            const auto create = reinterpret_cast<PFN_vkCreateMetalSurfaceEXT>(
+                vkGetInstanceProcAddr(static_cast<VkInstance>(instance), "vkCreateMetalSurfaceEXT"));
+            if (create == nullptr)
+            {
+                return static_cast<int>(VK_ERROR_EXTENSION_NOT_PRESENT);
+            }
+            VkMetalSurfaceCreateInfoEXT info{};
+            info.sType = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT;
+            info.pLayer = (CAMetalLayer *)v.layer;
+            return static_cast<int>(create(static_cast<VkInstance>(instance), &info, nullptr, static_cast<VkSurfaceKHR *>(surfaceOut)));
+        };
+    }
+#endif
 
     auto host = std::make_unique<Ios::IosHost>(std::move(bridge), paths);
     g_state.host = host.get();
@@ -337,7 +407,7 @@ namespace
     application.Init({
         .projectPath = projectDir.string(),
         .physicsBackend = Config::ApplicationOptions::PhysicsBackend::AUTO,
-        .renderBackend = Config::ApplicationOptions::RenderBackend::SOFTWARE,
+        .renderBackend = g_state.vulkan ? Config::ApplicationOptions::RenderBackend::VULKAN : Config::ApplicationOptions::RenderBackend::SOFTWARE,
         .isHeadless = false,
     });
     if (!application.GetWindow().IsValid())
@@ -394,6 +464,10 @@ namespace
     NSError *error = nil;
     [AVAudioSession.sharedInstance setCategory:AVAudioSessionCategoryAmbient error:&error];
     [AVAudioSession.sharedInstance setActive:YES error:&error];
+
+    // Before the view is made: its layer class follows the renderer
+    g_state.vulkan = DeviceHasVulkan();
+    Logger::Info(g_state.vulkan ? "N2Engine iOS player: the Vulkan renderer (MoltenVK)" : "N2Engine iOS player: the software renderer");
 
     self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
     self.window.rootViewController = [[N2ViewController alloc] init];

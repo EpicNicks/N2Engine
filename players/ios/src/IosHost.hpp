@@ -55,14 +55,18 @@ namespace N2Engine::Ios
         /// A frame: RGBA8, rows bottom to top (the software renderer's layout)
         std::function<void(const std::uint8_t *rgba, int width, int height)> show;
         std::function<void(bool on)> keepScreenOn;
-        /// The layer the frame is shown on (a CALayer*), for NativeSurface
+        /// The layer the frame is shown on (a CALayer*, a CAMetalLayer* when the app draws with Vulkan), for NativeSurface
         void *layer = nullptr;
+        /// With the Vulkan renderer on MoltenVK (build targets stage 13; empty otherwise): the instance extensions a surface
+        /// needs, and making one on the view's CAMetalLayer (a VkResult)
+        std::function<std::vector<const char *>()> vulkanInstanceExtensions;
+        std::function<int(void *instance, void *surfaceOut)> createVulkanSurface;
     };
 
     /**
      * The iOS platform backend: a UIKit view, its lifecycle and touch. The OS owns the loop (a CADisplayLink calls
      * Application::RunFrame once a frame). The software renderer presents by handing its pixels over (Surface::presentPixels),
-     * which become the view's layer contents. user:// is the app's Application Support folder; the game's pack is read in
+     * which become the view's layer contents; the Vulkan renderer (MoltenVK) draws into the view's CAMetalLayer. user:// is the app's Application Support folder; the game's pack is read in
      * place from the app bundle.
      */
     class IosHost final : public Platform::IPlatformHost
@@ -85,6 +89,8 @@ namespace N2Engine::Ios
             surface.handle = _view.layer;
             surface.presentPixels = _view.show;
             surface.framebufferSize = _view.sizeInPixels;
+            surface.vulkanInstanceExtensions = _view.vulkanInstanceExtensions;
+            surface.createVulkanSurface = _view.createVulkanSurface;
             return surface;
         }
         std::string LastError() const override { return {}; }
