@@ -167,6 +167,7 @@ node tools/n2build/n2build.mjs run    --target web --project path/to/game   # bu
 <li><strong>The window's title</strong> is the game's name; a Debug build adds the renderer.</li>
 <li><strong>Windows:</strong> a Release player is a windowed program, with no console window behind the game. <code>--console-log</code> still prints the log when it is started from a console or by <code>n2build run</code>. Debug keeps the console.</li>
 <li><strong><code>--frames N</code></strong> runs N frames through <code>Application::BeginRun</code>/<code>RunFrame</code>/<code>EndRun</code> and quits, for smoke runs.</li>
+<li><strong><code>--headless</code></strong> runs with no window: the software renderer draws offscreen. It is for machines with no display or no GPU, such as CI runners. With any other <code>--renderer</code> it is refused.</li>
 </ul>
 <p class="src">Source: <code>players/desktop/src/Main.cpp</code>, <code>players/desktop/src/PlayerOptions.cpp</code>; tests: <code>tests/players/PlayerOptionsTests.cpp</code></p>
 

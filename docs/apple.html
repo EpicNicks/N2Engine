@@ -160,7 +160,7 @@ node tools/n2build/n2build.mjs build  --target macos --project path/to/game</cod
 <h2 id="ci">CI and what was verified</h2>
 <p>The <code>apple</code> jobs in <code>.github/workflows/tests.yml</code> run on <code>macos-15</code>, with the same commands as the game workflow:</p>
 <ul>
-<li><strong>macOS:</strong> builds lua_project's package and runs it for 60 frames.</li>
+<li><strong>macOS:</strong> builds lua_project's package and runs it for 60 frames with <code>--headless</code>. The runner is a virtual machine with no GPU, so it has no OpenGL context. The windowed run on a Mac is checklist item 5.</li>
 <li><strong>iOS:</strong> builds the simulator app, checks its bundle (the pack and the bundle identifier), and runs it in the simulator. The run must log a first frame and a frame rate.</li>
 </ul>
 <div class="callout note">
