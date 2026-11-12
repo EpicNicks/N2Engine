@@ -233,11 +233,24 @@ export function copyGameData(projectDir, gameDir) {
   if (fs.existsSync(path.join(projectDir, '.import'))) copyInto(path.join(projectDir, '.import'), path.join(gameDir, '.import'));
 }
 
+/** PhysX's GPU library (PhysXGpu_64.dll; libPhysXGpu_64.so on Linux): about 360 MB, and used only for GPU physics */
+export const PHYSX_GPU_LIBRARY = /^(lib)?PhysXGpu_64\.(dll|so)$/i;
+
+/**
+ * The runtime files a package ships: every listed one, except PhysX's GPU library when the project's physics.gpu is off
+ * (the default; "on" and "auto" use it). Returns {ship, left} (left: what was left out).
+ */
+export function runtimeFilesFor(files, physicsGpu) {
+  const usesGpu = physicsGpu === 'on' || physicsGpu === 'auto';
+  const left = usesGpu ? [] : files.filter((file) => PHYSX_GPU_LIBRARY.test(file));
+  return { ship: files.filter((file) => !left.includes(file)), left };
+}
+
 /**
  * A desktop package: the player (renamed after the game) and the files players/desktop lists beside it, and the game
  * folder. Returns the executable's file name.
  */
-export function packageDesktop({ treeDir, descriptor, projectDir, packageDir, gameName, platform = process.platform, pack = null }) {
+export function packageDesktop({ treeDir, descriptor, projectDir, packageDir, gameName, platform = process.platform, pack = null, physicsGpu, onLeftOut }) {
   const binDir = path.join(treeDir, descriptor.package.from);
   const listFile = path.join(binDir, descriptor.package.fileList ?? 'n2player-files.txt');
   if (!fs.existsSync(listFile)) throw new BuildError(`${listFile} is missing: the build did not produce the player`);
@@ -251,7 +264,10 @@ export function packageDesktop({ treeDir, descriptor, projectDir, packageDir, ga
   }
   fs.copyFileSync(path.join(binDir, player), path.join(packageDir, executable));
   if (platform !== 'win32') fs.chmodSync(path.join(packageDir, executable), 0o755);
-  for (const file of runtime) fs.copyFileSync(path.join(binDir, file), path.join(packageDir, file));
+  // PhysX's GPU library only for a game that uses GPU physics (physics.gpu on or auto): it is most of a Windows package
+  const { ship, left } = runtimeFilesFor(runtime, physicsGpu);
+  for (const file of ship) fs.copyFileSync(path.join(binDir, file), path.join(packageDir, file));
+  if (left.length && onLeftOut) onLeftOut(left);
   // The game: one pack beside the player (it mounts game.n2pack where the game folder would be), or the folder as it is
   if (pack && pack.format !== 'folder') {
     cookPack({ projectDir, outFile: path.join(packageDir, `game${PACK_EXTENSION}`), format: pack.format, target: descriptor.name,
