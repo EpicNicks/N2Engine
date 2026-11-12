@@ -1151,22 +1151,56 @@ test('the simulator: the booted one, else the newest iPhone; install, launch, th
   assert.equal(pickSimulator('{"devices": {}}'), null);
   assert.equal(pickSimulator('not json'), null);
 
+  // The game's log comes through the simulator's log stream (the app's process, its N2Engine lines); the app is a process
+  // of this Mac for two checks, then is gone
   const calls = [];
+  let checks = 0;
+  let stopped = false;
   const exec = async (command, args) => {
     calls.push(args.join(' '));
-    return args[1] === 'list' ? { code: 0, stdout: list(false), stderr: '' } : { code: 0, stdout: '', stderr: '' };
+    if (args[1] === 'list') return { code: 0, stdout: list(false), stderr: '' };
+    if (args[1] === 'launch') return { code: 0, stdout: 'com.example.tri: 4242\n', stderr: '' };
+    return { code: 0, stdout: '', stderr: '' };
   };
   const stream = (command, args, { onLine }) => {
     calls.push(args.join(' '));
-    onLine('N2Engine info: N2Engine iOS player: first frame');
-    return { stop: () => {}, done: Promise.resolve() };
+    onLine('Timestamp               Ty Process[PID:TID]');
+    onLine('2026-11-12 13:06:58.898 Df N2Game[4242:181b4] N2Engine info: N2Engine iOS player: first frame');
+    onLine('2026-11-12 13:07:05.125 Df N2Game[4242:181b4] N2Engine info: N2Engine iOS player: 15 frames, 3.0 fps');
+    return { stop: () => { stopped = true; }, done: Promise.resolve() };
+  };
+  const isAlive = (pid) => {
+    assert.equal(pid, 4242, 'the pid simctl launch printed');
+    checks += 1;
+    return checks <= 2;
   };
   const { reporter, lines } = capture();
-  const outcome = await runInSimulator({ app: '/out/Tri.app', bundleId: 'com.example.tri', env: {}, reporter, exec, stream, sleep: async () => {} });
-  assert.deepEqual(outcome, { device: 'NEW', reason: 'exited' });
-  assert.deepEqual(calls, ['simctl list devices available --json', 'simctl boot NEW', 'simctl install NEW /out/Tri.app',
-    'simctl launch --console-pty --terminate-running-process NEW com.example.tri']);
-  assert.deepEqual(lines.filter((l) => l.type === 'log').map((l) => [l.stream, l.text]), [['console', 'N2Engine info: N2Engine iOS player: first frame']]);
+  const outcome = await runInSimulator({ app: '/out/Tri.app', bundleId: 'com.example.tri', env: {}, reporter, exec, stream, isAlive, sleep: async () => {} });
+  assert.deepEqual(outcome, { device: 'NEW', pid: '4242', reason: 'exited' });
+  assert.deepEqual(calls.slice(0, 6), ['simctl list devices available --json', 'simctl boot NEW', 'simctl bootstatus NEW -b',
+    'simctl install NEW /out/Tri.app',
+    'simctl spawn NEW log stream --style compact --level info --predicate process == "N2Game" AND eventMessage BEGINSWITH "N2Engine"',
+    'simctl launch --terminate-running-process NEW com.example.tri']);
+  assert.equal(checks, 3, 'the process is checked until it is gone');
+  assert.ok(stopped, 'the log stream is stopped at the end');
+  assert.ok(!calls.some((c) => c.includes('terminate NEW')), 'an app that exited is not terminated');
+  assert.deepEqual(lines.filter((l) => l.type === 'log').map((l) => [l.stream, l.text]), [
+    ['console', 'N2Engine info: N2Engine iOS player: first frame'], ['console', 'N2Engine info: N2Engine iOS player: 15 frames, 3.0 fps']]);
+
+  // --seconds: the app is stopped when the time is up
+  const timed = [];
+  const keepRunning = async (command, args) => {
+    timed.push(args.join(' '));
+    if (args[1] === 'list') return { code: 0, stdout: list(true), stderr: '' };
+    return { code: 0, stdout: 'com.example.tri: 7\n', stderr: '' };
+  };
+  const quiet = () => ({ stop: () => {}, done: Promise.resolve() });
+  const timedOut = await runInSimulator({ app: '/out/Tri.app', bundleId: 'com.example.tri', env: {}, reporter: capture().reporter, exec: keepRunning,
+    stream: quiet, isAlive: () => true, seconds: 3, sleep: async () => {} });
+  assert.equal(timedOut.reason, 'time');
+  assert.ok(timed.includes('simctl terminate NEW com.example.tri'));
+  assert.ok(!timed.includes('simctl boot NEW'), 'a booted simulator is not booted again');
+  assert.ok(timed.includes('simctl bootstatus NEW -b'), 'but it is waited for until it is ready');
 });
 
 /** A fake git for the game's repository */
@@ -1251,6 +1285,55 @@ test('build --target ios --dry-run off a Mac prints the workflow it would start'
   const logs = lines.filter((l) => l.type === 'log').map((l) => l.text);
   assert.ok(logs.some((t) => t.startsWith('gh workflow run n2build-apple.yml --ref main -f target=ios -f config=release -f project=')), logs.join('\n'));
   assert.equal(lines.at(-1).remote, true);
+});
+
+// --- private targets (build targets stage 11) ----------------------------------------------------------------------
+
+const SAMPLE_TARGETS = path.join(ENGINE_ROOT, 'samples', 'private-targets');
+
+test('a target folder outside targets/ adds a target with its own code: the sample console', () => {
+  const descriptors = loadDescriptors(ENGINE_ROOT, [SAMPLE_TARGETS]);
+  const sample = descriptors.get('sample-console');
+  assert.ok(sample, 'the sample loads from its folder');
+  assert.equal(sample.source, SAMPLE_TARGETS);
+  assert.equal(sample.cmake.sourceDir, 'player');
+  assert.ok(!loadDescriptors(ENGINE_ROOT).has('sample-console'), 'not one of the repository\'s targets');
+  const plan = planBuild({ engineRoot: ENGINE_ROOT, projectDir: makeProject({ name: 'Tri' }), descriptor: sample, config: 'release', modules: undefined,
+    present: new Set(), buildRoot: tmp('n2build-private-'), gameName: 'Tri' });
+  assert.ok(plan.configureArgs.includes(`-DN2ENGINE_EXTRA_TARGET_DIR=${path.join(SAMPLE_TARGETS, 'sample-console', 'player')}`), plan.configureArgs.join(' '));
+  assert.ok(plan.buildArgs.includes('sample_console_player'));
+  assert.ok(fs.existsSync(path.join(SAMPLE_TARGETS, 'sample-console', 'player', 'CMakeLists.txt')));
+});
+
+test('a private target\'s cmake files stay inside its folder; a toolchain file is passed to CMake', () => {
+  const base = JSON.parse(fs.readFileSync(path.join(SAMPLE_TARGETS, 'sample-console', 'target.json'), 'utf8'));
+  for (const bad of ['../engine', '/abs/player', 'player/../../x', 'a\\..\\b', '']) {
+    assert.throws(() => validateDescriptor({ ...base, cmake: { ...base.cmake, sourceDir: bad } }, 'x'), /cmake\.sourceDir must be a path inside/, bad);
+  }
+  assert.throws(() => validateDescriptor({ ...base, cmake: { ...base.cmake, toolchainFile: '../t.cmake' } }, 'x'), /cmake\.toolchainFile/);
+  assert.throws(() => validateDescriptor({ ...base, cmake: { ...base.cmake, toolchain: 'emsdk', toolchainFile: 't.cmake' } }, 'x'), /cannot both/);
+  const folder = tmp('n2build-private-folder-');
+  write(path.join(folder, 'console-x', 'target.json'), { ...base, name: 'console-x', cmake: { ...base.cmake, toolchainFile: 'sdk/toolchain.cmake' } });
+  const descriptor = loadDescriptors(ENGINE_ROOT, [folder]).get('console-x');
+  const plan = planBuild({ engineRoot: ENGINE_ROOT, projectDir: makeProject({ name: 'Tri' }), descriptor, config: 'debug', modules: undefined,
+    present: new Set(), buildRoot: tmp('n2build-private-'), gameName: 'Tri' });
+  assert.ok(plan.configureArgs.includes(`-DCMAKE_TOOLCHAIN_FILE=${path.join(folder, 'console-x', 'sdk', 'toolchain.cmake')}`));
+  assert.ok(plan.configureArgs.includes(`-DN2ENGINE_EXTRA_TARGET_DIR=${path.join(folder, 'console-x', 'player')}`));
+});
+
+test('no engine source names a private target: the sample is added from outside, without editing the engine', () => {
+  const names = /sample[-_]console|SampleConsole/;
+  const offenders = [];
+  const scan = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) scan(full);
+      else if (/\.(c|cc|cpp|h|hpp|mm|cmake|txt|json|mjs|gradle)$/.test(entry.name) && names.test(fs.readFileSync(full, 'utf8'))) offenders.push(path.relative(ENGINE_ROOT, full));
+    }
+  };
+  for (const dir of ['engine', 'renderer', 'math', 'text', 'players', 'cmake', 'targets', 'web', path.join('tools', 'n2build', 'lib')]) scan(path.join(ENGINE_ROOT, dir));
+  if (names.test(fs.readFileSync(path.join(ENGINE_ROOT, 'CMakeLists.txt'), 'utf8'))) offenders.push('CMakeLists.txt');
+  assert.deepEqual(offenders, []);
 });
 
 // --- PhysX's GPU library only for GPU physics (follow-up of the build targets plan) ----------------------------------

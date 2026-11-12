@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Private targets · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="physics2d.html">2D physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="sprite2d.html">Sprites &amp; 2D shapes</a></li>
+<li><a href="particles.html">Particles</a></li>
+<li><a href="soft-bodies.html">Soft bodies</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+<li><a href="netcode.html">Netcode (n2net)</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+<li><a href="editor-extensions.html">Lua editor extensions</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="editor.html">Editor projects</a></li>
+<li><a href="mcp.html">MCP bridge (n2-mcp)</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+<li><a href="web-build.html">Web build</a></li>
+<li><a href="project-modules.html">Project modules</a></li>
+<li><a href="build-targets.html">Build targets</a></li>
+<li><a href="platform.html">The platform layer</a></li>
+<li><a href="packs.html">Packs &amp; the virtual filesystem</a></li>
+<li><a href="android.html">Android</a></li>
+<li><a href="apple.html">iOS &amp; macOS</a></li>
+<li><a href="private-targets.html" aria-current="page">Private targets</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Private targets</h1>
+<p class="lead">A private target is a target folder kept outside this repository, such as a console whose SDK cannot be public. It adds a target to n2build, with its own player, platform backend, renderer and toolchain, without changing a file of the engine. This repository holds only the mechanism and a neutral sample. This is stage 11 of the <a href="build-targets.html">build targets</a> plan <span class="badge">PR #TBD</span>.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#folder">The target folder</a></li>
+<li><a href="#code">Its code: player, backend, renderer</a></li>
+<li><a href="#sample">The sample</a></li>
+<li><a href="#rules">What stays out of this repository</a></li>
+</ol>
+</div>
+
+<h2 id="folder">The target folder</h2>
+<p>A folder of targets holds one subfolder per target, each with its <code>target.json</code> (<a href="build-targets.html#descriptors">descriptors</a>). n2build reads extra folders from three places:</p>
+<ul>
+<li>the <code>targetFolders</code> list in your <code>n2build.json</code>;</li>
+<li>the <code>N2BUILD_TARGET_DIRS</code> environment variable;</li>
+<li><code>--targets-dir</code>.</li>
+</ul>
+<p>A name that is already taken is an error that names both files, so a private target can never replace a public one silently. Two descriptor keys exist for private targets:</p>
+<table>
+<thead><tr><th>Key</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td><code>cmake.sourceDir</code></td><td>A folder inside the target's folder that holds a <code>CMakeLists.txt</code>. n2build passes it to the engine's configure as <code>N2ENGINE_EXTRA_TARGET_DIR</code>, and the root <code>CMakeLists.txt</code> adds it with the engine's targets in scope (<code>engine</code>, <code>renderer</code>, <code>MathCore::math</code>, <code>n2_player_options</code>).</td></tr>
+<tr><td><code>cmake.toolchainFile</code></td><td>The target SDK's CMake toolchain file, also inside the target's folder. It is passed as <code>CMAKE_TOOLCHAIN_FILE</code>.</td></tr>
+</tbody>
+</table>
+<p>Both must be relative paths without <code>..</code>: the target's files stay in its folder. <code>cmake.target</code> names the player the folder builds, and <code>package</code> works as for the desktop targets: a file list beside the player names what a package ships.</p>
+
+<h2 id="code">Its code: player, backend, renderer</h2>
+<ul>
+<li><strong>The player</strong> is the target's own <code>main</code>. It hands its platform backend to the window before the engine starts (<code>Window::SetPlatformHost</code>), as the Android and iOS players do.</li>
+<li><strong>The platform backend</strong> implements <code>Platform::IPlatformHost</code> (<a href="platform.html">the platform layer</a>). Its surface may be of kind <code>Custom</code>: the backend and its renderer agree on what the handle is.</li>
+<li><strong>The renderer:</strong> a backend that returns one from <code>IPlatformHost::CreateRenderer()</code> gets it instead of the configured renderer. It is initialised with <code>RenderSurface()</code> like any other. The default returns none, so the engine's own renderers are used. A backend can also keep the software renderer and take its frames as pixels (<code>Surface::presentPixels</code>).</li>
+</ul>
+<p class="src">Source: <code>engine/include/engine/platform/PlatformHost.hpp</code> — <code>CreateRenderer</code>; <code>engine/src/Window.cpp</code> — <code>InitWindow</code>; the root <code>CMakeLists.txt</code> — <code>N2ENGINE_EXTRA_TARGET_DIR</code></p>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>A platform that brings a renderer gets that renderer, whatever renderer was configured, and never starts GLFW (<code>PlatformHostTest.APlatformThatBringsItsOwnRendererGetsItInsteadOfTheConfiguredOne</code>). No engine source names a private target (an n2build test scans them).</p>
+</div>
+
+<h2 id="sample">The sample</h2>
+<p><code>samples/private-targets/sample-console</code> is a made-up console with a fixed 640×360 screen and no window system:</p>
+<ul>
+<li>Its backend takes each frame as pixels and prints a summary to stdout (frame number, size, and a hash of the pixels), where a real target would give the frame to its display API.</li>
+<li>It brings its own renderer, the software renderer under its own name.</li>
+<li>Its player uses the desktop player's start-up code, so it runs the same packages.</li>
+</ul>
+<pre class="lang-shell"><code>node tools/n2build/n2build.mjs list  --targets-dir samples/private-targets
+node tools/n2build/n2build.mjs build --targets-dir samples/private-targets --target sample-console --project lua_project
+node tools/n2build/n2build.mjs run   --targets-dir samples/private-targets --target sample-console --project lua_project --no-build --frames 90</code></pre>
+<p>CI builds and runs it in the Linux <code>n2build</code> job, and checks that the target's own renderer drew and that its frames reached the backend.</p>
+
+<h2 id="rules">What stays out of this repository</h2>
+<ul>
+<li>Every file of a real private target: its descriptor, player, backend, renderer, toolchain file and the SDK.</li>
+<li>Any name, header, API or code shape taken from a platform holder's SDK. The sample uses only the engine's own interfaces and generic names.</li>
+<li>Signing material and credentials: they follow the same rules as the public targets (<a href="android.html#signing">signing profiles</a>).</li>
+</ul>
+
+<div class="page-footer">
+<span>Describes the build targets branches through stage 11.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>

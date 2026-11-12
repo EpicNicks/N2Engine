@@ -48,6 +48,15 @@ export function validateDescriptor(raw, file) {
     }
   }
   if (raw.cmake?.toolchain !== undefined && raw.cmake.toolchain !== 'emsdk') fail("cmake.toolchain must be 'emsdk' when given");
+  // A private target's own code and toolchain (docs/private-targets.html): folders and files inside the target's folder
+  for (const key of ['sourceDir', 'toolchainFile']) {
+    const value = raw.cmake?.[key];
+    if (value === undefined) continue;
+    if (typeof value !== 'string' || value === '' || path.isAbsolute(value) || value.split(/[\\/]/).includes('..')) {
+      fail(`cmake.${key} must be a path inside the target's folder (relative, no ..)`);
+    }
+  }
+  if (raw.cmake?.toolchain !== undefined && raw.cmake?.toolchainFile !== undefined) fail('cmake.toolchain and cmake.toolchainFile cannot both be given');
 
   const physics3d = stringList(raw.physics3d ?? PHYSICS3D_VALUES, 'physics3d');
   for (const value of physics3d) {

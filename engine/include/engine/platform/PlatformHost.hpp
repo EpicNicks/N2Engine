@@ -15,6 +15,10 @@ namespace N2Engine::Input
     class InputDevice;
 }
 
+namespace Renderer::Common
+{
+    class IRenderer;
+}
 namespace N2Engine::Platform
 {
     /**
@@ -176,6 +180,12 @@ namespace N2Engine::Platform
         /// The device the input system reads (engine codes; InputDevice.hpp), or null when there is none
         [[nodiscard]] virtual Input::InputDevice *Input() = 0;
         [[nodiscard]] virtual HostPaths Paths() const = 0;
+
+        // ---- a platform's own renderer (build targets stage 11; docs/private-targets.html)
+        /// A renderer this platform brings itself (a private target's GPU API), used instead of the configured backend
+        /// (Config::ApplicationOptions::renderBackend) and initialised with RenderSurface() like any other. Null, the
+        /// default: the engine's own renderers. (Defined out of line, in HeadlessHost.cpp, where IRenderer is complete.)
+        [[nodiscard]] virtual std::unique_ptr<Renderer::Common::IRenderer> CreateRenderer();
     };
 
     /// The backends this build has. A host made for a platform that is not this one is null.
