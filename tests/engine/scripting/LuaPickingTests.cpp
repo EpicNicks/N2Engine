@@ -185,10 +185,11 @@ TEST_F(LuaPickingTest, RayAndScreenPointToRay)
     EXPECT_FLOAT_EQ(Eval<float>("Ray.new(Vector3(1, 2, 3), Vector3(0, 1, 0)).origin.x"), 1.0f);
     // origin and direction (and BoundingBox min and max) are properties: a field of the vector writes the ray, and the
     // vector can be replaced whole
-    EXPECT_FLOAT_EQ(Eval<float>("local r = Ray(Vector3(1, 2, 3), Vector3(0, 1, 0)); r.origin.x = 7; return r.origin.x"), 7.0f);
-    EXPECT_FLOAT_EQ(Eval<float>("local r = Ray(Vector3(1, 2, 3), Vector3(0, 1, 0)); r.direction = Vector3(0, 0, 1); return r:GetPoint(2).z"), 5.0f);
-    EXPECT_FLOAT_EQ(Eval<float>("local b = BoundingBox(Vector3(0, 0, 0), Vector3(2, 2, 2)); b.min.x = -2; return b:GetCenter().x"), 0.0f);
-    EXPECT_FLOAT_EQ(Eval<float>("local b = BoundingBox(Vector3(0, 0, 0), Vector3(2, 2, 2)); b.max = Vector3(4, 4, 4); return b:GetCenter().y"), 2.0f);
+    // (Eval returns an expression: each check is a function called on the spot)
+    EXPECT_FLOAT_EQ(Eval<float>("(function() local r = Ray(Vector3(1, 2, 3), Vector3(0, 1, 0)); r.origin.x = 7; return r.origin.x end)()"), 7.0f);
+    EXPECT_FLOAT_EQ(Eval<float>("(function() local r = Ray(Vector3(1, 2, 3), Vector3(0, 1, 0)); r.direction = Vector3(0, 0, 1); return r:GetPoint(2).z end)()"), 5.0f);
+    EXPECT_FLOAT_EQ(Eval<float>("(function() local b = BoundingBox(Vector3(0, 0, 0), Vector3(2, 2, 2)); b.min.x = -4; return b:GetCenter().x end)()"), -1.0f);
+    EXPECT_FLOAT_EQ(Eval<float>("(function() local b = BoundingBox(Vector3(0, 0, 0), Vector3(2, 2, 2)); b.max = Vector3(4, 4, 4); return b:GetCenter().y end)()"), 2.0f);
 
     Camera camera;
     camera.SetOrthographic(-4.0f, 4.0f, -3.0f, 3.0f, 0.1f, 100.0f);
