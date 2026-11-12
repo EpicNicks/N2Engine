@@ -7,6 +7,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
+#include <os/log.h>
 
 #include <chrono>
 #include <cstdint>
@@ -57,6 +58,10 @@ namespace
         const char *prefix = level == Logger::LogLevel::Error ? "error" : level == Logger::LogLevel::Warn ? "warning" : "info";
         std::fprintf(stdout, "N2Engine %s: %.*s\n", prefix, static_cast<int>(message.size()), message.data());
         std::fflush(stdout);
+        // The system log too (Console.app; log show/stream on the simulator), where it is kept whatever stdout is
+        const std::string text(message);
+        os_log_with_type(OS_LOG_DEFAULT, level == Logger::LogLevel::Error ? OS_LOG_TYPE_ERROR : OS_LOG_TYPE_DEFAULT,
+                         "N2Engine %{public}s: %{public}s", prefix, text.c_str());
     }
 
     /// "N2Engine iOS player: <frames> frames, <fps> fps" every five seconds of running, as the Android player logs
@@ -258,6 +263,7 @@ namespace
 - (void)viewDidAppear:(BOOL)animated
 {
     [super viewDidAppear:animated];
+    os_log(OS_LOG_DEFAULT, "N2Engine iOS player: the view appeared; starting the engine");
     if (!g_state.engineStarted && !g_state.engineFailed)
     {
         g_state.engineStarted = [self startEngine];

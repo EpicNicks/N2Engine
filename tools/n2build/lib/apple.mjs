@@ -91,10 +91,16 @@ export function pickSimulator(listJson) {
 }
 
 /**
- * Install and launch in the simulator, its console streamed as log events ("stream": "console") until the app exits or
- * `seconds` pass. `exec` (a whole-output runner) and `stream` (lib/adb.mjs's streamLines shape) are injectable for tests.
+ * Install and launch in the simulator, the game's log streamed as log events ("stream": "console") until the app exits or
+ * `seconds` pass. The player writes its log to the system log too (os_log, players/ios/src/IosMain.mm), and that is
+ * what is followed here: the simulator's `log stream` for the app's process, its "N2Engine" lines. Neither
+ * `simctl launch --console-pty` nor `--stdout=<file>` delivered the output reliably on CI runners while the app ran.
+ * Whether the app still runs: a simulator app is a process of this Mac, and simctl launch prints its pid (the simulator's
+ * launchctl list does not list apps). `exec` (a whole-output runner), `stream` (lib/adb.mjs's streamLines shape), `isAlive`
+ * (pid -> boolean) and `sleep` are injectable for tests.
  */
-export async function runInSimulator({ app, bundleId, env, reporter, seconds = null, exec, stream, sleep = (ms) => new Promise((r) => { setTimeout(r, ms); }) }) {
+export async function runInSimulator({ app, bundleId, env, reporter, seconds = null, exec, stream, isAlive = processAlive,
+  processName = IOS_APP_NAME.replace(/\.app$/, ''), sleep = (ms) => new Promise((r) => { setTimeout(r, ms); }) }) {
   const simctl = async (args, what) => {
     const result = await exec('xcrun', ['simctl', ...args], { env });
     if (result.code !== 0) throw new BuildError(`${what} failed: ${(result.stderr || result.stdout).trim().split(/\r?\n/).slice(-3).join(' ')}`);
@@ -106,26 +112,60 @@ export async function runInSimulator({ app, bundleId, env, reporter, seconds = n
     reporter.step('boot', `Booting the ${device.name} simulator`);
     await simctl(['boot', device.udid], 'Booting the simulator');
   }
+  // simctl boot returns before the system has finished starting: bootstatus -b waits until the device is ready
+  await simctl(['bootstatus', device.udid, '-b'], 'Waiting for the simulator to finish booting');
   reporter.step('install', `Installing ${path.basename(app)} on ${device.name}`);
   await simctl(['install', device.udid, app], 'Installing the app');
-  reporter.step('run', `Launching ${bundleId}; its console follows`);
-  let exited = false;
-  const console_ = stream('xcrun', ['simctl', 'launch', '--console-pty', '--terminate-running-process', device.udid, bundleId],
-    { env, onLine: (line) => reporter.log('console', line) });
-  console_.done.then(() => { exited = true; });
+
+  // The log stream starts before the launch, so the first lines are not missed
+  const log = stream('xcrun', ['simctl', 'spawn', device.udid, 'log', 'stream', '--style', 'compact', '--level', 'info',
+    '--predicate', `process == "${processName}" AND eventMessage BEGINSWITH "N2Engine"`], {
+    env,
+    onLine: (line) => {
+      const message = /\]\s+(N2Engine .*)$/.exec(line)?.[1];
+      if (message) reporter.log('console', message);
+    },
+  });
+  await sleep(1000);
+  reporter.step('run', `Launching ${bundleId}; its log follows`);
+  let launched;
+  try {
+    launched = await simctl(['launch', '--terminate-running-process', device.udid, bundleId], 'Launching the app');
+  } catch (error) {
+    log.stop();
+    await log.done;
+    throw error;
+  }
+  const pid = /:\s*(\d+)/.exec(launched.stdout)?.[1] ?? null;
+
   let waited = 0;
-  while (!exited && (seconds === null || waited < seconds * 1000)) {
+  let reason = 'time';
+  while (seconds === null || waited < seconds * 1000) {
     await sleep(500);
     waited += 500;
+    // Without a pid (simctl printed none) the run lasts until --seconds
+    if (waited % 2000 === 0 && pid !== null && !isAlive(Number(pid))) {
+      reason = 'exited';
+      break;
+    }
   }
-  const reason = exited ? 'exited' : 'time';
-  if (!exited) {
-    await exec('xcrun', ['simctl', 'terminate', device.udid, bundleId], { env });
-    console_.stop();
-  }
-  await console_.done;
-  return { device: device.udid, reason };
+  if (reason === 'time') await exec('xcrun', ['simctl', 'terminate', device.udid, bundleId], { env });
+  await sleep(1000); // the last lines through the log
+  log.stop();
+  await log.done;
+  return { device: device.udid, pid, reason };
 }
+
+/** Whether a process of this machine exists (signal 0 checks without sending; EPERM: it exists, it is not ours) */
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+
 
 /** A process's whole output (simctl's short commands) */
 export function captureProcess(command, args, { env }) {
