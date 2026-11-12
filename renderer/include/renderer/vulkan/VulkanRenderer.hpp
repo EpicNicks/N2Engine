@@ -14,7 +14,6 @@
 #include "renderer/common/Renderer.hpp"
 
 #include <vulkan/vulkan.h>
-#include <GLFW/glfw3.h>
 
 #include "renderer/common/IShader.hpp"
 #include "renderer/common/IMesh.hpp"
@@ -189,7 +188,7 @@ namespace Renderer
             /// (nullptr) there is no surface and no surface or swapchain extension. Returns false and leaves nothing
             /// allocated on any failure; see GetInitStatus. Initializing a renderer that is already initialized shuts it
             /// down first (destroying its surface before the new one is made).
-            bool Initialize(GLFWwindow* windowHandle, uint32_t width, uint32_t height) override;
+            bool Initialize(const Common::Surface &surface, uint32_t width, uint32_t height) override;
             /// Destroys every Vulkan object and expires the lifetime token. Safe to call twice, or without Initialize
             void Shutdown() override;
             /// Sets the size of the offscreen target, unless SetRenderTargetSize fixed it (then ignored); a 0 changes
@@ -580,7 +579,8 @@ namespace Renderer
             bool _initialized = false;
 
             // The window (stage F): the handle is used only for glfwGetFramebufferSize
-            GLFWwindow* _window = nullptr;
+            /// The window and its Vulkan operations (the platform's); none: headless
+            Common::Surface _window;
             VkSurfaceKHR _surface = VK_NULL_HANDLE;
             std::unique_ptr<SwapchainState> _swapchain; // never null; empty without a surface
             std::vector<GPUInfo> _gpus;                  // GetCompatibleGPUs, filled by PickPhysicalDevice

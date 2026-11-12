@@ -8,6 +8,8 @@
 #include <string>
 #include <string_view>
 
+#include <renderer/common/Surface.hpp>
+
 namespace N2Engine::Input
 {
     class InputDevice;
@@ -137,6 +139,9 @@ namespace N2Engine::Platform
         virtual bool CreateSurface(const SurfaceOptions &options) = 0;
         virtual void DestroySurface() = 0;
         [[nodiscard]] virtual NativeSurface Surface() const = 0;
+        /// The surface as a renderer takes it (build targets stage 7): the native handle and the window system's
+        /// operations the renderers need (an OpenGL context, a Vulkan surface, the size in pixels). None: draw offscreen.
+        [[nodiscard]] virtual Renderer::Common::Surface RenderSurface() const { return {}; }
         [[nodiscard]] virtual std::string LastError() const = 0;
         /// The surface's size in pixels (the framebuffer), and the scale from window units to pixels
         [[nodiscard]] virtual int SurfaceWidth() const = 0;

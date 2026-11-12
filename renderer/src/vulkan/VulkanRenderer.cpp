@@ -376,7 +376,7 @@ bool VulkanRenderer::WantsValidation(bool& required) const
 #endif
 }
 
-bool VulkanRenderer::Initialize(GLFWwindow* windowHandle, uint32_t width, uint32_t height)
+bool VulkanRenderer::Initialize(const Common::Surface &surface, uint32_t width, uint32_t height)
 {
     std::lock_guard lock(_mutex);
 
@@ -393,7 +393,7 @@ bool VulkanRenderer::Initialize(GLFWwindow* windowHandle, uint32_t width, uint32
     _targetFixed = false;
     // Frames always render offscreen; a window (stage F) also gets a surface and a swapchain, and its handle is kept only
     // for glfwGetFramebufferSize. Without one (and without the test-only headless surface) nothing of that is made
-    _window = windowHandle;
+    _window = surface;
     if (_vsyncSetting)
     {
         _vsync = *_vsyncSetting;
@@ -536,20 +536,18 @@ bool VulkanRenderer::CreateInstance()
     };
     // A window needs the surface extensions GLFW names for this platform (VK_KHR_surface and the platform's own); the
     // test-only headless surface needs VK_KHR_surface and VK_EXT_headless_surface; the headless path enables neither
-    if (_window != nullptr)
+    if (_window.HasWindow())
     {
-        if (glfwVulkanSupported() != GLFW_TRUE)
+        // The platform names them (GLFW's glfwGetRequiredInstanceExtensions on the desktop); none means it has no Vulkan
+        const std::vector<const char *> required =
+            _window.vulkanInstanceExtensions ? _window.vulkanInstanceExtensions() : std::vector<const char *>{};
+        if (required.empty() || !_window.createVulkanSurface)
         {
-            return Fail(InitStatus::NoSurface, "GLFW cannot reach a Vulkan loader (glfwVulkanSupported is false), so the "
-                                               "window cannot get a Vulkan surface");
+            return Fail(InitStatus::NoSurface, "the window cannot get a Vulkan surface (the platform names no Vulkan "
+                                               "instance extensions: no Vulkan loader, or no Vulkan support)");
         }
-        uint32_t count = 0;
-        const char** names = glfwGetRequiredInstanceExtensions(&count);
-        if (names == nullptr || count == 0)
-        {
-            return Fail(InitStatus::NoSurface, "GLFW names no Vulkan instance extensions for windows on this platform "
-                                               "(glfwGetRequiredInstanceExtensions)");
-        }
+        const char *const *names = required.data();
+        const auto count = static_cast<uint32_t>(required.size());
         for (uint32_t i = 0; i < count; ++i)
         {
             if (!availableExtensions.contains(names[i]))
@@ -1370,7 +1368,7 @@ void VulkanRenderer::ShutdownLocked()
     _draw = std::make_unique<DrawState>(); // materials and the rest of the CPU-side state go with the device
     _swapchain = std::make_unique<SwapchainState>();
     _surface = VK_NULL_HANDLE;
-    _window = nullptr;
+    _window = Common::Surface();
     _gpus.clear();
     _debugMessenger = VK_NULL_HANDLE;
     _instance = VK_NULL_HANDLE;

@@ -5,7 +5,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
+#include <utility>
+#include <vector>
 
+#if N2ENGINE_RENDERER_VULKAN
+// glfwCreateWindowSurface is declared only with Vulkan's types
+#include <vulkan/vulkan.h>
+#endif
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
@@ -110,6 +117,51 @@ namespace N2Engine::Platform
                     return {};
                 }
                 return {NativeSurface::Kind::GlfwWindow, _window, nullptr, SurfaceWidth(), SurfaceHeight()};
+            }
+
+            Renderer::Common::Surface RenderSurface() const override
+            {
+                Renderer::Common::Surface surface;
+                if (!_window)
+                {
+                    return surface;
+                }
+                GLFWwindow *window = _window;
+                surface.kind = Renderer::Common::Surface::Kind::DesktopWindow;
+                surface.handle = window;
+                // A window made with an OpenGL context (the OpenGL and software renderers) presents through it
+                if (glfwGetWindowAttrib(window, GLFW_CLIENT_API) != GLFW_NO_API)
+                {
+                    surface.makeContextCurrent = [window] { glfwMakeContextCurrent(window); };
+                    surface.getProcAddress = [](const char *name) { return reinterpret_cast<void *>(glfwGetProcAddress(name)); };
+                    surface.swapBuffers = [window] { glfwSwapBuffers(window); };
+                }
+#if N2ENGINE_RENDERER_VULKAN
+                surface.vulkanInstanceExtensions = [] {
+                    std::vector<const char *> names;
+                    if (glfwVulkanSupported() != GLFW_TRUE)
+                    {
+                        return names; // no Vulkan loader: the renderer refuses the window
+                    }
+                    uint32_t count = 0;
+                    const char **required = glfwGetRequiredInstanceExtensions(&count);
+                    if (required != nullptr)
+                    {
+                        names.assign(required, required + count);
+                    }
+                    return names;
+                };
+                surface.createVulkanSurface = [window](void *instance, void *surfaceOut) {
+                    return static_cast<int>(glfwCreateWindowSurface(static_cast<VkInstance>(instance), window, nullptr,
+                                                                    static_cast<VkSurfaceKHR *>(surfaceOut)));
+                };
+#endif
+                surface.framebufferSize = [window] {
+                    int width = 0, height = 0;
+                    glfwGetFramebufferSize(window, &width, &height);
+                    return std::pair<int, int>{width, height};
+                };
+                return surface;
             }
 
             std::string LastError() const override { return _error; }
