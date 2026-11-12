@@ -890,7 +890,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install MoltenVK, the Vulkan loader and headers, glslang, Ninja
-        run: brew install ninja molten-vk vulkan-loader vulkan-headers glslang || true
+        run: brew install ninja molten-vk vulkan-loader vulkan-headers vulkan-tools glslang || true
 
       - name: Configure and build renderer_tests with the Vulkan renderer
         id: build
@@ -911,9 +911,20 @@ jobs:
         run: |
           set +e
           export VK_ICD_FILENAMES="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
+          # What the loader sees (vulkan-tools' vulkaninfo): the device MoltenVK reports, or why there is none
+          vulkaninfo --summary 2>&1 | head -40
           ./build/bin/renderer_tests --gtest_filter='Vulkan*' --gtest_brief=0 > vulkan-tests.log 2>&1
           echo "exit=$?" > vulkan-tests.exit
-          grep -E "^\[  (PASSED|FAILED|SKIPPED) |\[ vulkan \]" vulkan-tests.log | head -80
+          # Why tests skip: each skip's message (the line after "Skipped"), counted
+          grep -A1 -E "Skipped$" vulkan-tests.log | grep -vE "Skipped$|^--$" | sort | uniq -c | sort -rn | head -20
+          grep -E "^\[  (PASSED|FAILED) |\[ vulkan \]|^\[  FAILED  \]" vulkan-tests.log | head -40
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: metal-spike-vulkan-tests
+          path: vulkan-tests.log
+          if-no-files-found: ignore
 
       - name: Summary
         if: always()
