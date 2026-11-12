@@ -2,7 +2,8 @@
 //
 // JSON events (docs/build-targets.html#json):
 //   {"type":"step","id":"configure","title":"..."}            a phase starts
-//   {"type":"log","stream":"stdout"|"stderr","text":"..."}    a line from a tool n2build runs
+//   {"type":"log","stream":"stdout"|"stderr"|"logcat","text":"..."}  a line from a tool n2build runs; logcat is the game
+//                                                             running on an Android device (docs/android.html#run)
 //   {"type":"warning","text":"..."}                           something the user should know, not a failure
 //   {"type":"doctor","target":"...","ok":bool,"checks":[...]} a doctor report (also printed before a build)
 //   {"type":"targets","targets":[...]}                         the list command
@@ -14,8 +15,32 @@ export class Reporter {
    */
   constructor({ json = false, out, err } = {}) {
     this.json = json;
-    this.out = out ?? ((line) => process.stdout.write(`${line}\n`));
-    this.err = err ?? ((line) => process.stderr.write(`${line}\n`));
+    this.secrets = [];
+    const rawOut = out ?? ((line) => process.stdout.write(`${line}\n`));
+    const rawErr = err ?? ((line) => process.stderr.write(`${line}\n`));
+    // Every line goes out through redact: a signing password a tool echoes never reaches a log (docs/android.html#signing)
+    this.out = (line) => rawOut(this.redact(line));
+    this.err = (line) => rawErr(this.redact(line));
+  }
+
+  /** A value that must never be printed (a signing password): from now on every line shows it as **** */
+  addSecret(value) {
+    if (typeof value === 'string' && value.length > 0 && !this.secrets.includes(value)) {
+      this.secrets.push(value);
+      this.secrets.sort((a, b) => b.length - a.length); // the longest first, so one secret inside another is fully hidden
+    }
+  }
+
+  redact(line) {
+    let text = String(line);
+    // Longest first, each in both spellings (JSON escapes a password with " or \ in it), so a shorter secret never breaks
+    // up a longer one before it is hidden
+    for (const secret of this.secrets) {
+      const escaped = JSON.stringify(secret).slice(1, -1);
+      if (escaped !== secret) text = text.split(escaped).join('****');
+      text = text.split(secret).join('****');
+    }
+    return text;
   }
 
   emit(event) {

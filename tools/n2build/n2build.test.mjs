@@ -17,6 +17,8 @@ import {
   androidSettings, cmakeInstallDir, defaultAppId, gradleInvocation, isAppId, packageAndroid, planAndroid, prepareGradleTree, propertiesPath,
 } from './lib/android.mjs';
 import { BuildError, Reporter } from './lib/report.mjs';
+import { ACTIVITY, findAdb, parseDevices, pickDevice, runOnDevice } from './lib/adb.mjs';
+import { ANDROID_SIGNING_ENV, androidSigningEnv, resolveAndroidSigning, signingProfileName, withoutSigningEnv } from './lib/signing.mjs';
 import { MANIFEST_NAME, cookPack, crc32, findSevenZip, packFiles, writeZip } from './lib/cook.mjs';
 import { resolveRequest } from './lib/serve.mjs';
 import { applyEnv, checkToolchains, commandInvocation, findOnPath, parseVersion, versionAtLeast } from './lib/toolchains.mjs';
@@ -819,8 +821,13 @@ test('the android package: the APK named after the game, -unsigned when it is no
   write(apk, 'PK');
   const packageDir = path.join(dir, 'out');
   fs.mkdirSync(packageDir);
-  assert.equal(packageAndroid({ plan: { apk, signed: false }, packageDir, gameName: 'Tri Like!' }), 'Tri Like_-unsigned.apk');
-  assert.equal(packageAndroid({ plan: { apk, signed: true }, packageDir, gameName: 'Tri' }), 'Tri.apk');
+  assert.deepEqual(packageAndroid({ plan: { apk, signed: false }, packageDir, gameName: 'Tri Like!' }), { apk: 'Tri Like_-unsigned.apk', aab: null });
+  assert.deepEqual(packageAndroid({ plan: { apk, signed: true }, packageDir, gameName: 'Tri' }), { apk: 'Tri.apk', aab: null });
+  const aab = path.join(dir, 'app-release.aab');
+  write(aab, 'PK');
+  assert.deepEqual(packageAndroid({ plan: { apk, aab, signed: true }, packageDir, gameName: 'Tri' }), { apk: 'Tri.apk', aab: 'Tri.aab' });
+  assert.ok(fs.existsSync(path.join(packageDir, 'Tri.aab')));
+  assert.throws(() => packageAndroid({ plan: { apk, aab: path.join(dir, 'none.aab'), signed: true }, packageDir, gameName: 'Tri' }), /did not produce the AAB/);
   assert.throws(() => packageAndroid({ plan: { apk: path.join(dir, 'none.apk'), signed: true }, packageDir, gameName: 'Tri' }), /Gradle did not produce/);
 });
 
@@ -837,6 +844,220 @@ test('build --target android --dry-run prints the Gradle command, and refuses --
   const refused = capture();
   assert.equal(await main(['build', '--target', 'android', '--project', projectDir, '--pack', 'folder', '--dry-run', '--json'], { ctx: androidProbe(), reporter: refused.reporter }), 1);
   assert.match(refused.lines.at(-1).error, /one pack/);
+});
+
+// --- Android deploy (build targets stage 9) ------------------------------------------------------------------------
+
+const KEYSTORE = path.resolve('/keys/game.jks');
+const PASSWORD_FILE = path.resolve('/keys/key.pass');
+
+function signingSettings(android) {
+  return { signingProfiles: { release: { android: { keystore: KEYSTORE, keyAlias: 'upload', ...android } } } };
+}
+
+const signingIo = (env = {}, files = {}) => ({
+  env,
+  exists: (file) => file === KEYSTORE || Object.hasOwn(files, file),
+  readFile: (file) => (Object.hasOwn(files, file) ? files[file] : null),
+});
+
+test('the signing profile name: --signing, else the project, else none; a bad name is refused', () => {
+  assert.equal(signingProfileName({}, {}), null);
+  assert.equal(signingProfileName({}, { signing: { profile: 'release' } }), 'release');
+  assert.equal(signingProfileName({ signing: 'play' }, { signing: { profile: 'release' } }), 'play');
+  assert.throws(() => signingProfileName({ signing: 'a b' }, {}), /profile name/);
+});
+
+test('a signing profile: passwords from text, the environment or a file; the key password defaults to the store one', () => {
+  const fromEnv = resolveAndroidSigning('release', signingSettings({ storePassword: { env: 'STORE_PW' } }), signingIo({ STORE_PW: 's3cret' }));
+  assert.deepEqual(fromEnv, { profile: 'release', storeFile: KEYSTORE, keyAlias: 'upload', storePassword: 's3cret', keyPassword: 's3cret' });
+  const fromFile = resolveAndroidSigning('release', signingSettings({ storePassword: 'text', keyPassword: { file: PASSWORD_FILE } }),
+    signingIo({}, { [PASSWORD_FILE]: 'k3y\nsecond line ignored\n' }));
+  assert.equal(fromFile.keyPassword, 'k3y');
+  assert.equal(fromFile.storePassword, 'text');
+});
+
+test('a signing profile that is missing or wrong is refused with the reason, never a password', () => {
+  const io = signingIo({ STORE_PW: 'hunter2' });
+  const fails = (settings, pattern, name = 'release', ioOverride = io) => {
+    assert.throws(() => resolveAndroidSigning(name, settings, ioOverride), (error) => {
+      assert.ok(error instanceof BuildError);
+      assert.match(error.message, pattern);
+      assert.ok(!error.message.includes('hunter2'), error.message);
+      return true;
+    });
+  };
+  fails({}, /"release", which is not in your settings/);
+  fails(signingSettings({ storePassword: { env: 'STORE_PW' } }), /"play", which is not/, 'play');
+  fails({ signingProfiles: { release: {} } }, /no "android" part/);
+  fails(signingSettings({ storePassword: { env: 'NOT_SET' } }), /NOT_SET is not set/);
+  fails(signingSettings({ storePassword: { env: 'STORE_PW' }, keystore: 'relative.jks' }), /absolute path/);
+  fails(signingSettings({ storePassword: { env: 'STORE_PW' }, keystore: path.resolve('/keys/missing.jks') }), /does not exist/);
+  fails(signingSettings({ storePassword: { env: 'STORE_PW' }, keyAlias: '' }), /keyAlias/);
+  fails(signingSettings({ storePassword: { file: PASSWORD_FILE } }), /cannot be read/);
+  fails(signingSettings({ storePassword: { file: 'relative.pass' } }), /absolute path/);
+  fails(signingSettings({ storePassword: { env: 'STORE_PW', file: PASSWORD_FILE } }), /must be a string/);
+  fails(signingSettings({ storePassword: '' }), /is empty/);
+  fails(signingSettings({ storePassword: 'x', certificate: 'y' }), /unknown key "certificate"/);
+});
+
+test('signing reaches Gradle in its environment only, and nothing else gets it', () => {
+  const signing = { storeFile: KEYSTORE, keyAlias: 'upload', storePassword: 'a', keyPassword: 'b' };
+  const env = androidSigningEnv(signing);
+  assert.deepEqual(env, { [ANDROID_SIGNING_ENV.storeFile]: KEYSTORE, [ANDROID_SIGNING_ENV.storePassword]: 'a',
+    [ANDROID_SIGNING_ENV.keyAlias]: 'upload', [ANDROID_SIGNING_ENV.keyPassword]: 'b' });
+  assert.deepEqual(withoutSigningEnv({ PATH: '/bin', ...env }), { PATH: '/bin' });
+  const gradle = fs.readFileSync(path.join(ENGINE_ROOT, 'players', 'android', 'app', 'build.gradle'), 'utf8');
+  for (const name of Object.values(ANDROID_SIGNING_ENV)) assert.ok(gradle.includes(`signingEnv('${name}')`), `build.gradle reads ${name}`);
+  assert.ok(!/findProperty\(["']n2\.(store|key)/i.test(gradle), 'no signing value comes from a -P property');
+});
+
+test('the reporter hides a secret in every line, JSON-escaped spellings included', () => {
+  const { reporter, lines } = capture();
+  reporter.addSecret('pa"ss\\word');
+  reporter.addSecret('pa');
+  reporter.log('stdout', 'storePassword=pa"ss\\word and pa');
+  reporter.warning('pa');
+  reporter.result({ ok: false, error: 'bad pa"ss\\word' });
+  const text = lines.map((l) => JSON.stringify(l)).join('\n');
+  assert.ok(!text.includes('pa"ss') && !text.includes('ss\\\\word') && !/\bpa\b/.test(text), text);
+  assert.equal(lines[0].text, 'storePassword=**** and ****');
+  const human = [];
+  const plain = new Reporter({ out: (l) => human.push(l), err: (l) => human.push(l) });
+  plain.addSecret('topsecret');
+  plain.log('stderr', 'echo topsecret');
+  assert.deepEqual(human, ['echo ****']);
+});
+
+test('a release plan with a profile signs the APK and builds the AAB; without one it is unsigned and has no AAB', () => {
+  const projectDir = makeProject({ name: 'Tri' });
+  const base = { engineRoot: ENGINE_ROOT, projectDir, descriptor: androidDescriptor(), modules: undefined, buildRoot: tmp('n2build-android-'),
+    gameName: 'Tri', settings: {}, info: { androidSdk: '/sdk', androidNdk: '27.0.12077973' }, cmakeDir: '/usr' };
+  const signed = planAndroid({ ...base, config: 'release', signingProfile: 'release' });
+  assert.deepEqual(signed.tasks, ['assembleRelease', 'bundleRelease']);
+  assert.ok(signed.apk.endsWith(path.join('apk', 'release', 'app-release.apk')));
+  assert.ok(signed.aab.endsWith(path.join('bundle', 'release', 'app-release.aab')));
+  assert.equal(signed.signed, true);
+  assert.equal(signed.signingProfile, 'release');
+  assert.ok(!signed.gradleArgs.some((a) => /keystore|password|\.jks/i.test(a)), 'no signing detail on the command line');
+  const unsigned = planAndroid({ ...base, config: 'release' });
+  assert.deepEqual(unsigned.tasks, ['assembleRelease']);
+  assert.equal(unsigned.aab, null);
+  assert.equal(unsigned.signed, false);
+  const debug = planAndroid({ ...base, config: 'debug', signingProfile: 'release' });
+  assert.deepEqual(debug.tasks, ['assembleDebug']);
+  assert.equal(debug.signingProfile, null, 'a debug build uses the debug key');
+});
+
+test('build --dry-run names the signing profile without reading it', async () => {
+  const projectDir = makeProject({ name: 'Tri', build: { targets: { android: { signing: { profile: 'release' } } } } });
+  const { reporter, lines } = capture();
+  const code = await main(['build', '--target', 'android', '--project', projectDir, '--dry-run', '--json'], { ctx: androidProbe(), reporter });
+  assert.equal(code, 0, JSON.stringify(lines.at(-1)));
+  const logs = lines.filter((l) => l.type === 'log').map((l) => l.text);
+  assert.ok(logs.some((t) => t.includes('assembleRelease') && t.includes('bundleRelease')), logs.join('\n'));
+  assert.ok(logs.includes('signing: the profile "release" (read when the build runs)'));
+  assert.ok(logs.some((t) => t.startsWith('aab: ')));
+});
+
+test('a build whose signing profile is missing fails before anything is built', async () => {
+  const projectDir = makeProject({ name: 'Tri', build: { targets: { android: { signing: { profile: 'release' } } } } });
+  const { reporter, lines } = capture();
+  const home = tmp('n2build-home-');
+  const code = await main(['build', '--target', 'android', '--project', projectDir, '--build-dir', tmp('n2build-tree-'), '--json'],
+    { ctx: androidProbe({ env: { HOME: home, XDG_DATA_HOME: path.join(home, 'data') } }), reporter });
+  assert.equal(code, 1);
+  assert.match(lines.at(-1).error, /signing profile "release", which is not in your settings/);
+});
+
+test('adb: the SDK\'s adb, the device list, and which device a run uses', () => {
+  assert.equal(findAdb('/sdk', { platform: 'linux', exists: (f) => f === '/sdk/platform-tools/adb' }), '/sdk/platform-tools/adb');
+  assert.equal(findAdb('C:\\sdk', { platform: 'win32', exists: (f) => f === 'C:\\sdk\\platform-tools\\adb.exe' }), 'C:\\sdk\\platform-tools\\adb.exe');
+  assert.equal(findAdb(null, { platform: 'linux', exists: () => true }), null);
+  const devices = parseDevices([
+    '* daemon not running; starting now at tcp:5037', 'List of devices attached',
+    'R5CT1234\tdevice usb:1-1 product:a54 model:SM_A546B device:a54x transport_id:2',
+    'emulator-5554   device product:sdk_gphone64_x86_64 model:sdk_gphone64_x86_64 device:emu64x transport_id:1',
+    'ZY22\tunauthorized usb:1-2 transport_id:3', '',
+  ].join('\r\n'));
+  assert.deepEqual(devices, [
+    { serial: 'R5CT1234', state: 'device', model: 'SM_A546B' },
+    { serial: 'emulator-5554', state: 'device', model: 'sdk_gphone64_x86_64' },
+    { serial: 'ZY22', state: 'unauthorized', model: null },
+  ]);
+  assert.throws(() => pickDevice(devices), /Several devices are attached: choose one with --device \(R5CT1234 \(SM_A546B\), emulator-5554/);
+  assert.equal(pickDevice(devices, 'emulator-5554').serial, 'emulator-5554');
+  assert.throws(() => pickDevice(devices, 'ZY22'), /unauthorized: accept the USB debugging prompt/);
+  assert.throws(() => pickDevice(devices, 'nope'), /No device nope is attached/);
+  assert.equal(pickDevice(devices.slice(0, 1)).serial, 'R5CT1234');
+  assert.throws(() => pickDevice([]), /No Android device is attached/);
+  assert.throws(() => pickDevice(devices.slice(2)), /ZY22 is unauthorized/);
+});
+
+/** A fake adb: answers each command, records them; the game's process lives for `alive` pidof calls */
+function fakeAdb({ alive = 3, install = { code: 0, stdout: 'Success', stderr: '' } } = {}) {
+  const calls = [];
+  let pidofCalls = 0;
+  const exec = async (adb, args) => {
+    calls.push(args.slice(2).join(' '));
+    if (args[2] === 'install') return install;
+    if (args.includes('pidof')) {
+      pidofCalls += 1;
+      return pidofCalls <= alive ? { code: 0, stdout: '4242\n', stderr: '' } : { code: 1, stdout: '', stderr: '' };
+    }
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  let stopped = false;
+  const stream = (adb, args, { onLine }) => {
+    calls.push(args.slice(2).join(' '));
+    onLine('I/N2Engine( 4242): N2Engine Android player: first frame');
+    return { stop: () => { stopped = true; }, done: Promise.resolve() };
+  };
+  return { calls, exec, stream, wasStopped: () => stopped };
+}
+
+test('runOnDevice: install, start, the game\'s logcat as log events, until its process ends', async () => {
+  const adb = fakeAdb({ alive: 3 });
+  const { reporter, lines } = capture();
+  const outcome = await runOnDevice({ adb: 'adb', apk: path.join('out', 'Tri.apk'), appId: 'com.example.tri', device: { serial: 'emulator-5554', state: 'device', model: null },
+    env: {}, reporter, exec: adb.exec, stream: adb.stream, sleep: async () => {} });
+  assert.deepEqual(outcome, { pid: '4242', reason: 'exited' });
+  assert.deepEqual(adb.calls.slice(0, 4), [`install -r ${path.join('out', 'Tri.apk')}`, 'logcat -c', `shell am start -W -n com.example.tri/${ACTIVITY}`, 'shell pidof com.example.tri']);
+  assert.ok(adb.calls.includes('logcat -v brief --pid=4242'));
+  assert.ok(adb.wasStopped());
+  assert.deepEqual(lines.filter((l) => l.type === 'log').map((l) => [l.stream, l.text]), [['logcat', 'I/N2Engine( 4242): N2Engine Android player: first frame']]);
+  assert.deepEqual(lines.filter((l) => l.type === 'step').map((l) => l.id), ['install', 'run', 'logcat']);
+});
+
+test('runOnDevice: --seconds stops the game; a failed install is an error with adb\'s reason', async () => {
+  const adb = fakeAdb({ alive: 1000 });
+  let clock = 0;
+  const outcome = await runOnDevice({ adb: 'adb', apk: 'Tri.apk', appId: 'com.example.tri', device: { serial: 's', state: 'device' }, env: {},
+    reporter: capture().reporter, seconds: 5, exec: adb.exec, stream: adb.stream, sleep: async (ms) => { clock += ms; }, now: () => clock });
+  assert.equal(outcome.reason, 'time');
+  assert.ok(adb.calls.includes('shell am force-stop com.example.tri'));
+
+  const refused = fakeAdb({ install: { code: 1, stdout: 'Performing Streamed Install\nadb: failed to install Tri.apk: Failure [INSTALL_PARSE_FAILED_NO_CERTIFICATES]', stderr: '' } });
+  await assert.rejects(runOnDevice({ adb: 'adb', apk: 'Tri.apk', appId: 'com.example.tri', device: { serial: 's', state: 'device' }, env: {},
+    reporter: capture().reporter, exec: refused.exec, stream: refused.stream, sleep: async () => {} }), /adb install failed: .*INSTALL_PARSE_FAILED_NO_CERTIFICATES/);
+});
+
+test('run --target android refuses an unsigned package, and picks the device through adb', async () => {
+  const packageDir = tmp('n2build-apk-run-');
+  write(path.join(packageDir, '.n2build-package.json'), { target: 'android', config: 'release', entry: 'Tri-unsigned.apk', appId: 'com.example.tri', signed: false });
+  const projectDir = makeProject({ name: 'Tri' });
+  const unsigned = capture();
+  assert.equal(await main(['run', '--target', 'android', '--project', projectDir, '--out', packageDir, '--no-build', '--json'], { ctx: androidProbe(), reporter: unsigned.reporter }), 1);
+  assert.match(unsigned.lines.at(-1).error, /unsigned, and Android installs only signed APKs/);
+
+  write(path.join(packageDir, '.n2build-package.json'), { target: 'android', config: 'debug', entry: 'Tri.apk', appId: 'com.example.tri', signed: true });
+  const adb = fakeAdb({ alive: 2 });
+  const ctx = androidProbe({ files: ['/sdk/platform-tools/adb'], commands: { adb: 'List of devices attached\nemulator-5554\tdevice model:emu\n' } });
+  ctx.adb = { exec: adb.exec, stream: adb.stream, sleep: async () => {} };
+  const ran = capture();
+  assert.equal(await main(['run', '--target', 'android', '--project', projectDir, '--out', packageDir, '--no-build', '--json'], { ctx, reporter: ran.reporter }), 0, JSON.stringify(ran.lines.at(-1)));
+  assert.deepEqual(ran.lines.at(-1), { type: 'result', ok: true, output: packageDir, device: 'emulator-5554', pid: '4242', ended: 'exited' });
+  assert.ok(adb.calls[0].startsWith('install -r ') && adb.calls[0].endsWith('Tri.apk'));
 });
 
 // --- PhysX's GPU library only for GPU physics (follow-up of the build targets plan) ----------------------------------

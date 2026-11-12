@@ -66,10 +66,28 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
+    // n2build's signing profile (docs/android.html#signing), resolved from the user's n2build.json when the build runs and
+    // handed to this process in its environment only: never a -P property (a command line is visible to other programs),
+    // never a file in the build tree. Without it a release build is unsigned
+    def signingEnv = { String name -> System.getenv(name) }
+    def profileKeystore = signingEnv('N2_SIGNING_STORE_FILE')
+    signingConfigs {
+        if (profileKeystore) {
+            n2profile {
+                storeFile file(profileKeystore)
+                storePassword signingEnv('N2_SIGNING_STORE_PASSWORD')
+                keyAlias signingEnv('N2_SIGNING_KEY_ALIAS')
+                keyPassword signingEnv('N2_SIGNING_KEY_PASSWORD')
+            }
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
-            // Signed by n2build's signing profile at build time (stage 9); unsigned until then
+            if (profileKeystore) {
+                signingConfig signingConfigs.n2profile
+            }
         }
     }
 }
