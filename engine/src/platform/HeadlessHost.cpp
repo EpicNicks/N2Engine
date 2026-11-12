@@ -4,6 +4,9 @@
 // Mouse::InjectPointer, Touchscreen); a lifecycle event is whatever the program hands in (Post, for tests).
 #include "engine/platform/PlatformHost.hpp"
 
+// IRenderer complete for CreateRenderer's default (before anything that may include GLFW: glad comes first)
+#include <renderer/common/Renderer.hpp>
+
 #include "platform/DesktopGlfwHost.hpp"
 
 namespace N2Engine::Platform
@@ -77,6 +80,11 @@ namespace N2Engine::Platform
     std::unique_ptr<IPlatformHost> MakeHeadlessHost(HostPaths paths)
     {
         return std::make_unique<HeadlessHost>(std::move(paths));
+    }
+
+    std::unique_ptr<Renderer::Common::IRenderer> IPlatformHost::CreateRenderer()
+    {
+        return nullptr; // the engine's own renderers
     }
 
     bool PostLifecycleEvent(IPlatformHost &host, const LifecycleEvent event)

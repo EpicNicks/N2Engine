@@ -149,6 +149,12 @@ export function resolveOptions(descriptor, config, present) {
   return options;
 }
 
+/** A path inside a target's folder (the descriptor's cmake.sourceDir or toolchainFile), absolute */
+export function privatePath(descriptor, relative) {
+  if (!descriptor.dir) throw new BuildError(`The ${descriptor.name} target names cmake files but was not loaded from a folder`);
+  return path.resolve(descriptor.dir, relative);
+}
+
 /** Every path and command of a build, decided before anything runs (printed by --dry-run) */
 export function planBuild({ engineRoot, projectDir, descriptor, config, modules, present, toolchainFile, buildRoot, outDir, jobs, gameName, packFormat, extraConfigureArgs = [] }) {
   const options = resolveOptions(descriptor, config, present);
@@ -167,6 +173,9 @@ export function planBuild({ engineRoot, projectDir, descriptor, config, modules,
     if (!toolchainFile) throw new BuildError('The Emscripten toolchain file was not found (see n2build doctor)');
     configureArgs.push(`-DCMAKE_TOOLCHAIN_FILE=${toolchainFile}`);
   }
+  // A private target (docs/private-targets.html): its toolchain file and its own CMake folder, from its target folder
+  if (descriptor.cmake.toolchainFile) configureArgs.push(`-DCMAKE_TOOLCHAIN_FILE=${privatePath(descriptor, descriptor.cmake.toolchainFile)}`);
+  if (descriptor.cmake.sourceDir) configureArgs.push(`-DN2ENGINE_EXTRA_TARGET_DIR=${privatePath(descriptor, descriptor.cmake.sourceDir)}`);
   for (const [name, value] of Object.entries(options).sort(([a], [b]) => a.localeCompare(b))) {
     configureArgs.push(`-D${name}=${value}`);
   }

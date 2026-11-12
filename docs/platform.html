@@ -68,6 +68,7 @@
 <li><a href="packs.html">Packs &amp; the virtual filesystem</a></li>
 <li><a href="android.html">Android</a></li>
 <li><a href="apple.html">iOS &amp; macOS</a></li>
+<li><a href="private-targets.html">Private targets</a></li>
 </ul>
 </div>
 </nav>
@@ -90,6 +91,7 @@
 <tr><td>The loop</td><td><code>OwnsLoop()</code>: false where the engine runs its own loop (desktop, headless); true where the OS calls the engine once a frame (the web, Android, iOS)</td></tr>
 <tr><td>Input</td><td><code>Input()</code>: the <a href="input.html#devices">input device</a>, in engine codes, or null (input is then injected)</td></tr>
 <tr><td>Paths</td><td>The project root (or a pack's mount point; <a href="packs.html">Packs</a>), <code>user://</code>, and a temporary folder</td></tr>
+<tr><td>Its own renderer</td><td><code>CreateRenderer()</code>: a renderer the platform brings, used instead of the configured one; none by default (<a href="private-targets.html">private targets</a>)</td></tr>
 </tbody>
 </table>
 </div>

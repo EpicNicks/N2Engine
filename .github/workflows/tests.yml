@@ -732,6 +732,18 @@ jobs:
       - name: n2build run (60 frames under Xvfb)
         run: xvfb-run -a node tools/n2build/n2build.mjs run --target linux --project lua_project --out "$RUNNER_TEMP/package/LuaDemo" --no-build --frames 60
 
+      # Build targets stage 11 (docs/private-targets.html): the sample private target, added from its own folder with
+      # --targets-dir. Its CMake folder, platform backend and renderer come from samples/private-targets, not the engine.
+      # It has no window, so no Xvfb: the run must say the platform's own renderer drew, and summarise its frames.
+      - name: n2build the sample private target (build and run 90 frames)
+        run: |
+          node tools/n2build/n2build.mjs list --targets-dir samples/private-targets | tee list.txt
+          grep -q "^sample-console" list.txt
+          node tools/n2build/n2build.mjs build --targets-dir samples/private-targets --target sample-console --project lua_project --build-dir "$RUNNER_TEMP/n2build" --out "$RUNNER_TEMP/package/Sample"
+          node tools/n2build/n2build.mjs run --targets-dir samples/private-targets --target sample-console --project lua_project --out "$RUNNER_TEMP/package/Sample" --no-build --frames 90 | tee sample.txt
+          grep -q "sample-console: the platform's own renderer" sample.txt
+          grep -Eq "sample-console: frame 90, 640x360, pixels [0-9a-f]{16}" sample.txt
+
   # The Android target (build targets stage 8; docs/android.html): lua_project built into a debug APK through n2build
   # (Gradle, the NDK's clang and the GameActivity prefab), then installed on an x86_64 emulator, where it must log its
   # first frame and a frame rate (scripts/android-emulator-smoke.sh). The emulator has no GPU here: the player draws with

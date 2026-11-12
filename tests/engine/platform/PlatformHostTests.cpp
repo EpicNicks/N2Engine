@@ -5,6 +5,7 @@
 #include <engine/Window.hpp>
 #include <engine/config/ApplicationOptions.hpp>
 #include <engine/platform/PlatformHost.hpp>
+#include <renderer/software/SoftwareRenderer.hpp>
 
 // The platform layer (build targets stage 6; docs/platform.html): the headless backend, lifecycle events reaching the
 // engine, and a fake backend written against the interface alone (what an Android or iOS backend implements).
@@ -114,6 +115,91 @@ TEST(PlatformHostTest, AWindowlessWindowRunsOnTheHeadlessBackendAndForwardsLifec
 
     window.Shutdown();
     EXPECT_EQ(window.GetPlatformHost(), nullptr);
+}
+
+namespace
+{
+    /// A private target's renderer (build targets stage 11): here the software renderer, counting the frames it presents
+    class PrivateRenderer final : public Renderer::Software::SoftwareRenderer
+    {
+    public:
+        explicit PrivateRenderer(int *presents) : _presents(presents) {}
+        void Present() override
+        {
+            ++*_presents;
+            SoftwareRenderer::Present();
+        }
+
+    private:
+        int *_presents;
+    };
+
+    /// A private target's backend: its own surface kind, its frames taken as pixels, and its own renderer
+    class FakePrivateHost final : public IPlatformHost
+    {
+    public:
+        int *presents = nullptr;
+        int *framesShown = nullptr;
+        int lastWidth = 0;
+
+        std::string_view Name() const override { return "fake-private"; }
+        bool CreateSurface(const SurfaceOptions &) override { return true; }
+        void DestroySurface() override {}
+        NativeSurface Surface() const override { return {NativeSurface::Kind::Custom, reinterpret_cast<void *>(0x2), nullptr, 320, 180}; }
+        Renderer::Common::Surface RenderSurface() const override
+        {
+            Renderer::Common::Surface surface;
+            surface.kind = Renderer::Common::Surface::Kind::Custom;
+            surface.handle = reinterpret_cast<void *>(0x2);
+            surface.presentPixels = [this](const std::uint8_t *rgba, const int width, int) {
+                if (rgba != nullptr) ++*framesShown;
+                const_cast<FakePrivateHost *>(this)->lastWidth = width;
+            };
+            surface.framebufferSize = [] { return std::pair<int, int>{320, 180}; };
+            return surface;
+        }
+        std::string LastError() const override { return {}; }
+        int SurfaceWidth() const override { return 320; }
+        int SurfaceHeight() const override { return 180; }
+        void SetResizeHandler(std::function<void(int, int)>) override {}
+        void SetTitle(const std::string &) override {}
+        void SetWindowMode(Platform::WindowMode) override {}
+        Platform::WindowMode GetWindowMode() const override { return Platform::WindowMode::Fullscreen; }
+        void PollEvents() override {}
+        bool ShouldClose() const override { return false; }
+        void SetLifecycleHandler(std::function<void(LifecycleEvent)>) override {}
+        bool OwnsLoop() const override { return false; }
+        Input::InputDevice *Input() override { return nullptr; }
+        HostPaths Paths() const override { return {}; }
+        std::unique_ptr<Renderer::Common::IRenderer> CreateRenderer() override { return std::make_unique<PrivateRenderer>(presents); }
+    };
+}
+
+TEST(PlatformHostTest, APlatformThatBringsItsOwnRendererGetsItInsteadOfTheConfiguredOne)
+{
+    EXPECT_EQ(MakeHeadlessHost()->CreateRenderer(), nullptr) << "the engine's own backends bring none";
+
+    int presents = 0;
+    int framesShown = 0;
+    auto host = std::make_unique<FakePrivateHost>();
+    host->presents = &presents;
+    host->framesShown = &framesShown;
+    FakePrivateHost *raw = host.get();
+    Window window;
+    window.SetPlatformHost(std::move(host));
+    Config::ApplicationOptions options;
+    options.isHeadless = false;
+    options.renderBackend = Config::ApplicationOptions::RenderBackend::OPENGL; // not what runs: the platform decides
+    ASSERT_TRUE(window.InitWindow(options)) << window.GetInitError();
+    ASSERT_NE(dynamic_cast<PrivateRenderer *>(window.GetRenderer()), nullptr);
+    EXPECT_FALSE(Window::HasGlfw()) << "a private backend never starts GLFW";
+
+    window.GetRenderer()->Clear(0.1f, 0.2f, 0.3f, 1.0f);
+    window.GetRenderer()->Present();
+    EXPECT_EQ(presents, 1);
+    EXPECT_EQ(framesShown, 1) << "the frame reached the platform through presentPixels";
+    EXPECT_EQ(raw->lastWidth, 320);
+    window.Shutdown();
 }
 
 TEST(PlatformHostTest, TheInterfaceCoversAMobileBackend)

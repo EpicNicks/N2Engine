@@ -68,6 +68,7 @@
 <li><a href="packs.html">Packs &amp; the virtual filesystem</a></li>
 <li><a href="android.html">Android</a></li>
 <li><a href="apple.html">iOS &amp; macOS</a></li>
+<li><a href="private-targets.html">Private targets</a></li>
 </ul>
 </div>
 </nav>
@@ -230,15 +231,18 @@ node tools/n2build/n2build.mjs run    --target web --project path/to/game   # bu
 <tr><td><code>formatVersion</code></td><td><code>1</code></td></tr>
 <tr><td><code>name</code>, <code>displayName</code></td><td>The name (lowercase, the folder's name) and what people see</td></tr>
 <tr><td><code>hostSystems</code></td><td>Node's <code>process.platform</code> values that can build it: <code>win32</code>, <code>linux</code>, <code>darwin</code></td></tr>
-<tr><td><code>toolchains.required</code>, <code>.optional</code></td><td>From <code>msvc</code>, <code>cxx</code>, <code>emsdk</code>, <code>cmake</code>, <code>ninja</code>, <code>vulkan-sdk</code></td></tr>
+<tr><td><code>toolchains.required</code>, <code>.optional</code></td><td>From <code>msvc</code>, <code>cxx</code>, <code>emsdk</code>, <code>cmake</code>, <code>ninja</code>, <code>vulkan-sdk</code>, <code>android-sdk</code>, <code>android-ndk</code>, <code>jdk</code>, <code>gradle</code>, <code>xcode</code>, <code>gh</code></td></tr>
 <tr><td><code>pins</code></td><td>A toolchain's exact version, checked by doctor (the web pins Emscripten, as CI does)</td></tr>
 <tr><td><code>physics3d</code></td><td>The <code>build.modules.physics3d</code> values the target can build</td></tr>
 <tr><td><code>cmake.target</code></td><td>The CMake target to build (<code>n2player</code>, <code>web-package</code>)</td></tr>
 <tr><td><code>cmake.toolchain</code></td><td><code>"emsdk"</code>: configure with Emscripten's toolchain file</td></tr>
+<tr><td><code>cmake.generator</code></td><td>The CMake generator (default <code>Ninja</code>; iOS uses <code>Xcode</code>, which is given the configuration at build time)</td></tr>
+<tr><td><code>cmake.sourceDir</code>, <code>cmake.toolchainFile</code></td><td>A private target's own CMake folder and toolchain file, inside its folder (<a href="private-targets.html">private targets</a>)</td></tr>
 <tr><td><code>cmake.options</code>, <code>cmake.configs.&lt;config&gt;</code></td><td>CMake options for every build, and per configuration</td></tr>
 <tr><td><code>cmake.toolchainOptions.&lt;id&gt;</code></td><td>Options when an optional toolchain is <code>present</code> or <code>absent</code></td></tr>
-<tr><td><code>package</code></td><td><code>kind</code> (<code>desktop</code> or <code>web</code>), <code>from</code> (the folder in the build tree), <code>fileList</code> (desktop: the list of files to ship, which the player's CMake writes)</td></tr>
-<tr><td><code>run</code></td><td><code>kind</code>: <code>executable</code> or <code>web-server</code></td></tr>
+<tr><td><code>package</code></td><td><code>kind</code> (<code>desktop</code>, <code>web</code>, <code>android</code> or <code>ios</code>), <code>pack</code> (the default pack format), <code>from</code> (the folder in the build tree), <code>fileList</code> (desktop: the list of files to ship, which the player's CMake writes)</td></tr>
+<tr><td><code>run</code></td><td><code>kind</code>: <code>executable</code>, <code>web-server</code>, <code>android-device</code> or <code>ios-simulator</code></td></tr>
+<tr><td><code>remote</code></td><td>Where the target builds when this machine is not one of its <code>hostSystems</code>: <code>{"kind": "github-actions", "workflow", "artifact", "toolchains"}</code> (<a href="apple.html#remote">remote builds</a>)</td></tr>
 </tbody>
 </table>
 </div>
@@ -265,7 +269,7 @@ node tools/n2build/n2build.mjs run    --target web --project path/to/game   # bu
 <li><strong>Packs</strong> are stage 4: a package carries <code>game.n2pack</code> (zip by default, <code>--pack stored|7z|folder</code>), and <code>n2build cook</code> makes one alone (<a href="packs.html">Packs &amp; the virtual filesystem</a>).</li>
 <li><strong>CI</strong> builds and runs the Linux package through n2build. The Windows and web packages are built through n2build locally only; CI still builds those with CMake directly.</li>
 <li><strong>Package size on Windows.</strong> A build with PhysX ships <code>PhysXGpu_64.dll</code> (about 360 MB of the 374 MB <code>lua_project</code> package, measured 2026-11-10), because the engine's PhysX build always lists it. A game that does not use GPU physics (<code>physics.gpu</code>) does not need it; leaving it out is a follow-up. A project with <code>"physics3d": "none"</code> or <code>"jolt"</code> ships no PhysX at all.</li>
-<li><strong>Android</strong> builds an APK, and with a signing profile a signed release APK and AAB; <code>run</code> installs it on a device and streams its log (<a href="android.html">Android</a>). <strong>iOS and macOS</strong> build on a Mac, or in GitHub Actions from any machine (stage 10, <a href="apple.html">iOS &amp; macOS</a>). Private targets: a later stage.</li>
+<li><strong>Android</strong> builds an APK, and with a signing profile a signed release APK and AAB; <code>run</code> installs it on a device and streams its log (<a href="android.html">Android</a>). <strong>iOS and macOS</strong> build on a Mac, or in GitHub Actions from any machine (stage 10, <a href="apple.html">iOS &amp; macOS</a>). A target folder outside the repository adds a <a href="private-targets.html">private target</a>, with its own player, backend and renderer (stage 11).</li>
 </ul>
 
 <div class="page-footer">

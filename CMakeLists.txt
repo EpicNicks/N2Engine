@@ -455,6 +455,19 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(OpenAL)
 endif()
 
+# == A private target's own code (build targets stage 11; docs/private-targets.html) ==
+# A target folder outside this repository can bring its own player, platform backend and renderer: n2build passes its
+# CMake folder (the descriptor's cmake.sourceDir) here, and it is built with the engine's targets in scope (engine,
+# renderer, MathCore::math). Nothing in this repository names a private target.
+set(N2ENGINE_EXTRA_TARGET_DIR "" CACHE PATH "A private target's CMake folder (n2build sets it from the target descriptor)")
+if(N2ENGINE_EXTRA_TARGET_DIR)
+    if(NOT EXISTS "${N2ENGINE_EXTRA_TARGET_DIR}/CMakeLists.txt")
+        message(FATAL_ERROR "N2ENGINE_EXTRA_TARGET_DIR: ${N2ENGINE_EXTRA_TARGET_DIR} has no CMakeLists.txt")
+    endif()
+    message(STATUS "Private target code: ${N2ENGINE_EXTRA_TARGET_DIR}")
+    add_subdirectory("${N2ENGINE_EXTRA_TARGET_DIR}" "${CMAKE_BINARY_DIR}/private-target")
+endif()
+
 # == Tests ==
 if(N2ENGINE_BUILD_TESTS)
     include(FetchContent)
