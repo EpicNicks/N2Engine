@@ -258,7 +258,7 @@ node tools/n2build/n2build.mjs run    --target web --project path/to/game   # bu
 <ul>
 <li><strong>The editor.</strong> The Build Settings panel (stage 3, in the frontend). n2build already reads the per-target settings (<a href="#settings-n2build">above</a>).</li>
 <li><strong>Packs.</strong> A package carries the game's folder as it is; zip and 7z packs come in stage 4.</li>
-<li><strong>CI</strong> builds and runs the Linux package through n2build. The Windows and web packages are built through n2build locally only; CI still builds those with CMake directly.</li>
+<li><strong>CI</strong> builds every desktop and web package through n2build: Linux in the <code>n2build</code> job (run for 60 frames under Xvfb), Windows and the web in <code>n2build-packages</code>. The Windows package's files are checked, but it is not run: the runner has no OpenGL 3.3 context. The web package runs n2build's node smoke for 30 frames.</li>
 <li><strong>Package size on Windows.</strong> A build with PhysX ships <code>PhysXGpu_64.dll</code> (about 360 MB of the 374 MB <code>lua_project</code> package, measured 2026-11-10), because the engine's PhysX build always lists it. A game that does not use GPU physics (<code>physics.gpu</code>) does not need it; leaving it out is a follow-up. A project with <code>"physics3d": "none"</code> or <code>"jolt"</code> ships no PhysX at all.</li>
 <li><strong>Android, iOS, macOS</strong> and private targets: later stages of the plan.</li>
 </ul>

@@ -726,6 +726,93 @@ jobs:
       - name: n2build run (60 frames under Xvfb)
         run: xvfb-run -a node tools/n2build/n2build.mjs run --target linux --project lua_project --out "$RUNNER_TEMP/package/LuaDemo" --no-build --frames 60
 
+  # The Windows and web packages through n2build too (build targets follow-up): the same commands the editor's Build button
+  # runs, so the packaging the other jobs do with CMake directly is also checked the way people get it. Windows: the
+  # package's files (no run: the runner has no OpenGL 3.3 context). Web: the size-profile package, then n2build run's node
+  # smoke for 30 frames.
+  n2build-packages:
+    name: n2build (${{ matrix.target }} package of lua_project)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows
+            os: windows-2022
+          - target: web
+            os: ubuntu-24.04
+    env:
+      N2_DOWNLOAD_CACHE: ${{ github.workspace }}/.n2-downloads
+      EMSCRIPTEN_VERSION: 4.0.10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install the Emscripten SDK
+        if: matrix.target == 'web'
+        run: |
+          set -e
+          git clone --depth 1 --branch "$EMSCRIPTEN_VERSION" https://github.com/emscripten-core/emsdk.git "$HOME/emsdk" \
+            || git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
+          cd "$HOME/emsdk"
+          ./emsdk install "$EMSCRIPTEN_VERSION"
+          ./emsdk activate "$EMSCRIPTEN_VERSION"
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build
+
+      # The web job's caches, restored only (that job saves them): PhysX for WebAssembly and the Dawn downloads
+      - name: Restore the PhysX WebAssembly libraries
+        if: matrix.target == 'web'
+        uses: actions/cache/restore@v6
+        with:
+          path: external/PhysX/physx/bin/emscripten.wasm32
+          key: physx-web-emsdk-${{ env.EMSCRIPTEN_VERSION }}-${{ hashFiles('cmake/PhysXWebPin.cmake', 'scripts/web-build-physx.sh') }}
+
+      - name: Restore the Dawn downloads
+        if: matrix.target == 'web'
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            .n2-downloads
+            ~/emsdk/upstream/emscripten/cache/ports
+          key: dawn-downloads-web-emsdk-${{ env.EMSCRIPTEN_VERSION }}-${{ hashFiles('cmake/EmdawnwebgpuPort.cmake') }}
+
+      - name: n2build doctor
+        shell: bash
+        run: node tools/n2build/n2build.mjs doctor --target ${{ matrix.target }} --project lua_project
+
+      - name: n2build build (${{ matrix.target }}, release)
+        shell: bash
+        run: node tools/n2build/n2build.mjs build --target ${{ matrix.target }} --project lua_project --build-dir "$RUNNER_TEMP/n2build" --out "$RUNNER_TEMP/package/LuaDemo" --archive zip
+
+      - name: Check the package
+        shell: bash
+        run: |
+          pkg="$RUNNER_TEMP/package/LuaDemo"
+          ls -la "$pkg"
+          cat "$pkg/.n2build-package.json"
+          test -f "$pkg.zip"
+          if [ "${{ matrix.target }}" = windows ]; then
+            test -f "$pkg/lua_project.exe"
+            test -f "$pkg/OpenAL32.dll"
+            # The game: a pack beside the player once packs are in (stage 4), the folder before
+            test -f "$pkg/game.n2pack" || test -d "$pkg/game"
+          else
+            test -f "$pkg/index.html"
+            test -f "$pkg/index.wasm"
+            # The marker never holds local paths: the folder is uploaded as it is
+            if grep -qF "$RUNNER_TEMP" "$pkg/.n2build-package.json"; then echo "::error::The web package marker names a local path"; exit 1; fi
+          fi
+
+      - name: n2build run (web, node smoke, 30 frames)
+        if: matrix.target == 'web'
+        run: node tools/n2build/n2build.mjs run --target web --project lua_project --out "$RUNNER_TEMP/package/LuaDemo" --no-build --frames 30
+
   # The same Linux build and tests on arm64 (ubuntu-24.04-arm, aarch64): the math library's x86 SIMD paths are compiled out
   # there and the scalar versions run; PhysX runs its own aarch64 build. Not a required check yet.
   linux-arm64:
