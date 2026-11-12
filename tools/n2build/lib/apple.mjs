@@ -10,7 +10,6 @@
 // Off a Mac the targets build in GitHub Actions instead (lib/remote.mjs, decision D7).
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
 import { isAppId, defaultAppId } from './android.mjs';
@@ -92,15 +91,16 @@ export function pickSimulator(listJson) {
 }
 
 /**
- * Install and launch in the simulator, the app's output streamed as log events ("stream": "console") until it exits or
- * `seconds` pass. The app writes its stdout and stderr to a file the simulator fills (simctl launch --stdout/--stderr),
- * which is followed here: `simctl launch --console-pty` proved unreliable on CI runners (its stream can end at once while
- * the app keeps running). Whether the app still runs: a simulator app is a process of this Mac, and simctl launch prints its
- * pid (the simulator's launchctl list does not list apps). `exec` (a whole-output runner), `readFile` (text or null),
- * `isAlive` (pid -> boolean) and `sleep` are injectable for tests.
+ * Install and launch in the simulator, the game's log streamed as log events ("stream": "console") until the app exits or
+ * `seconds` pass. The player writes its log to the system log too (os_log, players/ios/src/IosMain.mm), and that is
+ * what is followed here: the simulator's `log stream` for the app's process, its "N2Engine" lines. Neither
+ * `simctl launch --console-pty` nor `--stdout=<file>` delivered the output reliably on CI runners while the app ran.
+ * Whether the app still runs: a simulator app is a process of this Mac, and simctl launch prints its pid (the simulator's
+ * launchctl list does not list apps). `exec` (a whole-output runner), `stream` (lib/adb.mjs's streamLines shape), `isAlive`
+ * (pid -> boolean) and `sleep` are injectable for tests.
  */
-export async function runInSimulator({ app, bundleId, env, reporter, seconds = null, exec, readFile = readTextFile, outFile = null, isAlive = processAlive,
-  sleep = (ms) => new Promise((r) => { setTimeout(r, ms); }) }) {
+export async function runInSimulator({ app, bundleId, env, reporter, seconds = null, exec, stream, isAlive = processAlive,
+  processName = IOS_APP_NAME.replace(/\.app$/, ''), sleep = (ms) => new Promise((r) => { setTimeout(r, ms); }) }) {
   const simctl = async (args, what) => {
     const result = await exec('xcrun', ['simctl', ...args], { env });
     if (result.code !== 0) throw new BuildError(`${what} failed: ${(result.stderr || result.stdout).trim().split(/\r?\n/).slice(-3).join(' ')}`);
@@ -112,47 +112,47 @@ export async function runInSimulator({ app, bundleId, env, reporter, seconds = n
     reporter.step('boot', `Booting the ${device.name} simulator`);
     await simctl(['boot', device.udid], 'Booting the simulator');
   }
-  // simctl boot returns before the system has finished starting: an app launched then is killed as SpringBoard comes up
-  // (on CI it exited at once, with no output and no crash report). bootstatus -b waits until the device is ready
+  // simctl boot returns before the system has finished starting: bootstatus -b waits until the device is ready
   await simctl(['bootstatus', device.udid, '-b'], 'Waiting for the simulator to finish booting');
   reporter.step('install', `Installing ${path.basename(app)} on ${device.name}`);
   await simctl(['install', device.udid, app], 'Installing the app');
 
-  const output = outFile ?? path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'n2build-sim-')), 'console.txt');
-  reporter.step('run', `Launching ${bundleId}; its output follows`);
-  const launched = await simctl(['launch', '--terminate-running-process', `--stdout=${output}`, `--stderr=${output}`, device.udid, bundleId],
-    'Launching the app');
+  // The log stream starts before the launch, so the first lines are not missed
+  const log = stream('xcrun', ['simctl', 'spawn', device.udid, 'log', 'stream', '--style', 'compact', '--level', 'info',
+    '--predicate', `process == "${processName}" AND eventMessage BEGINSWITH "N2Engine"`], {
+    env,
+    onLine: (line) => {
+      const message = /\]\s+(N2Engine .*)$/.exec(line)?.[1];
+      if (message) reporter.log('console', message);
+    },
+  });
+  await sleep(1000);
+  reporter.step('run', `Launching ${bundleId}; its log follows`);
+  let launched;
+  try {
+    launched = await simctl(['launch', '--terminate-running-process', device.udid, bundleId], 'Launching the app');
+  } catch (error) {
+    log.stop();
+    await log.done;
+    throw error;
+  }
   const pid = /:\s*(\d+)/.exec(launched.stdout)?.[1] ?? null;
-
-  // New lines of the output file as log events (a partial last line waits for its end)
-  let shown = 0;
-  let pending = '';
-  const follow = () => {
-    const text = readFile(output);
-    if (text === null || text.length <= shown) return;
-    pending += text.slice(shown);
-    shown = text.length;
-    const lines = pending.split(/\r?\n/);
-    pending = lines.pop();
-    for (const line of lines) reporter.log('console', line);
-  };
-  // Without a pid (simctl printed none) the run lasts until --seconds
-  const running = async () => pid === null || isAlive(Number(pid));
 
   let waited = 0;
   let reason = 'time';
   while (seconds === null || waited < seconds * 1000) {
     await sleep(500);
     waited += 500;
-    follow();
-    if (waited % 2000 === 0 && !(await running())) {
+    // Without a pid (simctl printed none) the run lasts until --seconds
+    if (waited % 2000 === 0 && pid !== null && !isAlive(Number(pid))) {
       reason = 'exited';
       break;
     }
   }
   if (reason === 'time') await exec('xcrun', ['simctl', 'terminate', device.udid, bundleId], { env });
-  follow();
-  if (pending !== '') reporter.log('console', pending);
+  await sleep(1000); // the last lines through the log
+  log.stop();
+  await log.done;
   return { device: device.udid, pid, reason };
 }
 
@@ -166,13 +166,6 @@ function processAlive(pid) {
   }
 }
 
-function readTextFile(file) {
-  try {
-    return fs.readFileSync(file, 'utf8');
-  } catch {
-    return null;
-  }
-}
 
 /** A process's whole output (simctl's short commands) */
 export function captureProcess(command, args, { env }) {
