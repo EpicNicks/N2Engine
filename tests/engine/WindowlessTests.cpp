@@ -6,6 +6,9 @@
 #include <utility>
 #include <vector>
 
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
+
 #include "engine/Window.hpp"
 #include "engine/common/Color.hpp"
 #include "engine/config/ApplicationOptions.hpp"
@@ -42,12 +45,16 @@ namespace
         void SetUp() override
         {
             Errors().clear();
+#ifndef N2ENGINE_PLATFORM_WEB // the web build has no GLFW at all (build targets stage 6): nothing could call it
             _previous = glfwSetErrorCallback(&Collect);
+#endif
         }
 
         void TearDown() override
         {
+#ifndef N2ENGINE_PLATFORM_WEB
             glfwSetErrorCallback(_previous);
+#endif
             for (const auto &[code, description] : Errors())
             {
                 ADD_FAILURE() << "GLFW error 0x" << std::hex << code << std::dec << ": " << description
