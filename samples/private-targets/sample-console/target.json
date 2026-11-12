@@ -1,0 +1,26 @@
+{
+  "formatVersion": 1,
+  "name": "sample-console",
+  "displayName": "Sample console (a private target's shape)",
+  "hostSystems": ["win32", "linux"],
+  "toolchains": {
+    "required": ["cmake", "ninja"],
+    "optional": ["msvc", "cxx"]
+  },
+  "physics3d": ["none", "jolt"],
+  "cmake": {
+    "target": "sample_console_player",
+    "sourceDir": "player",
+    "options": {
+      "N2ENGINE_BUILD_TESTS": "OFF",
+      "N2ENGINE_USE_PHYSX": "OFF",
+      "N2ENGINE_RENDERER_VULKAN": "OFF"
+    },
+    "configs": {
+      "debug": { "CMAKE_BUILD_TYPE": "Debug" },
+      "release": { "CMAKE_BUILD_TYPE": "Release" }
+    }
+  },
+  "package": { "kind": "desktop", "from": "bin", "fileList": "sample-console-files.txt" },
+  "run": { "kind": "executable" }
+}

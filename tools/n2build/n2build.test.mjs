@@ -1240,6 +1240,55 @@ test('build --target ios --dry-run off a Mac prints the workflow it would start'
   assert.equal(lines.at(-1).remote, true);
 });
 
+// --- private targets (build targets stage 11) ----------------------------------------------------------------------
+
+const SAMPLE_TARGETS = path.join(ENGINE_ROOT, 'samples', 'private-targets');
+
+test('a target folder outside targets/ adds a target with its own code: the sample console', () => {
+  const descriptors = loadDescriptors(ENGINE_ROOT, [SAMPLE_TARGETS]);
+  const sample = descriptors.get('sample-console');
+  assert.ok(sample, 'the sample loads from its folder');
+  assert.equal(sample.source, SAMPLE_TARGETS);
+  assert.equal(sample.cmake.sourceDir, 'player');
+  assert.ok(!loadDescriptors(ENGINE_ROOT).has('sample-console'), 'not one of the repository\'s targets');
+  const plan = planBuild({ engineRoot: ENGINE_ROOT, projectDir: makeProject({ name: 'Tri' }), descriptor: sample, config: 'release', modules: undefined,
+    present: new Set(), buildRoot: tmp('n2build-private-'), gameName: 'Tri' });
+  assert.ok(plan.configureArgs.includes(`-DN2ENGINE_EXTRA_TARGET_DIR=${path.join(SAMPLE_TARGETS, 'sample-console', 'player')}`), plan.configureArgs.join(' '));
+  assert.ok(plan.buildArgs.includes('sample_console_player'));
+  assert.ok(fs.existsSync(path.join(SAMPLE_TARGETS, 'sample-console', 'player', 'CMakeLists.txt')));
+});
+
+test('a private target\'s cmake files stay inside its folder; a toolchain file is passed to CMake', () => {
+  const base = JSON.parse(fs.readFileSync(path.join(SAMPLE_TARGETS, 'sample-console', 'target.json'), 'utf8'));
+  for (const bad of ['../engine', '/abs/player', 'player/../../x', 'a\\..\\b', '']) {
+    assert.throws(() => validateDescriptor({ ...base, cmake: { ...base.cmake, sourceDir: bad } }, 'x'), /cmake\.sourceDir must be a path inside/, bad);
+  }
+  assert.throws(() => validateDescriptor({ ...base, cmake: { ...base.cmake, toolchainFile: '../t.cmake' } }, 'x'), /cmake\.toolchainFile/);
+  assert.throws(() => validateDescriptor({ ...base, cmake: { ...base.cmake, toolchain: 'emsdk', toolchainFile: 't.cmake' } }, 'x'), /cannot both/);
+  const folder = tmp('n2build-private-folder-');
+  write(path.join(folder, 'console-x', 'target.json'), { ...base, name: 'console-x', cmake: { ...base.cmake, toolchainFile: 'sdk/toolchain.cmake' } });
+  const descriptor = loadDescriptors(ENGINE_ROOT, [folder]).get('console-x');
+  const plan = planBuild({ engineRoot: ENGINE_ROOT, projectDir: makeProject({ name: 'Tri' }), descriptor, config: 'debug', modules: undefined,
+    present: new Set(), buildRoot: tmp('n2build-private-'), gameName: 'Tri' });
+  assert.ok(plan.configureArgs.includes(`-DCMAKE_TOOLCHAIN_FILE=${path.join(folder, 'console-x', 'sdk', 'toolchain.cmake')}`));
+  assert.ok(plan.configureArgs.includes(`-DN2ENGINE_EXTRA_TARGET_DIR=${path.join(folder, 'console-x', 'player')}`));
+});
+
+test('no engine source names a private target: the sample is added from outside, without editing the engine', () => {
+  const names = /sample[-_]console|SampleConsole/;
+  const offenders = [];
+  const scan = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) scan(full);
+      else if (/\.(c|cc|cpp|h|hpp|mm|cmake|txt|json|mjs|gradle)$/.test(entry.name) && names.test(fs.readFileSync(full, 'utf8'))) offenders.push(path.relative(ENGINE_ROOT, full));
+    }
+  };
+  for (const dir of ['engine', 'renderer', 'math', 'text', 'players', 'cmake', 'targets', 'web', path.join('tools', 'n2build', 'lib')]) scan(path.join(ENGINE_ROOT, dir));
+  if (names.test(fs.readFileSync(path.join(ENGINE_ROOT, 'CMakeLists.txt'), 'utf8'))) offenders.push('CMakeLists.txt');
+  assert.deepEqual(offenders, []);
+});
+
 // --- PhysX's GPU library only for GPU physics (follow-up of the build targets plan) ----------------------------------
 
 test("PhysX's GPU library ships only when the project's physics.gpu is on or auto", () => {

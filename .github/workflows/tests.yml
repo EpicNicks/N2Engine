@@ -732,6 +732,18 @@ jobs:
       - name: n2build run (60 frames under Xvfb)
         run: xvfb-run -a node tools/n2build/n2build.mjs run --target linux --project lua_project --out "$RUNNER_TEMP/package/LuaDemo" --no-build --frames 60
 
+      # Build targets stage 11 (docs/private-targets.html): the sample private target, added from its own folder with
+      # --targets-dir. Its CMake folder, platform backend and renderer come from samples/private-targets, not the engine.
+      # It has no window, so no Xvfb: the run must say the platform's own renderer drew, and summarise its frames.
+      - name: n2build the sample private target (build and run 90 frames)
+        run: |
+          node tools/n2build/n2build.mjs list --targets-dir samples/private-targets | tee list.txt
+          grep -q "^sample-console" list.txt
+          node tools/n2build/n2build.mjs build --targets-dir samples/private-targets --target sample-console --project lua_project --build-dir "$RUNNER_TEMP/n2build" --out "$RUNNER_TEMP/package/Sample"
+          node tools/n2build/n2build.mjs run --targets-dir samples/private-targets --target sample-console --project lua_project --out "$RUNNER_TEMP/package/Sample" --no-build --frames 90 | tee sample.txt
+          grep -q "sample-console: the platform's own renderer" sample.txt
+          grep -Eq "sample-console: frame 90, 640x360, pixels [0-9a-f]{16}" sample.txt
+
   # The Android target (build targets stage 8; docs/android.html): lua_project built into a debug APK through n2build
   # (Gradle, the NDK's clang and the GameActivity prefab), then installed on an x86_64 emulator, where it must log its
   # first frame and a frame rate (scripts/android-emulator-smoke.sh). The emulator has no GPU here: the player draws with
@@ -901,6 +913,15 @@ jobs:
           node tools/n2build/n2build.mjs run --target ios --project lua_project --config debug --out "$RUNNER_TEMP/package/LuaDemo" --no-build --seconds 60 | tee run.txt
           grep -q "N2Engine iOS player: first frame" run.txt
           grep -Eq "N2Engine iOS player: [0-9]+ frames, [0-9.]+ fps" run.txt
+
+      # When the run fails: the app's crash report, if the simulator wrote one, and the simulator's log for the app
+      - name: The iOS app's crash report and log (on failure)
+        if: failure() && matrix.target == 'ios'
+        run: |
+          ls -t ~/Library/Logs/DiagnosticReports/ 2>/dev/null | head -10
+          report="$(ls -t ~/Library/Logs/DiagnosticReports/N2Game* 2>/dev/null | head -1)"
+          if [ -n "$report" ]; then head -c 12000 "$report"; else echo "no crash report for N2Game"; fi
+          xcrun simctl spawn booted log show --last 5m --style compact --predicate 'process == "N2Game"' 2>/dev/null | tail -80 || true
 
   # The same Linux build and tests on arm64 (ubuntu-24.04-arm, aarch64): the math library's x86 SIMD paths are compiled out
   # there and the scalar versions run; PhysX runs its own aarch64 build. Not a required check yet.

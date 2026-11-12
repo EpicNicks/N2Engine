@@ -46,6 +46,10 @@ every stage. Stages still run in the order of section 5, each after the stages i
   `cmake/N2EngineApple.cmake`; off a Mac both build in the game repository's `n2build-apple` workflow (`n2build
   apple-workflow` writes it; `gh` starts, follows and downloads it). Verified only in CI (no Mac here). Device signing waits
   for a developer account (D7). `docs/apple.html`.
+- Stage 11 (private targets), branch `feat-bt11-private-targets`: a target folder outside the repository adds a target with
+  its own CMake folder (`cmake.sourceDir`, added by the root CMakeLists.txt as `N2ENGINE_EXTRA_TARGET_DIR`) and toolchain
+  file (`cmake.toolchainFile`); `IPlatformHost::CreateRenderer` lets its backend bring its own renderer. A neutral sample,
+  `samples/private-targets/sample-console`, is built and run in CI. `docs/private-targets.html`.
 
 ## 1. Goal
 
