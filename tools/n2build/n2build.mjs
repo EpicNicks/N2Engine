@@ -6,6 +6,7 @@
 //   node tools/n2build/n2build.mjs build  --target <name> --project DIR [--config debug|release] [--out DIR]
 //                                         [--build-dir DIR] [--archive zip|7z] [--jobs N] [--dry-run]
 //   node tools/n2build/n2build.mjs run    --target <name> --project DIR [--config ...] [--no-build] [--frames N] [--port N]
+//                                         [--device SERIAL] [--seconds N]
 //   node tools/n2build/n2build.mjs cook   --target <name> --project DIR [--out FILE] [--pack zip|stored|7z]
 //
 // --pack (build, cook): how the game's files are packaged (docs/packs.html): zip, stored (an uncompressed zip), 7z
@@ -28,17 +29,20 @@ import {
   archivePackage, checkPhysics, engineRevision, needsConfigure, packageDesktop, packageWeb, packPath, planBuild,
   preparePackageDir, readMarker, readProject, recordConfigure, resolvePackFormat, runProcess, writeMarker,
 } from './lib/build.mjs';
+import { findAdb, parseDevices, pickDevice, runOnDevice } from './lib/adb.mjs';
 import { cmakeInstallDir, gradleInvocation, packageAndroid, planAndroid, prepareGradleTree } from './lib/android.mjs';
 import { PACK_EXTENSION, cookPack, findSevenZip } from './lib/cook.mjs';
 import { PACK_KINDS } from './lib/descriptors.mjs';
 import { findTarget, loadDescriptors, readUserSettings, userSettingsFile } from './lib/descriptors.mjs';
 import { BuildError, Reporter } from './lib/report.mjs';
 import { serveFolder } from './lib/serve.mjs';
+import { androidSigningEnv, resolveAndroidSigning, signingProfileName, withoutSigningEnv } from './lib/signing.mjs';
 import { checkToolchains, findOnPath, systemProbe } from './lib/toolchains.mjs';
 
 export const ENGINE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const COMMANDS = ['list', 'doctor', 'build', 'run', 'cook'];
-const VALUE_OPTIONS = new Set(['--target', '--project', '--config', '--out', '--build-dir', '--archive', '--jobs', '--frames', '--port', '--targets-dir', '--pack']);
+const VALUE_OPTIONS = new Set(['--target', '--project', '--config', '--out', '--build-dir', '--archive', '--jobs', '--frames', '--port', '--targets-dir', '--pack',
+  '--signing', '--device', '--seconds']);
 const FLAG_OPTIONS = new Set(['--json', '--dry-run', '--no-build', '--help']);
 
 export const USAGE = `Usage: n2build <command> [options]
@@ -47,8 +51,10 @@ export const USAGE = `Usage: n2build <command> [options]
   build  --target T --project DIR [--config debug|release] [--out DIR] [--build-dir DIR]
          [--archive zip|7z] [--jobs N] [--dry-run]
   run    --target T --project DIR [--config debug|release] [--no-build] [--frames N] [--port N]
+         [--device SERIAL] [--seconds N]   (android: the device, and how long to follow the game's log)
   cook   --target T --project DIR [--out FILE] [--pack zip|stored|7z]
          build also takes --pack zip|stored|7z|folder (how the game's files are packaged)
+         and --signing PROFILE (a signing profile in your n2build.json; default: the project's)
 Common: --json (JSON lines for the editor), --targets-dir DIR (more targets)`;
 
 export class UsageError extends Error {}
@@ -86,7 +92,7 @@ export function parseArguments(argv) {
   if (options.config !== undefined && !/^[a-z][a-z0-9-]{0,31}$/.test(options.config)) {
     throw new UsageError('--config must be a configuration name such as debug or release');
   }
-  for (const [name, key] of [['--jobs', 'jobs'], ['--frames', 'frames'], ['--port', 'port']]) {
+  for (const [name, key] of [['--jobs', 'jobs'], ['--frames', 'frames'], ['--port', 'port'], ['--seconds', 'seconds']]) {
     if (options[key] !== undefined) {
       const number = Number(options[key]);
       const min = key === 'port' ? 0 : 1;
@@ -228,10 +234,14 @@ async function build(descriptor, options, ctx, reporter) {
 async function buildAndroid({ descriptor, options, ctx, reporter, project, projectDir, config, toolchains, packFormat, sevenZip, ready }) {
   if (packFormat === 'folder') throw new BuildError('An APK holds the game as one pack: build the android target with --pack zip, stored or 7z');
   const cmake = findOnPath('cmake', toolchains.env, ctx);
+  // The signing profile: named by --signing or the project, resolved from the user's n2build.json (lib/signing.mjs). A
+  // debug build always uses the SDK's debug key
+  const profileName = signingProfileName(options, project.settings);
+  if (profileName && config === 'debug') reporter.warning(`A debug build is signed with the SDK's debug key; the signing profile "${profileName}" is used for release builds`);
   const plan = planAndroid({
     engineRoot: ENGINE_ROOT, projectDir, descriptor, config, modules: project.modules, settings: project.settings,
     info: toolchains.info, cmakeDir: cmakeInstallDir(cmake), buildRoot: options.buildDir ? path.resolve(options.buildDir) : null,
-    outDir: options.out, gameName: project.name,
+    outDir: options.out, gameName: project.name, signingProfile: profileName,
   });
   const gradle = toolchains.info.gradle ?? 'gradle';
   if (options.dryRun) {
@@ -240,32 +250,53 @@ async function buildAndroid({ descriptor, options, ctx, reporter, project, proje
     reporter.log('stdout', `game: ${packFormat} pack ${plan.packFile}`);
     reporter.log('stdout', `gradle ${plan.gradleArgs.join(' ')}`);
     reporter.log('stdout', `apk: ${plan.apk}`);
+    if (plan.aab) reporter.log('stdout', `aab: ${plan.aab}`);
+    reporter.log('stdout', `signing: ${plan.signingProfile ? `the profile "${plan.signingProfile}" (read when the build runs)` : plan.signed ? 'the SDK debug key' : 'none (an unsigned APK)'}`);
     reporter.log('stdout', `package: ${plan.packageDir}`);
     return { ok: ready, dryRun: true, output: plan.packageDir, treeDir: plan.treeDir, ...(ready ? {} : { error: 'Not ready (see the doctor report)' }) };
+  }
+  // Read only now, when the build runs; its passwords are hidden in every line from here on, and reach Gradle only in its
+  // process environment
+  let gradleEnv = withoutSigningEnv(toolchains.env);
+  if (plan.signingProfile) {
+    const settingsFile = userSettingsFile(ctx.env, ctx.platform);
+    const signing = resolveAndroidSigning(plan.signingProfile, readUserSettings(settingsFile), {
+      env: ctx.env, settingsFile: settingsFile ?? 'n2build.json',
+      ...(ctx.exists ? { exists: ctx.exists } : {}),
+      ...(ctx.readFile ? { readFile: ctx.readFile } : {}),
+    });
+    reporter.addSecret(signing.storePassword);
+    reporter.addSecret(signing.keyPassword);
+    gradleEnv = { ...gradleEnv, ...androidSigningEnv(signing) };
   }
   reporter.step('cook', `Packing the game (${packFormat}) into ${plan.packFile}`);
   prepareGradleTree(plan);
   cookPack({ projectDir, outFile: plan.packFile, format: packFormat, target: descriptor.name, game: project.name, sevenZip, env: toolchains.env });
 
-  reporter.step('compile', `Building the APK with Gradle (${config}; the engine for ${plan.properties.abis})`);
+  reporter.step('compile', `Building the ${plan.aab ? 'APK and AAB' : 'APK'} with Gradle (${config}; the engine for ${plan.properties.abis})`);
   const invocation = gradleInvocation(gradle, plan.gradleArgs, ctx.platform);
-  const code = await runProcess(invocation.command, invocation.args, { env: toolchains.env, cwd: plan.gradleDir, reporter, spawnOptions: invocation.options });
+  const code = await runProcess(invocation.command, invocation.args, { env: gradleEnv, cwd: plan.gradleDir, reporter, spawnOptions: invocation.options });
   if (code !== 0) throw new BuildError(`The ${descriptor.name} build failed (Gradle exit code ${code}; see the log above)`);
 
   reporter.step('package', `Packaging into ${plan.packageDir}`);
   preparePackageDir(plan.packageDir);
-  const entry = packageAndroid({ plan, packageDir: plan.packageDir, gameName: project.name });
+  const files = packageAndroid({ plan, packageDir: plan.packageDir, gameName: project.name });
+  const entry = files.apk;
+  // The profile's name only: never its keystore path or anything read from it
   writeMarker(plan.packageDir, {
     ...markerInfo({ descriptor, config, entry, project, engine: engineRevision(ENGINE_ROOT), builtAt: new Date().toISOString() }),
     appId: plan.appId, abis: plan.properties.abis.split(','), signed: plan.signed,
+    ...(plan.signingProfile ? { signingProfile: plan.signingProfile } : {}), ...(files.aab ? { bundle: files.aab } : {}),
   });
-  if (!plan.signed) reporter.warning('The release APK is unsigned: Android installs only signed APKs (signing profiles come with stage 9; docs/android.html)');
+  if (!plan.signed) {
+    reporter.warning('The release APK is unsigned: Android installs only signed APKs. Name a signing profile (build.targets.android.signing, or --signing; docs/android.html#signing)');
+  }
   let archive;
   if (options.archive) {
     reporter.step('archive', `Writing a .${options.archive} archive`);
     archive = archivePackage({ packageDir: plan.packageDir, format: options.archive, cmake: cmake ?? 'cmake', env: toolchains.env });
   }
-  return { ok: true, output: plan.packageDir, entry, ...(archive ? { archive } : {}) };
+  return { ok: true, output: plan.packageDir, entry, ...(files.aab ? { bundle: files.aab } : {}), ...(archive ? { archive } : {}) };
 }
 
 /** n2build cook: the game's pack alone (what build puts in a package), with its manifest beside it */
@@ -307,8 +338,16 @@ async function run(descriptor, options, ctx, reporter) {
   }
 
   if (descriptor.run.kind === 'android-device') {
-    throw new BuildError(`Built ${path.join(packageDir, marker.entry)}. Installing and running it on a device is not in n2build yet: `
-      + `adb install -r "${path.join(packageDir, marker.entry)}" then adb shell am start -n ${marker.appId}/com.n2engine.player.N2Activity`);
+    if (!marker.signed) throw new BuildError(`${marker.entry} is unsigned, and Android installs only signed APKs: build debug, or name a signing profile`);
+    const sdk = checkToolchains({ ...descriptor, toolchains: { required: ['android-sdk'], optional: [] } }, ctx).info.androidSdk;
+    const adb = findAdb(sdk, ctx);
+    if (!adb) throw new BuildError("adb was not found (the Android SDK's platform-tools): install them with the SDK Manager");
+    const listed = ctx.run(adb, ['devices', '-l'], { env: ctx.env });
+    if (!listed || listed.status !== 0) throw new BuildError(`${adb} devices failed: ${listed?.stderr?.trim() || 'it did not start'}`);
+    const device = pickDevice(parseDevices(listed.stdout), options.device);
+    const outcome = await runOnDevice({ adb, apk: path.join(packageDir, marker.entry), appId: marker.appId, device, env: ctx.env, reporter,
+      seconds: options.seconds ?? null, ...(ctx.adb ?? {}) });
+    return { ok: true, output: packageDir, device: device.serial, pid: outcome.pid, ended: outcome.reason };
   }
 
   if (options.frames) {

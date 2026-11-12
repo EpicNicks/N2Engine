@@ -5,9 +5,10 @@
 //   planAndroid            every path, property and command, decided before anything runs (--dry-run prints it)
 //   prepareGradleTree      the template copied into the tree, and local.properties (the SDK, and a CMake 3.25 or newer)
 //   gradleInvocation       how to start Gradle (gradle.bat on Windows goes through cmd.exe, with checked arguments)
-//   packageAndroid         the APK into the package folder, renamed after the game
+//   packageAndroid         the APK (and a release AAB) into the package folder, renamed after the game
 //
-// Signing (stage 9) is not here yet: a debug APK is signed with the SDK's debug key, a release APK is left unsigned.
+// Signing (stage 9; lib/signing.mjs): a debug APK is signed with the SDK's debug key. A release build with a signing profile
+// is signed with it and also gives an AAB (the format Google Play takes); without one, the release APK is left unsigned.
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -75,7 +76,7 @@ export function propertiesPath(file) {
  * Every path and argument of an Android build. info is checkToolchains' (androidSdk, androidNdk, gradle); cmakeDir is
  * the folder holding bin/cmake of a CMake 3.25 or newer (the SDK's own CMake 3.22 is too old for the engine).
  */
-export function planAndroid({ engineRoot, projectDir, descriptor, config, modules, settings, info, cmakeDir, buildRoot, outDir, gameName }) {
+export function planAndroid({ engineRoot, projectDir, descriptor, config, modules, settings, info, cmakeDir, buildRoot, outDir, gameName, signingProfile = null }) {
   if (!['debug', 'release'].includes(config)) throw new BuildError(`The android target builds debug or release, not '${config}'`);
   const android = androidSettings(settings ?? {}, gameName);
   const options = { ...descriptor.cmake.options, ...descriptor.cmake.configs[config] };
@@ -100,10 +101,14 @@ export function planAndroid({ engineRoot, projectDir, descriptor, config, module
     cmakeBuildType: options.CMAKE_BUILD_TYPE ?? (config === 'debug' ? 'Debug' : 'Release'),
   };
   for (const [name, value] of Object.entries(properties)) checkPropertyValue(`n2.${name}`, value);
-  const gradleArgs = ['-p', gradleDir, `assemble${variant}`, '--no-daemon', '--console=plain',
+  // A release build signed with a profile is the one to publish: Gradle builds the AAB too
+  const profileSigned = config === 'release' && signingProfile !== null;
+  const tasks = [`assemble${variant}`, ...(profileSigned ? ['bundleRelease'] : [])];
+  const gradleArgs = ['-p', gradleDir, ...tasks, '--no-daemon', '--console=plain',
     ...Object.entries(properties).map(([name, value]) => `-Pn2.${name}=${value}`)];
-  const apkName = config === 'debug' ? 'app-debug.apk' : 'app-release-unsigned.apk';
+  const apkName = config === 'debug' ? 'app-debug.apk' : profileSigned ? 'app-release.apk' : 'app-release-unsigned.apk';
   const apk = path.join(gradleDir, 'app', 'build', 'outputs', 'apk', config, apkName);
+  const aab = profileSigned ? path.join(gradleDir, 'app', 'build', 'outputs', 'bundle', 'release', 'app-release.aab') : null;
   const localProperties = [
     '# Written by n2build for this build tree',
     ...(info?.androidSdk ? [`sdk.dir=${propertiesPath(info.androidSdk)}`] : []),
@@ -112,7 +117,8 @@ export function planAndroid({ engineRoot, projectDir, descriptor, config, module
   ].join('\n');
   return {
     key, treeDir, gradleDir, assetsDir, packageDir, packFile: path.join(assetsDir, `game${PACK_EXTENSION}`),
-    properties, gradleArgs, apk, signed: config === 'debug', localProperties, appId: android.appId,
+    properties, gradleArgs, tasks, apk, aab, signed: config === 'debug' || profileSigned, signingProfile: profileSigned ? signingProfile : null,
+    localProperties, appId: android.appId,
     template: path.join(engineRoot, descriptor.package.from),
   };
 }
@@ -151,10 +157,16 @@ export function gradleInvocation(gradle, args, platform = process.platform) {
   return invocation;
 }
 
-/** The APK into the package folder as <Game>.apk; returns its file name */
+/** The APK into the package folder as <Game>.apk, and a signed release's AAB as <Game>.aab; returns their file names */
 export function packageAndroid({ plan, packageDir, gameName }) {
   if (!fs.existsSync(plan.apk)) throw new BuildError(`${plan.apk} is missing: Gradle did not produce the APK`);
   const name = `${safeName(gameName)}${plan.signed ? '' : '-unsigned'}.apk`;
   fs.copyFileSync(plan.apk, path.join(packageDir, name));
-  return name;
+  let bundle = null;
+  if (plan.aab) {
+    if (!fs.existsSync(plan.aab)) throw new BuildError(`${plan.aab} is missing: Gradle did not produce the AAB`);
+    bundle = `${safeName(gameName)}.aab`;
+    fs.copyFileSync(plan.aab, path.join(packageDir, bundle));
+  }
+  return { apk: name, aab: bundle };
 }
