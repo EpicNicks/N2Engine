@@ -168,7 +168,7 @@ node tools/n2build/n2build.mjs build  --target macos --project path/to/game</cod
 <p>Without image view swizzles, one- and two-channel textures are stored as RGBA holding what the swizzle would give (<code>VulkanResourceTest.WithoutImageViewSwizzlesSmallTexturesAreStoredAsRgbaHoldingWhatTheSwizzleWouldGive</code>, forced on any driver).</p>
 </div>
 
-<h3 id="moltenvk-ios">iOS on MoltenVK <span class="badge">PR #TBD</span></h3>
+<h3 id="moltenvk-ios">iOS on MoltenVK <span class="badge">PR #353</span></h3>
 <p>The iOS app can draw with the Vulkan renderer too, on MoltenVK's static library (an app links its code in; it loads no library of its own from elsewhere):</p>
 <ul>
 <li><strong>Where MoltenVK comes from:</strong> Homebrew's MoltenVK is macOS-only. Take MoltenVK's own release from Khronos (<code>MoltenVK-all.tar</code>, unpacked: the folder <code>MoltenVK/MoltenVK</code>, holding <code>include/</code> and <code>static/MoltenVK.xcframework</code>) or the Vulkan SDK's <code>iOS</code> folder. Name it with the environment variable <code>N2_MOLTENVK_IOS</code> (or the CMake option <code>N2ENGINE_IOS_MOLTENVK</code>) before <code>n2build build --target ios</code>.</li>
