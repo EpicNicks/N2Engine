@@ -57,6 +57,16 @@ bool Window::FailInit(const std::string &error)
 void Window::ConnectLifecycle()
 {
     _host->SetLifecycleHandler([this](const Platform::LifecycleEvent event) {
+        // The renderer first: it lets go of the old surface before anything else hears it is gone, and has the new one
+        // before the game draws again (build targets stage 12)
+        if (_renderer && event == Platform::LifecycleEvent::SurfaceLost)
+        {
+            _renderer->OnSurfaceLost();
+        }
+        else if (_renderer && event == Platform::LifecycleEvent::SurfaceRecreated)
+        {
+            _renderer->OnSurfaceRecreated(_host->RenderSurface());
+        }
         if (_lifecycleHandler)
         {
             _lifecycleHandler(event);

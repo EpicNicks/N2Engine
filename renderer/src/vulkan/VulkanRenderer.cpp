@@ -1316,6 +1316,7 @@ void VulkanRenderer::Shutdown()
 {
     std::lock_guard lock(_mutex);
     ShutdownLocked();
+    _surfaceSuspended = false;
     _initStatus = InitStatus::NotInitialized;
     _initMessage.clear();
     EndLifetime();

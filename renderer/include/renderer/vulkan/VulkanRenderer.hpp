@@ -194,6 +194,10 @@ namespace Renderer
             /// Sets the size of the offscreen target, unless SetRenderTargetSize fixed it (then ignored); a 0 changes
             /// nothing of it. With a window it also makes the next Present recreate the swapchain
             void Resize(uint32_t width, uint32_t height) override;
+            /// The window is going (Android in the background): the swapchain and the surface are destroyed now, frames
+            /// render offscreen until OnSurfaceRecreated makes a surface on the new window (build targets stage 12)
+            void OnSurfaceLost() override;
+            void OnSurfaceRecreated(const Common::Surface& surface) override;
             /// The colour the next BeginFrame clears to; between BeginFrame and EndFrame it also clears the frame so far
             void Clear(float r, float g, float b, float a) override;
 
@@ -587,6 +591,7 @@ namespace Renderer
             std::optional<std::string> _gpuPreference;   // SetGpuPreference (wins over N2_VULKAN_GPU)
             std::optional<bool> _vsyncSetting;           // SetVSync (wins over N2_VULKAN_VSYNC)
             bool _vsync = true;                          // what the swapchain uses
+            bool _surfaceSuspended = false;              // OnSurfaceLost let the surface go; OnSurfaceRecreated makes one
 
             // Test settings (kept across Shutdown, like the validation mode)
             bool _headlessSurfaceForTest = false;

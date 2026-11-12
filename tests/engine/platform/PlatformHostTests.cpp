@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <format>
+#include <string>
 #include <vector>
 
 #include <engine/Window.hpp>
@@ -129,6 +131,15 @@ namespace
             ++*_presents;
             SoftwareRenderer::Present();
         }
+        void OnSurfaceLost() override { ++lost; }
+        void OnSurfaceRecreated(const Renderer::Common::Surface &surface) override
+        {
+            ++recreated;
+            recreatedKind = surface.kind;
+        }
+        int lost = 0;
+        int recreated = 0;
+        Renderer::Common::Surface::Kind recreatedKind = Renderer::Common::Surface::Kind::None;
 
     private:
         int *_presents;
@@ -167,7 +178,8 @@ namespace
         Platform::WindowMode GetWindowMode() const override { return Platform::WindowMode::Fullscreen; }
         void PollEvents() override {}
         bool ShouldClose() const override { return false; }
-        void SetLifecycleHandler(std::function<void(LifecycleEvent)>) override {}
+        void SetLifecycleHandler(std::function<void(LifecycleEvent)> handler) override { lifecycle = std::move(handler); }
+        std::function<void(LifecycleEvent)> lifecycle;
         bool OwnsLoop() const override { return false; }
         Input::InputDevice *Input() override { return nullptr; }
         HostPaths Paths() const override { return {}; }
@@ -199,6 +211,36 @@ TEST(PlatformHostTest, APlatformThatBringsItsOwnRendererGetsItInsteadOfTheConfig
     EXPECT_EQ(presents, 1);
     EXPECT_EQ(framesShown, 1) << "the frame reached the platform through presentPixels";
     EXPECT_EQ(raw->lastWidth, 320);
+    window.Shutdown();
+}
+
+TEST(PlatformHostTest, TheRendererHearsTheSurfaceGoAndComeBackBeforeTheGame)
+{
+    int presents = 0;
+    int framesShown = 0;
+    auto host = std::make_unique<FakePrivateHost>();
+    host->presents = &presents;
+    host->framesShown = &framesShown;
+    FakePrivateHost *raw = host.get();
+    Window window;
+    std::vector<std::string> order;
+    window.SetPlatformHost(std::move(host));
+    Config::ApplicationOptions options;
+    options.isHeadless = false;
+    ASSERT_TRUE(window.InitWindow(options)) << window.GetInitError();
+    auto *renderer = dynamic_cast<PrivateRenderer *>(window.GetRenderer());
+    ASSERT_NE(renderer, nullptr);
+    window.SetLifecycleHandler([&](const LifecycleEvent event) {
+        order.push_back(std::format("{} (renderer lost {}, recreated {})", LifecycleEventName(event), renderer->lost, renderer->recreated));
+    });
+    ASSERT_TRUE(raw->lifecycle);
+    raw->lifecycle(LifecycleEvent::Paused);
+    raw->lifecycle(LifecycleEvent::SurfaceLost);
+    raw->lifecycle(LifecycleEvent::SurfaceRecreated);
+    raw->lifecycle(LifecycleEvent::Resumed);
+    EXPECT_EQ(order, (std::vector<std::string>{"Paused (renderer lost 0, recreated 0)", "SurfaceLost (renderer lost 1, recreated 0)",
+                                               "SurfaceRecreated (renderer lost 1, recreated 1)", "Resumed (renderer lost 1, recreated 1)"}));
+    EXPECT_EQ(renderer->recreatedKind, Renderer::Common::Surface::Kind::Custom) << "the host's surface, asked for again";
     window.Shutdown();
 }
 

@@ -700,6 +700,38 @@ void VulkanRenderer::RecreateSurfaceLocked()
     }
 }
 
+void VulkanRenderer::OnSurfaceLost()
+{
+    // Android is about to free the window (build targets stage 12): the swapchain and the VkSurfaceKHR made from it go
+    // first. Until OnSurfaceRecreated there is no surface, so Present does nothing and frames render offscreen.
+    std::lock_guard lock(_mutex);
+    if (!_initialized || _surface == VK_NULL_HANDLE || _device == VK_NULL_HANDLE)
+    {
+        return;
+    }
+    vkDeviceWaitIdle(_device);
+    DestroySwapchainLocked();
+    DestroySurfaceLocked();
+    _surfaceSuspended = true;
+}
+
+void VulkanRenderer::OnSurfaceRecreated(const Common::Surface& surface)
+{
+    std::lock_guard lock(_mutex);
+    if (!_initialized)
+    {
+        return;
+    }
+    // The new window's operations (createVulkanSurface looks the new ANativeWindow up)
+    _window = surface;
+    if (!_surfaceSuspended)
+    {
+        return; // nothing was let go: the old surface is still in use
+    }
+    _surfaceSuspended = false;
+    RecreateSurfaceLocked();
+}
+
 void VulkanRenderer::MarkDeviceLostLocked(const char* where, VkResult result)
 {
     _deviceLost = true;
