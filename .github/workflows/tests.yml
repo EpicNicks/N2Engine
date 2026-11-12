@@ -876,6 +876,63 @@ jobs:
           "$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner" verify --print-certs "$pkg/lua_project.apk" | tee certs.txt
           grep -q "CN=N2Engine CI" certs.txt
 
+  # The Metal spike (build targets stage 13; orchestrator/proposals/metal-spike.md): the engine's Vulkan renderer and its
+  # test suite on MoltenVK, on a macOS runner. A spike measures, it does not gate: no step fails the job, and the result
+  # (built or not, tests passed, failed and skipped, the device MoltenVK reports) goes into the job summary, for the user's
+  # choice between MoltenVK and a native Metal renderer.
+  metal-spike:
+    name: metal spike (the Vulkan renderer on MoltenVK)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: macos-15
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install MoltenVK, the Vulkan loader and headers, glslang, Ninja
+        run: brew install ninja molten-vk vulkan-loader vulkan-headers glslang || true
+
+      - name: Configure and build renderer_tests with the Vulkan renderer
+        id: build
+        run: |
+          set +e
+          prefix="$(brew --prefix)"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_APPLE_MOLTENVK=ON \
+            -DN2ENGINE_RENDERER_VULKAN=ON -DCMAKE_PREFIX_PATH="$prefix" > configure.log 2>&1
+          configured=$?
+          built=1
+          if [ $configured -eq 0 ]; then cmake --build build --target renderer_tests > build.log 2>&1; built=$?; fi
+          tail -40 configure.log; tail -60 build.log 2>/dev/null
+          echo "configured=$configured" >> "$GITHUB_OUTPUT"
+          echo "built=$built" >> "$GITHUB_OUTPUT"
+
+      - name: Run the Vulkan tests on MoltenVK
+        if: steps.build.outputs.built == '0'
+        run: |
+          set +e
+          export VK_ICD_FILENAMES="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
+          ./build/bin/renderer_tests --gtest_filter='Vulkan*' --gtest_brief=0 > vulkan-tests.log 2>&1
+          echo "exit=$?" > vulkan-tests.exit
+          grep -E "^\[  (PASSED|FAILED|SKIPPED) |\[ vulkan \]" vulkan-tests.log | head -80
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### The Vulkan renderer on MoltenVK (the Metal spike)"
+            echo ""
+            echo "- MoltenVK: $(brew list --versions molten-vk 2>/dev/null || echo 'not installed')"
+            echo "- configure exit ${{ steps.build.outputs.configured }}, build exit ${{ steps.build.outputs.built }}"
+            if [ -f vulkan-tests.log ]; then
+              echo "- tests: $(grep -c '^\[       OK \]' vulkan-tests.log) passed, $(grep -c '^\[  FAILED  \] Vulkan' vulkan-tests.log) failed, $(grep -c '^\[  SKIPPED \] Vulkan' vulkan-tests.log) skipped ($(cat vulkan-tests.exit))"
+              echo ""
+              echo '```'
+              grep -E "\[ vulkan \]|^\[  FAILED  \] Vulkan" vulkan-tests.log | head -40
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
+
   # The Apple targets (build targets stage 10, decision D7; docs/apple.html): built and run on a pinned macOS runner, the
   # same commands the n2build-apple workflow runs for a game (tools/n2build/lib/remote.mjs). macOS: the desktop player,
   # run for 60 frames. iOS: the app for the simulator, run there until it has logged a first frame and a frame rate.

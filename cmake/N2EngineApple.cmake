@@ -8,7 +8,14 @@
 #     stands in, as on the web and Android.
 
 set(N2ENGINE_USE_PHYSX OFF CACHE BOOL "Use PhysX physics backend" FORCE)
-set(N2ENGINE_RENDERER_VULKAN OFF CACHE BOOL "" FORCE)
+# The Metal question (build targets stage 13; orchestrator/proposals/metal-spike.md): N2ENGINE_APPLE_MOLTENVK=ON keeps the
+# Vulkan renderer in a macOS build, to run on MoltenVK (the spike's CI job). Off by default until the user picks
+option(N2ENGINE_APPLE_MOLTENVK "macOS: build the Vulkan renderer, for MoltenVK (the Metal spike)" OFF)
+if(N2ENGINE_APPLE_MOLTENVK AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    message(STATUS "macOS: the Vulkan renderer is built, for MoltenVK (N2ENGINE_APPLE_MOLTENVK)")
+else()
+    set(N2ENGINE_RENDERER_VULKAN OFF CACHE BOOL "" FORCE)
+endif()
 set(N2ENGINE_RENDERER_WEBGPU OFF CACHE BOOL "" FORCE)
 
 # libc++'s missing <generator>, the web build's stand-in
