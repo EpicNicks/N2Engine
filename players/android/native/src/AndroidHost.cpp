@@ -6,6 +6,7 @@
 #include <android/configuration.h>
 #include <android/keycodes.h>
 #include <android/native_window.h>
+#include <android/window.h>
 #include <game-activity/GameActivity.h>
 #include <game-activity/native_app_glue/android_native_app_glue.h>
 
