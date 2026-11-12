@@ -10,7 +10,7 @@ import test from 'node:test';
 
 import {
   archivePackage, buildKey, checkPhysics, needsConfigure, packageDesktop, packageWeb, planBuild, preparePackageDir,
-  readProject, readTargetSettings, recordConfigure, resolveOptions, safeName, writeMarker, PACKAGE_MARKER,
+  readProject, readTargetSettings, recordConfigure, resolveOptions, runtimeFilesFor, safeName, writeMarker, PACKAGE_MARKER,
 } from './lib/build.mjs';
 import { loadDescriptors, readUserSettings, userSettingsFile, validateDescriptor } from './lib/descriptors.mjs';
 import { BuildError, Reporter } from './lib/report.mjs';
@@ -539,4 +539,29 @@ test("build --dry-run uses the target's config and name, and warns when the targ
   assert.ok(logs.some((t) => t.includes('-DCMAKE_BUILD_TYPE=Debug')), logs.join('\n'));
   assert.ok(logs.some((t) => t.includes('-DN2ENGINE_TARGET=linux')));
   assert.equal(lines.at(-1).output, path.join(projectDir, '.n2', 'out', 'linux-debug', 'Tri Linux'));
+});
+
+// --- PhysX's GPU library only for GPU physics (follow-up of the build targets plan) ----------------------------------
+
+test("PhysX's GPU library ships only when the project's physics.gpu is on or auto", () => {
+  const runtime = ['OpenAL32.dll', 'PhysX_64.dll', 'PhysXCommon_64.dll', 'PhysXGpu_64.dll'];
+  assert.deepEqual(runtimeFilesFor(runtime, undefined), { ship: ['OpenAL32.dll', 'PhysX_64.dll', 'PhysXCommon_64.dll'], left: ['PhysXGpu_64.dll'] });
+  assert.deepEqual(runtimeFilesFor(runtime, 'off').left, ['PhysXGpu_64.dll']);
+  assert.deepEqual(runtimeFilesFor(runtime, 'on'), { ship: runtime, left: [] });
+  assert.deepEqual(runtimeFilesFor(runtime, 'auto').left, []);
+  assert.deepEqual(runtimeFilesFor(['libopenal.so.1', 'libPhysXGpu_64.so'], 'off').left, ['libPhysXGpu_64.so']);
+  assert.deepEqual(runtimeFilesFor(['PhysXGpu_64.dll.bak'], 'off').left, [], 'only the library itself');
+
+  const tree = fakeTree({ 'n2player-files.txt': 'n2player.exe\nPhysX_64.dll\nPhysXGpu_64.dll\n', 'n2player.exe': 'exe', 'PhysX_64.dll': 'cpu', 'PhysXGpu_64.dll': 'gpu' });
+  const left = [];
+  const cpuOnly = path.join(tmp('n2build-out-'), 'Tri');
+  preparePackageDir(cpuOnly);
+  packageDesktop({ treeDir: tree, descriptor: descriptor(), projectDir: makeProject({ name: 'Tri' }), packageDir: cpuOnly, gameName: 'Tri', platform: 'win32',
+    onLeftOut: (files) => left.push(...files) });
+  assert.deepEqual(fs.readdirSync(cpuOnly).sort(), ['PhysX_64.dll', 'Tri.exe', 'game']);
+  assert.deepEqual(left, ['PhysXGpu_64.dll']);
+  const gpu = path.join(tmp('n2build-out-'), 'Tri');
+  preparePackageDir(gpu);
+  packageDesktop({ treeDir: tree, descriptor: descriptor(), projectDir: makeProject({ name: 'Tri' }), packageDir: gpu, gameName: 'Tri', platform: 'win32', physicsGpu: 'on' });
+  assert.ok(fs.existsSync(path.join(gpu, 'PhysXGpu_64.dll')));
 });
