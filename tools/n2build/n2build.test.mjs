@@ -15,7 +15,7 @@ import {
 import { loadDescriptors, readUserSettings, userSettingsFile, validateDescriptor } from './lib/descriptors.mjs';
 import { BuildError, Reporter } from './lib/report.mjs';
 import { resolveRequest } from './lib/serve.mjs';
-import { applyEnv, checkToolchains, findOnPath, parseVersion, versionAtLeast } from './lib/toolchains.mjs';
+import { applyEnv, checkToolchains, findOnPath, parseVersion, systemProbe, versionAtLeast } from './lib/toolchains.mjs';
 import { ENGINE_ROOT, main, markerInfo, parseArguments, resolveConfig, UsageError } from './n2build.mjs';
 
 const tmp = (prefix) => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -539,4 +539,17 @@ test("build --dry-run uses the target's config and name, and warns when the targ
   assert.ok(logs.some((t) => t.includes('-DCMAKE_BUILD_TYPE=Debug')), logs.join('\n'));
   assert.ok(logs.some((t) => t.includes('-DN2ENGINE_TARGET=linux')));
   assert.equal(lines.at(-1).output, path.join(projectDir, '.n2', 'out', 'linux-debug', 'Tri Linux'));
+});
+
+test('a program on PATH is a file, not a folder of the same name (emsdk has a cmake folder on PATH)', () => {
+  // /emsdk/upstream/emscripten/cmake is a folder; /usr/bin/cmake is the program
+  const probe = { platform: 'linux', exists: () => true, isFile: (file) => file === '/usr/bin/cmake' };
+  assert.equal(findOnPath('cmake', { PATH: '/emsdk/upstream/emscripten:/usr/bin' }, probe), '/usr/bin/cmake');
+  assert.equal(findOnPath('cmake', { PATH: '/emsdk/upstream/emscripten' }, probe), null);
+  // The real probe tells a folder from a file
+  const dir = tmp('n2build-path-');
+  fs.mkdirSync(path.join(dir, 'cmake'));
+  write(path.join(dir, 'tool'), 'x');
+  assert.equal(systemProbe().isFile(path.join(dir, 'cmake')), false);
+  assert.equal(systemProbe().isFile(path.join(dir, 'tool')), true);
 });
