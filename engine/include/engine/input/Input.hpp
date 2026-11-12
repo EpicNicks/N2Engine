@@ -6,6 +6,6 @@
 
 #include "engine/input/ActionMap.hpp"
 #include "engine/input/InputBinding.hpp"
-#include "engine/input/InputMapping.hpp"
+#include "engine/input/InputDevice.hpp"
 #include "engine/input/InputSystem.hpp"
 #include "engine/input/InputValue.hpp"

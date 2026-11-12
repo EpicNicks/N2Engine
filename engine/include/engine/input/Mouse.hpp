@@ -5,7 +5,10 @@
 
 #include <math/Vector2.hpp>
 
-struct GLFWwindow;
+namespace N2Engine::Input
+{
+    class InputDevice;
+}
 
 namespace N2Engine::Input
 {
@@ -24,7 +27,8 @@ namespace N2Engine::Input
         }
 
     private:
-        GLFWwindow *_window;
+        /// The device read (null: none; position and buttons are what InjectPointer hands in)
+        InputDevice *_window;
 
         // Per-frame state. Scroll arrives in callbacks during glfwPollEvents, before Update, so it's
         // gathered in _pendingScroll and published to _scrollDelta by Update (which used to zero it
@@ -47,11 +51,8 @@ namespace N2Engine::Input
         };
         std::optional<InjectedPointer> _injected;
 
-        // Static callback for GLFW
-        static void ScrollCallback(GLFWwindow *window, double xOffset, double yOffset);
-
     public:
-        explicit Mouse(GLFWwindow *window);
+        explicit Mouse(InputDevice *window);
         ~Mouse();
 
         static Mouse* Get();

@@ -8,7 +8,10 @@
 
 #include <nlohmann/json.hpp>
 
-struct GLFWwindow;
+namespace N2Engine::Input
+{
+    class InputDevice;
+}
 
 namespace N2Engine
 {

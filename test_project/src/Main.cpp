@@ -9,7 +9,6 @@
 #include <engine/input/ActionMap.hpp>
 #include <engine/input/InputBinding.hpp>
 #include <engine/input/InputSystem.hpp>
-#include <engine/input/InputMapping.hpp>
 #include <engine/physics/BoxCollider.hpp>
 #include <engine/physics/Rigidbody.hpp>
 #include <engine/io/Resources.hpp>

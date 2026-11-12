@@ -5,11 +5,10 @@
 #include "engine/input/InputBindingFactory.hpp"
 #include "engine/Logger.hpp"
 
+#include "engine/Application.hpp"
 #include "engine/Window.hpp"
 
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
-
+#include "engine/input/InputDevice.hpp"
 #include "engine/input/Mouse.hpp"
 #include "engine/input/Touchscreen.hpp"
 #include "engine/input/Rumble.hpp"
@@ -43,11 +42,9 @@ struct InputSystem::UpdatingScope
 InputSystem::InputSystem(Window &window)
     : _window{window}
 {
-    // The window's user pointer stays the Window: its resize callback needs it (this used to overwrite
-    // it with the Mouse, so resizing called Window::OnWindowResize on a Mouse). The Mouse's scroll
-    // callback reaches it through the Window instead.
-    _mouse = std::make_unique<Mouse>(_window._window);
-    _keyboard = std::make_unique<Keyboard>(_window._window);
+    // The window's input device (build targets stage 5): GLFW's on the desktop, none without a window
+    _mouse = std::make_unique<Mouse>(_window.GetInputDevice());
+    _keyboard = std::make_unique<Keyboard>(_window.GetInputDevice());
 }
 
 InputSystem::~InputSystem()
@@ -58,7 +55,7 @@ InputSystem::~InputSystem()
 
 ActionMap* InputSystem::CreateActionMapFromJson(const std::string &name, const nlohmann::json &j)
 {
-    auto result = ActionMap::Deserialize(j, name, _window._window);
+    auto result = ActionMap::Deserialize(j, name, _window.GetInputDevice());
     if (!result.has_value())
     {
         Logger::Error(std::format("Failed to create action map '{}': {}",
@@ -147,27 +144,27 @@ ActionMap* InputSystem::GetCurActionMap() const
 std::vector<GamepadInfo> InputSystem::GetConnectedGamepads()
 {
     std::vector<GamepadInfo> result;
-    // Without GLFW (no window, or windowless) there are no gamepads; GLFW would refuse the calls
-    if (!Window::HasGlfw())
+    // No device (no window, or windowless): no gamepads
+    const InputDevice *device = Application::GetInstance().GetWindow().GetInputDevice();
+    if (device == nullptr)
     {
         return result;
     }
-    for (int i = GLFW_JOYSTICK_1; i <= GLFW_JOYSTICK_LAST; ++i)
+    for (int i = 0; i < MaxGamepads; ++i)
     {
-        if (glfwJoystickPresent(i))
+        if (!device->IsJoystickPresent(i))
         {
-            if (glfwJoystickIsGamepad(i))
-            {
-                const char *name = glfwGetGamepadName(i);
-                result.push_back(name != nullptr ? GamepadInfo{name, i} : GamepadInfo{"Nameless Gamepad", i});
-            }
-            else
-            {
-                const char *name = glfwGetJoystickName(i);
-                result.push_back(name != nullptr
-                                     ? GamepadInfo{"Unrecognized Gamepad Mapping: " + std::string(name), i}
-                                     : GamepadInfo{"Namless Unrecognized Gamepad Mapping", i});
-            }
+            continue;
+        }
+        const std::string name = device->GamepadName(i);
+        if (device->IsGamepad(i))
+        {
+            result.push_back(!name.empty() ? GamepadInfo{name, i} : GamepadInfo{"Nameless Gamepad", i});
+        }
+        else
+        {
+            result.push_back(!name.empty() ? GamepadInfo{"Unrecognized Gamepad Mapping: " + name, i}
+                                           : GamepadInfo{"Namless Unrecognized Gamepad Mapping", i});
         }
     }
     return result;
@@ -257,7 +254,7 @@ bool InputSystem::Deserialize(const nlohmann::json &j)
 
             for (const auto &bindingJson : actionJson["bindings"])
             {
-                if (auto binding = CreateBindingFromJson(_window._window, bindingJson); binding.has_value())
+                if (auto binding = CreateBindingFromJson(_window.GetInputDevice(), bindingJson); binding.has_value())
                 {
                     inputAction->AddBinding(std::move(binding.value()));
                 }

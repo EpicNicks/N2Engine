@@ -12,7 +12,10 @@
 #include "engine/input/InputValue.hpp"
 #include "nlohmann/json.hpp"
 
-struct GLFWwindow;
+namespace N2Engine::Input
+{
+    class InputDevice;
+}
 
 namespace N2Engine::Math
 {
@@ -125,7 +128,7 @@ namespace N2Engine::Input
         static std::expected<std::unique_ptr<InputAction>, ActionParseError> Deserialize(
             const nlohmann::json &j,
             const std::string &actionName,
-            GLFWwindow *window
+            InputDevice *window
         );
 
     private:
@@ -183,7 +186,7 @@ namespace N2Engine::Input
         static std::expected<std::unique_ptr<ActionMap>, ActionMapParseError> Deserialize(
             const nlohmann::json &j,
             const std::string &mapName,
-            GLFWwindow *window
+            InputDevice *window
         );
 
     private:

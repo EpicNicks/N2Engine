@@ -7,6 +7,7 @@
 #include "engine/Application.hpp"
 
 #include "engine/input/InputSystem.hpp"
+#include "input/GlfwInputDevice.hpp"
 #include "engine/input/ActionMap.hpp"
 #include "engine/input/InputBinding.hpp"
 
@@ -54,6 +55,7 @@ bool Window::FailInit(const std::string &error)
 
     // Leave nothing half-initialized: callers check IsValid() and every accessor handles null
     _inputSystem.reset();
+    _inputDevice.reset();
     _renderer.reset();
     _windowless = false;
     _windowlessSize = {0, 0};
@@ -230,6 +232,7 @@ bool Window::InitWindow(const Config::ApplicationOptions &options)
         return FailInit("Failed to initialize renderer");
     }
 
+    _inputDevice = Input::MakeGlfwInputDevice(_window);
     _inputSystem = std::make_unique<Input::InputSystem>(*this);
     return true;
 }
@@ -279,8 +282,9 @@ void Window::PollEvents()
 
 void Window::Shutdown()
 {
-    // Before the window: ~Mouse unregisters its scroll callback on it
+    // Before the window: ~Mouse and ~Keyboard drop their handlers, and the device its GLFW callbacks
     _inputSystem.reset();
+    _inputDevice.reset();
     _renderSize.reset();
     if (_renderer)
     {

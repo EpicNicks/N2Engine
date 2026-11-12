@@ -4,7 +4,10 @@
 #include <math/Vector2.hpp>
 #include "engine/input/InputTypes.hpp"
 
-struct GLFWwindow;
+namespace N2Engine::Input
+{
+    class InputDevice;
+}
 
 namespace N2Engine
 {
@@ -18,10 +21,11 @@ namespace N2Engine::Input
     class InputBinding
     {
     protected:
-        GLFWwindow *window; // Need window handle for polling
+        /// The device read (build targets stage 5; null: none, so nothing is pressed)
+        InputDevice *window;
 
     public:
-        explicit InputBinding(GLFWwindow *win) : window(win) {}
+        explicit InputBinding(InputDevice *win) : window(win) {}
         explicit InputBinding(const Window &win);
         virtual ~InputBinding() = default;
 
@@ -35,7 +39,7 @@ namespace N2Engine::Input
         Key boundKey;
 
     public:
-        KeyboardButtonBinding(GLFWwindow *win, Key key) : InputBinding(win), boundKey(key) {}
+        KeyboardButtonBinding(InputDevice *win, Key key) : InputBinding(win), boundKey(key) {}
         KeyboardButtonBinding(const Window &win, Key key) : InputBinding(win), boundKey(key) {}
 
         InputValue getValue() override;
@@ -51,7 +55,7 @@ namespace N2Engine::Input
         float pressPoint = 0.0f; // > 0: the binding is a button, pressed at or past this magnitude
 
     public:
-        AxisBinding(GLFWwindow *win, GamepadAxis axis, const int joyId = 0,
+        AxisBinding(InputDevice *win, GamepadAxis axis, const int joyId = 0,
                     const AxisDirection direction = AxisDirection::Both, const float pressPoint = 0.0f)
             : InputBinding(win), boundAxis(axis), gamepadId(joyId), direction(direction), pressPoint(pressPoint) {}
 
@@ -82,7 +86,7 @@ namespace N2Engine::Input
         int gamepadId;
 
     public:
-        GamepadButtonCompositeBinding(GLFWwindow *win, GamepadButton upButton, GamepadButton downButton,
+        GamepadButtonCompositeBinding(InputDevice *win, GamepadButton upButton, GamepadButton downButton,
                                       GamepadButton leftButton, GamepadButton rightButton, const int joyId = 0)
             : InputBinding(win), up(upButton), down(downButton), left(leftButton), right(rightButton),
               gamepadId(joyId) {}
@@ -105,7 +109,7 @@ namespace N2Engine::Input
         std::unique_ptr<InputBinding> binding;
 
     public:
-        ChordBinding(GLFWwindow *win, std::unique_ptr<InputBinding> modifierBinding,
+        ChordBinding(InputDevice *win, std::unique_ptr<InputBinding> modifierBinding,
                      std::unique_ptr<InputBinding> mainBinding)
             : InputBinding(win), modifier(std::move(modifierBinding)), binding(std::move(mainBinding)) {}
 
@@ -124,7 +128,7 @@ namespace N2Engine::Input
         bool invertYAxis;
 
     public:
-        GamepadStickBinding(GLFWwindow *win, GamepadAxis xAxis, GamepadAxis yAxis, int joyId = 0,
+        GamepadStickBinding(InputDevice *win, GamepadAxis xAxis, GamepadAxis yAxis, int joyId = 0,
                             float deadzone = 0.15f, bool invertX = false, bool invertY = false)
             : InputBinding(win), xAxis(xAxis), yAxis(yAxis), gamepadId(joyId), deadzone(deadzone),
               invertXAxis(invertX), invertYAxis(invertY) {}
@@ -144,7 +148,7 @@ namespace N2Engine::Input
         Key up, down, left, right;
 
     public:
-        Vector2CompositeBinding(GLFWwindow *win, Key upKey, Key downKey, Key leftKey, Key rightKey)
+        Vector2CompositeBinding(InputDevice *win, Key upKey, Key downKey, Key leftKey, Key rightKey)
             : InputBinding(win), up(upKey), down(downKey), left(leftKey), right(rightKey) {}
 
         Vector2CompositeBinding(const Window &window, Key upKey, Key downKey, Key leftKey, Key rightKey)
@@ -160,7 +164,7 @@ namespace N2Engine::Input
         MouseButton boundButton;
 
     public:
-        MouseButtonBinding(GLFWwindow *win, MouseButton button)
+        MouseButtonBinding(InputDevice *win, MouseButton button)
             : InputBinding(win), boundButton(button) {}
 
         MouseButtonBinding(const Window &win, MouseButton button)
@@ -182,7 +186,7 @@ namespace N2Engine::Input
         int gamepadId;
 
     public:
-        GamepadButtonBinding(GLFWwindow *win, GamepadButton button, const int joyId = 0)
+        GamepadButtonBinding(InputDevice *win, GamepadButton button, const int joyId = 0)
             : InputBinding(win), boundButton(button), gamepadId(joyId) {}
 
         GamepadButtonBinding(const Window &win, GamepadButton button, const int joyId = 0)

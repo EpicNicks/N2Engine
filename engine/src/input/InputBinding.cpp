@@ -5,7 +5,7 @@
 
 #include "engine/input/InputValue.hpp"
 #include "engine/input/KeySource.hpp"
-#include <engine/input/InputMapping.hpp>
+#include <engine/input/InputDevice.hpp>
 #include <engine/Application.hpp>
 #include <engine/Window.hpp>
 
@@ -14,8 +14,18 @@ using namespace N2Engine::Input;
 using namespace N2Engine::Math;
 
 InputBinding::InputBinding(const Window &win)
-    : window(win._window)
+    : window(win.GetInputDevice())
 {
+}
+
+namespace
+{
+    /// A gamepad binding's device: its own, else the application window's. Gamepads are the system's, not a window's
+    /// (GLFW reads them without one), so a binding made without a device still sees them while a window is open.
+    const InputDevice *GamepadDevice(const InputDevice *own)
+    {
+        return own != nullptr ? own : Application::GetInstance().GetWindow().GetInputDevice();
+    }
 }
 
 InputValue KeyboardButtonBinding::getValue()
@@ -25,15 +35,8 @@ InputValue KeyboardButtonBinding::getValue()
     {
         return source->IsKeyDown(boundKey);
     }
-    // No window (e.g. an InputSystem on a Window that never opened): nothing is pressed, and GLFW is
-    // never handed a null window
-    if (window == nullptr)
-    {
-        return false;
-    }
-    const int glfwKey = KeyToGLFW.at(boundKey);
-    const int state = glfwGetKey(window, glfwKey);
-    return (state == GLFW_PRESS);
+    // No device (e.g. an InputSystem on a Window that never opened): nothing is pressed
+    return window != nullptr && window->IsKeyDown(boundKey);
 }
 
 
@@ -72,35 +75,25 @@ InputValue AxisBinding::Shape(const float normalized, const AxisDirection direct
 
 InputValue AxisBinding::getValue()
 {
-    // Without GLFW (no window, or windowless) there are no gamepads; GLFW would refuse the call
-    if (!Window::HasGlfw())
+    // No device (no window, or windowless): no gamepads
+    GamepadState state;
+    const InputDevice *device = GamepadDevice(window);
+    if (device != nullptr && device->GetGamepadState(gamepadId, state))
     {
-        return Shape(0.0f, direction, pressPoint);
-    }
-    GLFWgamepadstate state;
-    if (glfwGetGamepadState(gamepadId, &state))
-    {
-        const int glfwAxis = GamepadAxisToGLFW.at(boundAxis);
-        return Shape(NormalizeAxis(boundAxis, state.axes[glfwAxis]), direction, pressPoint);
+        return Shape(NormalizeAxis(boundAxis, state.Axis(boundAxis)), direction, pressPoint);
     }
     return Shape(0.0f, direction, pressPoint);
 }
 
 InputValue GamepadStickBinding::getValue()
 {
-    // Without GLFW (no window, or windowless) there are no gamepads; GLFW would refuse the call
-    if (!Window::HasGlfw())
+    // No device (no window, or windowless): no gamepads
+    GamepadState state;
+    const InputDevice *device = GamepadDevice(window);
+    if (device != nullptr && device->GetGamepadState(gamepadId, state))
     {
-        return Vector2(0.0f, 0.0f);
-    }
-    GLFWgamepadstate state;
-    if (glfwGetGamepadState(gamepadId, &state))
-    {
-        const int glfwXAxis = GamepadAxisToGLFW.at(xAxis);
-        const int glfwYAxis = GamepadAxisToGLFW.at(yAxis);
-
-        const float x = (invertXAxis ? -1 : 1) * state.axes[glfwXAxis];
-        const float y = (invertYAxis ? -1 : 1) * state.axes[glfwYAxis];
+        const float x = (invertXAxis ? -1 : 1) * state.Axis(xAxis);
+        const float y = (invertYAxis ? -1 : 1) * state.Axis(yAxis);
 
         // Apply radial deadzone (better than per-axis deadzone)
         const Vector2 stick(x, y);
@@ -130,7 +123,7 @@ InputValue Vector2CompositeBinding::getValue()
     // An installed KeySource replaces the window (see KeyboardButtonBinding)
     const KeySource *source = KeySource::Get();
 
-    // No window and no source: no key is pressed (GLFW is never handed a null window)
+    // No device and no source: no key is pressed
     if (window == nullptr && source == nullptr)
     {
         return Vector2(x, y);
@@ -138,7 +131,7 @@ InputValue Vector2CompositeBinding::getValue()
 
     const auto isDown = [&](const Key key)
     {
-        return source != nullptr ? source->IsKeyDown(key) : glfwGetKey(window, KeyToGLFW.at(key)) == GLFW_PRESS;
+        return source != nullptr ? source->IsKeyDown(key) : window->IsKeyDown(key);
     };
     if (isDown(right))
         x += 1.0f;
@@ -159,30 +152,16 @@ InputValue MouseButtonBinding::getValue()
     {
         return source->IsMouseButtonDown(boundButton);
     }
-    // No window: no button is pressed (GLFW is never handed a null window)
-    if (window == nullptr)
-    {
-        return false;
-    }
-    const int glfwButton = MouseButtonToGLFW.at(boundButton);
-    const int state = glfwGetMouseButton(window, glfwButton);
-    return (state == GLFW_PRESS);
+    // No device: no button is pressed
+    return window != nullptr && window->IsMouseButtonDown(boundButton);
 }
 
 InputValue GamepadButtonBinding::getValue()
 {
-    // Without GLFW (no window, or windowless) there are no gamepads; GLFW would refuse the call
-    if (!Window::HasGlfw())
-    {
-        return false;
-    }
-    GLFWgamepadstate state;
-    if (glfwGetGamepadState(gamepadId, &state))
-    {
-        const int glfwButton = GamepadButtonToGLFW.at(boundButton);
-        return (state.buttons[glfwButton] == GLFW_PRESS);
-    }
-    return false;
+    // No device (no window, or windowless): no gamepads
+    GamepadState state;
+    const InputDevice *device = GamepadDevice(window);
+    return device != nullptr && device->GetGamepadState(gamepadId, state) && state.Button(boundButton);
 }
 
 Vector2 GamepadButtonCompositeBinding::Combine(const bool upDown, const bool downDown, const bool leftDown,
@@ -202,20 +181,14 @@ Vector2 GamepadButtonCompositeBinding::Combine(const bool upDown, const bool dow
 
 InputValue GamepadButtonCompositeBinding::getValue()
 {
-    // Without GLFW (no window, or windowless) there are no gamepads; GLFW would refuse the call
-    if (!Window::HasGlfw())
+    // No device (no window, or windowless): no gamepads
+    GamepadState state;
+    const InputDevice *device = GamepadDevice(window);
+    if (device == nullptr || !device->GetGamepadState(gamepadId, state))
     {
         return Vector2(0.0f, 0.0f);
     }
-    GLFWgamepadstate state;
-    if (!glfwGetGamepadState(gamepadId, &state))
-    {
-        return Vector2(0.0f, 0.0f);
-    }
-    const auto isDown = [&state](const GamepadButton button)
-    {
-        return state.buttons[GamepadButtonToGLFW.at(button)] == GLFW_PRESS;
-    };
+    const auto isDown = [&state](const GamepadButton button) { return state.Button(button); };
     return Combine(isDown(up), isDown(down), isDown(left), isDown(right));
 }
 

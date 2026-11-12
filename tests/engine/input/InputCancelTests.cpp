@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <engine/input/InputDevice.hpp>
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -24,7 +26,7 @@ namespace
     class HeldBinding final : public InputBinding
     {
     public:
-        explicit HeldBinding(bool *held) : InputBinding(static_cast<GLFWwindow *>(nullptr)), held(held) {}
+        explicit HeldBinding(bool *held) : InputBinding(static_cast<N2Engine::Input::InputDevice *>(nullptr)), held(held) {}
         InputValue getValue() override { return *held; }
         [[nodiscard]] BindingType GetType() const override { return BindingType::KeyboardButton; }
         [[nodiscard]] json Serialize() const override { return json::object(); }
@@ -297,19 +299,19 @@ TEST_F(InputMapSwitchCancelTest, SwitchingFromACallbackCancelsWhenTheLoopEnds)
 // GLFW once it is initialized. There is no seam to observe "no GLFW call" without GLFW itself.
 TEST(NullWindowBindingTest, KeyboardBindingReadsReleased)
 {
-    KeyboardButtonBinding binding(static_cast<GLFWwindow *>(nullptr), Key::Space);
+    KeyboardButtonBinding binding(static_cast<N2Engine::Input::InputDevice *>(nullptr), Key::Space);
     EXPECT_FALSE(binding.getValue().asBool());
 }
 
 TEST(NullWindowBindingTest, MouseBindingReadsReleased)
 {
-    MouseButtonBinding binding(static_cast<GLFWwindow *>(nullptr), MouseButton::Left);
+    MouseButtonBinding binding(static_cast<N2Engine::Input::InputDevice *>(nullptr), MouseButton::Left);
     EXPECT_FALSE(binding.getValue().asBool());
 }
 
 TEST(NullWindowBindingTest, CompositeBindingReadsZero)
 {
-    Vector2CompositeBinding binding(static_cast<GLFWwindow *>(nullptr), Key::W, Key::S, Key::A, Key::D);
+    Vector2CompositeBinding binding(static_cast<N2Engine::Input::InputDevice *>(nullptr), Key::W, Key::S, Key::A, Key::D);
     const InputValue value = binding.getValue();
     EXPECT_TRUE(value.Is<Math::Vector2>());
     EXPECT_FLOAT_EQ(value.asVector2().x, 0.0f);

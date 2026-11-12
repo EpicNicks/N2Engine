@@ -6,7 +6,7 @@
 #include <limits>
 
 #include "engine/input/InputBinding.hpp"
-#include "engine/input/InputMapping.hpp"
+#include "engine/input/InputDevice.hpp"
 
 namespace N2Engine::Input
 {
@@ -92,7 +92,7 @@ namespace N2Engine::Input
 
     // chordDepth counts the Chords this binding sits inside, so nesting is bounded
     std::expected<std::unique_ptr<InputBinding>, BindingParseError> CreateBinding(
-        GLFWwindow *window,
+        InputDevice *window,
         const nlohmann::json &j,
         const int chordDepth
     )
@@ -244,7 +244,7 @@ namespace N2Engine::Input
     }
 
     std::expected<std::unique_ptr<InputBinding>, BindingParseError> CreateBindingFromJson(
-        GLFWwindow *window,
+        InputDevice *window,
         const nlohmann::json &j
     )
     {

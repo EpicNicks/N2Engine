@@ -20,7 +20,7 @@
 #include "engine/input/InputBinding.hpp"
 #include "engine/input/InputTypes.hpp"
 #include "engine/input/InputBindingFactory.hpp"
-#include "engine/input/InputMapping.hpp"
+#include "engine/input/InputDevice.hpp"
 #include "engine/input/InputValue.hpp"
 #include "engine/input/Input.hpp"
 #include <n2seed.h>

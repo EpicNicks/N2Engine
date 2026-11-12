@@ -21,7 +21,11 @@ every stage. Stages still run in the order of section 5, each after the stages i
   cook step (`n2build cook`, and `build` packages `game.n2pack`: zip for desktop, stored for the web, 7z non-solid
   through 7-Zip); the desktop and web players mount the pack. The audit of `std::filesystem` call sites is in
   `docs/packs.html#audit`. Persistent web saves (IDBFS on `user://`) are the documented gap.
-- The Triangle-Like input branches (needed by stage 5): #330 and #331 merged; #332 to #336 in review.
+- The Triangle-Like input branches (needed by stage 5): #330 to #336 merged on 2026-11-11.
+- Stage 5 (engine input codes), branch `feat-bt5-engine-input-codes`: `Input::InputDevice` in engine codes; GLFW's device
+  (`engine/src/input/GlfwInputDevice.cpp`) is the only code that knows GLFW's key, button and axis numbers, its tables
+  private; `Window` owns it; bindings, `ActionMap`, `Mouse`, `Keyboard` and `InputSystem` take an `InputDevice*`. Saved data
+  names its keys, so it loads unchanged (tested); no migration is needed.
 
 ## 1. Goal
 

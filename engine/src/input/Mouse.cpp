@@ -1,16 +1,14 @@
 #include "engine/input/Mouse.hpp"
 
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
-
 #include "engine/Application.hpp"
 #include "engine/Window.hpp"
+#include "engine/input/InputDevice.hpp"
 #include "engine/input/InputSystem.hpp"
 #include "engine/input/InputTypes.hpp"
 
 namespace N2Engine::Input
 {
-    Mouse::Mouse(GLFWwindow *window)
+    Mouse::Mouse(InputDevice *window)
         : _window(window)
     {
         if (!_window)
@@ -18,28 +16,27 @@ namespace N2Engine::Input
             return; // no window (e.g. headless): position and buttons stay as injected, scroll still works
         }
 
-        // Register scroll callback
-        glfwSetScrollCallback(_window, ScrollCallback);
+        // Scroll arrives as the device delivers it, between frames
+        _window->SetScrollHandler([this](const Math::Vector2 delta) { AccumulateScroll(delta.x, delta.y); });
 
-        // Sticky buttons: a press released again before Update samples still reads as pressed once, so a click
-        // shorter than a frame becomes Down in one Update and Up in the next instead of being lost. Update reads
+        // Sticky buttons (and keys): a press released again before Update samples still reads as pressed once, so a
+        // click shorter than a frame becomes Down in one Update and Up in the next instead of being lost. Update reads
         // the buttons first in the frame (before action maps poll their mouse bindings).
-        glfwSetInputMode(_window, GLFW_STICKY_MOUSE_BUTTONS, GLFW_TRUE);
+        _window->SetStickyInput(true);
 
         // Initialize current mouse position
-        double mouseX, mouseY;
-        glfwGetCursorPos(_window, &mouseX, &mouseY);
-        _currentPosition = Math::Vector2(static_cast<float>(mouseX), static_cast<float>(mouseY));
+        if (const auto position = _window->CursorPosition())
+        {
+            _currentPosition = *position;
+        }
         _lastPosition = _currentPosition;
     }
 
     Mouse::~Mouse()
     {
-        // Clean up callback
         if (_window)
         {
-            glfwSetScrollCallback(_window, nullptr);
-            glfwSetInputMode(_window, GLFW_STICKY_MOUSE_BUTTONS, GLFW_FALSE);
+            _window->SetScrollHandler({});
         }
     }
 
@@ -48,17 +45,6 @@ namespace N2Engine::Input
         // No input system when the window failed to open
         const auto *input = Application::GetInstance().GetWindow().GetInputSystem();
         return input ? input->GetMouse() : nullptr;
-    }
-
-    void Mouse::ScrollCallback(GLFWwindow *window, double xOffset, double yOffset)
-    {
-        // The window's user pointer is its Window (resize events need it); reach the Mouse through it
-        const auto *owner = static_cast<Window *>(glfwGetWindowUserPointer(window));
-        auto *input = owner ? owner->GetInputSystem() : nullptr;
-        if (auto *mouse = input ? input->GetMouse() : nullptr)
-        {
-            mouse->AccumulateScroll(static_cast<float>(xOffset), static_cast<float>(yOffset));
-        }
     }
 
     void Mouse::AccumulateScroll(float xOffset, float yOffset)
@@ -90,14 +76,15 @@ namespace N2Engine::Input
         }
         else if (_window)
         {
-            double mouseX, mouseY;
-            glfwGetCursorPos(_window, &mouseX, &mouseY);
-            position = Math::Vector2(static_cast<float>(mouseX), static_cast<float>(mouseY));
+            if (const auto cursor = _window->CursorPosition())
+            {
+                position = *cursor;
+            }
 
             uint32_t buttons = 0;
             for (int button = 0; button < ButtonCount; ++button)
             {
-                if (glfwGetMouseButton(_window, GLFW_MOUSE_BUTTON_1 + button) == GLFW_PRESS)
+                if (_window->IsMouseButtonDown(static_cast<MouseButton>(button)))
                 {
                     buttons |= ButtonBit(button);
                 }
