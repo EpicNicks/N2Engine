@@ -914,6 +914,15 @@ jobs:
           grep -q "N2Engine iOS player: first frame" run.txt
           grep -Eq "N2Engine iOS player: [0-9]+ frames, [0-9.]+ fps" run.txt
 
+      # When the run fails: the app's crash report, if the simulator wrote one, and the simulator's log for the app
+      - name: The iOS app's crash report and log (on failure)
+        if: failure() && matrix.target == 'ios'
+        run: |
+          ls -t ~/Library/Logs/DiagnosticReports/ 2>/dev/null | head -10
+          report="$(ls -t ~/Library/Logs/DiagnosticReports/N2Game* 2>/dev/null | head -1)"
+          if [ -n "$report" ]; then head -c 12000 "$report"; else echo "no crash report for N2Game"; fi
+          xcrun simctl spawn booted log show --last 5m --style compact --predicate 'process == "N2Game"' 2>/dev/null | tail -80 || true
+
   # The same Linux build and tests on arm64 (ubuntu-24.04-arm, aarch64): the math library's x86 SIMD paths are compiled out
   # there and the scalar versions run; PhysX runs its own aarch64 build. Not a required check yet.
   linux-arm64:
