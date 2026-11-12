@@ -88,6 +88,20 @@ TEST(PlayerOptionsTest, RejectsUnknownOptionsAndASecondFolder)
     EXPECT_NE(twoFolders.error().find("More than one"), std::string::npos);
 }
 
+TEST(PlayerOptionsTest, HeadlessRunsTheSoftwareRendererWithoutAWindow)
+{
+    EXPECT_FALSE(Parse({})->headless);
+    const auto headless = Parse({"--headless", "--frames", "60"});
+    ASSERT_TRUE(headless.has_value()) << headless.error();
+    EXPECT_TRUE(headless->headless);
+    EXPECT_EQ(headless->renderBackend, RenderBackend::SOFTWARE);
+    EXPECT_TRUE(Parse({"--headless", "--renderer", "software"}).has_value());
+    const auto withGpu = Parse({"--headless", "--renderer", "opengl"});
+    ASSERT_FALSE(withGpu.has_value());
+    EXPECT_NE(withGpu.error().find("software renderer only"), std::string::npos) << withGpu.error();
+    EXPECT_NE(PlayerUsage("n2player").find("--headless"), std::string::npos);
+}
+
 TEST(PlayerOptionsTest, RendererTitles)
 {
     EXPECT_EQ(RenderBackendTitle(RenderBackend::OPENGL), "OpenGL");

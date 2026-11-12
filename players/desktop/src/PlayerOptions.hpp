@@ -26,6 +26,8 @@ namespace N2Engine::Player
         bool consoleLog = false;
         /// Run this many frames, then quit as if the window closed (smoke runs). Absent: until the window closes.
         std::optional<int> frames;
+        /// No window: the software renderer draws offscreen (a machine with no display or no GPU, such as a CI runner)
+        bool headless = false;
         bool help = false;
     };
 

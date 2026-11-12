@@ -112,6 +112,7 @@ node tools/n2build/n2build.mjs build  --target macos --project path/to/game</cod
 <li>It ends when the app exits, or after <code>--seconds</code>.</li>
 </ol>
 <p>The doctor checks Xcode (<code>xcodebuild -version</code>) and CMake. For macOS it checks the compiler, CMake and Ninja, as on Linux.</p>
+<p>The oldest systems: iOS 16.3 and macOS 13.3 (<code>CMAKE_OSX_DEPLOYMENT_TARGET</code> in the targets). They are the first where Apple's C++ library formats floating-point numbers (<code>std::format</code> uses <code>std::to_chars</code>).</p>
 <p class="src">Source: <code>tools/n2build/lib/apple.mjs</code>; <code>targets/ios</code>, <code>targets/macos</code>; <code>players/ios</code>; <code>cmake/N2EngineApple.cmake</code></p>
 
 <h2 id="remote">Building in GitHub Actions</h2>
@@ -160,7 +161,7 @@ node tools/n2build/n2build.mjs build  --target macos --project path/to/game</cod
 <h2 id="ci">CI and what was verified</h2>
 <p>The <code>apple</code> jobs in <code>.github/workflows/tests.yml</code> run on <code>macos-15</code>, with the same commands as the game workflow:</p>
 <ul>
-<li><strong>macOS:</strong> builds lua_project's package and runs it for 60 frames.</li>
+<li><strong>macOS:</strong> builds lua_project's package and runs it for 60 frames with <code>--headless</code>. The runner is a virtual machine with no GPU, so it has no OpenGL context. The windowed run on a Mac is checklist item 5.</li>
 <li><strong>iOS:</strong> builds the simulator app, checks its bundle (the pack and the bundle identifier), and runs it in the simulator. The run must log a first frame and a frame rate.</li>
 </ul>
 <div class="callout note">

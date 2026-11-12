@@ -612,6 +612,11 @@ namespace N2Engine::N2Net
                 Close(socket);
                 continue;
             }
+#if defined(SO_NOSIGPIPE) && !defined(MSG_NOSIGNAL)
+            // Apple platforms have no MSG_NOSIGNAL: a write to a peer that has gone must not raise SIGPIPE either
+            const int noSigPipe = 1;
+            setsockopt(socket, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, sizeof(noSigPipe));
+#endif
             Impl::Peer peer;
             peer.socket = socket;
             peer.accepted = peer.lastRead = now;
@@ -673,10 +678,10 @@ namespace N2Engine::N2Net
             }
             if (!p.dead && p.written < p.output.size())
             {
-#ifdef _WIN32
-                constexpr int flags = 0;
-#else
+#if defined(MSG_NOSIGNAL)
                 constexpr int flags = MSG_NOSIGNAL;
+#else
+                constexpr int flags = 0; // Windows has no SIGPIPE; Apple sets SO_NOSIGPIPE on the socket (above)
 #endif
                 const int n = static_cast<int>(
                     send(p.socket, reinterpret_cast<const char *>(p.output.data() + p.written),
