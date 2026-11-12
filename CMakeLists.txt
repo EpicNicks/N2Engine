@@ -130,6 +130,18 @@ else()
     set(N2ENGINE_PLATFORM_ANDROID OFF)
 endif()
 
+# == Apple platforms (build targets stage 10) ==
+# iOS from the toolchain (-DCMAKE_SYSTEM_NAME=iOS with the Xcode generator); macOS is a desktop platform. Both:
+# cmake/N2EngineApple.cmake and docs/apple.html.
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(N2ENGINE_PLATFORM_IOS ON)
+else()
+    set(N2ENGINE_PLATFORM_IOS OFF)
+endif()
+if(APPLE)
+    include(${CMAKE_SOURCE_DIR}/cmake/N2EngineApple.cmake)
+endif()
+
 # == PhysX setup ==
 set(N2ENGINE_PHYSX_AVAILABLE OFF)
 
@@ -402,7 +414,11 @@ if(N2ENGINE_PLATFORM_ANDROID)
     # repository for an APK
     add_subdirectory(players/android/native)
 endif()
-if(NOT N2ENGINE_PLATFORM_WEB AND NOT N2ENGINE_PLATFORM_ANDROID)
+if(N2ENGINE_PLATFORM_IOS)
+    # The iOS player, an app bundle (players/ios)
+    add_subdirectory(players/ios)
+endif()
+if(NOT N2ENGINE_PLATFORM_WEB AND NOT N2ENGINE_PLATFORM_ANDROID AND NOT N2ENGINE_PLATFORM_IOS)
 add_subdirectory(test_project)
 add_subdirectory(lua_project)
 # The desktop player that tools/n2build packages for the windows and linux targets (docs/build-targets.html)

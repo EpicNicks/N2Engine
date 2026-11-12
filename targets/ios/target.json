@@ -1,0 +1,32 @@
+{
+  "formatVersion": 1,
+  "name": "ios",
+  "displayName": "iOS (simulator app)",
+  "hostSystems": ["darwin"],
+  "toolchains": {
+    "required": ["xcode", "cmake"]
+  },
+  "physics3d": ["none", "jolt"],
+  "cmake": {
+    "target": "n2ios",
+    "generator": "Xcode",
+    "options": {
+      "CMAKE_SYSTEM_NAME": "iOS",
+      "CMAKE_OSX_SYSROOT": "iphonesimulator",
+      "CMAKE_OSX_ARCHITECTURES": "arm64",
+      "N2ENGINE_BUILD_TESTS": "OFF"
+    },
+    "configs": {
+      "debug": { "CMAKE_BUILD_TYPE": "Debug" },
+      "release": { "CMAKE_BUILD_TYPE": "Release" }
+    }
+  },
+  "package": { "kind": "ios", "from": "players/ios", "pack": "zip" },
+  "run": { "kind": "ios-simulator" },
+  "remote": {
+    "kind": "github-actions",
+    "workflow": "n2build-apple.yml",
+    "artifact": "n2build-ios",
+    "toolchains": ["gh"]
+  }
+}

@@ -92,9 +92,17 @@ export function resolvePackFormat(descriptor, settings, optionPack) {
   return optionPack ?? settings?.pack ?? descriptor.package.pack ?? (descriptor.package.kind === 'web' ? 'stored' : 'zip');
 }
 
-/** Where the game's pack goes: beside the player in a desktop package, in the build tree for the web (index.data holds it) */
+/**
+ * Where the game's pack goes: beside the player in a desktop package; in the build tree for the web (index.data holds it)
+ * and iOS (the app bundle does)
+ */
 export function packPath({ descriptor, packageDir, treeDir }) {
-  return descriptor.package.kind === 'web' ? path.join(treeDir, `game${PACK_EXTENSION}`) : path.join(packageDir, `game${PACK_EXTENSION}`);
+  return ['web', 'ios'].includes(descriptor.package.kind) ? path.join(treeDir, `game${PACK_EXTENSION}`) : path.join(packageDir, `game${PACK_EXTENSION}`);
+}
+
+/** Whether the pack is cooked before CMake configures: the web and iOS builds put it inside what they build */
+export function packBeforeConfigure(descriptor) {
+  return ['web', 'ios'].includes(descriptor.package.kind);
 }
 
 /**
@@ -142,7 +150,7 @@ export function resolveOptions(descriptor, config, present) {
 }
 
 /** Every path and command of a build, decided before anything runs (printed by --dry-run) */
-export function planBuild({ engineRoot, projectDir, descriptor, config, modules, present, toolchainFile, buildRoot, outDir, jobs, gameName, packFormat }) {
+export function planBuild({ engineRoot, projectDir, descriptor, config, modules, present, toolchainFile, buildRoot, outDir, jobs, gameName, packFormat, extraConfigureArgs = [] }) {
   const options = resolveOptions(descriptor, config, present);
   // The pack format is not part of the key: the web's pack path is a configure argument (a change reconfigures the tree)
   const key = buildKey({ projectDir, target: descriptor.name, config, modules, options });
@@ -162,7 +170,11 @@ export function planBuild({ engineRoot, projectDir, descriptor, config, modules,
   for (const [name, value] of Object.entries(options).sort(([a], [b]) => a.localeCompare(b))) {
     configureArgs.push(`-D${name}=${value}`);
   }
+  // Settings a target's own flow adds (iOS: the pack and the app's identity, lib/apple.mjs)
+  configureArgs.push(...extraConfigureArgs);
   const buildArgs = ['--build', treeDir, '--target', descriptor.cmake.target];
+  // Xcode is a multi-configuration generator: the configuration is chosen when building, not configuring
+  if (descriptor.cmake.generator === 'Xcode') buildArgs.push('--config', options.CMAKE_BUILD_TYPE ?? (config === 'debug' ? 'Debug' : 'Release'));
   if (jobs) buildArgs.push('-j', String(jobs));
   return { key, treeDir, packageDir, options, configureArgs, buildArgs };
 }
