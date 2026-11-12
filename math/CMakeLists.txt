@@ -36,6 +36,12 @@ elseif(MSVC)
     target_compile_options(math PUBLIC 
         /arch:AVX         # Enables AVX (includes SSE2, SSE4.1)
     )
+elseif(ANDROID AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|x86|i[3-6]86)$")
+    # Android on x86 (the emulator, a few Chromebooks): the x86_64 ABI guarantees SSE4.2 but not AVX, and 32-bit x86 only
+    # SSSE3, so no -mavx here: the AVX paths are behind __AVX__ and the SSE4.1 ones (CpuInfo.hpp) are used instead
+    if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+        target_compile_options(math PUBLIC -msse2 -msse4.1)
+    endif()
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|X86_64|AMD64|amd64|x86|i[3-6]86)$")
     # GCC/Clang flags (x86 only; other architectures such as aarch64 build the scalar implementations)
     target_compile_options(math PUBLIC 
