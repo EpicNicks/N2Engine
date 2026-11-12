@@ -552,6 +552,8 @@ test('a program on PATH is a file, not a folder of the same name (emsdk has a cm
   write(path.join(dir, 'tool'), 'x');
   assert.equal(systemProbe().isFile(path.join(dir, 'cmake')), false);
   assert.equal(systemProbe().isFile(path.join(dir, 'tool')), true);
+});
+
 // --- PhysX's GPU library only for GPU physics (follow-up of the build targets plan) ----------------------------------
 
 test("PhysX's GPU library ships only when the project's physics.gpu is on or auto", () => {
