@@ -54,8 +54,12 @@ namespace
     bool DeviceHasVulkan()
     {
 #if N2ENGINE_ANDROID_VULKAN
+        // vkEnumerateInstanceVersion is Vulkan 1.1: looked up, not linked (the NDK's libvulkan.so for API 26 is 1.0 only),
+        // and a loader without it is a 1.0 one
+        const auto enumerateVersion = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(
+            vkGetInstanceProcAddr(VK_NULL_HANDLE, "vkEnumerateInstanceVersion"));
         uint32_t version = VK_API_VERSION_1_0;
-        if (vkEnumerateInstanceVersion(&version) != VK_SUCCESS || version < VK_API_VERSION_1_1)
+        if (enumerateVersion == nullptr || enumerateVersion(&version) != VK_SUCCESS || version < VK_API_VERSION_1_1)
         {
             return false;
         }
