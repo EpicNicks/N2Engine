@@ -8,11 +8,11 @@
 #include <vector>
 
 #include <glad/glad.h>
-#include <GLFW/glfw3.h>
 
 #include <math/Vector3.hpp>
 
 #include "renderer/common/GpuCompute.hpp"
+#include "renderer/common/Surface.hpp"
 #include "renderer/common/RenderTypes.hpp"
 #include "renderer/common/RenderCounters.hpp"
 #include "renderer/common/RenderState.hpp"
@@ -71,7 +71,9 @@ namespace Renderer::Common
         [[nodiscard]] std::weak_ptr<const void> GetLifetimeToken() const { return m_lifetime; }
 
         // Lifecycle
-        virtual bool Initialize(GLFWwindow *windowHandle, uint32_t width, uint32_t height) = 0;
+        /// Starts on surface (a window, through the operations the platform supplies; or none: offscreen) at width x
+        /// height pixels. Initialize(nullptr, width, height) is an offscreen renderer.
+        virtual bool Initialize(const Surface &surface, uint32_t width, uint32_t height) = 0;
         virtual void Shutdown() = 0;
         virtual void Resize(uint32_t width, uint32_t height) = 0;
         virtual void Clear(float r, float g, float b, float a) = 0;

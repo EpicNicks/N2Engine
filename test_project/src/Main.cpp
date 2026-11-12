@@ -147,7 +147,19 @@ void TestRenderer()
     glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
 
     // Initialize renderer
-    if (!renderer->Initialize(window, WINDOW_WIDTH, WINDOW_HEIGHT))
+    // The renderer takes the window and its OpenGL operations (build targets stage 7): this demo owns its GLFW window
+    Renderer::Common::Surface surface;
+    surface.kind = Renderer::Common::Surface::Kind::DesktopWindow;
+    surface.handle = window;
+    surface.makeContextCurrent = [window] { glfwMakeContextCurrent(window); };
+    surface.getProcAddress = [](const char *name) { return reinterpret_cast<void *>(glfwGetProcAddress(name)); };
+    surface.swapBuffers = [window] { glfwSwapBuffers(window); };
+    surface.framebufferSize = [window] {
+        int width = 0, height = 0;
+        glfwGetFramebufferSize(window, &width, &height);
+        return std::pair<int, int>{width, height};
+    };
+    if (!renderer->Initialize(surface, WINDOW_WIDTH, WINDOW_HEIGHT))
     {
         std::cerr << "Failed to initialize renderer" << std::endl;
         glfwDestroyWindow(window);

@@ -39,7 +39,7 @@ namespace Renderer::OpenGL
         ~OpenGLRenderer() override;
 
         // Lifecycle
-        bool Initialize(GLFWwindow* windowHandle, uint32_t width, uint32_t height) override;
+        bool Initialize(const Common::Surface &surface, uint32_t width, uint32_t height) override;
         void Shutdown() override;
         void Resize(uint32_t width, uint32_t height) override;
         void Clear(float r, float g, float b, float a) override;
@@ -105,7 +105,8 @@ namespace Renderer::OpenGL
         [[nodiscard]] bool SetRenderTargetSize(uint32_t width, uint32_t height) override;
 
     private:
-        GLFWwindow* m_window;
+        /// The window and its OpenGL context operations (the platform's)
+        Common::Surface m_window;
         uint32_t m_width;
         uint32_t m_height;
 

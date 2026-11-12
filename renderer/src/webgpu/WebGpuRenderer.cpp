@@ -543,7 +543,7 @@ namespace Renderer::WebGpu
         return false;
     }
 
-    bool WebGpuRenderer::Initialize(GLFWwindow* windowHandle, std::uint32_t width, std::uint32_t height)
+    bool WebGpuRenderer::Initialize(const Common::Surface &surface, std::uint32_t width, std::uint32_t height)
     {
         std::lock_guard lock(_mutex);
 
@@ -557,7 +557,7 @@ namespace Renderer::WebGpu
         _initMessage.clear();
         _warnedPresent = false;
         _targetFixed = false;
-        static_cast<void>(windowHandle); // no surface: frames render offscreen whether or not there is a window
+        static_cast<void>(surface); // no surface: frames render offscreen whether or not there is a window
 
         if (width == 0 || height == 0)
         {
