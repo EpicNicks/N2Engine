@@ -122,5 +122,7 @@ endif()
 
 # tests/common has the glTF file builder the model tests share with tests/assetimport
 target_include_directories(engine_tests PRIVATE ${CMAKE_SOURCE_DIR}/tests/common)
+# engine/src: tests of the engine's private headers (input/GlfwInputMapping.hpp: the GLFW device's tables)
+target_include_directories(engine_tests PRIVATE ${CMAKE_SOURCE_DIR}/engine/src)
 
 add_test(NAME engine_tests COMMAND engine_tests)

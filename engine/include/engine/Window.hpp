@@ -13,6 +13,7 @@
 
 #include "engine/config/ApplicationOptions.hpp"
 #include "engine/common/Color.hpp"
+#include "engine/input/InputDevice.hpp"
 
 namespace N2Engine
 {
@@ -44,12 +45,11 @@ namespace N2Engine
 
     class Window
     {
-        friend class Input::InputBinding;
-        friend class Input::InputSystem;
-
     private:
         GLFWwindow *_window;
         std::unique_ptr<Renderer::Common::IRenderer> _renderer;
+        /// The window's input device (GLFW's; build targets stage 5), before the input system so it outlives it
+        std::unique_ptr<Input::InputDevice> _inputDevice;
         std::unique_ptr<Input::InputSystem> _inputSystem;
         std::string _title{"N2Engine Application"};
         WindowMode _windowMode{WindowMode::Windowed};
@@ -119,6 +119,8 @@ namespace N2Engine
         void Clear();
         [[nodiscard]] Renderer::Common::IRenderer* GetRenderer() const;
         [[nodiscard]] Input::InputSystem* GetInputSystem() const;
+        /// Where input is read from: GLFW's device while a window is open, null without one (input is then injected)
+        [[nodiscard]] Input::InputDevice* GetInputDevice() const { return _inputDevice.get(); }
 
         /// The window's size in screen coordinates; windowless, the size the renderer started at; {0, 0} without either
         [[nodiscard]] Vector2i GetWindowDimensions() const;

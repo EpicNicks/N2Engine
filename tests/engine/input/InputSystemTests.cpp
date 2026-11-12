@@ -1,4 +1,6 @@
 #include <gtest/gtest.h>
+
+#include <engine/input/InputDevice.hpp>
 #include <nlohmann/json.hpp>
 
 #include "engine/input/InputBinding.hpp"
@@ -14,7 +16,7 @@ using json = nlohmann::json;
 class InputBindingSerializationTest : public ::testing::Test
 {
 protected:
-    GLFWwindow* window = nullptr;
+    N2Engine::Input::InputDevice *window = nullptr;
 };
 
 
@@ -396,7 +398,7 @@ TEST(BindingParseErrorTest, AllErrorsHaveStrings)
 class InputActionSerializationTest : public ::testing::Test
 {
 protected:
-    GLFWwindow* window = nullptr;
+    N2Engine::Input::InputDevice *window = nullptr;
 };
 
 TEST_F(InputActionSerializationTest, EmptyAction_Serialize)
@@ -439,7 +441,7 @@ TEST_F(InputActionSerializationTest, ActionWithMultipleBindings_Serialize)
 class ActionMapSerializationTest : public ::testing::Test
 {
 protected:
-    GLFWwindow* window = nullptr;
+    N2Engine::Input::InputDevice *window = nullptr;
 };
 
 TEST_F(ActionMapSerializationTest, EmptyMap_Serialize)
@@ -488,7 +490,7 @@ TEST_F(ActionMapSerializationTest, DisabledMap_Serialize)
 class FullConfigSerializationTest : public ::testing::Test
 {
 protected:
-    GLFWwindow* window = nullptr;
+    N2Engine::Input::InputDevice *window = nullptr;
 
     static json CreateValidConfig()
     {

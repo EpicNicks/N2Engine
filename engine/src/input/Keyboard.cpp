@@ -1,36 +1,32 @@
 #include "engine/input/Keyboard.hpp"
 
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
-
 #include <nlohmann/json.hpp>
 
 #include "engine/Application.hpp"
 #include "engine/Window.hpp"
-#include "engine/input/InputMapping.hpp"
+#include "engine/input/InputDevice.hpp"
 #include "engine/input/InputSystem.hpp"
 #include "engine/input/KeySource.hpp"
 
 namespace N2Engine::Input
 {
-    Keyboard::Keyboard(GLFWwindow *window)
+    Keyboard::Keyboard(InputDevice *window)
         : _window(window)
     {
         if (_window == nullptr)
         {
             return; // no window: keys come from a KeySource, text from InjectText
         }
-        glfwSetCharCallback(_window, CharCallback);
+        _window->SetTextHandler([this](const unsigned int codepoint) { AppendCodepoint(codepoint); });
         // Sticky keys: a key pressed and released between two Updates still reads as down once
-        glfwSetInputMode(_window, GLFW_STICKY_KEYS, GLFW_TRUE);
+        _window->SetStickyInput(true);
     }
 
     Keyboard::~Keyboard()
     {
         if (_window != nullptr)
         {
-            glfwSetCharCallback(_window, nullptr);
-            glfwSetInputMode(_window, GLFW_STICKY_KEYS, GLFW_FALSE);
+            _window->SetTextHandler({});
         }
     }
 
@@ -38,18 +34,6 @@ namespace N2Engine::Input
     {
         const auto *input = Application::GetInstance().GetWindow().GetInputSystem();
         return input ? input->GetKeyboard() : nullptr;
-    }
-
-    void Keyboard::CharCallback(GLFWwindow *window, const unsigned int codepoint)
-    {
-        // The window's user pointer is its Window; the keyboard is reached through its input system (as the mouse's
-        // scroll callback does)
-        const auto *owner = static_cast<Window *>(glfwGetWindowUserPointer(window));
-        auto *input = owner ? owner->GetInputSystem() : nullptr;
-        if (auto *keyboard = input ? input->GetKeyboard() : nullptr)
-        {
-            keyboard->AppendCodepoint(codepoint);
-        }
     }
 
     void Keyboard::AppendCodepoint(const unsigned int codepoint)
@@ -114,7 +98,7 @@ namespace N2Engine::Input
             }
             else if (_window != nullptr)
             {
-                down = glfwGetKey(_window, KeyToGLFW.at(key)) == GLFW_PRESS;
+                down = _window->IsKeyDown(key);
             }
             _keys[i] = down;
         }

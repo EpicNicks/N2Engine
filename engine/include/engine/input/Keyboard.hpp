@@ -7,7 +7,10 @@
 
 #include "engine/input/InputTypes.hpp"
 
-struct GLFWwindow;
+namespace N2Engine::Input
+{
+    class InputDevice;
+}
 
 namespace N2Engine::Input
 {
@@ -27,7 +30,7 @@ namespace N2Engine::Input
         /// The most typed text kept per frame (bytes); the rest of a burst is dropped
         static constexpr std::size_t MaxTypedBytes = 256;
 
-        explicit Keyboard(GLFWwindow *window);
+        explicit Keyboard(InputDevice *window);
         ~Keyboard();
 
         Keyboard(const Keyboard &) = delete;
@@ -53,12 +56,10 @@ namespace N2Engine::Input
         static std::optional<Key> KeyFromName(std::string_view name);
 
     private:
-        GLFWwindow *_window;
+        InputDevice *_window;
         std::bitset<KeyCount> _keys;
         std::bitset<KeyCount> _previousKeys;
         std::string _pendingText;
         std::string _typedText;
-
-        static void CharCallback(GLFWwindow *window, unsigned int codepoint);
     };
 }

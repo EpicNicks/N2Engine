@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <engine/input/InputDevice.hpp>
+
 #include <memory>
 
 #include <math/Vector2.hpp>
@@ -32,7 +34,7 @@ namespace
         const KeySource *_previous;
     };
 
-    GLFWwindow *NoWindow() { return nullptr; }
+    N2Engine::Input::InputDevice *NoWindow() { return nullptr; }
 }
 
 TEST(InjectedKeysTest, AKeyIsDownFromItsPressUntilItsRelease)
