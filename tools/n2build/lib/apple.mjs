@@ -10,6 +10,7 @@
 // Off a Mac the targets build in GitHub Actions instead (lib/remote.mjs, decision D7).
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { isAppId, defaultAppId } from './android.mjs';
@@ -91,10 +92,14 @@ export function pickSimulator(listJson) {
 }
 
 /**
- * Install and launch in the simulator, its console streamed as log events ("stream": "console") until the app exits or
- * `seconds` pass. `exec` (a whole-output runner) and `stream` (lib/adb.mjs's streamLines shape) are injectable for tests.
+ * Install and launch in the simulator, the app's output streamed as log events ("stream": "console") until it exits or
+ * `seconds` pass. The app writes its stdout and stderr to a file the simulator fills (simctl launch --stdout/--stderr),
+ * which is followed here: `simctl launch --console-pty` proved unreliable on CI runners (its stream can end at once while
+ * the app keeps running). Whether the app still runs is asked of the simulator's launchd (launchctl list).
+ * `exec` (a whole-output runner), `readFile` (text or null) and `sleep` are injectable for tests.
  */
-export async function runInSimulator({ app, bundleId, env, reporter, seconds = null, exec, stream, sleep = (ms) => new Promise((r) => { setTimeout(r, ms); }) }) {
+export async function runInSimulator({ app, bundleId, env, reporter, seconds = null, exec, readFile = readTextFile, outFile = null,
+  sleep = (ms) => new Promise((r) => { setTimeout(r, ms); }) }) {
   const simctl = async (args, what) => {
     const result = await exec('xcrun', ['simctl', ...args], { env });
     if (result.code !== 0) throw new BuildError(`${what} failed: ${(result.stderr || result.stdout).trim().split(/\r?\n/).slice(-3).join(' ')}`);
@@ -108,23 +113,53 @@ export async function runInSimulator({ app, bundleId, env, reporter, seconds = n
   }
   reporter.step('install', `Installing ${path.basename(app)} on ${device.name}`);
   await simctl(['install', device.udid, app], 'Installing the app');
-  reporter.step('run', `Launching ${bundleId}; its console follows`);
-  let exited = false;
-  const console_ = stream('xcrun', ['simctl', 'launch', '--console-pty', '--terminate-running-process', device.udid, bundleId],
-    { env, onLine: (line) => reporter.log('console', line) });
-  console_.done.then(() => { exited = true; });
+
+  const output = outFile ?? path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'n2build-sim-')), 'console.txt');
+  reporter.step('run', `Launching ${bundleId}; its output follows`);
+  const launched = await simctl(['launch', '--terminate-running-process', `--stdout=${output}`, `--stderr=${output}`, device.udid, bundleId],
+    'Launching the app');
+  const pid = /:\s*(\d+)/.exec(launched.stdout)?.[1] ?? null;
+
+  // New lines of the output file as log events (a partial last line waits for its end)
+  let shown = 0;
+  let pending = '';
+  const follow = () => {
+    const text = readFile(output);
+    if (text === null || text.length <= shown) return;
+    pending += text.slice(shown);
+    shown = text.length;
+    const lines = pending.split(/\r?\n/);
+    pending = lines.pop();
+    for (const line of lines) reporter.log('console', line);
+  };
+  const running = async () => {
+    const listed = await exec('xcrun', ['simctl', 'spawn', device.udid, 'launchctl', 'list'], { env });
+    return listed.code !== 0 || listed.stdout.includes(bundleId); // a failed query is not taken for an exit
+  };
+
   let waited = 0;
-  while (!exited && (seconds === null || waited < seconds * 1000)) {
+  let reason = 'time';
+  while (seconds === null || waited < seconds * 1000) {
     await sleep(500);
     waited += 500;
+    follow();
+    if (waited % 2000 === 0 && !(await running())) {
+      reason = 'exited';
+      break;
+    }
   }
-  const reason = exited ? 'exited' : 'time';
-  if (!exited) {
-    await exec('xcrun', ['simctl', 'terminate', device.udid, bundleId], { env });
-    console_.stop();
+  if (reason === 'time') await exec('xcrun', ['simctl', 'terminate', device.udid, bundleId], { env });
+  follow();
+  if (pending !== '') reporter.log('console', pending);
+  return { device: device.udid, pid, reason };
+}
+
+function readTextFile(file) {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch {
+    return null;
   }
-  await console_.done;
-  return { device: device.udid, reason };
 }
 
 /** A process's whole output (simctl's short commands) */

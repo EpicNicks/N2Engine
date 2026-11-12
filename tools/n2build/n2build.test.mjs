@@ -1138,22 +1138,48 @@ test('the simulator: the booted one, else the newest iPhone; install, launch, th
   assert.equal(pickSimulator('{"devices": {}}'), null);
   assert.equal(pickSimulator('not json'), null);
 
+  // The app writes its output to a file the simulator fills; it runs for two launchd checks, then is gone
   const calls = [];
+  let output = '';
+  let checks = 0;
   const exec = async (command, args) => {
     calls.push(args.join(' '));
-    return args[1] === 'list' ? { code: 0, stdout: list(false), stderr: '' } : { code: 0, stdout: '', stderr: '' };
-  };
-  const stream = (command, args, { onLine }) => {
-    calls.push(args.join(' '));
-    onLine('N2Engine info: N2Engine iOS player: first frame');
-    return { stop: () => {}, done: Promise.resolve() };
+    if (args[1] === 'list') return { code: 0, stdout: list(false), stderr: '' };
+    if (args[1] === 'launch') {
+      output = 'N2Engine info: N2Engine iOS player: first frame\nN2Engine info: N2Engine iOS player: 30 frames, 6.0 fps\npartial';
+      return { code: 0, stdout: 'com.example.tri: 4242\n', stderr: '' };
+    }
+    if (args.includes('launchctl')) {
+      checks += 1;
+      return { code: 0, stdout: checks <= 2 ? '4242\t0\tUIKitApplication:com.example.tri[1a2b]\n' : '', stderr: '' };
+    }
+    return { code: 0, stdout: '', stderr: '' };
   };
   const { reporter, lines } = capture();
-  const outcome = await runInSimulator({ app: '/out/Tri.app', bundleId: 'com.example.tri', env: {}, reporter, exec, stream, sleep: async () => {} });
-  assert.deepEqual(outcome, { device: 'NEW', reason: 'exited' });
-  assert.deepEqual(calls, ['simctl list devices available --json', 'simctl boot NEW', 'simctl install NEW /out/Tri.app',
-    'simctl launch --console-pty --terminate-running-process NEW com.example.tri']);
-  assert.deepEqual(lines.filter((l) => l.type === 'log').map((l) => [l.stream, l.text]), [['console', 'N2Engine info: N2Engine iOS player: first frame']]);
+  const outcome = await runInSimulator({ app: '/out/Tri.app', bundleId: 'com.example.tri', env: {}, reporter, exec, outFile: '/tmp/console.txt',
+    readFile: (file) => (file === '/tmp/console.txt' ? output : null), sleep: async () => {} });
+  assert.deepEqual(outcome, { device: 'NEW', pid: '4242', reason: 'exited' });
+  assert.deepEqual(calls.slice(0, 4), ['simctl list devices available --json', 'simctl boot NEW', 'simctl install NEW /out/Tri.app',
+    'simctl launch --terminate-running-process --stdout=/tmp/console.txt --stderr=/tmp/console.txt NEW com.example.tri']);
+  assert.equal(checks, 3, 'launchd is asked until the app is gone');
+  assert.ok(!calls.some((c) => c.includes('terminate NEW')), 'an app that exited is not terminated');
+  assert.deepEqual(lines.filter((l) => l.type === 'log').map((l) => [l.stream, l.text]), [
+    ['console', 'N2Engine info: N2Engine iOS player: first frame'], ['console', 'N2Engine info: N2Engine iOS player: 30 frames, 6.0 fps'],
+    ['console', 'partial']]);
+
+  // --seconds: the app is stopped when the time is up
+  const timed = [];
+  const keepRunning = async (command, args) => {
+    timed.push(args.join(' '));
+    if (args[1] === 'list') return { code: 0, stdout: list(true), stderr: '' };
+    if (args.includes('launchctl')) return { code: 0, stdout: 'UIKitApplication:com.example.tri[1]\n', stderr: '' };
+    return { code: 0, stdout: 'com.example.tri: 7\n', stderr: '' };
+  };
+  const stopped = await runInSimulator({ app: '/out/Tri.app', bundleId: 'com.example.tri', env: {}, reporter: capture().reporter, exec: keepRunning,
+    outFile: '/tmp/none.txt', readFile: () => null, seconds: 3, sleep: async () => {} });
+  assert.equal(stopped.reason, 'time');
+  assert.ok(timed.includes('simctl terminate NEW com.example.tri'));
+  assert.ok(!timed.includes('simctl boot NEW'), 'a booted simulator is used as it is');
 });
 
 /** A fake git for the game's repository */

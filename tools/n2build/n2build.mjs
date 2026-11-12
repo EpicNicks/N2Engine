@@ -29,7 +29,7 @@ import {
   archivePackage, checkPhysics, engineRevision, needsConfigure, packageDesktop, packageWeb, packBeforeConfigure, packPath, planBuild, safeName,
   preparePackageDir, readMarker, readProject, recordConfigure, resolvePackFormat, runProcess, writeMarker,
 } from './lib/build.mjs';
-import { findAdb, parseDevices, pickDevice, runOnDevice, streamLines } from './lib/adb.mjs';
+import { findAdb, parseDevices, pickDevice, runOnDevice } from './lib/adb.mjs';
 import { captureProcess, iosConfigureArgs, iosSettings, packageIos, runInSimulator } from './lib/apple.mjs';
 import { checkPushed, dispatchAndFollow, gitState, workflowInputs, workflowTemplate } from './lib/remote.mjs';
 import { cmakeInstallDir, gradleInvocation, packageAndroid, planAndroid, prepareGradleTree } from './lib/android.mjs';
@@ -407,7 +407,7 @@ async function run(descriptor, options, ctx, reporter) {
       throw new BuildError('The iOS simulator runs on a Mac only. Off a Mac, the n2build-apple workflow runs the app in the simulator for 30 seconds (docs/apple.html#remote)');
     }
     const outcome = await runInSimulator({ app: path.join(packageDir, marker.entry), bundleId: marker.appId, env: ctx.env, reporter,
-      seconds: options.seconds ?? null, ...(ctx.simulator ?? { exec: captureProcess, stream: streamLines }) });
+      seconds: options.seconds ?? null, ...(ctx.simulator ?? { exec: captureProcess }) });
     return { ok: true, output: packageDir, device: outcome.device, ended: outcome.reason };
   }
 
