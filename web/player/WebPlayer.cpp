@@ -8,6 +8,11 @@
 //  - Keyboard and mouse come from HTML5 events: keys and buttons go to an Input::InjectedKeys installed as the engine's
 //    KeySource (the seam the editor's play child uses), the pointer to Mouse::InjectPointer, the wheel to
 //    Mouse::AccumulateScroll. WebInputMap.hpp holds the translation.
+//  - Gamepads come from the browser's Gamepad API, sampled at the start of every frame (it has no events for button or
+//    axis changes) into an Input::InjectedGamepads installed as the engine's GamepadSource. Slot i is
+//    navigator.getGamepads()[i], the index Rumble writes to. A pad the browser has no standard mapping for is a joystick
+//    without a gamepad mapping (InputSystem lists it; no binding reads it). Browsers show no pad to a page until a
+//    button on it is pressed while the page is visible.
 //
 // Arguments (Module.arguments, or callMain's): [--project DIR] (default /project, the preloaded folder),
 // [--frames N] (run N frames, then stop: the node smoke test, which also skips the DOM and takes its size from --size),
@@ -18,11 +23,14 @@
 #include <emscripten/html5.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <format>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -35,6 +43,7 @@
 #include "engine/Logger.hpp"
 #include "engine/ProjectSettings.hpp"
 #include "engine/Window.hpp"
+#include "engine/input/GamepadSource.hpp"
 #include "engine/input/InputSystem.hpp"
 #include "engine/input/KeySource.hpp"
 #include "engine/input/Keyboard.hpp"
@@ -95,6 +104,8 @@ namespace
     struct Player
     {
         Input::InjectedKeys keys;
+        Input::InjectedGamepads gamepads;
+        EmscriptenGamepadEvent gamepadReading{}; // emscripten_get_gamepad_status's output (1.3 KB, so not on the stack)
         std::uint32_t buttons = 0;
         std::uint32_t pressedSinceSample = 0; // presses latched so a click shorter than a frame still reaches the game
         Math::Vector2 pointer{0.0f, 0.0f};
@@ -297,6 +308,46 @@ namespace
         emscripten_set_touchcancel_callback("#canvas", nullptr, EM_TRUE, OnTouch);
     }
 
+    /// The browser's gamepads as they are now, into g_player.gamepads. Without the Gamepad API (node, an old browser)
+    /// there are none.
+    void SampleGamepads()
+    {
+        g_player.gamepads.DisconnectAll();
+        if (emscripten_sample_gamepad_data() != EMSCRIPTEN_RESULT_SUCCESS)
+        {
+            return;
+        }
+        const int count = std::min(emscripten_get_num_gamepads(), Input::MaxGamepads);
+        EmscriptenGamepadEvent &pad = g_player.gamepadReading;
+        for (int i = 0; i < count; ++i)
+        {
+            // NO_DATA: an empty slot (a pad that was unplugged keeps its neighbours' indices)
+            if (emscripten_get_gamepad_status(i, &pad) != EMSCRIPTEN_RESULT_SUCCESS || !pad.connected)
+            {
+                continue;
+            }
+            const std::string name(pad.id, strnlen(pad.id, sizeof(pad.id)));
+            if (!Web::IsStandardGamepadMapping(std::string_view(pad.mapping, strnlen(pad.mapping, sizeof(pad.mapping)))))
+            {
+                g_player.gamepads.Connect(i, name, std::nullopt);
+                continue;
+            }
+            constexpr int Slots = static_cast<int>(sizeof(pad.analogButton) / sizeof(pad.analogButton[0]));
+            const int axes = std::clamp(pad.numAxes, 0, static_cast<int>(sizeof(pad.axis) / sizeof(pad.axis[0])));
+            const int buttonCount = std::clamp(pad.numButtons, 0, Slots);
+            std::array<Web::DomGamepadButton, Slots> buttons{};
+            for (int b = 0; b < buttonCount; ++b)
+            {
+                buttons[static_cast<std::size_t>(b)] = {pad.digitalButton[b], pad.analogButton[b]};
+            }
+            g_player.gamepads.Connect(i, name,
+                                      Web::GamepadStateFromStandard(
+                                          std::span<const double>(pad.axis, static_cast<std::size_t>(axes)),
+                                          std::span<const Web::DomGamepadButton>(buttons.data(),
+                                                                                 static_cast<std::size_t>(buttonCount))));
+        }
+    }
+
     // -- size and frames -----------------------------------------------------------------------------------------
 
     /// Makes the render size follow the canvas as shown. False when there is nothing to render into.
@@ -407,6 +458,10 @@ namespace
         {
             mouse->InjectPointer(g_player.pointer, g_player.buttons | g_player.pressedSinceSample);
             g_player.pressedSinceSample = 0;
+        }
+        if (g_player.domAvailable)
+        {
+            SampleGamepads(); // not under node: Emscripten's sampler assumes a navigator object
         }
         if (!application.RunFrame())
         {
@@ -574,8 +629,9 @@ int main(int argc, char *argv[])
         return Fail("The project's scene.lua failed to run (see the log)");
     }
 
-    // Keys and mouse buttons come from the page's events, not from a window
+    // Keys and mouse buttons come from the page's events, gamepads from the Gamepad API, not from a window
     Input::KeySource::Set(&g_player.keys);
+    Input::GamepadSource::Set(&g_player.gamepads);
     if (g_player.domAvailable)
     {
         RegisterInput();

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "engine/input/GamepadSource.hpp"
 #include "engine/input/InputValue.hpp"
 #include "engine/input/KeySource.hpp"
 #include <engine/input/InputDevice.hpp>
@@ -21,7 +22,8 @@ InputBinding::InputBinding(const Window &win)
 namespace
 {
     /// A gamepad binding's device: its own, else the application window's. Gamepads are the system's, not a window's
-    /// (GLFW reads them without one), so a binding made without a device still sees them while a window is open.
+    /// (GLFW reads them without one), so a binding made without a device still sees them while a window is open. An
+    /// installed GamepadSource replaces either (ReadGamepadState).
     const InputDevice *GamepadDevice(const InputDevice *own)
     {
         return own != nullptr ? own : Application::GetInstance().GetWindow().GetInputDevice();
@@ -75,10 +77,10 @@ InputValue AxisBinding::Shape(const float normalized, const AxisDirection direct
 
 InputValue AxisBinding::getValue()
 {
-    // No device (no window, or windowless): no gamepads
+    // No device and no GamepadSource (no window, or windowless): no gamepads
     GamepadState state;
     const InputDevice *device = GamepadDevice(window);
-    if (device != nullptr && device->GetGamepadState(gamepadId, state))
+    if (ReadGamepadState(device, gamepadId, state))
     {
         return Shape(NormalizeAxis(boundAxis, state.Axis(boundAxis)), direction, pressPoint);
     }
@@ -87,10 +89,10 @@ InputValue AxisBinding::getValue()
 
 InputValue GamepadStickBinding::getValue()
 {
-    // No device (no window, or windowless): no gamepads
+    // No device and no GamepadSource (no window, or windowless): no gamepads
     GamepadState state;
     const InputDevice *device = GamepadDevice(window);
-    if (device != nullptr && device->GetGamepadState(gamepadId, state))
+    if (ReadGamepadState(device, gamepadId, state))
     {
         const float x = (invertXAxis ? -1 : 1) * state.Axis(xAxis);
         const float y = (invertYAxis ? -1 : 1) * state.Axis(yAxis);
@@ -158,10 +160,10 @@ InputValue MouseButtonBinding::getValue()
 
 InputValue GamepadButtonBinding::getValue()
 {
-    // No device (no window, or windowless): no gamepads
+    // No device and no GamepadSource (no window, or windowless): no gamepads
     GamepadState state;
     const InputDevice *device = GamepadDevice(window);
-    return device != nullptr && device->GetGamepadState(gamepadId, state) && state.Button(boundButton);
+    return ReadGamepadState(device, gamepadId, state) && state.Button(boundButton);
 }
 
 Vector2 GamepadButtonCompositeBinding::Combine(const bool upDown, const bool downDown, const bool leftDown,
@@ -181,10 +183,10 @@ Vector2 GamepadButtonCompositeBinding::Combine(const bool upDown, const bool dow
 
 InputValue GamepadButtonCompositeBinding::getValue()
 {
-    // No device (no window, or windowless): no gamepads
+    // No device and no GamepadSource (no window, or windowless): no gamepads
     GamepadState state;
     const InputDevice *device = GamepadDevice(window);
-    if (device == nullptr || !device->GetGamepadState(gamepadId, state))
+    if (!ReadGamepadState(device, gamepadId, state))
     {
         return Vector2(0.0f, 0.0f);
     }

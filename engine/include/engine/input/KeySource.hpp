@@ -14,7 +14,7 @@ namespace N2Engine::Input
      * or mouse buttons while one is installed, so a key the window reports can't mix with the injected ones.
      *
      * The mouse position, the scroll and the gamepads aren't part of it: the pointer has Mouse::InjectPointer and
-     * Mouse::AccumulateScroll, and gamepads come later.
+     * Mouse::AccumulateScroll, and gamepads have GamepadSource.
      *
      * Main thread only. The source is not owned: the installer keeps it alive until it installs another or none.
      */

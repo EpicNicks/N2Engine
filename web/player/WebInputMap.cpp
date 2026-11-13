@@ -4,6 +4,7 @@
 #include <cmath>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 namespace N2Engine::Web
 {
@@ -189,5 +190,53 @@ namespace N2Engine::Web
         const double scale = std::min({1.0, maxWidth / deviceWidth, std::sqrt(maxArea / (deviceWidth * deviceHeight))});
         return {std::max(1, static_cast<int>(std::lround(deviceWidth * scale))),
                 std::max(1, static_cast<int>(std::lround(deviceHeight * scale)))};
+    }
+
+    bool IsStandardGamepadMapping(const std::string_view mapping)
+    {
+        return mapping == "standard";
+    }
+
+    Input::GamepadState GamepadStateFromStandard(const std::span<const double> axes,
+                                                 const std::span<const DomGamepadButton> buttons)
+    {
+        using Input::GamepadAxis;
+        using Input::GamepadButton;
+        // The standard layout's button order (https://w3c.github.io/gamepad/#remapping); 6 and 7 are the triggers
+        constexpr int Triggers[2] = {6, 7};
+        constexpr std::pair<int, GamepadButton> Buttons[] = {
+            {0, GamepadButton::South},      {1, GamepadButton::East},       {2, GamepadButton::West},
+            {3, GamepadButton::North},      {4, GamepadButton::LeftBumper}, {5, GamepadButton::RightBumper},
+            {8, GamepadButton::Back},       {9, GamepadButton::Start},      {10, GamepadButton::LeftThumb},
+            {11, GamepadButton::RightThumb}, {12, GamepadButton::DpadUp},   {13, GamepadButton::DpadDown},
+            {14, GamepadButton::DpadLeft},  {15, GamepadButton::DpadRight}, {16, GamepadButton::Guide},
+        };
+        constexpr std::pair<int, GamepadAxis> Sticks[] = {
+            {0, GamepadAxis::LeftX}, {1, GamepadAxis::LeftY}, {2, GamepadAxis::RightX}, {3, GamepadAxis::RightY}};
+
+        const auto finite = [](const double v) { return std::isfinite(v) ? v : 0.0; };
+        Input::GamepadState state;
+        for (const auto &[index, button] : Buttons)
+        {
+            if (index < static_cast<int>(buttons.size()))
+            {
+                state.buttons[static_cast<std::size_t>(button)] = buttons[static_cast<std::size_t>(index)].pressed;
+            }
+        }
+        for (const auto &[index, axis] : Sticks)
+        {
+            const double v = index < static_cast<int>(axes.size()) ? finite(axes[static_cast<std::size_t>(index)]) : 0.0;
+            state.axes[static_cast<std::size_t>(axis)] = static_cast<float>(std::clamp(v, -1.0, 1.0));
+        }
+        const GamepadAxis triggerAxes[2] = {GamepadAxis::LeftTrigger, GamepadAxis::RightTrigger};
+        for (int t = 0; t < 2; ++t)
+        {
+            const int index = Triggers[t];
+            const double pulled = index < static_cast<int>(buttons.size())
+                                      ? std::clamp(finite(buttons[static_cast<std::size_t>(index)].value), 0.0, 1.0)
+                                      : 0.0;
+            state.axes[static_cast<std::size_t>(triggerAxes[t])] = static_cast<float>(pulled * 2.0 - 1.0);
+        }
+        return state;
     }
 }
