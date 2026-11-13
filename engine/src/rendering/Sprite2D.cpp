@@ -4,6 +4,8 @@
 #include <span>
 #include <utility>
 
+#include <renderer/common/BlendCutOut.hpp>
+
 #include "engine/GameObject.hpp"
 #include "engine/common/ScriptUtils.hpp"
 #include "engine/serialization/MathSerialization.hpp"
@@ -123,8 +125,9 @@ namespace N2Engine::Rendering
             _material->SetBaseColorTexture(_texture);
         }
         // The test is on the final alpha, the texture's times the colour's: half the colour's alpha cuts out what is under half
-        // opaque in the texture, so fading a sprite does not make it vanish
-        const float discard = (_texture && !renderer.SupportsBlending()) ? 0.5f * std::clamp(_color.a, 0.0f, 1.0f) : 0.0f;
+        // opaque in the texture, so fading a sprite does not make it vanish, and a fully faded one draws nothing
+        // (Renderer::Common::BlendCutOutBelow, shared with the UI Image)
+        const float discard = Renderer::Common::BlendCutOutBelow(_texture != nullptr, renderer.SupportsBlending(), _color.a);
         if (_material->GetBlendDiscardBelow() != discard)
         {
             _material->SetBlendDiscardBelow(discard);
