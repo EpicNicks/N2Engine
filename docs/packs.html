@@ -77,7 +77,7 @@
 <div class="content">
 
 <h1>Packs &amp; the virtual filesystem</h1>
-<p class="lead">A packaged game is one file, <code>game.n2pack</code>: the project folder's <code>project.n2proj</code>, <code>assets/</code> and <code>.import/</code> in a zip or 7z pack. The engine reads every game file through a virtual filesystem, so a player mounts the pack where the game's folder would be and opens that folder as it opens any project. This is stage 4 of the <a href="build-targets.html">build targets</a> plan <span class="badge">PR #TBD</span>.</p>
+<p class="lead">A packaged game is one file, <code>game.n2pack</code>: the project folder's <code>project.n2proj</code>, <code>assets/</code> and <code>.import/</code> in a zip or 7z pack. The engine reads every game file through a virtual filesystem, so a player mounts the pack where the game's folder would be and opens that folder as it opens any project. This is stage 4 of the <a href="build-targets.html">build targets</a> plan <span class="badge">PR #338</span>.</p>
 
 <h2 id="vfs">The virtual filesystem</h2>
 <p><code>IO::Vfs</code> (<code>engine/include/engine/io/Vfs.hpp</code>) is the one door through which the engine reads a game's files. A path inside a mount is served by that mount; any other path by the disk, exactly as before. Paths stay ordinary <code>std::filesystem</code> paths, so nothing above this layer changes its spelling.</p>
@@ -182,7 +182,7 @@
 </ul>
 
 <div class="page-footer">
-<span>Describes the build targets plan through stage 4 (PR #TBD).</span>
+<span>Describes the build targets plan through stage 4 (PR #338).</span>
 <a href="index.html">Back to overview</a>
 </div>
 
