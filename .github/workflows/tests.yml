@@ -1651,7 +1651,8 @@ jobs:
   # headless under node in all three profiles (dev, size, speed; stage 3), with the size budgets of web/budgets.json enforced. Not a required check. Emscripten is pinned to an exact release (EMSCRIPTEN_VERSION, installed
   # with the official emsdk, no third-party action): a moving "latest" would let an upstream release break or change the
   # build with no change in this repository. 4.0.10 was chosen as a 4.0 release with a recent LLVM/libc++ for C++23 (not yet proven: the first
-  # run of this job is the proof; bump the pin here and in docs/web-build.html if it is not enough). ccache is not used.
+  # run of this job is the proof; bump the pin here and in docs/web-build.html if it is not enough). ccache is used within the
+  # run only (see "Install ccache"): nothing is saved or restored between runs.
   # The unit tests run on the dev profile only; the size and speed profiles build and check the player package (no tests:
   # they would not add coverage, only minutes). The tests that cannot run on the web are excluded by an explicit list (tests/engine/CMakeLists.txt) or
   # skip themselves; docs/web-build.html lists them with their reasons and describes the build.
@@ -1665,8 +1666,33 @@ jobs:
     env:
       N2_DOWNLOAD_CACHE: ${{ github.workspace }}/.n2-downloads
       EMSCRIPTEN_VERSION: 4.0.10
+      # ccache within this run (see "Install ccache"): the trees are built in different folders, so paths are made relative to
+      # the workspace and the folder is not hashed, as on the Linux legs
+      CCACHE_DIR: ${{ github.workspace }}/.ccache-web
+      CCACHE_MAXSIZE: 6G
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
     steps:
       - uses: actions/checkout@v7
+
+      # ccache for emcc, within this run only. The size profile's trees (size; size without Box2D; the project without
+      # particles and soft bodies; and the libraries of the project without physics) compile mostly the same files with the
+      # same flags, so after the first tree most compiles are cache hits. Emscripten's EM_COMPILER_WRAPPER runs ccache in front
+      # of the clang that emcc calls, so ccache sees clang's real command line and binary, not emcc's. Nothing is saved or
+      # restored between runs: the repository's Actions caches are at their 10 GB limit, and a web cache saved by master
+      # would push the other legs' caches out. If the install fails, EM_COMPILER_WRAPPER is not set and the job builds
+      # without a compiler cache, as before; ccache only changes how long the compiles take, never what they produce.
+      - name: Install ccache
+        continue-on-error: true
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ccache
+          ccache --version | head -n 1
+          mkdir -p "$CCACHE_DIR"
+          ccache --zero-stats
+          ccache --show-config | grep -E " (cache_dir|max_size|base_dir|hash_dir|compiler_check) = " || true
+          echo "EM_COMPILER_WRAPPER=ccache" >> "$GITHUB_ENV"
 
       # emsdk is cloned at the release tag if it has one, otherwise at its default branch; either way `install` fetches
       # exactly EMSCRIPTEN_VERSION (the emsdk repository only says where to download that release from). The emsdk
@@ -1969,6 +1995,24 @@ jobs:
             fi
             echo "$dir: the WebGPU backend is linked into the player"
           done
+
+      # Runs after a failed build or test too (not when cancelled): what ccache did in this run, from zeroed statistics
+      - name: ccache statistics
+        if: "!cancelled()"
+        continue-on-error: true
+        run: |
+          if [ "${EM_COMPILER_WRAPPER:-}" != "ccache" ]; then
+            echo "### ccache (web)" >> "$GITHUB_STEP_SUMMARY"
+            echo "not installed: built without a compiler cache" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "### ccache (web, this run only)"
+            echo '```'
+            ccache -s
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          ccache -s
 
       # G6 reuses these exact build outputs in a separate browser job; no second engine build or mutable artifact ref.
       # The size-profile player keeps the transfer small. The dev readback executable links only the renderer.
