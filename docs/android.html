@@ -89,6 +89,7 @@
 <li><a href="#signing">Signing and the AAB</a></li>
 <li><a href="#run">Running on a device</a></li>
 <li><a href="#player">The player</a></li>
+<li><a href="#vulkan">The Vulkan renderer</a></li>
 <li><a href="#limits">What is not there yet</a></li>
 <li><a href="#ci">CI</a></li>
 <li><a href="#checklist">Device checklist</a></li>
@@ -135,6 +136,7 @@ node tools/n2build/n2build.mjs build  --target android --project path/to/game [-
 <tr><td><code>displayName</code></td><td>The project's name</td><td>The name under the launcher icon, and the APK's file name</td></tr>
 <tr><td><code>version</code>, <code>buildNumber</code></td><td><code>1.0.0</code>, <code>1</code></td><td><code>versionName</code> and <code>versionCode</code></td></tr>
 <tr><td><code>orientation</code></td><td><code>any</code></td><td><code>any</code>, <code>landscape</code> or <code>portrait</code> (the activity's <code>fullUser</code>, <code>sensorLandscape</code> or <code>sensorPortrait</code>)</td></tr>
+<tr><td><code>renderer</code></td><td><code>software</code></td><td><code>software</code> (or <code>auto</code>), or <code>vulkan</code>: the Vulkan renderer built in and used where the device has Vulkan (<a href="#vulkan">the Vulkan renderer</a>)</td></tr>
 <tr><td><code>abis</code></td><td><code>["arm64-v8a", "x86_64"]</code></td><td>The ABIs to build: <code>arm64-v8a</code>, <code>armeabi-v7a</code>, <code>x86_64</code>, <code>x86</code>. Each one is a separate engine build, so build fewer to build faster.</td></tr>
 <tr><td><code>config</code>, <code>modules</code>, <code>pack</code></td><td></td><td>As for every target</td></tr>
 </tbody>
@@ -185,9 +187,28 @@ node tools/n2build/n2build.mjs build  --target android --project path/to/game [-
 </ul>
 <p class="src">Source: <code>players/android/native/src/AndroidMain.cpp</code>, <code>AndroidHost.cpp</code>; <code>players/android/app</code> (<code>N2Activity</code>)</p>
 
+<h2 id="vulkan">The Vulkan renderer <span class="badge">PR #TBD</span></h2>
+<p>With <code>build.targets.android.renderer</code> set to <code>"vulkan"</code>, the APK also carries the engine's Vulkan renderer. It is built with the NDK's own Vulkan headers and <code>libvulkan.so</code>, and the NDK's <code>glslc</code> compiles its built-in shaders.</p>
+<ul>
+<li><strong>The choice, on the device:</strong> at start-up the player asks the Vulkan loader for a Vulkan 1.1 instance and a GPU. With one, it draws with Vulkan; without, with the software renderer. One APK runs on every device, and the log says which renderer it chose (<code>N2Engine Android player: the Vulkan renderer</code>).</li>
+<li><strong>The surface:</strong> the Android backend makes the <code>VkSurfaceKHR</code> on the window of the moment (<code>VK_KHR_android_surface</code>).</li>
+<li><strong>Background and back:</strong> Android frees a backgrounded app's window.
+<ol>
+<li>On <code>SurfaceLost</code>, the window tells the renderer first (<code>IRenderer::OnSurfaceLost</code>). The Vulkan renderer waits for the GPU and destroys its swapchain and surface before the window goes.</li>
+<li>Until the window comes back, frames render offscreen and nothing is presented.</li>
+<li>On <code>SurfaceRecreated</code>, the renderer gets the new surface (<code>OnSurfaceRecreated</code>) and makes a surface and a swapchain on it.</li>
+</ol>
+The software renderer needs neither: its present finds the current window each frame.</li>
+</ul>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>A lost surface is let go: no swapchain and no surface remain, frames still render and read back, and nothing is presented. A recreated surface presents again with a new surface. A second loss, or a recreate without a loss, changes nothing (<code>VulkanHeadlessSwapchainTest.ALostSurfaceIsLetGoAndMadeAgainWhenTheWindowComesBack</code>, on any driver with <code>VK_EXT_headless_surface</code>). The renderer hears the surface go and come back before the game does (<code>PlatformHostTest.TheRendererHearsTheSurfaceGoAndComeBackBeforeTheGame</code>).</p>
+</div>
+<p>Not verified: Vulkan on a real phone, and its frame rate against the software renderer's. Both are device-checklist items. On the CI emulator the log shows which renderer it chose; the job prints it.</p>
+
 <h2 id="limits">What is not there yet</h2>
 <ul>
-<li><strong>Rendering:</strong> the software renderer only. Vulkan on Android is stage 12.</li>
+<li><strong>Rendering:</strong> the software renderer, or Vulkan where the device has it (<a href="#vulkan">above</a>). A Vulkan start-up failure after the loader said yes is not retried with the software renderer.</li>
 <li><strong>Audio:</strong> OpenAL Soft plays through its OpenSL ES backend. AAudio through Oboe is a follow-up.</li>
 <li><strong>Rumble:</strong> does nothing yet. The manifest asks for <code>VIBRATE</code>, so adding it later does not change the APK's permissions.</li>
 </ul>

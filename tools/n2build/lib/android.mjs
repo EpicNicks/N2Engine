@@ -56,7 +56,12 @@ export function androidSettings(settings, gameName) {
   if (!Array.isArray(abis) || abis.length === 0 || abis.some((a) => !ANDROID_ABIS.includes(a)) || new Set(abis).size !== abis.length) {
     throw new BuildError(`${where}.abis must list one or more of ${ANDROID_ABIS.join(', ')}, each once`);
   }
-  return { appId, orientation, abis };
+  // The renderer (stage 12): software, or Vulkan with the software renderer where the device has none
+  const renderer = settings.renderer ?? 'software';
+  if (!['software', 'auto', 'vulkan'].includes(renderer)) {
+    throw new BuildError(`${where}.renderer must be "software" or "vulkan" on Android (auto is software)`);
+  }
+  return { appId, orientation, abis, vulkan: renderer === 'vulkan' };
 }
 
 /** A Gradle property value: one line, no characters the Windows command line would read (gradleInvocation) */
@@ -80,7 +85,7 @@ export function planAndroid({ engineRoot, projectDir, descriptor, config, module
   if (!['debug', 'release'].includes(config)) throw new BuildError(`The android target builds debug or release, not '${config}'`);
   const android = androidSettings(settings ?? {}, gameName);
   const options = { ...descriptor.cmake.options, ...descriptor.cmake.configs[config] };
-  const key = buildKey({ projectDir, target: descriptor.name, config, modules, options: { ...options, abis: android.abis } });
+  const key = buildKey({ projectDir, target: descriptor.name, config, modules, options: { ...options, abis: android.abis, vulkan: android.vulkan } });
   const treeDir = path.join(buildRoot ?? path.join(projectDir, '.n2', 'build'), key);
   const gradleDir = path.join(treeDir, 'gradle');
   const assetsDir = path.join(treeDir, 'assets');
@@ -99,6 +104,7 @@ export function planAndroid({ engineRoot, projectDir, descriptor, config, module
     nativeBuildDir: path.join(treeDir, 'native'),
     ndkVersion: info?.androidNdk ?? descriptor.pins?.['android-ndk'] ?? '',
     cmakeBuildType: options.CMAKE_BUILD_TYPE ?? (config === 'debug' ? 'Debug' : 'Release'),
+    vulkan: android.vulkan ? 'ON' : 'OFF',
   };
   for (const [name, value] of Object.entries(properties)) checkPropertyValue(`n2.${name}`, value);
   // A release build signed with a profile is the one to publish: Gradle builds the AAB too

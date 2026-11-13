@@ -50,6 +50,11 @@ every stage. Stages still run in the order of section 5, each after the stages i
   its own CMake folder (`cmake.sourceDir`, added by the root CMakeLists.txt as `N2ENGINE_EXTRA_TARGET_DIR`) and toolchain
   file (`cmake.toolchainFile`); `IPlatformHost::CreateRenderer` lets its backend bring its own renderer. A neutral sample,
   `samples/private-targets/sample-console`, is built and run in CI. `docs/private-targets.html`.
+- Stage 12 (Android Vulkan), branch `feat-bt12-android-vulkan`: `build.targets.android.renderer: "vulkan"` builds the
+  Vulkan renderer with the NDK (its headers, `libvulkan.so`, `glslc`); the player uses it where the loader finds a Vulkan 1.1
+  GPU, else the software renderer. `IRenderer::OnSurfaceLost`/`OnSurfaceRecreated`, called by `Window` before the game hears
+  the lifecycle event: the Vulkan renderer destroys its swapchain and surface and makes them again on the new window.
+  `docs/android.html#vulkan`.
 
 ## 1. Goal
 

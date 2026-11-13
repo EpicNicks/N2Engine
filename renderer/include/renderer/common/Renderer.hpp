@@ -78,6 +78,14 @@ namespace Renderer::Common
         virtual void Resize(uint32_t width, uint32_t height) = 0;
         virtual void Clear(float r, float g, float b, float a) = 0;
 
+        // The platform's surface going and coming back (build targets stage 12; docs/android.html#vulkan): Android
+        // destroys a backgrounded app's window. Lost: let go of everything made from the surface (a Vulkan swapchain and
+        // VkSurfaceKHR) before the platform frees it; frames until Recreated render offscreen or not at all. Recreated:
+        // the new surface (its operations look the new window up). A renderer that keeps nothing of the surface (the
+        // software renderer presents through an operation that finds the current window) needs neither.
+        virtual void OnSurfaceLost() {}
+        virtual void OnSurfaceRecreated(const Surface &surface) { (void)surface; }
+
         // Frame management
         virtual void BeginFrame() = 0;
         virtual void EndFrame() = 0;

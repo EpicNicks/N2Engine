@@ -753,9 +753,13 @@ test('app ids: the editor\'s rule plus no Java keyword; a default from the game\
 });
 
 test('build.targets.android: appId, orientation and abis are checked', () => {
-  assert.deepEqual(androidSettings({}, 'Tri'), { appId: 'com.n2engine.tri', orientation: 'any', abis: ['arm64-v8a', 'x86_64'] });
+  assert.deepEqual(androidSettings({}, 'Tri'), { appId: 'com.n2engine.tri', orientation: 'any', abis: ['arm64-v8a', 'x86_64'], vulkan: false });
   assert.deepEqual(androidSettings({ appId: 'com.example.tri', orientation: 'landscape', abis: ['arm64-v8a'] }, 'Tri'),
-    { appId: 'com.example.tri', orientation: 'landscape', abis: ['arm64-v8a'] });
+    { appId: 'com.example.tri', orientation: 'landscape', abis: ['arm64-v8a'], vulkan: false });
+  // The renderer (stage 12): vulkan builds the Vulkan renderer in; software and auto do not; desktop-only ones are refused
+  assert.equal(androidSettings({ renderer: 'vulkan' }, 'Tri').vulkan, true);
+  assert.equal(androidSettings({ renderer: 'auto' }, 'Tri').vulkan, false);
+  assert.throws(() => androidSettings({ renderer: 'opengl' }, 'Tri'), /renderer must be "software" or "vulkan"/);
   assert.throws(() => androidSettings({ appId: 'tri' }, 'Tri'), /appId/);
   assert.throws(() => androidSettings({ orientation: 'sideways' }, 'Tri'), /orientation/);
   assert.throws(() => androidSettings({ abis: ['mips'] }, 'Tri'), /abis/);
@@ -1321,6 +1325,19 @@ test('no engine source names a private target: the sample is added from outside,
   for (const dir of ['engine', 'renderer', 'math', 'text', 'players', 'cmake', 'targets', 'web', path.join('tools', 'n2build', 'lib')]) scan(path.join(ENGINE_ROOT, dir));
   if (names.test(fs.readFileSync(path.join(ENGINE_ROOT, 'CMakeLists.txt'), 'utf8'))) offenders.push('CMakeLists.txt');
   assert.deepEqual(offenders, []);
+});
+
+test('the Vulkan renderer on Android (stage 12): a Gradle property and its own build tree', () => {
+  const projectDir = makeProject({ name: 'Tri' });
+  const base = { engineRoot: ENGINE_ROOT, projectDir, descriptor: androidDescriptor(), modules: undefined, buildRoot: tmp('n2build-android-'),
+    gameName: 'Tri', config: 'debug', info: { androidSdk: '/sdk', androidNdk: '27.0.12077973' }, cmakeDir: '/usr' };
+  const software = planAndroid({ ...base, settings: {} });
+  const vulkan = planAndroid({ ...base, settings: { renderer: 'vulkan' } });
+  assert.ok(software.gradleArgs.includes('-Pn2.vulkan=OFF'));
+  assert.ok(vulkan.gradleArgs.includes('-Pn2.vulkan=ON'));
+  assert.notEqual(software.treeDir, vulkan.treeDir, 'switching the renderer never rebuilds the other tree');
+  const gradle = fs.readFileSync(path.join(ENGINE_ROOT, 'players', 'android', 'app', 'build.gradle'), 'utf8');
+  assert.ok(gradle.includes("-DN2ENGINE_ANDROID_VULKAN=${n2('vulkan', 'OFF')}"));
 });
 
 // --- PhysX's GPU library only for GPU physics (follow-up of the build targets plan) ----------------------------------

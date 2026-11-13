@@ -366,6 +366,41 @@ TEST_F(VulkanHeadlessSwapchainTest, MinimisedFramesStillRenderButNothingIsRecrea
     EXPECT_FALSE(info.minimised);
 }
 
+// Build targets stage 12 (docs/android.html#vulkan): Android frees a backgrounded app's window. The renderer lets go of the
+// swapchain and the surface when told, renders offscreen meanwhile, and makes both again on the new window.
+TEST_F(VulkanHeadlessSwapchainTest, ALostSurfaceIsLetGoAndMadeAgainWhenTheWindowComesBack)
+{
+    VulkanRenderer& renderer = Windowed(64, 48);
+    ASSERT_FALSE(HasFailure());
+    Frame(renderer, {10, 10, 10, 255});
+    ASSERT_EQ(renderer.GetSwapchainInfoForTest().presentCount, 1u);
+    ASSERT_EQ(renderer.GetSwapchainInfoForTest().surfaceCreateCount, 1u);
+
+    renderer.OnSurfaceLost();
+    SwapchainInfoForTest info = renderer.GetSwapchainInfoForTest();
+    EXPECT_FALSE(info.hasSurface) << "the surface is destroyed before the platform frees the window";
+    EXPECT_FALSE(info.hasSwapchain);
+    for (int i = 0; i < 4; ++i)
+    {
+        Frame(renderer, {20, 30, static_cast<int>(40 + i), 255});
+    }
+    EXPECT_EQ(renderer.GetSwapchainInfoForTest().presentCount, 1u) << "nothing presented without a surface";
+    EXPECT_TRUE(IsSolid(Read(renderer, 64, 48), 64, 48, {20, 30, 43, 255})) << "frames still render offscreen";
+    renderer.OnSurfaceLost(); // a second loss is harmless
+
+    renderer.OnSurfaceRecreated(nullptr); // the test's headless surface stands for the new window
+    info = renderer.GetSwapchainInfoForTest();
+    EXPECT_TRUE(info.hasSurface);
+    EXPECT_EQ(info.surfaceCreateCount, 2u);
+    Frame(renderer, {50, 60, 70, 255});
+    info = renderer.GetSwapchainInfoForTest();
+    EXPECT_EQ(info.presentCount, 2u) << "presenting again on the new surface";
+    EXPECT_FALSE(info.presentingStopped);
+
+    renderer.OnSurfaceRecreated(nullptr); // without a loss first: the surface in use is kept
+    EXPECT_EQ(renderer.GetSwapchainInfoForTest().surfaceCreateCount, 2u);
+}
+
 TEST_F(VulkanHeadlessSwapchainTest, AWindowMinimisedAtInitializeGetsItsSwapchainWhenRestored)
 {
     VulkanRenderer& renderer = Windowed(0, 0);

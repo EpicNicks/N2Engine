@@ -753,7 +753,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 110
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v7
 
@@ -805,6 +805,20 @@ jobs:
           grep -q " lib/x86_64/libn2game.so$" apk.txt
           grep -q " lib/x86_64/libc++_shared.so$" apk.txt
 
+      # Stage 12: the same game with the Vulkan renderer built in (build.targets.android.renderer "vulkan"); on the
+      # emulator it draws with Vulkan when the emulator offers a Vulkan device, else with the software renderer. The log
+      # names which (the step below prints it); either way it must draw.
+      - name: n2build build (android, debug APK, Vulkan renderer)
+        run: |
+          cp -r "$RUNNER_TEMP/lua_project" "$RUNNER_TEMP/lua_project_vk"
+          node -e '
+            const fs = require("fs"); const file = process.argv[1]; const p = JSON.parse(fs.readFileSync(file, "utf8"));
+            p.build.targets.android = { ...p.build.targets.android, appId: "com.n2engine.luademovk", renderer: "vulkan" };
+            fs.writeFileSync(file, JSON.stringify(p, null, 2));
+          ' "$RUNNER_TEMP/lua_project_vk/project.n2proj"
+          node tools/n2build/n2build.mjs build --target android --project "$RUNNER_TEMP/lua_project_vk" --config debug --build-dir "$RUNNER_TEMP/n2build" --out "$RUNNER_TEMP/package/LuaDemoVk"
+          unzip -l "$RUNNER_TEMP/package/LuaDemoVk/"*.apk | grep " lib/x86_64/libn2game.so$"
+
       - name: Enable KVM for the emulator
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -824,6 +838,9 @@ jobs:
             bash scripts/android-emulator-smoke.sh "$RUNNER_TEMP/package/LuaDemo" 90
             node tools/n2build/n2build.mjs run --target android --project "$RUNNER_TEMP/lua_project" --out "$RUNNER_TEMP/package/LuaDemo" --no-build --seconds 45 --json > "$RUNNER_TEMP/run.jsonl"
             node -e 'const l=require("fs").readFileSync(process.argv[1],"utf8").trim().split("\n").map(JSON.parse); const r=l.at(-1); const log=l.filter(e=>e.type==="log"&&e.stream==="logcat").map(e=>e.text); console.log(log.slice(-20).join("\n")); if(!r.ok||!log.some(t=>t.includes("N2Engine Android player: first frame"))){console.error(JSON.stringify(r));process.exit(1)}' "$RUNNER_TEMP/run.jsonl"
+            bash scripts/android-emulator-smoke.sh "$RUNNER_TEMP/package/LuaDemoVk" 90
+            adb logcat -d | grep -E "N2Engine Android player: the (Vulkan|software) renderer|Using Vulkan renderer|Vulkan renderer:" | tail -5
+            bash scripts/android-resume-check.sh com.n2engine.luademovk
 
       # Stage 9: a release build signed with a signing profile, made here with a throwaway keystore. The password goes to
       # keytool and to n2build only through environment variables (keytool's -storepass:env), never a command line; the

@@ -38,9 +38,50 @@
 
 #include "AndroidHost.hpp"
 
+#if N2ENGINE_ANDROID_VULKAN
+#include <vulkan/vulkan.h>
+#endif
+
 namespace
 {
     using namespace N2Engine;
+
+    /**
+     * Whether to draw with Vulkan (build targets stage 12): only in a build with the Vulkan renderer
+     * (build.targets.android.renderer "vulkan"), and only on a device whose loader finds a Vulkan 1.1 GPU. Every other
+     * device keeps the software renderer, so one APK runs everywhere.
+     */
+    bool DeviceHasVulkan()
+    {
+#if N2ENGINE_ANDROID_VULKAN
+        // vkEnumerateInstanceVersion is Vulkan 1.1: looked up, not linked (the NDK's libvulkan.so for API 26 is 1.0 only),
+        // and a loader without it is a 1.0 one
+        const auto enumerateVersion = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(
+            vkGetInstanceProcAddr(VK_NULL_HANDLE, "vkEnumerateInstanceVersion"));
+        uint32_t version = VK_API_VERSION_1_0;
+        if (enumerateVersion == nullptr || enumerateVersion(&version) != VK_SUCCESS || version < VK_API_VERSION_1_1)
+        {
+            return false;
+        }
+        VkApplicationInfo app{};
+        app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+        app.apiVersion = VK_API_VERSION_1_1;
+        VkInstanceCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+        info.pApplicationInfo = &app;
+        VkInstance instance = VK_NULL_HANDLE;
+        if (vkCreateInstance(&info, nullptr, &instance) != VK_SUCCESS)
+        {
+            return false;
+        }
+        uint32_t devices = 0;
+        const bool found = vkEnumeratePhysicalDevices(instance, &devices, nullptr) == VK_SUCCESS && devices > 0;
+        vkDestroyInstance(instance, nullptr);
+        return found;
+#else
+        return false;
+#endif
+    }
     constexpr const char *LogTag = "N2Engine";
 
     struct PlayerState
@@ -213,10 +254,12 @@ namespace
         state.host = host.get();
         Application &application = Application::GetInstance();
         application.GetWindow().SetPlatformHost(std::move(host));
+        const bool vulkan = DeviceHasVulkan();
+        Logger::Info(vulkan ? "N2Engine Android player: the Vulkan renderer" : "N2Engine Android player: the software renderer");
         application.Init({
             .projectPath = projectDir.string(),
             .physicsBackend = Config::ApplicationOptions::PhysicsBackend::AUTO,
-            .renderBackend = Config::ApplicationOptions::RenderBackend::SOFTWARE,
+            .renderBackend = vulkan ? Config::ApplicationOptions::RenderBackend::VULKAN : Config::ApplicationOptions::RenderBackend::SOFTWARE,
             .isHeadless = false,
         });
         if (!application.GetWindow().IsValid())

@@ -10,8 +10,17 @@
 
 #include <vulkan/vulkan.h>
 
+// The allocator is created for Vulkan 1.1, so VMA uses nothing newer
+#define VMA_VULKAN_VERSION 1001000
+#if defined(__ANDROID__)
+// Android (build targets stage 12): the NDK's libvulkan.so for the app's minimum API (26) exports only Vulkan 1.0, so the
+// 1.1 entry points VMA uses are looked up through vkGetInstanceProcAddr at run time instead of linked
+#define VMA_STATIC_VULKAN_FUNCTIONS 0
+#define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
+#else
 #define VMA_STATIC_VULKAN_FUNCTIONS 1
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
+#endif
 
 // VMA's own warnings are silenced locally (and its include directory is a SYSTEM one); no global flag changes
 #if defined(__clang__)

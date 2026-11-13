@@ -331,6 +331,13 @@ namespace
 bool VulkanRenderer::CreateAllocator()
 {
     VmaAllocatorCreateInfo info{};
+#if VMA_DYNAMIC_VULKAN_FUNCTIONS
+    // Android (VulkanVma.hpp): VMA finds its entry points through the loader at run time
+    VmaVulkanFunctions functions{};
+    functions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
+    functions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
+    info.pVulkanFunctions = &functions;
+#endif
     info.vulkanApiVersion = VK_API_VERSION_1_1; // the instance's API version
     info.instance = _instance;
     info.physicalDevice = _physicalDevice;
