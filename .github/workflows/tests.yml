@@ -1049,10 +1049,19 @@ jobs:
       - name: The iOS app's crash report and log (on failure)
         if: failure() && matrix.target == 'ios'
         run: |
-          ls -t ~/Library/Logs/DiagnosticReports/ 2>/dev/null | head -10
-          report="$(ls -t ~/Library/Logs/DiagnosticReports/N2Game* 2>/dev/null | head -1)"
-          if [ -n "$report" ]; then head -c 12000 "$report"; else echo "no crash report for N2Game"; fi
+          # A crash report can take a while to be written
+          sleep 20
+          find ~/Library/Logs/DiagnosticReports -mmin -30 -type f 2>/dev/null | head -20
+          report="$(find ~/Library/Logs/DiagnosticReports -mmin -30 -type f -name 'N2Game*' 2>/dev/null | head -1)"
+          if [ -n "$report" ]; then head -c 16000 "$report"; else echo "no crash report for N2Game"; fi
           xcrun simctl spawn booted log show --last 5m --style compact --predicate 'process == "N2Game"' 2>/dev/null | tail -80 || true
+          # Why the app ended, as the system saw it (launchd, SpringBoard, the crash reporter)
+          xcrun simctl spawn booted log show --last 5m --style compact --predicate 'process != "N2Game" AND eventMessage CONTAINS[c] "lua_project"' 2>/dev/null | tail -40 || true
+          # Once more with the app's stdout and stderr on the console, and MoltenVK's own log (it writes to stderr)
+          if [ "${{ matrix.moltenvk }}" = true ]; then
+            SIMCTL_CHILD_MVK_CONFIG_LOG_LEVEL=3 SIMCTL_CHILD_MVK_CONFIG_DEBUG=1 \
+              timeout 90 xcrun simctl launch --console-pty --terminate-running-process booted com.n2engine.lua_project 2>&1 | grep -v "New asset" | tail -120 || true
+          fi
 
   # The same Linux build and tests on arm64 (ubuntu-24.04-arm, aarch64): the math library's x86 SIMD paths are compiled out
   # there and the scalar versions run; PhysX runs its own aarch64 build. Not a required check yet.
