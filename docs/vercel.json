@@ -1,4 +1,5 @@
 {
+  "buildCommand": "node tools/build-search-index.mjs --check",
   "cleanUrls": true,
   "trailingSlash": false,
   "headers": [
