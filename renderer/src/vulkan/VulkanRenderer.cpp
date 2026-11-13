@@ -571,6 +571,15 @@ bool VulkanRenderer::CreateInstance()
         }
     }
 
+    // A portability driver (MoltenVK on Apple platforms; build targets stage 13) is listed only to an instance that asks
+    // for it: Vulkan loaders since 1.3.216 hide it otherwise, and vkEnumeratePhysicalDevices finds no GPU
+    bool portability = false;
+    if (availableExtensions.contains("VK_KHR_portability_enumeration"))
+    {
+        addExtension("VK_KHR_portability_enumeration");
+        portability = true;
+    }
+
     // A messenger in the create info's pNext also reports what happens during vkCreateInstance and vkDestroyInstance
     VkDebugUtilsMessengerCreateInfoEXT messengerInfo{};
     FillMessengerInfo(messengerInfo, _debug.get());
@@ -578,6 +587,10 @@ bool VulkanRenderer::CreateInstance()
     VkInstanceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     createInfo.pApplicationInfo = &appInfo;
+    if (portability)
+    {
+        createInfo.flags |= 0x00000001; // VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR (older headers lack the name)
+    }
     if (validation)
     {
         createInfo.enabledLayerCount = 1;

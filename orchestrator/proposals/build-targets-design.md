@@ -55,6 +55,9 @@ every stage. Stages still run in the order of section 5, each after the stages i
   GPU, else the software renderer. `IRenderer::OnSurfaceLost`/`OnSurfaceRecreated`, called by `Window` before the game hears
   the lifecycle event: the Vulkan renderer destroys its swapchain and surface and makes them again on the new window.
   `docs/android.html#vulkan`.
+- Stage 13 (Metal), branch `feat-bt13-metal-spike`: the spike, `orchestrator/proposals/metal-spike.md` (MoltenVK or a native
+  Metal renderer, with the `metal-spike` CI job running the Vulkan test suite on MoltenVK); the Vulkan instance asks for
+  `VK_KHR_portability_enumeration`. The renderer itself follows the user's pick.
 
 ## 1. Goal
 
