@@ -113,7 +113,8 @@ fn fs_main(input: FragmentInput) -> @location(0) vec4<f32> {
         // The ramp's lower end never goes below 0, the distance at the quad's border: minified text
         // has a wide antialiasing ramp, which would otherwise give the whole quad some coverage
         let outlineCoverage = smoothstep(max(outlineEdge - edgeWidth, 0.0), outlineEdge + edgeWidth, sdf);
-        result = over(result, vec4<f32>(material.uOutlineColor.rgb, material.uOutlineColor.a * outlineCoverage));
+        // The vertex alpha (UIText's per-character colour) fades the outline and the shadow with the face
+        result = over(result, vec4<f32>(material.uOutlineColor.rgb, material.uOutlineColor.a * input.fragColor.a * outlineCoverage));
     }
     if (material.uShadowColor.a > 0.0) {
         // The shadow is the face-plus-outline shape, moved, under both
@@ -121,7 +122,7 @@ fn fs_main(input: FragmentInput) -> @location(0) vec4<f32> {
         let shadowWidth = max(max(0.5 * fwidth(shadowSdf), 1e-4), material.uShadowSoftness);
         let shadowEdge = 0.5 - material.uOutline;
         let shadowCoverage = smoothstep(max(shadowEdge - shadowWidth, 0.0), shadowEdge + shadowWidth, shadowSdf);
-        result = over(result, vec4<f32>(material.uShadowColor.rgb, material.uShadowColor.a * shadowCoverage));
+        result = over(result, vec4<f32>(material.uShadowColor.rgb, material.uShadowColor.a * input.fragColor.a * shadowCoverage));
     }
 
     if (result.a < 0.01) {

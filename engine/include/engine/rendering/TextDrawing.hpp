@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -29,9 +30,12 @@ namespace N2Engine::Rendering::TextDrawing
      * The mesh for a layout: one quad (4 vertices, 6 indices) per GlyphQuad, in order, at z = 0 with
      * normal +Z and white vertex colour. Corners are bottom-left, bottom-right, top-right, top-left
      * (counter-clockwise seen from +Z), with the glyph's atlas uvs as given (y-down, so the top corners
-     * get uv.minY).
+     * get uv.minY). `quadColors`, when it has one entry per quad, gives each quad's four vertices that
+     * colour instead of white: the text shaders multiply the face colour by it (UIText's per-character
+     * colours). Any other size is ignored.
      */
-    [[nodiscard]] Renderer::Common::MeshData BuildMesh(const Text::TextLayout &layout);
+    [[nodiscard]] Renderer::Common::MeshData BuildMesh(const Text::TextLayout &layout,
+                                                       std::span<const Common::Color> quadColors = {});
 
     /**
      * The text shader's effect uniforms for one draw, in the units the shaders use. With every effect off
@@ -194,15 +198,19 @@ namespace N2Engine::Rendering::TextDrawing
          * Draws nothing (false) without a bound renderer, for a null or unloaded font or an empty layout,
          * or if the renderer has no text shader; the last logs one warning per process, naming
          * `componentName`.
+         *
+         * `quadColors` are the vertex colours of BuildMesh, one per quad (empty: white). They are read only
+         * when the mesh is built, so a change to them must come with a new layoutVersion.
          */
         bool Draw(const std::shared_ptr<Text::Font> &font, const Text::TextLayout &layout,
                   std::uint64_t layoutVersion, const float *modelMatrix, const Common::Color &color,
                   const Text::TextEffects &effects, const Renderer::Common::RenderState &state,
-                  std::string_view componentName);
+                  std::string_view componentName, std::span<const Common::Color> quadColors = {});
 
     private:
         bool EnsureAtlasTexture(const std::shared_ptr<Text::Font> &font);
-        bool EnsureMesh(const Text::TextLayout &layout, std::uint64_t layoutVersion);
+        bool EnsureMesh(const Text::TextLayout &layout, std::uint64_t layoutVersion,
+                        std::span<const Common::Color> quadColors);
         /// The draws of a text with extra passes: each effect pass, then the face (see Draw)
         bool DrawPasses(const Text::TextEffects &effects, const Text::AtlasSettings &settings,
                         const Text::FontAtlas &atlas, const Common::Color &color, const float *modelMatrix,

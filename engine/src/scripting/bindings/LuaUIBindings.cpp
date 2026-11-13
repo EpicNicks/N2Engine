@@ -259,6 +259,26 @@ namespace N2Engine::Scripting::Bindings
                 }
             },
             "ClearCharacterOffsets", [](const UITextRef &c) { c.Pin()->ClearCharacterOffsets(); },
+            // Colours character `index` (1-based, as SetCharacterOffset): multiplies the text's colour on that
+            // character's face. Not saved; kept across SetText
+            "SetCharacterColor", [](const UITextRef &c, const int index, const Common::Color &color)
+            {
+                if (index >= 1)
+                {
+                    c.Pin()->SetCharacterColor(static_cast<std::size_t>(index - 1), color);
+                }
+            },
+            "ClearCharacterColors", [](const UITextRef &c) { c.Pin()->ClearCharacterColors(); },
+            // Scales character `index` (1-based, as SetCharacterOffset) about its glyph's centre. Not saved; kept
+            // across SetText
+            "SetCharacterScale", [](const UITextRef &c, const int index, const float scale)
+            {
+                if (index >= 1)
+                {
+                    c.Pin()->SetCharacterScale(static_cast<std::size_t>(index - 1), scale);
+                }
+            },
+            "ClearCharacterScales", [](const UITextRef &c) { c.Pin()->ClearCharacterScales(); },
             // The laid-out block in canvas space, in the rect of the last layout: minX, minY, maxX, maxY
             // (all 0 for empty text)
             "GetBounds", [](const UITextRef &c)
