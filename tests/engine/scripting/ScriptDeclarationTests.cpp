@@ -970,9 +970,18 @@ TEST_F(ScriptDeclarationTest, AWaitTheBudgetCutShortIsResumedNotStartedAgainAndI
     _gate->Open();
     ASSERT_TRUE(WaitForNoWorkers(10s));
     {
-        const ScriptDeclarationCache::CommandBudget budget(0ms); // even with this command's budget already spent
+        // The worker gives its slot back just before it hands its answer to the job, so a reader right after the slot
+        // is free can still find the job unfinished (and be refused, without starting it again): read until the answer
+        // is there
+        const auto end = std::chrono::steady_clock::now() + 10s;
         bool refused = true;
-        const auto result = Cache().Get(path, "return {}", refused);
+        ScriptDeclarationCache::Declaration result;
+        while (refused && std::chrono::steady_clock::now() < end)
+        {
+            const ScriptDeclarationCache::CommandBudget budget(0ms); // even with this command's budget already spent
+            result = Cache().Get(path, "return {}", refused);
+            if (refused) std::this_thread::sleep_for(5ms);
+        }
         EXPECT_FALSE(refused);
         EXPECT_TRUE(result->declared);
     }
