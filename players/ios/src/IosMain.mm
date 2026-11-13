@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -130,6 +131,12 @@ namespace
     bool DeviceHasVulkan()
     {
 #if N2ENGINE_RENDERER_VULKAN
+#if TARGET_OS_SIMULATOR
+        // The simulator's Metal host (SimMetalHost, on the Mac) crashes on MoltenVK's Metal argument buffers as the first
+        // pipelines are made (seen on the CI's macOS 15 runner); with discrete resource indexes it draws. Set before
+        // MoltenVK reads its configuration (the first instance, below), and only when not set already. Devices keep them.
+        setenv("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "0", 0);
+#endif
         VkApplicationInfo app{};
         app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
         app.apiVersion = VK_API_VERSION_1_1;

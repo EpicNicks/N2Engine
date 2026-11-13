@@ -1064,15 +1064,11 @@ jobs:
               host="$(ls -t "$dir"/SimMetalHost* "$dir"/*MetalHost* 2>/dev/null | head -1)"
               if [ -n "$host" ]; then echo "== $host"; head -c 16000 "$host"; fi
             done
-            # Once more with the app's stdout and stderr on the console and MoltenVK's own log (stderr), then again with
-            # Metal argument buffers off (macOS has no timeout(1): perl's alarm ends each run)
-            for buffers in default 0; do
-              echo "== MoltenVK log, argument buffers: $buffers"
-              extra=""; [ "$buffers" = 0 ] && extra="SIMCTL_CHILD_MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS=0"
-              env SIMCTL_CHILD_MVK_CONFIG_LOG_LEVEL=3 $extra perl -e 'alarm shift; exec @ARGV' 60 \
-                xcrun simctl launch --console-pty --terminate-running-process booted com.n2engine.lua_project 2>&1 \
-                | grep -v "New asset" | tail -100 || true
-            done
+            # Once more with the app's stdout and stderr on the console and MoltenVK's own log (stderr). macOS has no
+            # timeout(1): perl's alarm ends the run
+            SIMCTL_CHILD_MVK_CONFIG_LOG_LEVEL=3 perl -e 'alarm shift; exec @ARGV' 60 \
+              xcrun simctl launch --console-pty --terminate-running-process booted com.n2engine.lua_project 2>&1 \
+              | grep -v "New asset" | tail -100 || true
           fi
 
   # The same Linux build and tests on arm64 (ubuntu-24.04-arm, aarch64): the math library's x86 SIMD paths are compiled out
