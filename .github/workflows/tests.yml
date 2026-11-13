@@ -1661,15 +1661,19 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
-    # Since the per-project module builds (#315) a full run takes about 63 minutes: every step passed and the job was cancelled at 60
+    # Since the per-project module builds (#315) a full run took about 63 minutes: every step passed and the job was cancelled at 60.
+    # Master runs on 2026-11-13 took 67 to 87 minutes before ccache (PR #360)
     timeout-minutes: 90
     env:
       N2_DOWNLOAD_CACHE: ${{ github.workspace }}/.n2-downloads
       EMSCRIPTEN_VERSION: 4.0.10
       # ccache within this run (see "Install ccache"): the trees are built in different folders, so paths are made relative to
-      # the workspace and the folder is not hashed, as on the Linux legs
+      # the workspace and the folder is not hashed (CCACHE_BASEDIR and CCACHE_NOHASHDIR, as on the Linux legs). The cache lives
+      # for one run on the runner's disk, so it is not compressed and compiler_check stays at ccache's default (mtime): the
+      # compiler cannot change within a run
       CCACHE_DIR: ${{ github.workspace }}/.ccache-web
       CCACHE_MAXSIZE: 6G
+      CCACHE_COMPRESS: "0"
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_NOHASHDIR: "true"
     steps:
@@ -1680,10 +1684,14 @@ jobs:
       # same flags, so after the first tree most compiles are cache hits. Emscripten's EM_COMPILER_WRAPPER runs ccache in front
       # of the clang that emcc calls, so ccache sees clang's real command line and binary, not emcc's. Nothing is saved or
       # restored between runs: the repository's Actions caches are at their 10 GB limit, and a web cache saved by master
-      # would push the other legs' caches out. If the install fails, EM_COMPILER_WRAPPER is not set and the job builds
-      # without a compiler cache, as before; ccache only changes how long the compiles take, never what they produce.
+      # would push the other legs' caches out. The dev and speed trees have flags of their own, so their build steps turn
+      # ccache off (CCACHE_DISABLE). If the install fails or is slow, EM_COMPILER_WRAPPER is not set and the job builds
+      # without a compiler cache, as before. The code compiled is the same; one difference in the output: with
+      # CCACHE_BASEDIR, clang is given the sources by paths relative to the build folder, so paths in __FILE__ and debug
+      # info are relative too (as on the Linux legs).
       - name: Install ccache
         continue-on-error: true
+        timeout-minutes: 3
         run: |
           set -e
           sudo apt-get update
@@ -1768,6 +1776,9 @@ jobs:
           done
 
       - name: Build
+        # The dev tree has its own flags: nothing in this run can reuse its objects, so ccache is off for it
+        env:
+          CCACHE_DISABLE: "1"
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
@@ -1847,6 +1858,9 @@ jobs:
         run: bash scripts/web-size-report.sh build-web/bin
 
       - name: Test browser WebSocket transport against a native listener
+        # The dev tree has its own flags: nothing in this run can reuse its objects, so ccache is off for it
+        env:
+          CCACHE_DISABLE: "1"
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
@@ -1858,6 +1872,9 @@ jobs:
       # Stage 2 (issue #155): the web player and its package folder (build-web/web-package: index.html, index.js,
       # index.wasm, index.data, static files only). Linking it also runs the packaging of lua_project's assets.
       - name: Build the web package
+        # The dev tree has its own flags: nothing in this run can reuse its objects, so ccache is off for it
+        env:
+          CCACHE_DISABLE: "1"
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
@@ -1965,6 +1982,9 @@ jobs:
           done
 
       - name: Build and check the web package (speed profile)
+        # The speed tree has its own flags: nothing in this run can reuse its objects, so ccache is off for it
+        env:
+          CCACHE_DISABLE: "1"
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
@@ -1974,6 +1994,9 @@ jobs:
           node scripts/web-budget-check.mjs build-web-speed/web-package speed
 
       - name: Measure Jolt Physics (speed profile)
+        # The speed tree has its own flags: nothing in this run can reuse its objects, so ccache is off for it
+        env:
+          CCACHE_DISABLE: "1"
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
@@ -1996,9 +2019,10 @@ jobs:
             echo "$dir: the WebGPU backend is linked into the player"
           done
 
-      # Runs after a failed build or test too (not when cancelled): what ccache did in this run, from zeroed statistics
+      # Runs after a failed build or test, and on a timeout or cancel too (the slow runs are the ones to look at): what ccache
+      # did in this run, from zeroed statistics
       - name: ccache statistics
-        if: "!cancelled()"
+        if: always()
         continue-on-error: true
         run: |
           if [ "${EM_COMPILER_WRAPPER:-}" != "ccache" ]; then
