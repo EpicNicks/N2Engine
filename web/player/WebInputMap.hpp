@@ -1,11 +1,13 @@
 #pragma once
 
 #include <optional>
+#include <span>
 #include <string_view>
 
+#include "engine/input/InputDevice.hpp"
 #include "engine/input/InputTypes.hpp"
 
-// The pure part of the web player's input: how a browser's keyboard, mouse and wheel events become the engine's own
+// The pure part of the web player's input: how a browser's keyboard, mouse, wheel and gamepad readings become the engine's own
 // types. No Emscripten and no DOM in here, so the engine's tests can run it under node (tests/web).
 namespace N2Engine::Web
 {
@@ -37,6 +39,26 @@ namespace N2Engine::Web
     /// and deltaMode (0 pixels, 1 lines, 2 pages). `invert` flips the sign: the DOM's vertical delta is positive
     /// scrolling down, the engine's (GLFW's) is positive scrolling up; the horizontal one agrees in both.
     [[nodiscard]] float WheelToScroll(double delta, int domDeltaMode, bool invert);
+
+    /// One button of a DOM Gamepad: GamepadButton.pressed and .value (0..1)
+    struct DomGamepadButton
+    {
+        bool pressed = false;
+        double value = 0.0;
+    };
+
+    /// True for a DOM Gamepad.mapping the player reads: "standard" (the W3C standard gamepad layout, which the browser
+    /// remaps known pads to). Any other mapping ("" for a pad the browser does not know) is a joystick without a gamepad
+    /// mapping, as GLFW reports one it has no mapping for: present, but no state, so no binding reads it.
+    [[nodiscard]] bool IsStandardGamepadMapping(std::string_view mapping);
+
+    /// The engine's state for a gamepad in the W3C standard layout, from its DOM Gamepad.axes and .buttons. Buttons 0-3
+    /// are South, East, West, North; 4, 5 the bumpers; 6, 7 the analog triggers (their values, 0..1, become the engine's
+    /// -1 at rest to +1 pulled); 8 Back, 9 Start, 10, 11 the stick clicks; 12-15 the D-pad up, down, left, right; 16 Guide.
+    /// Axes 0-3 are the left and right sticks' x and y, y down positive (as GLFW and the engine have it). Values past
+    /// -1..1 are clamped; a button or axis the pad does not have reads released (a trigger at rest).
+    [[nodiscard]] Input::GamepadState GamepadStateFromStandard(std::span<const double> axes,
+                                                               std::span<const DomGamepadButton> buttons);
 
     struct RenderSize
     {

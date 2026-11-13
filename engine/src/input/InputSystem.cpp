@@ -8,6 +8,7 @@
 #include "engine/Application.hpp"
 #include "engine/Window.hpp"
 
+#include "engine/input/GamepadSource.hpp"
 #include "engine/input/InputDevice.hpp"
 #include "engine/input/Mouse.hpp"
 #include "engine/input/Touchscreen.hpp"
@@ -144,20 +145,16 @@ ActionMap* InputSystem::GetCurActionMap() const
 std::vector<GamepadInfo> InputSystem::GetConnectedGamepads()
 {
     std::vector<GamepadInfo> result;
-    // No device (no window, or windowless): no gamepads
+    // An installed GamepadSource, else the window's device; neither (no window, or windowless): no gamepads
     const InputDevice *device = Application::GetInstance().GetWindow().GetInputDevice();
-    if (device == nullptr)
-    {
-        return result;
-    }
     for (int i = 0; i < MaxGamepads; ++i)
     {
-        if (!device->IsJoystickPresent(i))
+        if (!Input::IsJoystickPresent(device, i))
         {
             continue;
         }
-        const std::string name = device->GamepadName(i);
-        if (device->IsGamepad(i))
+        const std::string name = Input::GamepadName(device, i);
+        if (Input::IsGamepad(device, i))
         {
             result.push_back(!name.empty() ? GamepadInfo{name, i} : GamepadInfo{"Nameless Gamepad", i});
         }

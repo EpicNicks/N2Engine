@@ -2,6 +2,8 @@
 
 #include <limits>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "WebInputMap.hpp"
 
@@ -185,4 +187,75 @@ TEST(WebInputMap, RenderSizeFollowsTheDevicePixelRatioUpToTheCap)
     EXPECT_EQ(FitRenderSize(800.0, 450.0, -2.0, 1280), (RenderSize{800, 450}));
     EXPECT_EQ(FitRenderSize(800.0, 450.0, std::numeric_limits<double>::quiet_NaN(), 1280), (RenderSize{800, 450}));
     EXPECT_EQ(FitRenderSize(0.0, 450.0, 2.0, 1280), (RenderSize{}));
+}
+
+namespace
+{
+    /// A standard-layout pad's 17 buttons, all released
+    std::vector<DomGamepadButton> ReleasedButtons()
+    {
+        return std::vector<DomGamepadButton>(17);
+    }
+}
+
+TEST(WebInputMap, OnlyTheStandardGamepadMappingIsRead)
+{
+    EXPECT_TRUE(IsStandardGamepadMapping("standard"));
+    EXPECT_FALSE(IsStandardGamepadMapping(""));
+    EXPECT_FALSE(IsStandardGamepadMapping("xr-standard"));
+}
+
+TEST(WebInputMap, StandardGamepadButtonsMapByPosition)
+{
+    using Input::GamepadButton;
+    const std::pair<int, GamepadButton> expected[] = {
+        {0, GamepadButton::South},      {1, GamepadButton::East},       {2, GamepadButton::West},
+        {3, GamepadButton::North},      {4, GamepadButton::LeftBumper}, {5, GamepadButton::RightBumper},
+        {8, GamepadButton::Back},       {9, GamepadButton::Start},      {10, GamepadButton::LeftThumb},
+        {11, GamepadButton::RightThumb}, {12, GamepadButton::DpadUp},   {13, GamepadButton::DpadDown},
+        {14, GamepadButton::DpadLeft},  {15, GamepadButton::DpadRight}, {16, GamepadButton::Guide},
+    };
+    const double axes[4] = {};
+    for (const auto &[index, button] : expected)
+    {
+        auto buttons = ReleasedButtons();
+        buttons[static_cast<std::size_t>(index)] = {true, 1.0};
+        const Input::GamepadState state = GamepadStateFromStandard(axes, buttons);
+        for (std::size_t b = 0; b < Input::GamepadButtonCount; ++b)
+        {
+            EXPECT_EQ(state.buttons[b], b == static_cast<std::size_t>(button)) << "DOM button " << index << ", engine " << b;
+        }
+    }
+}
+
+TEST(WebInputMap, StandardGamepadSticksAndTriggers)
+{
+    using Input::GamepadAxis;
+    const double axes[4] = {-0.5, 0.25, 2.0, std::numeric_limits<double>::quiet_NaN()};
+    auto buttons = ReleasedButtons();
+    buttons[6] = {false, 0.0}; // left trigger at rest
+    buttons[7] = {true, 1.0};  // right trigger pulled all the way
+    const Input::GamepadState state = GamepadStateFromStandard(axes, buttons);
+    EXPECT_FLOAT_EQ(state.Axis(GamepadAxis::LeftX), -0.5f);
+    EXPECT_FLOAT_EQ(state.Axis(GamepadAxis::LeftY), 0.25f) << "y down positive, as the DOM and GLFW have it";
+    EXPECT_FLOAT_EQ(state.Axis(GamepadAxis::RightX), 1.0f) << "clamped";
+    EXPECT_FLOAT_EQ(state.Axis(GamepadAxis::RightY), 0.0f) << "not a number reads centred";
+    EXPECT_FLOAT_EQ(state.Axis(GamepadAxis::LeftTrigger), -1.0f) << "the engine's trigger rests at -1";
+    EXPECT_FLOAT_EQ(state.Axis(GamepadAxis::RightTrigger), 1.0f);
+    EXPECT_FALSE(state.Button(Input::GamepadButton::South)) << "triggers are axes, not buttons";
+
+    buttons[6] = {true, 0.5};
+    EXPECT_FLOAT_EQ(GamepadStateFromStandard(axes, buttons).Axis(GamepadAxis::LeftTrigger), 0.0f) << "half pulled";
+}
+
+TEST(WebInputMap, AShortGamepadReadsReleased)
+{
+    const Input::GamepadState state = GamepadStateFromStandard({}, {});
+    for (const bool pressed : state.buttons)
+    {
+        EXPECT_FALSE(pressed);
+    }
+    EXPECT_FLOAT_EQ(state.Axis(Input::GamepadAxis::LeftX), 0.0f);
+    EXPECT_FLOAT_EQ(state.Axis(Input::GamepadAxis::LeftTrigger), -1.0f);
+    EXPECT_FLOAT_EQ(state.Axis(Input::GamepadAxis::RightTrigger), -1.0f);
 }
