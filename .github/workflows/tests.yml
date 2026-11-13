@@ -1673,7 +1673,7 @@ jobs:
       # compiler cannot change within a run
       CCACHE_DIR: ${{ github.workspace }}/.ccache-web
       CCACHE_MAXSIZE: 6G
-      CCACHE_COMPRESS: "0"
+      CCACHE_NOCOMPRESS: "true"
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_NOHASHDIR: "true"
     steps:
