@@ -136,6 +136,39 @@ TEST(UITextCharacterStyleTest, SetAndClearFollowTheOffsetRules)
     EXPECT_TRUE(text.GetCharacterScales().empty());
 }
 
+TEST(UITextCharacterStyleTest, AnIndexPastTheLimitIsIgnoredAndDefaultsAtTheEndAreDropped)
+{
+    const auto element = UI::UISystem::CreateText("CharacterStyle_Limits", "abc");
+    UIText &text = *element->GetComponent<UIText>();
+
+    // A script's mistake (no text has that many characters) must not grow a list to that size
+    text.SetCharacterColor(UIText::MaxCharacterIndex + 1, Common::Color::Red);
+    text.SetCharacterScale(2000000000, 2.0f);
+    text.SetCharacterOffset(UIText::MaxCharacterIndex + 1, {1.0f, 1.0f});
+    EXPECT_TRUE(text.GetCharacterColors().empty());
+    EXPECT_TRUE(text.GetCharacterScales().empty());
+    EXPECT_TRUE(text.GetCharacterOffsets().empty());
+    text.SetCharacterScale(UIText::MaxCharacterIndex, 2.0f);
+    EXPECT_EQ(text.GetCharacterScales().size(), UIText::MaxCharacterIndex + 1) << "the limit itself is taken";
+    text.ClearCharacterScales();
+
+    // A fade that ends back at white leaves no colours, so the mesh needs no vertex colours again
+    text.SetCharacterColor(0, Common::Color{1.0f, 1.0f, 1.0f, 0.5f});
+    text.SetCharacterColor(1, Common::Color{1.0f, 1.0f, 1.0f, 0.5f});
+    text.SetCharacterColor(1, Common::Color::White);
+    EXPECT_EQ(text.GetCharacterColors().size(), 1u) << "the white at the end is dropped";
+    text.SetCharacterColor(0, Common::Color::White);
+    EXPECT_TRUE(text.GetCharacterColors().empty());
+
+    // The same for scales and offsets
+    text.SetCharacterScale(2, 0.5f);
+    text.SetCharacterScale(2, 1.0f);
+    EXPECT_TRUE(text.GetCharacterScales().empty());
+    text.SetCharacterOffset(1, {0.0f, 3.0f});
+    text.SetCharacterOffset(1, {0.0f, 0.0f});
+    EXPECT_TRUE(text.GetCharacterOffsets().empty());
+}
+
 TEST(UITextCharacterStyleTest, ValuesAreClampedAndKeptAcrossSetText)
 {
     const auto element = UI::UISystem::CreateText("CharacterStyle_Clamp", "ab");

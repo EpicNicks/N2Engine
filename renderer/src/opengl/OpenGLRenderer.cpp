@@ -1453,7 +1453,7 @@ void OpenGLRenderer::CreateStandardShaders()
                 // The ramp's lower end never goes below 0, the distance at the quad's border: minified text
                 // has a wide antialiasing ramp, which would otherwise give the whole quad some coverage
                 float outlineCoverage = smoothstep(max(outlineEdge - edgeWidth, 0.0), outlineEdge + edgeWidth, sdf);
-                result = over(result, vec4(uOutlineColor.rgb, uOutlineColor.a * outlineCoverage));
+                result = over(result, vec4(uOutlineColor.rgb, uOutlineColor.a * fragColor.a * outlineCoverage));
             }
             if (uShadowColor.a > 0.0) {
                 // The shadow is the face-plus-outline shape, moved, under both
@@ -1462,7 +1462,7 @@ void OpenGLRenderer::CreateStandardShaders()
                 float shadowEdge = 0.5 - uOutline;
                 float shadowCoverage = smoothstep(max(shadowEdge - shadowWidth, 0.0), shadowEdge + shadowWidth,
                                                   shadowSdf);
-                result = over(result, vec4(uShadowColor.rgb, uShadowColor.a * shadowCoverage));
+                result = over(result, vec4(uShadowColor.rgb, uShadowColor.a * fragColor.a * shadowCoverage));
             }
 
             if (result.a < 0.01) {

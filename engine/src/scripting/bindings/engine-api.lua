@@ -1626,8 +1626,9 @@ function UIText:SetCharacterOffset(index, x, y) end
 function UIText:ClearCharacterOffsets() end
 
 ---Colours character `index` (1-based, as SetCharacterOffset): the colour multiplies the text's colour on that
----character's face; the outline, shadow and extra passes keep theirs. Components are clamped to 0..1. Not saved with
----the scene; kept across SetText
+---character's face, and its alpha also fades the character's outline, shadow and extra passes. Components are clamped
+---to 0..1. On the software renderer (Graphics.CanBlend() false) a character is drawn solid until its alpha is below the
+---text's minimum. Not saved with the scene; kept across SetText
 ---@param index integer
 ---@param color Color
 function UIText:SetCharacterColor(index, color) end

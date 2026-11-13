@@ -1014,15 +1014,18 @@ namespace
                                 // coplanar glyph's face wrote depth there, and rounding could otherwise let this
                                 // glyph's outline or shadow pass the strict test by a hair and cover it
                                 const bool effectPassesDepth = !rs.depthTest || z < drow[px] - kTextEffectDepthBias;
+                                // The vertex alpha (UIText's per-character colour) fades the outline and the shadow
+                                // with the face, as the GPU shaders multiply their alpha by it
+                                const float vertexA = (l0*A->caw + l1*B->caw + l2*C->caw) * rw;
                                 if (!covered && effectPassesDepth && mat.textOutline &&
-                                    mat.textOutlineA >= kTextMinAlpha && sdf >= mat.textOuterEdge)
+                                    mat.textOutlineA * vertexA >= kTextMinAlpha && sdf >= mat.textOuterEdge)
                                 {
                                     covered = true;
                                     writesDepth = false;
                                     colOut = mat.textOutlineColor;
                                 }
                                 if (!covered && effectPassesDepth && mat.textShadow &&
-                                    mat.textShadowA >= kTextMinAlpha &&
+                                    mat.textShadowA * vertexA >= kTextMinAlpha &&
                                     mat.tex->SampleFirstChannelBilinear(u - mat.textShadowDU, v - mat.textShadowDV) >=
                                         mat.textOuterEdge)
                                 {

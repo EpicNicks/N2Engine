@@ -1431,8 +1431,8 @@ TEST(VulkanShaderParityTest, TheTextPortIsTheGlShadersMathsLineForLine)
     for (const char* needle :
          {"0.5 * fwidth(sdf)", "1e-4", "smoothstep(0.5 - edgeWidth, 0.5 + edgeWidth, sdf)", "if (result.a < 0.01) {",
           "float outlineEdge = 0.5 - uOutline;",
-          "result = over(result, vec4(uOutlineColor.rgb, uOutlineColor.a * outlineCoverage));",
-          "result = over(result, vec4(uShadowColor.rgb, uShadowColor.a * shadowCoverage));",
+          "result = over(result, vec4(uOutlineColor.rgb, uOutlineColor.a * fragColor.a * outlineCoverage));",
+          "result = over(result, vec4(uShadowColor.rgb, uShadowColor.a * fragColor.a * shadowCoverage));",
           "smoothstep(max(outlineEdge - edgeWidth, 0.0), outlineEdge + edgeWidth, sdf)",
           "texture(uTexture, fragTexCoord - uShadowOffset).r"})
     {

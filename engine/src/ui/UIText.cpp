@@ -134,33 +134,6 @@ namespace N2Engine::UI
         return model;
     }
 
-    void UIText::SetCharacterOffset(const std::size_t index, const Math::Vector2 &offset)
-    {
-        if (index >= _characterOffsets.size())
-        {
-            if (offset.x == 0.0f && offset.y == 0.0f)
-            {
-                return; // already there
-            }
-            _characterOffsets.resize(index + 1, Math::Vector2{0.0f, 0.0f});
-        }
-        Math::Vector2 &slot = _characterOffsets[index];
-        if (slot.x != offset.x || slot.y != offset.y)
-        {
-            slot = offset;
-            _charactersChanged = true;
-        }
-    }
-
-    void UIText::ClearCharacterOffsets()
-    {
-        if (!_characterOffsets.empty())
-        {
-            _characterOffsets.clear();
-            _charactersChanged = true;
-        }
-    }
-
     namespace
     {
         constexpr std::uint32_t NoCharacter = ~std::uint32_t{0};
@@ -195,12 +168,91 @@ namespace N2Engine::UI
             return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
         }
 
+        bool SameOffset(const Math::Vector2 &a, const Math::Vector2 &b) { return a.x == b.x && a.y == b.y; }
+
+        bool SameScale(const float a, const float b) { return a == b; }
+
         float ClampComponent(const float value)
         {
             return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 1.0f;
         }
 
-        const Common::Color White{1.0f, 1.0f, 1.0f, 1.0f};
+        /**
+         * The rules every per-character list follows (offsets, scales, colours): an index above MaxCharacterIndex is
+         * ignored; setting the default past the end adds nothing; a list grows with defaults to reach `index`; trailing
+         * defaults are dropped, so a list whose characters are all back to the default is empty again. True when the list
+         * changed.
+         */
+        template <typename T, typename Same>
+        bool SetSlot(std::vector<T> &values, const std::size_t index, const T &value, const T &defaultValue, Same same)
+        {
+            if (index > UIText::MaxCharacterIndex)
+            {
+                return false;
+            }
+            if (index >= values.size())
+            {
+                if (same(value, defaultValue))
+                {
+                    return false; // already that
+                }
+                values.resize(index + 1, defaultValue);
+            }
+            if (same(values[index], value))
+            {
+                return false;
+            }
+            values[index] = value;
+            while (!values.empty() && same(values.back(), defaultValue))
+            {
+                values.pop_back();
+            }
+            return true;
+        }
+
+        template <typename T>
+        bool ClearSlots(std::vector<T> &values)
+        {
+            if (values.empty())
+            {
+                return false;
+            }
+            values.clear();
+            return true;
+        }
+
+        void MoveQuad(Text::Rect &p, const Math::Vector2 &o)
+        {
+            p.minX += o.x;
+            p.maxX += o.x;
+            p.minY += o.y;
+            p.maxY += o.y;
+        }
+
+        void ScaleQuad(Text::Rect &p, const float s)
+        {
+            const float cx = 0.5f * (p.minX + p.maxX);
+            const float cy = 0.5f * (p.minY + p.maxY);
+            const float hw = 0.5f * (p.maxX - p.minX) * s;
+            const float hh = 0.5f * (p.maxY - p.minY) * s;
+            p = Text::Rect{cx - hw, cy - hh, cx + hw, cy + hh};
+        }
+    }
+
+    void UIText::SetCharacterOffset(const std::size_t index, const Math::Vector2 &offset)
+    {
+        if (SetSlot(_characterOffsets, index, offset, Math::Vector2{0.0f, 0.0f}, SameOffset))
+        {
+            _charactersChanged = true;
+        }
+    }
+
+    void UIText::ClearCharacterOffsets()
+    {
+        if (ClearSlots(_characterOffsets))
+        {
+            _charactersChanged = true;
+        }
     }
 
     Text::TextLayout UIText::ApplyCharacterOffsets(const Text::TextLayout &layout, const std::string &text,
@@ -214,15 +266,9 @@ namespace N2Engine::UI
         const std::vector<std::uint32_t> characterOf = CharacterOfQuads(layout, text);
         for (std::size_t q = 0; q < result.quads.size(); ++q)
         {
-            const std::uint32_t index = characterOf[q];
-            if (index < offsets.size())
+            if (characterOf[q] < offsets.size())
             {
-                Text::GlyphQuad &quad = result.quads[q];
-                const Math::Vector2 &o = offsets[index];
-                quad.position.minX += o.x;
-                quad.position.maxX += o.x;
-                quad.position.minY += o.y;
-                quad.position.maxY += o.y;
+                MoveQuad(result.quads[q].position, offsets[characterOf[q]]);
             }
         }
         return result;
@@ -232,28 +278,19 @@ namespace N2Engine::UI
     {
         const Common::Color clamped{ClampComponent(color.r), ClampComponent(color.g), ClampComponent(color.b),
                                     ClampComponent(color.a)};
-        if (index >= _characterColors.size())
+        if (SetSlot(_characterColors, index, clamped, Common::Color::White, SameColor))
         {
-            if (SameColor(clamped, White))
-            {
-                return; // already that colour
-            }
-            _characterColors.resize(index + 1, White);
-        }
-        Common::Color &slot = _characterColors[index];
-        if (!SameColor(slot, clamped))
-        {
-            slot = clamped;
             _charactersChanged = true;
+            _colorsChanged = true;
         }
     }
 
     void UIText::ClearCharacterColors()
     {
-        if (!_characterColors.empty())
+        if (ClearSlots(_characterColors))
         {
-            _characterColors.clear();
             _charactersChanged = true;
+            _colorsChanged = true;
         }
     }
 
@@ -269,7 +306,7 @@ namespace N2Engine::UI
         result.reserve(characterOf.size());
         for (const std::uint32_t index : characterOf)
         {
-            result.push_back(index < colors.size() ? colors[index] : White);
+            result.push_back(index < colors.size() ? colors[index] : Common::Color::White);
         }
         return result;
     }
@@ -277,27 +314,16 @@ namespace N2Engine::UI
     void UIText::SetCharacterScale(const std::size_t index, const float scale)
     {
         const float clamped = std::isfinite(scale) ? std::max(scale, 0.0f) : 1.0f;
-        if (index >= _characterScales.size())
+        if (SetSlot(_characterScales, index, clamped, 1.0f, SameScale))
         {
-            if (clamped == 1.0f)
-            {
-                return; // already that size
-            }
-            _characterScales.resize(index + 1, 1.0f);
-        }
-        float &slot = _characterScales[index];
-        if (slot != clamped)
-        {
-            slot = clamped;
             _charactersChanged = true;
         }
     }
 
     void UIText::ClearCharacterScales()
     {
-        if (!_characterScales.empty())
+        if (ClearSlots(_characterScales))
         {
-            _characterScales.clear();
             _charactersChanged = true;
         }
     }
@@ -313,16 +339,9 @@ namespace N2Engine::UI
         const std::vector<std::uint32_t> characterOf = CharacterOfQuads(layout, text);
         for (std::size_t q = 0; q < result.quads.size(); ++q)
         {
-            const std::uint32_t index = characterOf[q];
-            if (index < scales.size())
+            if (characterOf[q] < scales.size())
             {
-                Text::Rect &p = result.quads[q].position;
-                const float s = scales[index];
-                const float cx = 0.5f * (p.minX + p.maxX);
-                const float cy = 0.5f * (p.minY + p.maxY);
-                const float hw = 0.5f * (p.maxX - p.minX) * s;
-                const float hh = 0.5f * (p.maxY - p.minY) * s;
-                p = Text::Rect{cx - hw, cy - hh, cx + hw, cy + hh};
+                ScaleQuad(result.quads[q].position, scales[characterOf[q]]);
             }
         }
         return result;
@@ -344,20 +363,54 @@ namespace N2Engine::UI
         const Text::TextLayout &layout = GetLayout(rect);
         const Matrix4 model = ComposeModel(canvasToWorld, ModelMatrixFor(GetAnchor(rect)));
         // The mesh follows the layout and the per-character scales, offsets and colours: a new version for
-        // DrawResources when any changed, the scales then the offsets applied to a copy of the layout, the
-        // colours turned into one vertex colour per quad
+        // DrawResources when any changed. One pass over the quads: each one's scale (about its centre), then its offset,
+        // on a copy of the layout; the colours become one vertex colour per quad, rebuilt only when they or the layout
+        // changed (an animated offset leaves them as they are)
         const bool moved = !_characterOffsets.empty() || !_characterScales.empty();
-        if (_layoutCache.GetVersion() != _drawnLayoutVersion || _charactersChanged)
+        const bool layoutChanged = _layoutCache.GetVersion() != _drawnLayoutVersion;
+        if (layoutChanged || _charactersChanged)
         {
             _drawnLayoutVersion = _layoutCache.GetVersion();
-            _charactersChanged = false;
             ++_meshVersion;
+            const bool recolor = !_characterColors.empty() && (layoutChanged || _colorsChanged);
+            const std::vector<std::uint32_t> characterOf =
+                moved || recolor ? CharacterOfQuads(layout, _text) : std::vector<std::uint32_t>{};
             if (moved)
             {
-                _offsetLayout = ApplyCharacterOffsets(ApplyCharacterScales(layout, _text, _characterScales), _text,
-                                                      _characterOffsets);
+                _offsetLayout = layout;
+                for (std::size_t q = 0; q < _offsetLayout.quads.size(); ++q)
+                {
+                    const std::uint32_t index = characterOf[q];
+                    Text::Rect &position = _offsetLayout.quads[q].position;
+                    if (index < _characterScales.size())
+                    {
+                        ScaleQuad(position, _characterScales[index]);
+                    }
+                    if (index < _characterOffsets.size())
+                    {
+                        MoveQuad(position, _characterOffsets[index]);
+                    }
+                }
             }
-            _quadColors = CharacterQuadColors(layout, _text, _characterColors);
+            else
+            {
+                _offsetLayout = Text::TextLayout{}; // nothing moved: the copy is not kept
+            }
+            if (_characterColors.empty())
+            {
+                _quadColors.clear();
+            }
+            else if (recolor)
+            {
+                _quadColors.clear();
+                _quadColors.reserve(characterOf.size());
+                for (const std::uint32_t index : characterOf)
+                {
+                    _quadColors.push_back(index < _characterColors.size() ? _characterColors[index] : Common::Color::White);
+                }
+            }
+            _charactersChanged = false;
+            _colorsChanged = false;
         }
         const Text::TextLayout &drawn = moved ? _offsetLayout : layout;
         _resources.Draw(_layoutCache.GetFont(), drawn, _meshVersion, model.Data(), GetDrawColor(), _effects, state,

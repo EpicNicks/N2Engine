@@ -727,3 +727,37 @@ TEST(SoftwareUIGoldenTest, UITextCharacterScaleHidesGrowsAndClears)
     }
     renderer.Shutdown();
 }
+
+TEST(SoftwareUIGoldenTest, UITextCharacterAlphaZeroHidesItsOutlineToo)
+{
+    // The character colour's alpha fades the outline (and shadow) with the face, so a character at alpha 0 leaves nothing
+    constexpr int width = 200;
+    constexpr int height = 80;
+    constexpr Rgb Blue{0, 0, 255};
+    SoftwareRenderer renderer;
+    ASSERT_TRUE(renderer.Initialize(nullptr, width, height));
+    {
+        UIScene ui = MakeUIScene("SoftwareUIGolden_CharacterAlphaOutline");
+        const auto element = AddElement(ui.canvas, "Label", 20.0f, 10.0f, 160.0f, 60.0f);
+        auto *text = element->AddComponent<UI::UIText>();
+        ASSERT_NE(text, nullptr);
+        text->SetText("Hi");
+        text->SetFontSize(32.0f);
+        text->SetColor(Common::Color::White);
+        text->SetOutline(0.08f, Common::Color::Blue);
+
+        const Frame outlined = RenderUIPass(renderer, *ui.scene, width, height);
+        const Coverage all = CoverageExcept(outlined, Black);
+        ASSERT_GT(CountColour(outlined, Blue), 0) << "the outline is drawn";
+
+        text->SetCharacterColor(0, Common::Color{1.0f, 1.0f, 1.0f, 0.0f});
+        const Frame faded = RenderUIPass(renderer, *ui.scene, width, height);
+        const Coverage rest = CoverageExcept(faded, Black);
+        ASSERT_GT(rest.count, 0) << "the i is still drawn, with its outline";
+        EXPECT_GT(CountColour(faded, Blue), 0);
+        EXPECT_GT(rest.minX, all.minX + 5) << "neither the H nor its outline is drawn";
+        EXPECT_EQ(CountColour(faded, White) + CountColour(faded, Blue), rest.count) << "only the i's face and outline";
+        ui.scene.reset();
+    }
+    renderer.Shutdown();
+}
