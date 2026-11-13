@@ -5,8 +5,8 @@
 #     view's layer contents. No GLFW, no desktop OpenGL library, no editor tools or tests;
 #   * the oldest systems: iOS 16.3 and macOS 13.3 (the targets' CMAKE_OSX_DEPLOYMENT_TARGET), where Apple's libc++ first has
 #     floating-point std::to_chars, which std::format uses;
-#   * macOS's GPU renderer is the Vulkan renderer on MoltenVK when MoltenVK is found (stage 13, below); iOS has the software
-#     renderer until MoltenVK's iOS framework is in the build (a stage 13 follow-up);
+#   * the GPU renderer is the Vulkan renderer on MoltenVK (stage 13, below): on macOS when MoltenVK is found, on iOS when
+#     MoltenVK's iOS library is named (N2ENGINE_IOS_MOLTENVK). Both keep the software renderer as the fallback;
 #   * both: no PhysX (decision D8 for iOS; no PhysX build for macOS is vendored), no WebGPU. Apple's libc++ has no std::generator: external/web-stubs/include/generator
 #     stands in, as on the web and Android.
 
@@ -42,6 +42,56 @@ if(N2ENGINE_APPLE_MOLTENVK AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
             message(STATUS "macOS: MoltenVK not found (brew install molten-vk, or the Vulkan SDK): no Vulkan renderer")
         endif()
     endif()
+elseif(N2ENGINE_APPLE_MOLTENVK AND CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    # iOS: MoltenVK's static library, linked into the app (an app may not load a library of its own from elsewhere). It
+    # comes from MoltenVK's release (MoltenVK-all.tar: MoltenVK/MoltenVK, holding include/ and static/MoltenVK.xcframework)
+    # or the Vulkan SDK's iOS folder, named by N2ENGINE_IOS_MOLTENVK or the N2_MOLTENVK_IOS environment variable. Without
+    # it the app has the software renderer only, as before
+    set(N2ENGINE_IOS_MOLTENVK "$ENV{N2_MOLTENVK_IOS}" CACHE PATH
+        "iOS: MoltenVK's folder (include/ and static/MoltenVK.xcframework, or the Vulkan SDK's iOS folder)")
+    set(_n2_mvk_ios_found OFF)
+    if(N2ENGINE_IOS_MOLTENVK)
+        # The xcframework's slice for the SDK this tree builds for: the simulator's (arm64 and x86_64) or the device's
+        string(TOLOWER "${CMAKE_OSX_SYSROOT}" _n2_sysroot)
+        if(_n2_sysroot MATCHES "simulator")
+            set(_n2_mvk_slice "ios-arm64_x86_64-simulator")
+        else()
+            set(_n2_mvk_slice "ios-arm64")
+        endif()
+        find_file(N2_MOLTENVK_IOS_LIBRARY libMoltenVK.a NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH
+            PATHS "${N2ENGINE_IOS_MOLTENVK}/static/MoltenVK.xcframework/${_n2_mvk_slice}"
+                  "${N2ENGINE_IOS_MOLTENVK}/lib/MoltenVK.xcframework/${_n2_mvk_slice}"
+                  "${N2ENGINE_IOS_MOLTENVK}/MoltenVK.xcframework/${_n2_mvk_slice}")
+        find_path(N2_MOLTENVK_IOS_INCLUDE vulkan/vulkan.h NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH
+            PATHS "${N2ENGINE_IOS_MOLTENVK}/include")
+        if(N2_MOLTENVK_IOS_LIBRARY AND N2_MOLTENVK_IOS_INCLUDE)
+            set(_n2_mvk_ios_found ON)
+        else()
+            message(WARNING "N2ENGINE_IOS_MOLTENVK (${N2ENGINE_IOS_MOLTENVK}) has no ${_n2_mvk_slice} libMoltenVK.a or include/vulkan/vulkan.h: no Vulkan renderer")
+        endif()
+    endif()
+    if(_n2_mvk_ios_found)
+        add_library(Vulkan::Vulkan STATIC IMPORTED GLOBAL)
+        set_target_properties(Vulkan::Vulkan PROPERTIES
+            IMPORTED_LOCATION "${N2_MOLTENVK_IOS_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${N2_MOLTENVK_IOS_INCLUDE}"
+            # What MoltenVK itself uses (its README's list for iOS)
+            INTERFACE_LINK_LIBRARIES "-framework Metal;-framework IOSurface;-framework QuartzCore;-framework CoreGraphics;-framework UIKit;-framework Foundation;c++")
+        set(Vulkan_LIBRARY "${N2_MOLTENVK_IOS_LIBRARY}" CACHE FILEPATH "MoltenVK, linked as the Vulkan library" FORCE)
+        set(Vulkan_INCLUDE_DIR "${N2_MOLTENVK_IOS_INCLUDE}" CACHE PATH "" FORCE)
+        # The shader compiler runs on the Mac building the app: looked for outside the iOS SDK
+        find_program(Vulkan_GLSLANG_VALIDATOR_EXECUTABLE glslangValidator NO_CMAKE_FIND_ROOT_PATH
+            HINTS /opt/homebrew/bin /usr/local/bin "$ENV{VULKAN_SDK}/bin" "$ENV{VULKAN_SDK}/../macOS/bin")
+        set(N2ENGINE_RENDERER_VULKAN ON CACHE BOOL "" FORCE)
+        set(N2ENGINE_APPLE_MOLTENVK_LINKED ON)
+        add_compile_definitions(N2ENGINE_APPLE_MOLTENVK=1)
+        message(STATUS "iOS: the Vulkan renderer on MoltenVK (${N2_MOLTENVK_IOS_LIBRARY})")
+    else()
+        set(N2ENGINE_RENDERER_VULKAN OFF CACHE BOOL "" FORCE)
+        if(NOT N2ENGINE_IOS_MOLTENVK)
+            message(STATUS "iOS: no MoltenVK named (N2ENGINE_IOS_MOLTENVK or N2_MOLTENVK_IOS): the software renderer only")
+        endif()
+    endif()
 else()
     set(N2ENGINE_RENDERER_VULKAN OFF CACHE BOOL "" FORCE)
 endif()
@@ -70,7 +120,7 @@ if(N2ENGINE_PLATFORM_IOS)
     # What the renderer and the engine link on the desktop, empty here (as on Android)
     add_library(glfw INTERFACE)
     add_library(OpenGL::GL INTERFACE IMPORTED GLOBAL)
-    message(STATUS "iOS (${CMAKE_OSX_SYSROOT}, ${CMAKE_SYSTEM_PROCESSOR}): software renderer into the view's layer, Jolt and Box2D, OpenAL Soft on Core Audio; no PhysX, Vulkan, GLFW, editor tools or tests")
+    message(STATUS "iOS (${CMAKE_OSX_SYSROOT}, ${CMAKE_SYSTEM_PROCESSOR}): software renderer into the view's layer (and Vulkan on MoltenVK when named), Jolt and Box2D, OpenAL Soft on Core Audio; no PhysX, GLFW, editor tools or tests")
 else()
     add_compile_definitions(N2ENGINE_PLATFORM_MACOS=1)
     # OpenGL is deprecated on macOS, and works: silence the warning on every use

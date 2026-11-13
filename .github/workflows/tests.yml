@@ -1035,8 +1035,11 @@ jobs:
   # The Apple targets (build targets stage 10, decision D7; docs/apple.html): built and run on a pinned macOS runner, the
   # same commands the n2build-apple workflow runs for a game (tools/n2build/lib/remote.mjs). macOS: the desktop player,
   # run for 60 frames. iOS: the app for the simulator, run there until it has logged a first frame and a frame rate.
+  #
+  # iOS twice: as n2build builds it by default (the software renderer), and with MoltenVK's iOS library from its pinned
+  # release (stage 13: the Vulkan renderer into the view's Metal layer)
   apple:
-    name: apple (${{ matrix.target }} package of lua_project)
+    name: apple (${{ matrix.target }}${{ matrix.moltenvk && ' with MoltenVK' || '' }} package of lua_project)
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: macos-15
@@ -1044,7 +1047,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [macos, ios]
+        include:
+          - target: macos
+          - target: ios
+          - target: ios
+            moltenvk: true
     steps:
       - uses: actions/checkout@v7
 
@@ -1055,6 +1062,19 @@ jobs:
       # MoltenVK and glslang too: the macOS player's Vulkan renderer runs on MoltenVK (build targets stage 13)
       - name: Install Ninja, MoltenVK and glslang
         run: brew install ninja molten-vk vulkan-headers glslang
+
+      # MoltenVK's own release (Khronos), pinned and checked: its static library for iOS and the simulator
+      - name: MoltenVK for iOS (v1.4.2)
+        if: matrix.moltenvk
+        run: |
+          mkdir -p "$RUNNER_TEMP/moltenvk"
+          cd "$RUNNER_TEMP/moltenvk"
+          curl -fsSL -o MoltenVK-all.tar https://github.com/KhronosGroup/MoltenVK/releases/download/v1.4.2/MoltenVK-all.tar
+          echo "562a15a29bc358446a56a4091c5f7e08f604184187c1d34f712148b61ef17276  MoltenVK-all.tar" | shasum -a 256 -c
+          tar -xf MoltenVK-all.tar MoltenVK/MoltenVK/include MoltenVK/MoltenVK/static
+          rm MoltenVK-all.tar
+          ls MoltenVK/MoltenVK/static/MoltenVK.xcframework
+          echo "N2_MOLTENVK_IOS=$RUNNER_TEMP/moltenvk/MoltenVK/MoltenVK" >> "$GITHUB_ENV"
 
       - name: n2build doctor
         run: node tools/n2build/n2build.mjs doctor --target ${{ matrix.target }} --project lua_project
@@ -1104,15 +1124,38 @@ jobs:
           node tools/n2build/n2build.mjs run --target ios --project lua_project --config debug --out "$RUNNER_TEMP/package/LuaDemo" --no-build --seconds 60 | tee run.txt
           grep -q "N2Engine iOS player: first frame" run.txt
           grep -Eq "N2Engine iOS player: [0-9]+ frames, [0-9.]+ fps" run.txt
+          # The first-frame line names the renderer (the lines before it can go by before the log stream starts)
+          if [ "${{ matrix.moltenvk }}" = true ]; then
+            grep -q "N2Engine iOS player: first frame, the Vulkan renderer (MoltenVK)" run.txt
+          else
+            grep -q "N2Engine iOS player: first frame, the software renderer" run.txt
+          fi
 
       # When the run fails: the app's crash report, if the simulator wrote one, and the simulator's log for the app
       - name: The iOS app's crash report and log (on failure)
         if: failure() && matrix.target == 'ios'
         run: |
-          ls -t ~/Library/Logs/DiagnosticReports/ 2>/dev/null | head -10
-          report="$(ls -t ~/Library/Logs/DiagnosticReports/N2Game* 2>/dev/null | head -1)"
-          if [ -n "$report" ]; then head -c 12000 "$report"; else echo "no crash report for N2Game"; fi
+          # A crash report can take a while to be written
+          sleep 20
+          find ~/Library/Logs/DiagnosticReports -mmin -30 -type f 2>/dev/null | head -20
+          report="$(find ~/Library/Logs/DiagnosticReports -mmin -30 -type f -name 'N2Game*' 2>/dev/null | head -1)"
+          if [ -n "$report" ]; then head -c 16000 "$report"; else echo "no crash report for N2Game"; fi
           xcrun simctl spawn booted log show --last 5m --style compact --predicate 'process == "N2Game"' 2>/dev/null | tail -80 || true
+          # Why the app ended, as the system saw it (launchd, SpringBoard, the crash reporter)
+          xcrun simctl spawn booted log show --last 5m --style compact --predicate 'process != "N2Game" AND eventMessage CONTAINS[c] "lua_project"' 2>/dev/null | tail -40 || true
+          if [ "${{ matrix.moltenvk }}" = true ]; then
+            # The simulator draws through SimMetalHost on the Mac: its own crash report, if it crashed
+            for dir in ~/Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports; do
+              ls -t "$dir" 2>/dev/null | head -10
+              host="$(ls -t "$dir"/SimMetalHost* "$dir"/*MetalHost* 2>/dev/null | head -1)"
+              if [ -n "$host" ]; then echo "== $host"; head -c 16000 "$host"; fi
+            done
+            # Once more with the app's stdout and stderr on the console and MoltenVK's own log (stderr). macOS has no
+            # timeout(1): perl's alarm ends the run
+            SIMCTL_CHILD_MVK_CONFIG_LOG_LEVEL=3 perl -e 'alarm shift; exec @ARGV' 60 \
+              xcrun simctl launch --console-pty --terminate-running-process booted com.n2engine.lua_project 2>&1 \
+              | grep -v "New asset" | tail -100 || true
+          fi
 
   # The same Linux build and tests on arm64 (ubuntu-24.04-arm, aarch64): the math library's x86 SIMD paths are compiled out
   # there and the scalar versions run; PhysX runs its own aarch64 build. Not a required check yet.

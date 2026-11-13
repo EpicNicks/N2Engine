@@ -60,7 +60,10 @@ every stage. Stages still run in the order of section 5, each after the stages i
   `VK_KHR_portability_enumeration`. The user picked MoltenVK (2026-11-12).
 - Stage 13, MoltenVK, branch `feat-bt13b-moltenvk`: the swizzle limit fixed (one- and two-channel textures as RGBA where the
   device cannot swizzle image views); macOS links MoltenVK itself and ships it beside the player (`--renderer vulkan`);
-  the CI runs the macOS player on Vulkan. iOS on MoltenVK (its iOS framework, a Metal-layer view) is the remaining step.
+  the CI runs the macOS player on Vulkan (#352).
+- Stage 13, iOS on MoltenVK, branch `feat-bt13c-ios-moltenvk`: MoltenVK's static iOS library (its release, named by
+  `N2_MOLTENVK_IOS`) linked into the app; the view's layer is a `CAMetalLayer` where MoltenVK finds a GPU, else the
+  software renderer; the CI runs the app on Vulkan in the simulator.
 
 ## 1. Goal
 
