@@ -893,7 +893,7 @@ jobs:
         run: |
           set +e
           prefix="$(brew --prefix)"
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_APPLE_MOLTENVK=ON \
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_APPLE_MOLTENVK=ON -DN2ENGINE_APPLE_VULKAN_LOADER=ON \
             -DN2ENGINE_RENDERER_VULKAN=ON -DCMAKE_PREFIX_PATH="$prefix" > configure.log 2>&1
           configured=$?
           built=1
@@ -966,8 +966,9 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install Ninja
-        run: brew install ninja
+      # MoltenVK and glslang too: the macOS player's Vulkan renderer runs on MoltenVK (build targets stage 13)
+      - name: Install Ninja, MoltenVK and glslang
+        run: brew install ninja molten-vk vulkan-headers glslang
 
       - name: n2build doctor
         run: node tools/n2build/n2build.mjs doctor --target ${{ matrix.target }} --project lua_project
@@ -998,6 +999,18 @@ jobs:
         run: |
           "$RUNNER_TEMP/package/LuaDemo/lua_project" --console-log --headless --frames 60 | tee run.txt
           grep -q "Using Software renderer, headless" run.txt
+
+      # Stage 13: the Vulkan renderer on MoltenVK, in a window (a Vulkan window needs no OpenGL context; the runner's
+      # paravirtual GPU runs MoltenVK). MoltenVK ships beside the player, and the player must load it from there
+      - name: Run (macOS, Vulkan on MoltenVK, 60 frames)
+        if: matrix.target == 'macos'
+        run: |
+          pkg="$RUNNER_TEMP/package/LuaDemo"
+          test -f "$pkg/libMoltenVK.dylib"
+          otool -L "$pkg/lua_project" | tee otool.txt
+          grep -q "@executable_path/libMoltenVK.dylib" otool.txt
+          "$pkg/lua_project" --console-log --renderer vulkan --frames 60 | tee vk.txt
+          grep -q "Using Vulkan renderer" vk.txt
 
       - name: Run in the simulator (first frame and a frame rate)
         if: matrix.target == 'ios'

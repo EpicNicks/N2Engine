@@ -154,6 +154,20 @@ node tools/n2build/n2build.mjs build  --target macos --project path/to/game</cod
 
 <h2 id="macos">macOS</h2>
 <p>macOS uses the desktop player (<code>players/desktop</code>), with GLFW, the OpenGL and software renderers, and AppleClang. The libc++ <code>&lt;generator&gt;</code> stand-in is the web build's. The package is a folder: the executable, which finds its libraries beside it (<code>@executable_path</code>), and <code>game.n2pack</code>. An <code>.app</code> bundle for macOS is a follow-up.</p>
+<h3 id="moltenvk">The Vulkan renderer on MoltenVK <span class="badge">PR #TBD</span></h3>
+<p>macOS's GPU renderer is the engine's Vulkan renderer running on MoltenVK, Khronos's Vulkan on Metal. This was the user's pick after the stage 13 spike (<code>orchestrator/proposals/metal-spike.md</code>):</p>
+<ul>
+<li><strong>The build:</strong> when MoltenVK is found (<code>brew install molten-vk</code>, or the Vulkan SDK), the macOS build includes the Vulkan renderer. The player links <code>libMoltenVK.dylib</code> itself, without the Vulkan loader. n2build ships the library beside the player, and the player loads it from there (<code>@executable_path</code>), so a package needs nothing installed. Without MoltenVK, the player has the OpenGL and software renderers as before.</li>
+<li><strong>Running it:</strong> <code>--renderer vulkan</code>. GLFW makes the window's Metal surface (<code>VK_EXT_metal_surface</code>) through MoltenVK's entry point (<code>glfwInitVulkanLoader</code>).</li>
+<li><strong>A portability device:</strong> MoltenVK cannot swizzle image views (<code>imageViewFormatSwizzle</code>). The renderer then stores one- and two-channel textures, the text atlas among them, as RGBA holding (r, 0, 0, 1) and (r, g, 0, 1). It samples them exactly as a swizzled view would. Every other device keeps R8 and RG8.</li>
+<li><strong>Signing:</strong> rewriting the player's and MoltenVK's library paths breaks their code signatures, so both are signed again ad hoc. A release for distribution is signed with its own identity (a follow-up with the developer account, D7).</li>
+<li><strong>iOS:</strong> the iOS app still draws with the software renderer. Homebrew's MoltenVK is macOS-only. MoltenVK on iOS needs its iOS framework, from the LunarG SDK or a source build, linked statically into the app, plus a Metal-layer view in the iOS backend. That is the next step.</li>
+</ul>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>Without image view swizzles, one- and two-channel textures are stored as RGBA holding what the swizzle would give (<code>VulkanResourceTest.WithoutImageViewSwizzlesSmallTexturesAreStoredAsRgbaHoldingWhatTheSwizzleWouldGive</code>, forced on any driver).</p>
+</div>
+
 
 <h2 id="signing">Devices and signing</h2>
 <p>The app is built for the simulator and is not signed. A device build needs an Apple Developer account, which the plan defers (D7). When it comes, signing happens only inside the workflow, from the repository's own secrets. Nothing is read on this machine and nothing goes into the project.</p>

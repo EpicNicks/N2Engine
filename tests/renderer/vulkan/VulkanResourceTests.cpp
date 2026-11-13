@@ -127,19 +127,21 @@ namespace
     }
 
     /// What the texture's level 0 holds: the input as given, except that 3 channels become RGBA with alpha 255
+    /// Level 0 as stored: 3 channels, and 1 and 2 on a device without image view swizzles (expandSmall), as RGBA with the
+    /// missing colour channels 0 and alpha 255; the rest as given
     std::vector<std::uint8_t> ExpectedLevel0(const std::vector<std::uint8_t>& input, std::uint32_t width,
-                                             std::uint32_t height, std::uint32_t channels)
+                                             std::uint32_t height, std::uint32_t channels, bool expandSmall = false)
     {
-        if (channels != 3)
+        if (channels == 4 || (channels <= 2 && !expandSmall))
         {
             return input;
         }
         std::vector<std::uint8_t> out(static_cast<std::size_t>(width) * height * 4);
         for (std::size_t i = 0; i < static_cast<std::size_t>(width) * height; ++i)
         {
-            out[i * 4 + 0] = input[i * 3 + 0];
-            out[i * 4 + 1] = input[i * 3 + 1];
-            out[i * 4 + 2] = input[i * 3 + 2];
+            out[i * 4 + 0] = input[i * channels + 0];
+            out[i * 4 + 1] = channels >= 2 ? input[i * channels + 1] : 0;
+            out[i * 4 + 2] = channels >= 3 ? input[i * channels + 2] : 0;
             out[i * 4 + 3] = 255;
         }
         return out;
@@ -257,8 +259,14 @@ TEST_F(VulkanResourceTest, EveryChannelCountAndOptionCreatesATextureWhoseLevelZe
                             EXPECT_EQ(info.height, size.h);
                             EXPECT_EQ(info.channels, channels);
 
-                            // The format follows the channel count; sRGB only for 3 and 4 channels
-                            if (channels == 1)
+                            // The format follows the channel count; sRGB only for 3 and 4 channels. Without image
+                            // view swizzles (MoltenVK) 1 and 2 channels are stored as RGBA
+                            const bool expandSmall = !R().ImageViewSwizzleForTest();
+                            if (channels <= 2 && expandSmall)
+                            {
+                                EXPECT_EQ(info.format, VK_FORMAT_R8G8B8A8_UNORM);
+                            }
+                            else if (channels == 1)
                             {
                                 EXPECT_EQ(info.format, VK_FORMAT_R8_UNORM);
                             }
@@ -315,7 +323,7 @@ TEST_F(VulkanResourceTest, EveryChannelCountAndOptionCreatesATextureWhoseLevelZe
                             ASSERT_TRUE(R().ReadTextureForTest(texture, 0, level0, &levelWidth, &levelHeight));
                             EXPECT_EQ(levelWidth, size.w);
                             EXPECT_EQ(levelHeight, size.h);
-                            EXPECT_EQ(level0, ExpectedLevel0(input, size.w, size.h, channels));
+                            EXPECT_EQ(level0, ExpectedLevel0(input, size.w, size.h, channels, expandSmall));
 
                             R().DestroyTexture(texture);
                         }
@@ -329,6 +337,30 @@ TEST_F(VulkanResourceTest, EveryChannelCountAndOptionCreatesATextureWhoseLevelZe
     EXPECT_EQ(R().GetLiveTextureCountForTest(), 0u);
     EXPECT_EQ(R().GetPendingDeletionCountForTest(), 0u);
     EXPECT_EQ(R().GetLiveAllocationCountForTest(), 0u);
+}
+
+// Build targets stage 13: a device without imageViewFormatSwizzle (MoltenVK) cannot give a one- or two-channel texture's
+// view the (r, 0, 0, 1) and (r, g, 0, 1) swizzles, so such textures are stored as RGBA holding those values. Forced here,
+// so lavapipe runs the path MoltenVK takes (the validation layer would flag a swizzled view on such a device)
+TEST_F(VulkanResourceTest, WithoutImageViewSwizzlesSmallTexturesAreStoredAsRgbaHoldingWhatTheSwizzleWouldGive)
+{
+    VulkanRenderer& renderer = NewRenderer();
+    renderer.SetNoImageViewSwizzleForTest(true);
+    ASSERT_TRUE(renderer.Initialize(nullptr, 8, 8)) << renderer.GetInitMessage();
+    EXPECT_FALSE(renderer.ImageViewSwizzleForTest());
+    for (std::uint32_t channels = 1; channels <= 2; ++channels)
+    {
+        SCOPED_TRACE(channels);
+        const std::vector<std::uint8_t> input = Pattern(5, 3, channels, 7);
+        ITexture* texture = renderer.CreateTexture(input.data(), 5, 3, channels, TextureOptions{});
+        ASSERT_NE(texture, nullptr);
+        EXPECT_EQ(texture->GetChannels(), channels) << "as given, whatever it is stored as";
+        EXPECT_EQ(renderer.GetTextureInfoForTest(texture).format, VK_FORMAT_R8G8B8A8_UNORM);
+        std::vector<std::uint8_t> level0;
+        ASSERT_TRUE(renderer.ReadTextureForTest(texture, 0, level0, nullptr, nullptr));
+        EXPECT_EQ(level0, ExpectedLevel0(input, 5, 3, channels, true));
+        renderer.DestroyTexture(texture);
+    }
 }
 
 TEST_F(VulkanResourceTest, ThreeChannelTexturesAreExpandedToRgbaWithAlpha255AndRowsAreTightlyPacked)

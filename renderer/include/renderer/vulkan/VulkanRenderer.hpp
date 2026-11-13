@@ -437,6 +437,10 @@ namespace Renderer
             /// Before Initialize: give the swapchain images TRANSFER_SRC usage too (when the surface allows it) and copy each
             /// presented image to host memory, for ReadPresentedImageForTest
             void SetPresentCaptureForTest(bool enabled);
+            /// Before Initialize: behave as a device without imageViewFormatSwizzle (MoltenVK): one- and two-channel
+            /// textures are stored as RGBA with identity views. Whether this renderer swizzles its views, after Initialize
+            void SetNoImageViewSwizzleForTest(bool enabled) { _noImageViewSwizzleForTest = enabled; }
+            [[nodiscard]] bool ImageViewSwizzleForTest() const { return _imageViewSwizzle; }
             /// The last presented swapchain image, RGBA8 with the top row first (an 8-bit format's bytes reordered to RGBA).
             /// False when there is none or the capture is off
             bool ReadPresentedImageForTest(std::vector<std::uint8_t>& rgba, uint32_t& width, uint32_t& height);
@@ -592,8 +596,10 @@ namespace Renderer
             std::optional<bool> _vsyncSetting;           // SetVSync (wins over N2_VULKAN_VSYNC)
             bool _vsync = true;                          // what the swapchain uses
             bool _surfaceSuspended = false;              // OnSurfaceLost let the surface go; OnSurfaceRecreated makes one
+            bool _imageViewSwizzle = true;               // the device allows swizzled image views (not MoltenVK's)
 
             // Test settings (kept across Shutdown, like the validation mode)
+            bool _noImageViewSwizzleForTest = false;
             bool _headlessSurfaceForTest = false;
             VkExtent2D _testFramebuffer{0, 0};
             bool _presentCaptureForTest = false;

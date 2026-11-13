@@ -57,7 +57,10 @@ every stage. Stages still run in the order of section 5, each after the stages i
   `docs/android.html#vulkan`.
 - Stage 13 (Metal), branch `feat-bt13-metal-spike`: the spike, `orchestrator/proposals/metal-spike.md` (MoltenVK or a native
   Metal renderer, with the `metal-spike` CI job running the Vulkan test suite on MoltenVK); the Vulkan instance asks for
-  `VK_KHR_portability_enumeration`. The renderer itself follows the user's pick.
+  `VK_KHR_portability_enumeration`. The user picked MoltenVK (2026-11-12).
+- Stage 13, MoltenVK, branch `feat-bt13b-moltenvk`: the swizzle limit fixed (one- and two-channel textures as RGBA where the
+  device cannot swizzle image views); macOS links MoltenVK itself and ships it beside the player (`--renderer vulkan`);
+  the CI runs the macOS player on Vulkan. iOS on MoltenVK (its iOS framework, a Metal-layer view) is the remaining step.
 
 ## 1. Goal
 

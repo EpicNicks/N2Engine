@@ -600,7 +600,11 @@ std::unique_ptr<VulkanTexture> VulkanRenderer::MakeTextureLocked(const uint8_t* 
     // RGBA8 sRGB the texture falls back to UNORM and its colours are no longer decoded on sampling.
     constexpr VkFormatFeatureFlags sampledUpload =
         VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
-    VkFormat format = channels == 1 ? VK_FORMAT_R8_UNORM
+    // Without image view swizzles (a portability device: MoltenVK; build targets stage 13) one- and two-channel textures
+    // are stored as RGBA8 holding what the swizzle would give, (r, 0, 0, 255) and (r, g, 0, 255), with identity views
+    const bool expandToRgba = channels <= 2 && !_imageViewSwizzle;
+    VkFormat format = expandToRgba ? VK_FORMAT_R8G8B8A8_UNORM
+        : channels == 1          ? VK_FORMAT_R8_UNORM
         : channels == 2          ? VK_FORMAT_R8G8_UNORM
                                  : VK_FORMAT_R8G8B8A8_UNORM;
     if (channels >= 3 && options.srgb)
@@ -659,15 +663,15 @@ std::unique_ptr<VulkanTexture> VulkanRenderer::MakeTextureLocked(const uint8_t* 
     const VkDeviceSize imageBytes = static_cast<VkDeviceSize>(width) * height * texelBytes;
     std::vector<uint8_t> expanded;
     const uint8_t* pixels = data;
-    if (channels == 3)
+    if (channels == 3 || expandToRgba)
     {
         const std::size_t count = static_cast<std::size_t>(width) * height;
         expanded.resize(count * 4);
         for (std::size_t i = 0; i < count; ++i)
         {
-            expanded[i * 4 + 0] = data[i * 3 + 0];
-            expanded[i * 4 + 1] = data[i * 3 + 1];
-            expanded[i * 4 + 2] = data[i * 3 + 2];
+            expanded[i * 4 + 0] = data[i * channels + 0];
+            expanded[i * 4 + 1] = channels >= 2 ? data[i * channels + 1] : 0;
+            expanded[i * 4 + 2] = channels >= 3 ? data[i * channels + 2] : 0;
             expanded[i * 4 + 3] = 255;
         }
         pixels = expanded.data();
@@ -716,12 +720,12 @@ std::unique_ptr<VulkanTexture> VulkanRenderer::MakeTextureLocked(const uint8_t* 
     viewInfo.format = format;
     viewInfo.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
                            VK_COMPONENT_SWIZZLE_IDENTITY};
-    if (channels == 1)
+    if (channels == 1 && !expandToRgba)
     {
         viewInfo.components = {VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_ZERO, VK_COMPONENT_SWIZZLE_ZERO,
                                VK_COMPONENT_SWIZZLE_ONE};
     }
-    else if (channels == 2)
+    else if (channels == 2 && !expandToRgba)
     {
         viewInfo.components = {VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_ZERO,
                                VK_COMPONENT_SWIZZLE_ONE};
