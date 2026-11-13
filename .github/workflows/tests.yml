@@ -1038,11 +1038,11 @@ jobs:
           node tools/n2build/n2build.mjs run --target ios --project lua_project --config debug --out "$RUNNER_TEMP/package/LuaDemo" --no-build --seconds 60 | tee run.txt
           grep -q "N2Engine iOS player: first frame" run.txt
           grep -Eq "N2Engine iOS player: [0-9]+ frames, [0-9.]+ fps" run.txt
+          # The first-frame line names the renderer (the lines before it can go by before the log stream starts)
           if [ "${{ matrix.moltenvk }}" = true ]; then
-            grep -q "N2Engine iOS player: the Vulkan renderer (MoltenVK)" run.txt
-            grep -q "Using Vulkan renderer" run.txt
+            grep -q "N2Engine iOS player: first frame, the Vulkan renderer (MoltenVK)" run.txt
           else
-            grep -q "N2Engine iOS player: the software renderer" run.txt
+            grep -q "N2Engine iOS player: first frame, the software renderer" run.txt
           fi
 
       # When the run fails: the app's crash report, if the simulator wrote one, and the simulator's log for the app

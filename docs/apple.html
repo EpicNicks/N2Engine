@@ -148,7 +148,7 @@ node tools/n2build/n2build.mjs build  --target macos --project path/to/game</cod
 <li><strong>Safe area and scale:</strong> <code>Insets()</code> is the view's safe area, in pixels; <code>ContentScale()</code> is the screen's scale.</li>
 <li><strong>Files:</strong> the pack is read where it is in the app bundle (bundle files are ordinary files, so there is no copy, unlike Android). <code>user://</code> is <code>Application Support/user</code>.</li>
 <li><strong>Audio:</strong> OpenAL Soft on Core Audio, with the ambient audio session (it mixes with other apps and follows the silent switch).</li>
-<li><strong>Log:</strong> the engine's log goes to stdout. The player logs <code>first frame</code> and then <code>N frames, X fps</code> every five seconds.</li>
+<li><strong>Log:</strong> the engine's log goes to stdout. The player logs <code>first frame</code> (with the renderer) and then <code>N frames, X fps</code> every five seconds.</li>
 </ul>
 <p class="src">Source: <code>players/ios/src/IosMain.mm</code>, <code>IosHost.hpp</code></p>
 
@@ -173,7 +173,7 @@ node tools/n2build/n2build.mjs build  --target macos --project path/to/game</cod
 <ul>
 <li><strong>Where MoltenVK comes from:</strong> Homebrew's MoltenVK is macOS-only. Take MoltenVK's own release from Khronos (<code>MoltenVK-all.tar</code>, unpacked: the folder <code>MoltenVK/MoltenVK</code>, holding <code>include/</code> and <code>static/MoltenVK.xcframework</code>) or the Vulkan SDK's <code>iOS</code> folder. Name it with the environment variable <code>N2_MOLTENVK_IOS</code> (or the CMake option <code>N2ENGINE_IOS_MOLTENVK</code>) before <code>n2build build --target ios</code>.</li>
 <li><strong>The build:</strong> the xcframework's slice is chosen by the SDK the tree builds for: <code>ios-arm64_x86_64-simulator</code> for the simulator, <code>ios-arm64</code> for a device. The shader compiler (<code>glslangValidator</code>, <code>brew install glslang</code>) runs on the Mac. Without MoltenVK named, the app is built as before, with the software renderer only.</li>
-<li><strong>At run time:</strong> the app asks MoltenVK for a GPU when it starts, before the view is made. With one, the view's layer is a <code>CAMetalLayer</code> and the renderer makes its surface on it (<code>VK_EXT_metal_surface</code>). Without one, the app keeps the software renderer. The log says which: <code>N2Engine iOS player: the Vulkan renderer (MoltenVK)</code> or <code>the software renderer</code>.</li>
+<li><strong>At run time:</strong> the app asks MoltenVK for a GPU when it starts, before the view is made. With one, the view's layer is a <code>CAMetalLayer</code> and the renderer makes its surface on it (<code>VK_EXT_metal_surface</code>). Without one, the app keeps the software renderer. The log says which, at the start and again in the first-frame line: <code>first frame, the Vulkan renderer (MoltenVK)</code> or <code>first frame, the software renderer</code>.</li>
 <li><strong>The CI:</strong> the <code>apple</code> job builds the iOS app twice, as n2build builds it by default and with MoltenVK v1.4.2 (downloaded and checked against its SHA-256), and runs both in the simulator.</li>
 <li><strong>Not yet:</strong> the n2build-apple workflow for a game's own repository does not fetch MoltenVK; a game that wants it sets <code>N2_MOLTENVK_IOS</code> in its workflow. A device run is a checklist item.</li>
 </ul>

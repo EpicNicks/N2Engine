@@ -81,7 +81,9 @@ namespace
         if (g_state.frames++ == 0)
         {
             g_state.lastReport = now;
-            Logger::Info("N2Engine iOS player: first frame");
+            // The renderer again: the simulator's log stream can start after the launch line went by
+            Logger::Info(g_state.vulkan ? "N2Engine iOS player: first frame, the Vulkan renderer (MoltenVK)"
+                                        : "N2Engine iOS player: first frame, the software renderer");
             return;
         }
         const std::chrono::duration<double> elapsed = now - g_state.lastReport;
