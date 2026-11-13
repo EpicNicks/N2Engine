@@ -23,11 +23,22 @@
   --badge-bg: #e4e0f5;
   --badge-fg: #47358f;
 
+  /* Syntax highlighting (assets/highlight.js) */
+  --tok-c: #6a717a;
+  --tok-kw: #b0215f;
+  --tok-s: #2a7a2e;
+  --tok-n: #a35200;
+  --tok-ty: #0b6f86;
+  --tok-fn: #1f5fbf;
+  --tok-p: #7a3fb0;
+  --tok-v: #a35200;
+  --tok-k: #1f5fbf;
+
   --mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 
   --sidebar-width: 16rem;
-  --content-width: 52rem;
+  --content-width: 64rem;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -53,6 +64,16 @@
 
     --badge-bg: #2d2650;
     --badge-fg: #c9bdff;
+
+    --tok-c: #8b949e;
+    --tok-kw: #ff7b9c;
+    --tok-s: #9fd88a;
+    --tok-n: #f0b86e;
+    --tok-ty: #6fc4d8;
+    --tok-fn: #8ab4ff;
+    --tok-p: #c9a0ff;
+    --tok-v: #f0b86e;
+    --tok-k: #8ab4ff;
   }
 }
 
@@ -153,6 +174,14 @@ main {
 
 .content {
   max-width: var(--content-width);
+  margin: 0 auto;
+}
+
+/* With room to spare, balance the sidebar with an equal right gutter so the
+   content sits on the centre of the screen, not the centre of the area beside
+   the sidebar. */
+@media (min-width: 90rem) {
+  main { padding-right: calc(2.5rem + var(--sidebar-width)); }
 }
 
 /* ---------- Typography ---------- */
@@ -196,6 +225,17 @@ pre {
   overflow-x: auto;
   line-height: 1.45;
 }
+.tok-c { color: var(--tok-c); font-style: italic; }
+.tok-kw { color: var(--tok-kw); }
+.tok-s { color: var(--tok-s); }
+.tok-n { color: var(--tok-n); }
+.tok-ty { color: var(--tok-ty); }
+.tok-fn { color: var(--tok-fn); }
+.tok-p { color: var(--tok-p); }
+.tok-v { color: var(--tok-v); }
+.tok-k { color: var(--tok-k); }
+.tok-o { color: var(--tok-p); }
+
 pre code {
   background: none;
   padding: 0;
@@ -233,10 +273,16 @@ table {
 }
 th, td {
   border: 1px solid var(--border);
-  padding: 0.4rem 0.6rem;
+  padding: 0.45rem 0.75rem;
   text-align: left;
   vertical-align: top;
+  min-width: 7.5rem;
 }
+/* First column holds names: keep identifiers whole instead of breaking them
+   mid-word. Inline code in a table never breaks inside a word either; the
+   .table-wrap scrolls if a row is wider than the page. */
+td:first-child, th:first-child { min-width: 11rem; }
+td code { overflow-wrap: normal; }
 th { background: var(--bg-sidebar); font-weight: 600; }
 
 /* ---------- Callouts ---------- */
@@ -358,6 +404,8 @@ ol.steps > li { margin: 0.25rem 0; }
   }
   .sidebar h2 { margin-top: 0.6rem; }
   main { padding: 1.25rem 1rem 3rem; }
+  th, td { min-width: 6rem; }
+  td:first-child, th:first-child { min-width: 8rem; }
   h1 { font-size: 1.6rem; }
 }
 
