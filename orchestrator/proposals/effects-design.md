@@ -213,7 +213,7 @@ is a renderer project of its own).
 | E0 | Nothing in the engine: the game uses `color` for rainbow, child outlines, gradient glow and the Lua glitch now | No |
 | E1 | `saturation` and `flash` on `Sprite2D` and `Image`, the unlit shader on four backends, `Graphics.CanBlend()`, Lua, docs, tests | Yes, unlit only |
 | E2 | Screen tint: `RenderState` fields, `IRenderer::SetScreenTint`, the three built-in shaders on four backends, `Application`, Lua `Screen`, docs, tests | Yes |
-| E3 | Optional: `Texture::MakeOutline`. **Implemented in PR #366** (2026-11-13): `Texture::MakeOutline(source, widthPixels, colour)`, an exact Euclidean dilation (distance transform) of the alpha mask (solid from alpha 128), padded by the width, cached by (source, width, 8-bit colour) up to 32 outlines; Lua `Sprite2D:SetOutlineTextureOf(source, widthPixels, color)` and `Sprite2D:GetTextureSize()`; the recipe with the padding maths in `docs/sprite2d.html#texture-outline` | No |
+| E3 | Optional: `Texture::MakeOutline`. **Implemented in PR #369** (2026-11-13): `Texture::MakeOutline(source, widthPixels, colour)`, an exact Euclidean dilation (distance transform) of the alpha mask (solid from alpha 128), padded by the width, cached by (source, width, 8-bit colour) up to 32 outlines; Lua `Sprite2D:SetOutlineTextureOf(source, widthPixels, color)` and `Sprite2D:GetTextureSize()`; the recipe with the padding maths in `docs/sprite2d.html#texture-outline` | No |
 
 Each stage is one PR, each with its own web size measurement. E1 and E2 are independent after #318; E2 matters most (time-stop
 is the one effect the game cannot fake).
