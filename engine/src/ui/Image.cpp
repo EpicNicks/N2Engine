@@ -2,6 +2,7 @@
 
 #include <utility>
 
+#include <renderer/common/BlendCutOut.hpp>
 #include <renderer/common/RenderTypes.hpp>
 
 namespace N2Engine::UI
@@ -158,6 +159,12 @@ namespace N2Engine::UI
         _material->SetInt("uHasTexture", texture != nullptr ? 1 : 0);
         const Common::Color color = GetDrawColor(); // the colour with a Button's tint, if any
         _material->SetColor("uAlbedo", color.r, color.g, color.b, color.a);
+        // A renderer that cannot blend (the software renderer) draws every pixel it keeps opaque. As Sprite2D does there, cut
+        // out a texture's pixels under half the colour's alpha, so its transparent parts are not drawn as boxes, and a fully
+        // faded image draws nothing (Renderer::Common::BlendCutOutBelow). A flat colour is never cut out: it is drawn opaque,
+        // as before. 0 (no test) wherever the renderer blends.
+        _material->SetFloat("uAlphaCutoff", Renderer::Common::BlendCutOutBelow(texture != nullptr,
+                                                                              renderer->SupportsBlending(), color.a));
         // The colour effects (Renderer::Common::ColorEffects), clamped again: a scene file can hold any value
         const Common::Color flash = Renderer::Common::ColorEffects::ClampFlash(_flash);
         _material->SetFloat("uSaturation", Renderer::Common::ColorEffects::ClampSaturation(_saturation));

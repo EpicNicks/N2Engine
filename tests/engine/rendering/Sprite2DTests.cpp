@@ -346,6 +346,27 @@ TEST(Sprite2DTest, ATexturesTransparentPixelsAreCutOutOnTheSoftwareRenderer)
     EXPECT_TRUE(IsGreen(frame.At(44, 32)));
 }
 
+TEST(Sprite2DTest, AFullyFadedTexturedSpriteDrawsNothingOnTheSoftwareRenderer)
+{
+    // Colour alpha 0: the cut-out must not fall to 0, which would keep every pixel and draw the sprite as a box
+    const std::vector<std::uint8_t> pixels = {255, 0, 0, 0, 0, 255, 0, 255};
+    Renderer::Common::TextureOptions options;
+    options.filter = Renderer::Common::TextureFilter::Nearest;
+    options.mipmaps = false;
+    const auto texture = Texture::Create(2, 1, pixels, options);
+    ASSERT_NE(texture, nullptr);
+
+    const Frame frame = Draw([&](Scene &scene)
+    {
+        AddSprite(scene, "Back", Vector3(0.0f, 0.0f, 0.0f), Common::Color::Blue, -1)->SetSize(Vector2(3.0f, 3.0f));
+        auto *sprite = AddSprite(scene, "Faded", Vector3(0.0f, 0.0f, 0.0f), Common::Color{1.0f, 1.0f, 1.0f, 0.0f});
+        sprite->SetSize(Vector2(2.0f, 2.0f));
+        sprite->SetTexture(texture);
+    });
+    EXPECT_TRUE(IsBlue(frame.At(20, 32)));
+    EXPECT_TRUE(IsBlue(frame.At(44, 32))) << "nothing of a fully faded sprite is drawn";
+}
+
 TEST(Sprite2DTest, ASpriteThatCannotBeDrawnDrawsNothing)
 {
     const Frame frame = Draw([](Scene &scene)
