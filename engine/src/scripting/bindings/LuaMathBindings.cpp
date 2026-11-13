@@ -7,10 +7,59 @@
 #include <math/Matrix.hpp>
 #include <math/Constants.hpp>
 #include <math/Random.hpp>
+#include <math/DeterministicRandom.hpp>
 #include <cstdint>
+#include <format>
+#include <limits>
+#include <stdexcept>
 
 namespace N2Engine::Scripting::Bindings
 {
+    namespace
+    {
+        // An integer argument: a Lua integer, or a float whose value is an integer in the int64 range (lua_tointegerx's
+        // rule). A string, even "5", or 1.5 is an error. Read from the stack, so no registry reference is made.
+        std::int64_t IntegerArgument(const sol::stack_object &value, const char *caller, const char *name)
+        {
+            if (value.get_type() == sol::type::number)
+            {
+                int isInteger = 0;
+                const lua_Integer integer = lua_tointegerx(value.lua_state(), value.stack_index(), &isInteger);
+                if (isInteger != 0)
+                {
+                    return static_cast<std::int64_t>(integer);
+                }
+            }
+            throw std::runtime_error(std::format("{}: {} must be an integer, got {}", caller, name,
+                                                 value.get_type() == sol::type::number
+                                                     ? std::string("a number with a fraction")
+                                                     : sol::type_name(value.lua_state(), value.get_type())));
+        }
+
+        // A seed or a state: any integer, taken modulo 2^32 (as Random.Seed takes it)
+        std::uint32_t SeedArgument(const sol::stack_object &value, const char *caller)
+        {
+            return static_cast<std::uint32_t>(IntegerArgument(value, caller, "the seed"));
+        }
+
+        // A bound of Int: it must fit an int, as Random.Int's do
+        int IntBoundArgument(const sol::stack_object &value, const char *name)
+        {
+            const std::int64_t bound = IntegerArgument(value, "RandomStream:Int", name);
+            if (bound < std::numeric_limits<int>::min() || bound > std::numeric_limits<int>::max())
+            {
+                throw std::runtime_error(std::format("RandomStream:Int: {} {} is outside the 32-bit integer range",
+                                                     name, bound));
+            }
+            return static_cast<int>(bound);
+        }
+
+        Math::DeterministicRandom NewStream(const sol::stack_object &seed)
+        {
+            return Math::DeterministicRandom(SeedArgument(seed, "RandomStream"));
+        }
+    }
+
     void BindMath(LuaRuntime &runtime)
     {
         auto &lua = runtime.GetState();
@@ -36,7 +85,49 @@ namespace N2Engine::Scripting::Bindings
             // sequence on every platform; n is taken modulo 2^32). Without a call, nothing changes.
             "Seed", [](const std::int64_t seed) { Math::Random::Seed(static_cast<std::uint32_t>(seed)); },
             "InUnitCircle", &Math::Random::RandomInUnitCircle,
-            "OnUnitCircle", &Math::Random::RandomOnUnitCircle
+            "OnUnitCircle", &Math::Random::RandomOnUnitCircle,
+            // Random.NewStream(seed): a stream of its own (RandomStream below), independent of the global one
+            "NewStream", [](const sol::stack_object &seed) { return NewStream(seed); }
+        );
+
+        // ===== RandomStream =====
+        // One Math::DeterministicRandom per object: the algorithm of the seeded global Random, so a stream made with seed
+        // n draws exactly what Random.* draws after Random.Seed(n), function for function, and nothing else draws from
+        // it. Its whole state is one 32-bit integer (GetState/SetState), which a script can keep in a field and put back
+        // (a snapshot, a replay). Copies are values: Clone() is a second stream at the same point.
+        lua.new_usertype<Math::DeterministicRandom>(
+            "RandomStream",
+            sol::call_constructor, sol::factories(&NewStream),
+            "new", sol::factories(&NewStream),
+            "Float", [](Math::DeterministicRandom &stream) { return stream.NextFloat(); },
+            // The formula of Random.Range (min + Float() * (max - min), in float), not DeterministicRandom::Range, so a
+            // stream and the seeded global agree here too; reversed bounds give a value between them, as there
+            "Range", [](Math::DeterministicRandom &stream, const float min, const float max)
+            {
+                return min + stream.NextFloat() * (max - min);
+            },
+            "Int", [](Math::DeterministicRandom &stream, const sol::stack_object &min, const sol::stack_object &max)
+            {
+                const int low = IntBoundArgument(min, "min");
+                const int high = IntBoundArgument(max, "max");
+                return stream.NextInt(low, high);
+            },
+            "InUnitCircle", [](Math::DeterministicRandom &stream) { return stream.InUnitCircle(); },
+            "OnUnitCircle", [](Math::DeterministicRandom &stream) { return stream.OnUnitCircle(); },
+            "Seed", [](Math::DeterministicRandom &stream, const sol::stack_object &seed)
+            {
+                stream.Seed(SeedArgument(seed, "RandomStream:Seed"));
+            },
+            // The state is the counter the next draw advances: an integer in [0, 2^32)
+            "GetState", [](const Math::DeterministicRandom &stream)
+            {
+                return static_cast<lua_Integer>(stream.State());
+            },
+            "SetState", [](Math::DeterministicRandom &stream, const sol::stack_object &state)
+            {
+                stream.Seed(SeedArgument(state, "RandomStream:SetState"));
+            },
+            "Clone", [](const Math::DeterministicRandom &stream) { return stream; }
         );
 
         // Constants such as Vector3.Zero are read-only properties returning a copy: as sol::var they were
