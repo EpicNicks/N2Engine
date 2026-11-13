@@ -125,6 +125,39 @@ namespace N2Engine::UI
         [[nodiscard]] static Text::TextLayout ApplyCharacterOffsets(const Text::TextLayout &layout, const std::string &text,
                                                                     const std::vector<Math::Vector2> &offsets);
 
+        /**
+         * Colours single characters, with the same index, lifetime and bounds rules as SetCharacterOffset: not
+         * saved, kept across SetText, cleared with ClearCharacterColors, and a default value (white) past the end
+         * adds nothing. The colour multiplies the text's colour (UIGraphic) on the character's face only: the
+         * outline, the shadow and extra effect passes keep their own colours, so a character faded to alpha 0
+         * still shows its outline and shadow. Each component is clamped to 0..1; a non-finite one counts as 1.
+         * Changing it rebuilds the text's mesh (the colour is in its vertex colours) on the next draw.
+         */
+        void SetCharacterColor(std::size_t index, const Common::Color &color);
+        /// Every character back to the text's own colour
+        void ClearCharacterColors();
+        [[nodiscard]] const std::vector<Common::Color> &GetCharacterColors() const { return _characterColors; }
+        /// The vertex colour of each quad of `layout` (of `text`) for these per-character `colors` (white for a
+        /// character with none); empty when `colors` is. Used by the draw, public for tests
+        [[nodiscard]] static std::vector<Common::Color> CharacterQuadColors(const Text::TextLayout &layout,
+                                                                           const std::string &text,
+                                                                           const std::vector<Common::Color> &colors);
+
+        /**
+         * Scales single characters about the centre of their glyph quad (1 is the layout's size, 2 twice as
+         * big, 0 hides the character), with the same index, lifetime and bounds rules as SetCharacterOffset.
+         * The layout is not changed: neighbours do not move apart, and GetBoundsIn ignores it, as it ignores
+         * the offsets. Applied before the offset. A negative scale counts as 0, a non-finite one as 1.
+         */
+        void SetCharacterScale(std::size_t index, float scale);
+        /// Every character back to the layout's size
+        void ClearCharacterScales();
+        [[nodiscard]] const std::vector<float> &GetCharacterScales() const { return _characterScales; }
+        /// `layout` (of `text`) with the quads of the characters `scales` index scaled about their centres (see
+        /// SetCharacterScale); used by the draw, public for tests
+        [[nodiscard]] static Text::TextLayout ApplyCharacterScales(const Text::TextLayout &layout, const std::string &text,
+                                                                   const std::vector<float> &scales);
+
         /// The layout options the current settings give in a rect of this width (it is the wrap width
         /// with wrap on)
         [[nodiscard]] Text::LayoutOptions GetLayoutOptions(float rectWidth) const;
@@ -163,10 +196,14 @@ namespace N2Engine::UI
 
         Rect _lastDrawnRect{};
 
-        // Per-character offsets (runtime only) and the layout they were applied to for the last draw
+        // Per-character offsets, scales and colours (runtime only), and the layout and quad colours they gave
+        // for the last draw
         std::vector<Math::Vector2> _characterOffsets;
-        bool _offsetsChanged = false;
+        std::vector<float> _characterScales;
+        std::vector<Common::Color> _characterColors;
+        bool _charactersChanged = false;
         Text::TextLayout _offsetLayout;
+        std::vector<Common::Color> _quadColors;
         std::uint64_t _drawnLayoutVersion = ~std::uint64_t{0}; // the layout version the last mesh came from
         std::uint64_t _meshVersion = 0;                        // what DrawResources sees: up on any change
 

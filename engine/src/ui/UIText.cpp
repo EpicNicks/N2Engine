@@ -1,5 +1,8 @@
 #include "engine/ui/UIText.hpp"
 
+#include <algorithm>
+#include <cmath>
+
 #include "engine/GameObjectScene.hpp"
 #include "engine/ui/RectTransform.hpp"
 
@@ -145,7 +148,7 @@ namespace N2Engine::UI
         if (slot.x != offset.x || slot.y != offset.y)
         {
             slot = offset;
-            _offsetsChanged = true;
+            _charactersChanged = true;
         }
     }
 
@@ -154,8 +157,50 @@ namespace N2Engine::UI
         if (!_characterOffsets.empty())
         {
             _characterOffsets.clear();
-            _offsetsChanged = true;
+            _charactersChanged = true;
         }
+    }
+
+    namespace
+    {
+        constexpr std::uint32_t NoCharacter = ~std::uint32_t{0};
+
+        /// The character index (code points of `text`, from 0) of each quad of `layout`; NoCharacter for a quad
+        /// whose cluster is outside the text
+        std::vector<std::uint32_t> CharacterOfQuads(const Text::TextLayout &layout, const std::string &text)
+        {
+            // The character index of each byte: lead bytes start a character, continuation bytes (10xxxxxx) don't
+            std::vector<std::uint32_t> characterOf(text.size() + 1, 0);
+            std::uint32_t character = 0;
+            for (std::size_t i = 0; i < text.size(); ++i)
+            {
+                if (i > 0 && (static_cast<unsigned char>(text[i]) & 0xC0) != 0x80)
+                {
+                    ++character;
+                }
+                characterOf[i] = character;
+            }
+            std::vector<std::uint32_t> result;
+            result.reserve(layout.quads.size());
+            for (const Text::GlyphQuad &quad : layout.quads)
+            {
+                result.push_back(quad.cluster < text.size() ? characterOf[quad.cluster] : NoCharacter);
+            }
+            return result;
+        }
+
+        bool SameColor(const Common::Color &a, const Common::Color &b)
+        {
+            // Component by component: the Color comparison allows an epsilon, which would skip a small step of a fade
+            return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
+        }
+
+        float ClampComponent(const float value)
+        {
+            return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 1.0f;
+        }
+
+        const Common::Color White{1.0f, 1.0f, 1.0f, 1.0f};
     }
 
     Text::TextLayout UIText::ApplyCharacterOffsets(const Text::TextLayout &layout, const std::string &text,
@@ -166,31 +211,118 @@ namespace N2Engine::UI
         {
             return result;
         }
-        // The character index of each byte: lead bytes start a character, continuation bytes (10xxxxxx) don't
-        std::vector<std::uint32_t> characterOf(text.size() + 1, 0);
-        std::uint32_t character = 0;
-        for (std::size_t i = 0; i < text.size(); ++i)
+        const std::vector<std::uint32_t> characterOf = CharacterOfQuads(layout, text);
+        for (std::size_t q = 0; q < result.quads.size(); ++q)
         {
-            if (i > 0 && (static_cast<unsigned char>(text[i]) & 0xC0) != 0x80)
-            {
-                ++character;
-            }
-            characterOf[i] = character;
-        }
-        for (Text::GlyphQuad &quad : result.quads)
-        {
-            if (quad.cluster >= text.size())
-            {
-                continue;
-            }
-            const std::uint32_t index = characterOf[quad.cluster];
+            const std::uint32_t index = characterOf[q];
             if (index < offsets.size())
             {
+                Text::GlyphQuad &quad = result.quads[q];
                 const Math::Vector2 &o = offsets[index];
                 quad.position.minX += o.x;
                 quad.position.maxX += o.x;
                 quad.position.minY += o.y;
                 quad.position.maxY += o.y;
+            }
+        }
+        return result;
+    }
+
+    void UIText::SetCharacterColor(const std::size_t index, const Common::Color &color)
+    {
+        const Common::Color clamped{ClampComponent(color.r), ClampComponent(color.g), ClampComponent(color.b),
+                                    ClampComponent(color.a)};
+        if (index >= _characterColors.size())
+        {
+            if (SameColor(clamped, White))
+            {
+                return; // already that colour
+            }
+            _characterColors.resize(index + 1, White);
+        }
+        Common::Color &slot = _characterColors[index];
+        if (!SameColor(slot, clamped))
+        {
+            slot = clamped;
+            _charactersChanged = true;
+        }
+    }
+
+    void UIText::ClearCharacterColors()
+    {
+        if (!_characterColors.empty())
+        {
+            _characterColors.clear();
+            _charactersChanged = true;
+        }
+    }
+
+    std::vector<Common::Color> UIText::CharacterQuadColors(const Text::TextLayout &layout, const std::string &text,
+                                                           const std::vector<Common::Color> &colors)
+    {
+        std::vector<Common::Color> result;
+        if (colors.empty())
+        {
+            return result;
+        }
+        const std::vector<std::uint32_t> characterOf = CharacterOfQuads(layout, text);
+        result.reserve(characterOf.size());
+        for (const std::uint32_t index : characterOf)
+        {
+            result.push_back(index < colors.size() ? colors[index] : White);
+        }
+        return result;
+    }
+
+    void UIText::SetCharacterScale(const std::size_t index, const float scale)
+    {
+        const float clamped = std::isfinite(scale) ? std::max(scale, 0.0f) : 1.0f;
+        if (index >= _characterScales.size())
+        {
+            if (clamped == 1.0f)
+            {
+                return; // already that size
+            }
+            _characterScales.resize(index + 1, 1.0f);
+        }
+        float &slot = _characterScales[index];
+        if (slot != clamped)
+        {
+            slot = clamped;
+            _charactersChanged = true;
+        }
+    }
+
+    void UIText::ClearCharacterScales()
+    {
+        if (!_characterScales.empty())
+        {
+            _characterScales.clear();
+            _charactersChanged = true;
+        }
+    }
+
+    Text::TextLayout UIText::ApplyCharacterScales(const Text::TextLayout &layout, const std::string &text,
+                                                  const std::vector<float> &scales)
+    {
+        Text::TextLayout result = layout;
+        if (scales.empty())
+        {
+            return result;
+        }
+        const std::vector<std::uint32_t> characterOf = CharacterOfQuads(layout, text);
+        for (std::size_t q = 0; q < result.quads.size(); ++q)
+        {
+            const std::uint32_t index = characterOf[q];
+            if (index < scales.size())
+            {
+                Text::Rect &p = result.quads[q].position;
+                const float s = scales[index];
+                const float cx = 0.5f * (p.minX + p.maxX);
+                const float cy = 0.5f * (p.minY + p.maxY);
+                const float hw = 0.5f * (p.maxX - p.minX) * s;
+                const float hh = 0.5f * (p.maxY - p.minY) * s;
+                p = Text::Rect{cx - hw, cy - hh, cx + hw, cy + hh};
             }
         }
         return result;
@@ -211,21 +343,25 @@ namespace N2Engine::UI
 
         const Text::TextLayout &layout = GetLayout(rect);
         const Matrix4 model = ComposeModel(canvasToWorld, ModelMatrixFor(GetAnchor(rect)));
-        // The mesh follows the layout and the character offsets: a new version for DrawResources when either
-        // changed, the offsets applied to a copy of the layout
-        if (_layoutCache.GetVersion() != _drawnLayoutVersion || _offsetsChanged)
+        // The mesh follows the layout and the per-character scales, offsets and colours: a new version for
+        // DrawResources when any changed, the scales then the offsets applied to a copy of the layout, the
+        // colours turned into one vertex colour per quad
+        const bool moved = !_characterOffsets.empty() || !_characterScales.empty();
+        if (_layoutCache.GetVersion() != _drawnLayoutVersion || _charactersChanged)
         {
             _drawnLayoutVersion = _layoutCache.GetVersion();
-            _offsetsChanged = false;
+            _charactersChanged = false;
             ++_meshVersion;
-            if (!_characterOffsets.empty())
+            if (moved)
             {
-                _offsetLayout = ApplyCharacterOffsets(layout, _text, _characterOffsets);
+                _offsetLayout = ApplyCharacterOffsets(ApplyCharacterScales(layout, _text, _characterScales), _text,
+                                                      _characterOffsets);
             }
+            _quadColors = CharacterQuadColors(layout, _text, _characterColors);
         }
-        const Text::TextLayout &drawn = _characterOffsets.empty() ? layout : _offsetLayout;
+        const Text::TextLayout &drawn = moved ? _offsetLayout : layout;
         _resources.Draw(_layoutCache.GetFont(), drawn, _meshVersion, model.Data(), GetDrawColor(), _effects, state,
-                        "UIText");
+                        "UIText", _quadColors);
     }
 
     void UIText::OnDestroy()

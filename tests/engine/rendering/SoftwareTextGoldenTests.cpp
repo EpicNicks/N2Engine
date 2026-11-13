@@ -624,3 +624,106 @@ TEST(SoftwareUIGoldenTest, UITextDrawsOverAnImageInHierarchyOrder)
 
     renderer.Shutdown();
 }
+
+// Per-character colour and scale on UIText (UIText::SetCharacterColor, SetCharacterScale), drawn by the UI pass on the
+// software renderer, which alpha-tests text: every touched pixel is exactly a face colour
+namespace
+{
+    struct ColourExtent
+    {
+        int count = 0;
+        int minX = 1 << 30, maxX = -1;
+    };
+
+    ColourExtent ExtentOf(const Frame &frame, const Rgb colour)
+    {
+        ColourExtent e;
+        for (int y = 0; y < frame.height; ++y)
+        {
+            for (int x = 0; x < frame.width; ++x)
+            {
+                if (frame.At(x, y) == colour)
+                {
+                    ++e.count;
+                    e.minX = std::min(e.minX, x);
+                    e.maxX = std::max(e.maxX, x);
+                }
+            }
+        }
+        return e;
+    }
+}
+
+TEST(SoftwareUIGoldenTest, UITextCharacterColourColoursOnlyThatCharacter)
+{
+    constexpr int width = 200;
+    constexpr int height = 80;
+    SoftwareRenderer renderer;
+    ASSERT_TRUE(renderer.Initialize(nullptr, width, height));
+    {
+        UIScene ui = MakeUIScene("SoftwareUIGolden_CharacterColour");
+        const auto element = AddElement(ui.canvas, "Label", 20.0f, 10.0f, 160.0f, 60.0f);
+        auto *text = element->AddComponent<UI::UIText>();
+        ASSERT_NE(text, nullptr);
+        text->SetText("Hi");
+        text->SetFontSize(32.0f);
+        text->SetColor(Common::Color::White);
+        text->SetCharacterColor(0, Common::Color::Red);
+
+        const Frame frame = RenderUIPass(renderer, *ui.scene, width, height);
+        const Coverage all = CoverageExcept(frame, Black);
+        const ColourExtent red = ExtentOf(frame, Red);
+        const ColourExtent white = ExtentOf(frame, White);
+        ASSERT_GT(red.count, 0) << "H is drawn red";
+        ASSERT_GT(white.count, 0) << "i keeps the text's white";
+        EXPECT_EQ(red.count + white.count, all.count) << "no other colour: the character colour multiplies the face";
+        EXPECT_LT(red.maxX, white.minX) << "the red ink is H's, left of the i";
+
+        // Cleared: the whole text is white again, on the next draw
+        text->ClearCharacterColors();
+        const Frame cleared = RenderUIPass(renderer, *ui.scene, width, height);
+        EXPECT_EQ(CountColour(cleared, Red), 0);
+        EXPECT_EQ(CountColour(cleared, White), CoverageExcept(cleared, Black).count);
+        ui.scene.reset();
+    }
+    renderer.Shutdown();
+}
+
+TEST(SoftwareUIGoldenTest, UITextCharacterScaleHidesGrowsAndClears)
+{
+    constexpr int width = 200;
+    constexpr int height = 80;
+    SoftwareRenderer renderer;
+    ASSERT_TRUE(renderer.Initialize(nullptr, width, height));
+    {
+        UIScene ui = MakeUIScene("SoftwareUIGolden_CharacterScale");
+        const auto element = AddElement(ui.canvas, "Label", 30.0f, 10.0f, 160.0f, 60.0f);
+        auto *text = element->AddComponent<UI::UIText>();
+        ASSERT_NE(text, nullptr);
+        text->SetText("Hi");
+        text->SetFontSize(32.0f);
+        text->SetColor(Common::Color::Yellow);
+        text->SetVerticalAlign(Text::VerticalAlign::Middle);
+
+        const Coverage plain = CoverageExcept(RenderUIPass(renderer, *ui.scene, width, height), Black);
+        ASSERT_GT(plain.count, 0);
+
+        text->SetCharacterScale(0, 0.0f);
+        const Coverage hidden = CoverageExcept(RenderUIPass(renderer, *ui.scene, width, height), Black);
+        EXPECT_GT(hidden.count, 0) << "the i is still drawn";
+        EXPECT_LT(hidden.count, plain.count);
+        EXPECT_GT(hidden.minX, plain.minX + 5) << "the H is gone, so the ink starts at the i";
+
+        text->SetCharacterScale(0, 2.0f);
+        const Coverage grown = CoverageExcept(RenderUIPass(renderer, *ui.scene, width, height), Black);
+        EXPECT_GT(grown.count, plain.count);
+        EXPECT_GT(grown.maxY - grown.minY, plain.maxY - plain.minY) << "the H is taller than the line now";
+
+        text->ClearCharacterScales();
+        const Coverage cleared = CoverageExcept(RenderUIPass(renderer, *ui.scene, width, height), Black);
+        EXPECT_EQ(cleared.count, plain.count);
+        EXPECT_EQ(cleared.minX, plain.minX);
+        ui.scene.reset();
+    }
+    renderer.Shutdown();
+}

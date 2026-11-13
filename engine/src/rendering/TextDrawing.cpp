@@ -202,19 +202,27 @@ namespace N2Engine::Rendering::TextDrawing
         return finish();
     }
 
-    Renderer::Common::MeshData BuildMesh(const Text::TextLayout &layout)
+    Renderer::Common::MeshData BuildMesh(const Text::TextLayout &layout, const std::span<const Common::Color> quadColors)
     {
         Renderer::Common::MeshData data;
         data.vertices.reserve(layout.quads.size() * 4);
         data.indices.reserve(layout.quads.size() * 6);
 
-        const auto corner = [](const float x, const float y, const float u, const float v)
+        // One colour per quad, or white for all of them
+        const bool colored = quadColors.size() == layout.quads.size();
+        Common::Color c{1.0f, 1.0f, 1.0f, 1.0f};
+        const auto corner = [&c](const float x, const float y, const float u, const float v)
         {
-            return Renderer::Common::Vertex{{x, y, 0.0f}, {0.0f, 0.0f, 1.0f}, {u, v}, {1.0f, 1.0f, 1.0f, 1.0f}};
+            return Renderer::Common::Vertex{{x, y, 0.0f}, {0.0f, 0.0f, 1.0f}, {u, v}, {c.r, c.g, c.b, c.a}};
         };
 
-        for (const Text::GlyphQuad &quad : layout.quads)
+        for (std::size_t i = 0; i < layout.quads.size(); ++i)
         {
+            const Text::GlyphQuad &quad = layout.quads[i];
+            if (colored)
+            {
+                c = quadColors[i];
+            }
             const auto base = static_cast<uint32_t>(data.vertices.size());
             const Text::Rect &p = quad.position; // y-up
             const Text::Rect &uv = quad.uv;      // y-down: minY is the glyph's top row
@@ -322,14 +330,15 @@ namespace N2Engine::Rendering::TextDrawing
         return true;
     }
 
-    bool DrawResources::EnsureMesh(const Text::TextLayout &layout, const std::uint64_t layoutVersion)
+    bool DrawResources::EnsureMesh(const Text::TextLayout &layout, const std::uint64_t layoutVersion,
+                                   const std::span<const Common::Color> quadColors)
     {
         if (_mesh && _meshVersion == layoutVersion)
         {
             return true;
         }
 
-        const Renderer::Common::MeshData data = BuildMesh(layout);
+        const Renderer::Common::MeshData data = BuildMesh(layout, quadColors);
         if (_mesh && !_renderer->UpdateMesh(_mesh, data))
         {
             // The backend can't update meshes in place: replace it
@@ -416,7 +425,8 @@ namespace N2Engine::Rendering::TextDrawing
     bool DrawResources::Draw(const std::shared_ptr<Text::Font> &font, const Text::TextLayout &layout,
                              const std::uint64_t layoutVersion, const float *modelMatrix,
                              const Common::Color &color, const Text::TextEffects &effects,
-                             const Renderer::Common::RenderState &state, const std::string_view componentName)
+                             const Renderer::Common::RenderState &state, const std::string_view componentName,
+                             const std::span<const Common::Color> quadColors)
     {
         Renderer::Common::IRenderer *renderer = _renderer;
         if (!renderer || _rendererLifetime.expired() || !modelMatrix)
@@ -451,7 +461,7 @@ namespace N2Engine::Rendering::TextDrawing
                 return false;
             }
         }
-        if (!EnsureMesh(layout, layoutVersion))
+        if (!EnsureMesh(layout, layoutVersion, quadColors))
         {
             return false;
         }

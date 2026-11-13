@@ -1625,6 +1625,25 @@ function UIText:SetCharacterOffset(index, x, y) end
 ---Puts every character back where the layout places it
 function UIText:ClearCharacterOffsets() end
 
+---Colours character `index` (1-based, as SetCharacterOffset): the colour multiplies the text's colour on that
+---character's face; the outline, shadow and extra passes keep theirs. Components are clamped to 0..1. Not saved with
+---the scene; kept across SetText
+---@param index integer
+---@param color Color
+function UIText:SetCharacterColor(index, color) end
+
+---Every character back to the text's own colour
+function UIText:ClearCharacterColors() end
+
+---Scales character `index` (1-based, as SetCharacterOffset) about the centre of its glyph: 1 is its size, 0 hides it,
+---a negative scale counts as 0. Neighbours do not move. Not saved with the scene; kept across SetText
+---@param index integer
+---@param scale number
+function UIText:SetCharacterScale(index, scale) end
+
+---Every character back to its laid-out size
+function UIText:ClearCharacterScales() end
+
 ---@return integer
 function UIText:GetEffectPassCount() end
 
