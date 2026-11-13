@@ -2309,6 +2309,17 @@ function Sprite2D:GetFlash() end
 function Sprite2D:SetTexture(path) end
 ---@return boolean
 function Sprite2D:HasTexture() end
+---The texture's size in pixels, or nil without a texture
+---@return Vector2|nil
+function Sprite2D:GetTextureSize() end
+---Makes this sprite's texture an outline of `source` (a res:// path, or a Sprite2D whose texture it takes): the source's
+---shape grown by `widthPixels` (a whole number, 0 to 256) and padded by it on every side, in `color`, transparent elsewhere.
+---Made once on the CPU and cached, so asking again is cheap. Draw it behind the source (a lower sorting order), sized up by
+---the padding: see docs/sprite2d.html#texture-outline. A bad source or width raises an error and keeps the texture.
+---@param source string|Sprite2D
+---@param widthPixels integer
+---@param color Color
+function Sprite2D:SetOutlineTextureOf(source, widthPixels, color) end
 ---The part of the texture shown, in uv with v up: its lower-left corner and its size
 ---@param offset Vector2
 ---@param size Vector2

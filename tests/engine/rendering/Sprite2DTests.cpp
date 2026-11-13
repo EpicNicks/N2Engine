@@ -346,6 +346,43 @@ TEST(Sprite2DTest, ATexturesTransparentPixelsAreCutOutOnTheSoftwareRenderer)
     EXPECT_TRUE(IsGreen(frame.At(44, 32)));
 }
 
+TEST(Sprite2DTest, AnOutlineTextureBehindATexturedSpriteDrawsARingOnTheSoftwareRenderer)
+{
+    // The recipe in docs/sprite2d.html#texture-outline: a 4 x 4 opaque texture on a 2 x 2 sprite (half a unit a texel), and its
+    // 1-pixel outline on a sprite sized up by the padding, (4 + 2) / 4 times as large, one sorting order lower
+    Renderer::Common::TextureOptions options;
+    options.filter = Renderer::Common::TextureFilter::Nearest;
+    options.mipmaps = false;
+    std::vector<std::uint8_t> pixels;
+    for (int i = 0; i < 16; ++i)
+    {
+        pixels.insert(pixels.end(), {0, 255, 0, 255});
+    }
+    const auto texture = Texture::Create(4, 4, pixels, options);
+    ASSERT_NE(texture, nullptr);
+    Texture::ClearOutlineCache();
+    const auto outline = Texture::MakeOutline(texture, 1, Common::Color::Red);
+    ASSERT_NE(outline, nullptr);
+    ASSERT_EQ(outline->GetWidth(), 6u);
+
+    const Frame frame = Draw([&](Scene &scene)
+    {
+        auto *sprite = AddSprite(scene, "Textured", Vector3(0.0f, 0.0f, 0.0f), Common::Color::White);
+        sprite->SetSize(Vector2(2.0f, 2.0f));
+        sprite->SetTexture(texture);
+        auto *ring = AddSprite(scene, "Outline", Vector3(0.0f, 0.0f, 0.0f), Common::Color::White, -1);
+        ring->SetSize(Vector2(3.0f, 3.0f));
+        ring->SetTexture(outline);
+    });
+    // 16 pixels a unit, the origin at (32, 32): the sprite spans 16 to 48, the outline 8 to 56
+    EXPECT_TRUE(IsGreen(frame.At(32, 32))) << "the sprite on top of its outline";
+    EXPECT_TRUE(IsRed(frame.At(52, 32))) << "the ring to the right";
+    EXPECT_TRUE(IsRed(frame.At(32, 12))) << "the ring below";
+    EXPECT_TRUE(IsBlack(frame.At(60, 32))) << "outside the outline";
+    EXPECT_TRUE(IsBlack(frame.At(10, 10))) << "the round corner's transparent texel is cut out";
+    Texture::ClearOutlineCache();
+}
+
 TEST(Sprite2DTest, AFullyFadedTexturedSpriteDrawsNothingOnTheSoftwareRenderer)
 {
     // Colour alpha 0: the cut-out must not fall to 0, which would keep every pixel and draw the sprite as a box

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -571,6 +572,54 @@ namespace N2Engine::Scripting::Bindings
                 sprite->SetTexture(path ? LoadTextureOrThrow(*path, "Sprite2D:SetTexture") : nullptr);
             },
             "HasTexture", [](const Sprite2DRef &ref) { return ref.Pin()->GetTexture() != nullptr; },
+            // The texture's size in pixels, or nil without one (for an outline's padding maths)
+            "GetTextureSize", [](const Sprite2DRef &ref) -> sol::optional<Math::Vector2>
+            {
+                const auto sprite = ref.Pin();
+                const auto &texture = sprite->GetTexture();
+                if (!texture)
+                {
+                    return sol::nullopt;
+                }
+                return Math::Vector2(static_cast<float>(texture->GetWidth()), static_cast<float>(texture->GetHeight()));
+            },
+            // This sprite's texture becomes Texture::MakeOutline of `source` (a res:// path, or a Sprite2D whose texture it
+            // takes): `widthPixels` (a whole number, 0 to Texture::MaxOutlineWidth) larger on every side, in `color`.
+            // Errors leave the texture as it was.
+            "SetOutlineTextureOf", [](const Sprite2DRef &ref, const sol::object &source, const double widthPixels,
+                                      const Common::Color &color)
+            {
+                constexpr std::string_view caller = "Sprite2D:SetOutlineTextureOf";
+                std::shared_ptr<Rendering::Texture> sourceTexture;
+                if (source.get_type() == sol::type::string)
+                {
+                    sourceTexture = LoadTextureOrThrow(source.as<std::string>(), caller);
+                }
+                else if (source.is<Sprite2DRef>())
+                {
+                    sourceTexture = source.as<Sprite2DRef>().Pin()->GetTexture();
+                    if (!sourceTexture)
+                    {
+                        throw std::runtime_error(std::format("{}: the source Sprite2D has no texture", caller));
+                    }
+                }
+                else
+                {
+                    throw std::runtime_error(std::format("{}: the source must be a res:// path or a Sprite2D", caller));
+                }
+                if (!std::isfinite(widthPixels) || widthPixels != std::floor(widthPixels) || widthPixels < 0.0 ||
+                    widthPixels > static_cast<double>(Rendering::Texture::MaxOutlineWidth))
+                {
+                    throw std::runtime_error(std::format("{}: the width must be a whole number of pixels from 0 to {}", caller,
+                                                         Rendering::Texture::MaxOutlineWidth));
+                }
+                auto outline = Rendering::Texture::MakeOutline(sourceTexture, static_cast<int>(widthPixels), color);
+                if (!outline)
+                {
+                    throw std::runtime_error(std::format("{}: can't make the outline (see the log)", caller));
+                }
+                ref.Pin()->SetTexture(std::move(outline));
+            },
             "SetRegion", Forward<Sprite2DRef, &Rendering::Sprite2D::SetRegion>(),
             "GetRegionOffset", Forward<Sprite2DRef, &Rendering::Sprite2D::GetRegionOffset>(),
             "GetRegionSize", Forward<Sprite2DRef, &Rendering::Sprite2D::GetRegionSize>(),
