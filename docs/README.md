@@ -2,7 +2,7 @@
 
 This folder is a static HTML site that documents how the engine **behaves**: guarantees, ordering, lifetimes, edge cases and error handling. Start at [`index.html`](index.html).
 
-- No build step, no JavaScript, no external fonts or scripts. Everything is plain HTML plus `assets/style.css`.
+- No build step, no external fonts or scripts. Everything is plain HTML plus `assets/style.css` and one small script, `assets/highlight.js`, that colours the code blocks (`<pre class="lang-*">`); the pages read fine without it.
 - Works opened straight from disk (`file://`) and on GitHub Pages (serve the `docs/` folder from the default branch). All links are relative.
 - Light and dark themes follow the reader's system setting (`prefers-color-scheme`).
 
