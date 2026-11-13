@@ -17,6 +17,9 @@ Worktrees made by this run (all from origin/master 1635a32f, under .claude/workt
 
 ## Outcome
 
+**Merged 2026-11-13 at the user's go:** #358 (4527d773), #359 (e4c91137), #360 (a45465b5), and the docs PR #361 (74a322d4,
+this file's first version; its iOS simulator leg failed once on a slow macOS runner and passed on a rerun).
+
 | Part | PR | Branch | Head | CI | Review |
 | --- | --- | --- | --- | --- | --- |
 | 1 Effects E1 follow-up | #358 | feat-effects-e1 | 3b29aa04 | all green, mergeable | high: 6 found, 4 fixed, 2 left open |

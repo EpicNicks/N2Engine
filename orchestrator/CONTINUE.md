@@ -4,25 +4,33 @@ Read the memory index first, then orchestrator/README.md and the LAST entries of
 
 ## Current state (2026-11-13, unattended run; read first)
 
-An unattended run on 2026-11-13 opened three engine PRs, none merged (each needs the user's go). Every unsure point,
-deviation, check not run and review finding is in `orchestrator/ledger/unattended-run-2026-11-13.md`.
+An unattended run on 2026-11-13 opened three engine PRs and a docs PR. **All four MERGED on 2026-11-13 at the user's go**
+(merge commits: #358 4527d773, #359 e4c91137, #360 a45465b5, #361 74a322d4; each was CI-green and reviewed; the user
+merging them accepted their deviations, including #359's values kept across `SetText` and the offsets' new index cap and
+trimming). Every unsure point, deviation, check not run and review finding is in
+`orchestrator/ledger/unattended-run-2026-11-13.md`. Master's Tests runs for these merges had not finished when this was
+written.
 
-- **#358** (branch feat-effects-e1, head 3b29aa04, all checks green, high review 6 findings, 4 fixed): effects E1 itself was
+- **#358** (merged 4527d773; high review 6 findings, 4 fixed): effects E1 itself was
   ALREADY MERGED in #327 on 2026-11-11 (this file still listed it as next). #358 is the follow-up the brief's software rule
   needed: the UI `Image` cuts a texture out at half alpha where the renderer cannot blend, as `Sprite2D` does, through one
-  helper `Renderer::Common::BlendCutOutBelow`, which also fixes alpha 0 drawing a box (both components). Worktree
-  .claude/worktrees/effects-e1.
-- **#359** (feat-uitext-char-colour-scale, head 1a49ed50, green, review 9 findings, all fixed or by design): `UIText`
+  helper `Renderer::Common::BlendCutOutBelow`, which also fixes alpha 0 drawing a box (both components). Left open: a
+  non-finite colour alpha still draws a box; the cut-out is not done inside the software renderer for every blended draw.
+- **#359** (merged e4c91137; review 9 findings, all fixed or by design): `UIText`
   `SetCharacterColor`/`ClearCharacterColors`, `SetCharacterScale`/`ClearCharacterScales`, Lua too. Kept across `SetText`
-  like #336's offsets (the brief said "cleared"; held as a deviation). The colour's alpha also fades outline, shadow and
+  like #336's offsets (the brief said "cleared"; accepted with the merge). The colour's alpha also fades outline, shadow and
   passes (text shaders on GL, Vulkan, WGSL and software changed by one factor). Shared rule for all three lists, offsets
-  included: index cap 65535, trailing defaults dropped. Worktree .claude/worktrees/uitext-char-style.
-- **#360** (ci-web-job-time, head 746e9f4f, green, review 7 findings, all fixed): ccache for emcc via
+  included: index cap 65535, trailing defaults dropped. Not verified: a GPU or browser look at a coloured, faded or
+  scaled character (the OpenGL text shader is not run in CI).
+- **#360** (merged a45465b5; review 7 findings, all fixed): ccache for emcc via
   `EM_COMPILER_WRAPPER=ccache`, within the run only (the Actions caches are over 10 GB). Measured: web job 52m11s
   (master 67 to 87 min); the two module steps 138 s and 277 s (were 513 to 693 s and 912 to 1221 s); 69% hits. Held:
-  saving the web cache from master pushes (needs a cache-budget decision). Worktree .claude/worktrees/web-ci-time.
-- Docs PR for this state: branch docs-unattended-run-2026-11-13 (worktree .claude/worktrees/docs-unattended).
-- Other open PR not from this run: #357 (web gamepads, worktree .claude/worktrees/web-gamepads).
+  saving the web cache from master pushes (needs a cache-budget decision).
+- **#361** (merged 74a322d4): the ledger, this section and the progress log, written before the merges; its iOS simulator
+  leg failed once on a slow macOS runner (about 3 fps) and passed on a rerun.
+- Worktrees left from the run (merged, removable after the PhysX junction check): .claude/worktrees/effects-e1,
+  uitext-char-style, web-ci-time, docs-unattended.
+- Open PR not from this run: #357 (web gamepads, worktree .claude/worktrees/web-gamepads).
 - Use `gh ... -R EpicNicks/N2Engine` when the shell may start outside the engine repo.
 
 ## Current state (2026-11-12; read this before the older State and Queue below, which are history from 2026-11-06)
@@ -41,7 +49,7 @@ deviation, check not run and review finding is in `orchestrator/ledger/unattende
 
 **Worktrees:** only the main checkout is left (it sits on the old branch feat-webgpu-compute-sim; switch it to master before using it). Before removing any new worktree, check it for a PhysX junction first (Standing rules).
 
-**Next (engine features judged on their own; each needs the user's go):** (1) confirm master's Tests runs for #353 and #354 are green, the iOS and MoltenVK legs especially; (2) effects E1 is merged (#327; follow-up #358 open), E3 outline texture only if the Lua recipes fall short; (3) Lua gaps that remain as general engine features: Lua coroutines in scripts, more than one random stream from Lua (per-character colour and scale on `UIText`: #359 open); (4) stripping stages 3 to 6; (5) build-target follow-ups: MoltenVK's size and speed measured on macOS and iOS (`proposals/metal-spike.md`), the items under "Not verified" in `proposals/build-targets-design.md`, device checks and Apple signing when the user has a device or a developer account; (6) the web job's time: #360 open (ccache within the run); saving the web ccache across runs is the user's call.
+**Next (engine features judged on their own; each needs the user's go):** (1) confirm master's Tests runs for #353 and #354 are green, the iOS and MoltenVK legs especially; (2) effects E1 is merged (#327; follow-up #358 merged), E3 outline texture only if the Lua recipes fall short; (3) Lua gaps that remain as general engine features: Lua coroutines in scripts, more than one random stream from Lua (per-character colour and scale on `UIText`: #359 merged); (4) stripping stages 3 to 6; (5) build-target follow-ups: MoltenVK's size and speed measured on macOS and iOS (`proposals/metal-spike.md`), the items under "Not verified" in `proposals/build-targets-design.md`, device checks and Apple signing when the user has a device or a developer account; (6) the web job's time: #360 merged (ccache within the run, 52 min); saving the web ccache across runs is the user's call.
 
 **Lessons from this run:** the docs-only filter compares the whole PR with master, so a docs commit on a code PR reruns everything. A find_package(Threads) placed before renderer/ changed OpenAL's configure probes and broke the Docker image. On Windows, vendor a dependency from its git blobs, not a checkout (CRLF). Vector4's constructor is (w, x, y, z). The software renderer cannot blend. Code reviews before merging found real bugs every time; recommend them. External outages seen: apt.llvm.org, GitHub's Dawn release downloads. Memory on this machine is tight: background watchers have been killed; tell the user, do not restart them unasked. Bash heredocs break on apostrophes: write files with the Write tool. Files in this repo may be CRLF: scripted edits must handle it. A PR that conflicts with master gets NO pull_request CI at all: `gh pr checks` then lists nothing, which a script reading "no failures" mistakes for green; check `mergeable` before calling a PR green. After one PR of a batch merges, the next can conflict (#318 then #321 and #322): re-check `mergeable` after each merge. A Windows engine_tests leg once failed on a timing test (ScriptDeclarationTest.AWaitTheBudgetCutShortIsResumedNotStartedAgainAndItsLateAnswerIsKept) on a docs-only PR: a flake, rerun.
 
