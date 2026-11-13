@@ -21,6 +21,14 @@ export function systemProbe() {
       return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
     },
     exists: (file) => fs.existsSync(file),
+    // A program on PATH is a file: emsdk's PATH holds upstream/emscripten, which has a cmake *folder*
+    isFile: (file) => {
+      try {
+        return fs.statSync(file).isFile();
+      } catch {
+        return false;
+      }
+    },
     readFile: (file) => {
       try {
         return fs.readFileSync(file, 'utf8');
@@ -54,7 +62,7 @@ export function findOnPath(name, env, ctx) {
   for (const dir of dirs) {
     for (const extension of extensions) {
       const candidate = join(dir.replace(/^"|"$/g, ''), name + extension);
-      if (ctx.exists(candidate)) return candidate;
+      if (ctx.isFile ? ctx.isFile(candidate) : ctx.exists(candidate)) return candidate;
     }
   }
   return null;
