@@ -142,7 +142,7 @@ node tools/n2build/n2build.mjs build  --target android --project path/to/game [-
 </tbody>
 </table>
 
-<h2 id="signing">Signing and the AAB <span class="badge">PR #TBD</span></h2>
+<h2 id="signing">Signing and the AAB <span class="badge">PR #344</span></h2>
 <p>A project names a signing profile and nothing more: <code>build.targets.android.signing</code> is <code>{"profile": "release"}</code>, and the editor refuses anything else there, because project files are committed and shared. The profile itself lives in your own <code>n2build.json</code>, beside the engine's user data (<code>%APPDATA%\N2Engine\n2build.json</code>, or <code>~/.local/share/n2engine/n2build.json</code>):</p>
 <pre class="lang-json"><code>{
   "signingProfiles": {
@@ -167,7 +167,7 @@ node tools/n2build/n2build.mjs build  --target android --project path/to/game [-
 </div>
 <p>A signed release build runs <code>assembleRelease bundleRelease</code> and puts <code>&lt;Game&gt;.apk</code> and <code>&lt;Game&gt;.aab</code> in the package folder. The AAB is what Google Play takes; the APK installs directly.</p>
 
-<h2 id="run">Running on a device <span class="badge">PR #TBD</span></h2>
+<h2 id="run">Running on a device <span class="badge">PR #344</span></h2>
 <pre class="lang-shell"><code>node tools/n2build/n2build.mjs run --target android --project path/to/game [--config debug] [--device SERIAL] [--seconds N] [--no-build]</code></pre>
 <ol>
 <li><strong>The device:</strong> <code>adb devices -l</code> (the SDK's <code>platform-tools/adb</code>). With one device attached, that one; with several, name it with <code>--device</code>. An unauthorized device says so: accept the USB debugging prompt on it.</li>
@@ -187,7 +187,7 @@ node tools/n2build/n2build.mjs build  --target android --project path/to/game [-
 </ul>
 <p class="src">Source: <code>players/android/native/src/AndroidMain.cpp</code>, <code>AndroidHost.cpp</code>; <code>players/android/app</code> (<code>N2Activity</code>)</p>
 
-<h2 id="vulkan">The Vulkan renderer <span class="badge">PR #TBD</span></h2>
+<h2 id="vulkan">The Vulkan renderer <span class="badge">PR #349</span></h2>
 <p>With <code>build.targets.android.renderer</code> set to <code>"vulkan"</code>, the APK also carries the engine's Vulkan renderer. It is built with the NDK's own Vulkan headers and <code>libvulkan.so</code>, and the NDK's <code>glslc</code> compiles its built-in shaders.</p>
 <ul>
 <li><strong>The choice, on the device:</strong> at start-up the player asks the Vulkan loader for a Vulkan 1.1 instance and a GPU. With one, it draws with Vulkan; without, with the software renderer. One APK runs on every device, and the log says which renderer it chose (<code>N2Engine Android player: the Vulkan renderer</code>).</li>
