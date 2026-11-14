@@ -450,11 +450,12 @@ add_subdirectory(players/desktop)
 if(N2ENGINE_USE_SCRIPTING)
 # The editor host runs project scripts and editor extensions in Lua: a tree without the scripting module has none
 add_subdirectory(editor-server)
-else()
-message(STATUS "Scripting: not in this build (N2ENGINE_USE_SCRIPTING is OFF), so the editor host and lua_project are not built")
-endif()
-# The dedicated game server (netcode stage A6): UDP sockets and the crypto library, so not part of the web build
+# The dedicated game server (netcode stage A6): UDP sockets and the crypto library, so not part of the web build. It takes its
+# options and scene loading from the editor host's library, so it needs the scripting module too
 add_subdirectory(n2server)
+else()
+message(STATUS "Scripting: not in this build (N2ENGINE_USE_SCRIPTING is OFF), so the editor host, the dedicated server and lua_project are not built")
+endif()
 endif()
 
 if(TARGET test_project AND N2ENGINE_PHYSX_AVAILABLE)

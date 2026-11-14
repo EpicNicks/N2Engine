@@ -1467,7 +1467,7 @@ jobs:
           cmake -S . -B build-noscripting -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DN2ENGINE_RENDERER_VULKAN=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DN2ENGINE_PROJECT=tests/projects/no_scripting 2>&1 | tee configure-noscripting.log
           grep -q "Engine modules: scripting OFF" configure-noscripting.log
           grep -q "Scripting: not in this build" configure-noscripting.log
-          cmake --build build-noscripting --parallel --target engine_tests n2player N2Server -- -k 0
+          cmake --build build-noscripting --parallel --target engine_tests n2player n2_replay -- -k 0
           ./build-noscripting/bin/engine_tests
           ./build-noscripting/bin/engine_tests --gtest_filter='LeftOutScripting*'
           # No Lua is left in the player: the VM and sol2 are not linked
