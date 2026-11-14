@@ -466,7 +466,6 @@ else()
 message(STATUS "Scripting: not in this build (N2ENGINE_USE_SCRIPTING is OFF), so the editor host, the dedicated server and lua_project are not built")
 endif()
 endif()
-endif()
 
 if(TARGET test_project AND N2ENGINE_PHYSX_AVAILABLE)
     target_include_directories(test_project PRIVATE ${PHYSX_INCLUDE_DIR})
