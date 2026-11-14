@@ -616,8 +616,14 @@ int main(int argc, char *argv[])
 #endif
 
     // As lua_project/src/Main.cpp: scripts load through ResourceLoader, which resolves res:// under <project>/assets
+#ifndef N2ENGINE_SCRIPTING_ENABLED
+    std::string startupScene; // the project's, for the start below (docs/project-modules.html#scripting)
+#endif
     if (const auto project = IO::ProjectFile::Load(projectDir); project)
     {
+#ifndef N2ENGINE_SCRIPTING_ENABLED
+        startupScene = project->startupScene;
+#endif
         IO::ResourceUUID::Initialize(project->projectId);
         IO::ResourceLoader::Instance().Initialize(projectDir, project->UserDataPath());
         for (const std::string &problem : ApplyProjectSettings(project->settings))
@@ -640,12 +646,11 @@ int main(int argc, char *argv[])
 #else
     // No scripting module in this build (docs/project-modules.html): the game is its project's startupScene
     {
-        const auto project = IO::ProjectFile::Load(projectDir);
-        if (!project || project->startupScene.empty())
+        if (startupScene.empty())
         {
             return Fail("The project names no startupScene, and this build has no scripting module to run assets/scene.lua");
         }
-        const auto file = IO::ResourceLoader::Instance().Load<SceneFile>(IO::ResourcePath(project->startupScene));
+        const auto file = IO::ResourceLoader::Instance().Load<SceneFile>(IO::ResourcePath(startupScene));
         if (file == nullptr)
         {
             return Fail("The startup scene could not be read (see the log)");

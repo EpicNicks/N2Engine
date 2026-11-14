@@ -152,12 +152,7 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         // network preset's requirements are checked against that
         networkEnv.gpuMode = options.physicsGpu ? ReadPhysicsGpuMode(project->settings) : Physics::GpuMode::Off;
         networkEnv.simdTier = ReadMathSimdTier(project->settings);
-#ifdef N2ENGINE_SCRIPTING_ENABLED
         networkEnv.luaSeedSet = ReadDeterminismLuaSeed(project->settings).has_value();
-#else
-        // No Lua runs in this build, so there is no Lua state whose hash seed or math could differ between machines
-        networkEnv.luaSeedSet = true;
-#endif
         networkEnv.fixedTimestepSeconds = Time::GetFixedTimestep();
         if (const auto physics = project->settings.find("physics"); physics != project->settings.end() &&
                                                                     physics->is_object())

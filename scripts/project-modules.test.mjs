@@ -153,7 +153,7 @@ test('generated and hidden folders are not scanned, and a broken scene is report
 });
 
 test('the suggestion is the smallest list the scan can justify', () => {
-  const suggest = (project, files) => suggestList(scanProject(makeProject({ name: 'p', ...project }, files)));
+  const suggest = (project, files) => suggestList(scanProject(makeProject({ name: 'p', startupScene: 'res://scenes/a.scene', ...project }, files)));
   const none = { physics3d: 'none', physics2d: false, particles: false, softbodies: false, audio: false, ui: false, scripting: false };
   const withLua = { ...none, scripting: true };
   assert.deepEqual(suggest({}, {}), none);

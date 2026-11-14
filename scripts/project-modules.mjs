@@ -294,6 +294,8 @@ export function suggestList(scan) {
   for (const module of BOOLEAN_MODULES) {
     list[module] = used.has(module);
   }
+  // A project with no startupScene is started from assets/scene.lua, which needs the runtime
+  list.scripting = list.scripting || scan.startsFromLua;
   return list;
 }
 

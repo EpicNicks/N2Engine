@@ -37,7 +37,11 @@ namespace N2Engine::Scripting
     public:
         explicit LuaComponent(GameObject &gameObject);
 
-        void SetScript(const IO::ResourcePath &path) { _scriptPath = path; }
+        void SetScript(const IO::ResourcePath &path)
+        {
+            _scriptPath = path;
+            _scriptUuid = nullptr; // the path is the script now, not the UUID it was loaded with
+        }
         void SetScriptData(const nlohmann::json &data);
 
         [[nodiscard]] const IO::ResourcePath &GetScriptPath() const { return _scriptPath; }

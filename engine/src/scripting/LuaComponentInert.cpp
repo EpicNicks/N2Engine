@@ -9,6 +9,7 @@
 #include "engine/serialization/ComponentRegistry.hpp"
 #include "engine/serialization/JsonLimits.hpp"
 
+#include <atomic>
 #include <memory>
 #include <stdexcept>
 #include <utility>
@@ -19,12 +20,11 @@ namespace N2Engine::Scripting
     {
         void WarnOnce()
         {
-            static bool warned = false;
-            if (warned)
+            static std::atomic<bool> warned{false};
+            if (warned.exchange(true))
             {
                 return;
             }
-            warned = true;
             Logger::Warn("A scene has LuaComponents, but this build has no scripting module (N2ENGINE_USE_SCRIPTING is OFF): "
                          "their scripts do not run. Their script references and data are kept and saved again as they were.");
         }
@@ -92,7 +92,9 @@ namespace N2Engine::Scripting
         }
         if (const auto uuid = values.find("scriptUUID"); uuid != values.end() && uuid->is_string())
         {
-            _scriptUuid = *uuid;
+            // An empty string is no script, as for the real component
+            _scriptUuid = uuid->get<std::string>().empty() ? nlohmann::json(nullptr) : *uuid;
+            _scriptPath = IO::ResourcePath();
         }
         if (const auto data = values.find("scriptData"); data != values.end() && data->is_object())
         {
