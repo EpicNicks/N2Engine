@@ -19,6 +19,7 @@
 #include "engine/ui/Image.hpp"
 #include "engine/ui/RectTransform.hpp"
 #include "engine/ui/UISystem.hpp"
+#include "../modules/ModuleGuards.hpp"
 
 // The screen tint as Application::Render draws it (effects design, stage E2): on the scene pass only, never on the
 // screen-space UI pass after it (in Unity, overlay UI is drawn after the full-screen passes, so the HUD stays in colour),
@@ -111,6 +112,7 @@ TEST_F(ScreenTintApplicationTest, WithoutATintBothHalvesAreRed)
 
 TEST_F(ScreenTintApplicationTest, AWholeScreenTintGreysTheClearColourButNotTheUi)
 {
+    N2_SKIP_WITHOUT_UI();
     ScreenTint grey;
     grey.saturation = 0.0f;
     Application::GetInstance().SetScreenTint(grey);

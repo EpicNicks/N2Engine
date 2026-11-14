@@ -719,6 +719,7 @@ TEST(EntityBoundsTest, ADisabledComponentOnAnInactiveObjectDoesNotCount)
 
 TEST(EntityBoundsTest, AnInactiveUiElementOrCanvasHasNoRect)
 {
+    N2_SKIP_WITHOUT_UI();
     auto scene = EditScene("Bounds_InactiveUi");
     auto canvas = AddWorldCanvas(*scene, Vector3(0.0f, 0.0f, 0.0f));
     const auto panel = AddPanel(canvas, "Panel", UI::Rect{0.0f, 0.0f, 50.0f, 100.0f});
