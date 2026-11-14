@@ -154,11 +154,11 @@ test('generated and hidden folders are not scanned, and a broken scene is report
 
 test('the suggestion is the smallest list the scan can justify', () => {
   const suggest = (project, files) => suggestList(scanProject(makeProject({ name: 'p', ...project }, files)));
-  const none = { physics3d: 'none', physics2d: false, particles: false, softbodies: false, audio: false, ui: false };
+  const none = { physics3d: 'none', physics2d: false, particles: false, softbodies: false, audio: false, ui: false, network: false };
   assert.deepEqual(suggest({}, {}), none);
   assert.deepEqual(suggest({}, { 'assets/a.lua': 'Physics2D.Raycast(a, b)' }), { ...none, physics2d: true });
   assert.deepEqual(suggest({}, { 'assets/a.lua': 'Physics.Raycast(a, b)' }), { ...none, physics3d: 'physx' });
-  assert.deepEqual(suggest({ settings: { network: { preset: 'deterministic' } } }, {}), { ...none, physics3d: 'jolt' });
+  assert.deepEqual(suggest({ settings: { network: { preset: 'deterministic' } } }, {}), { ...none, physics3d: 'jolt', network: true });
   assert.deepEqual(suggest({}, { 'assets/a.lua': 'go:AddComponent("ParticleSystem")' }), { ...none, particles: true });
   assert.deepEqual(suggest({}, { 'scenes/a.scene': sceneWith('MeshRenderer', 'SoftBody') }), { ...none, softbodies: true });
 });
@@ -240,6 +240,26 @@ test('UI is found by its components and the UI global', () => {
   assert.throws(() => readModuleList({ build: { modules: { audio: 1 } } }), /audio must be true or false/);
 });
 
+test('network is found by its components, the Network global and a network preset in the settings', () => {
+  const modules = (source) => scanLua(source).uses.map((use) => use.module);
+  assert.deepEqual(modules('Network.Spawn(prefab)'), ['network']);
+  assert.deepEqual(modules('Physics.RaycastLagCompensated(1, 2, a, b, 5)'), ['physics3d', 'network']);
+  assert.deepEqual(modules('go:GetComponent("NetworkObject")'), ['network']);
+  assert.deepEqual(modules('local MyNetwork = {}; MyNetwork.Spawn = 1'), []);
+
+  for (const component of ['NetworkObject', 'NetworkTransform', 'LagCompensatedHitbox']) {
+    const scene = makeProject({ name: 'p', build: { modules: { network: false } } }, { 'scenes/a.scene': sceneWith(component) });
+    assert.match(findConflicts(scanProject(scene)).join('\n'), new RegExp(`scenes/a\.scene uses ${component}, but the list leaves network out`));
+  }
+  const preset = makeProject({ name: 'p', build: { modules: { network: false } }, settings: { network: { preset: 'authoritative' } } }, {});
+  assert.match(findConflicts(scanProject(preset)).join('\n'), /project\.n2proj uses the network preset "authoritative", but the list leaves network out/);
+  const none = makeProject({ name: 'p', build: { modules: { network: false } }, settings: { network: { preset: 'none' } } }, {});
+  assert.deepEqual(findConflicts(scanProject(none)), []);
+  const kept = makeProject({ name: 'p', build: { modules: { physics3d: 'jolt', network: true } }, settings: { network: { preset: 'deterministic' } } }, {});
+  assert.deepEqual(findConflicts(scanProject(kept)), []);
+  assert.throws(() => readModuleList({ build: { modules: { network: 'no' } } }), /network must be true or false/);
+});
+
 test('the command line exits 0 when clean, 1 on a conflict and 2 on bad use', () => {
   const clean = makeProject({ name: 'p', build: { modules: { physics3d: 'none', physics2d: false } } }, { 'assets/scene.lua': 'print("hi")' });
   assert.equal(run(clean).status, 0);
@@ -260,7 +280,7 @@ test('--suggest prints a block that can be pasted, and --json the whole report',
   const suggested = run(folder, '--suggest');
   assert.equal(suggested.status, 0);
   assert.deepEqual(JSON.parse(suggested.stdout), {
-    build: { modules: { physics3d: 'none', physics2d: true, particles: false, softbodies: false, audio: false, ui: false } },
+    build: { modules: { physics3d: 'none', physics2d: true, particles: false, softbodies: false, audio: false, ui: false, network: false } },
   });
   assert.match(suggested.stderr, /computed name/);
 

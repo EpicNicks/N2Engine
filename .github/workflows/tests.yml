@@ -1437,6 +1437,7 @@ jobs:
           grep -q "Engine modules: particles OFF, softbodies OFF" configure-nophysics.log
           grep -q "Engine modules: audio OFF, ui OFF" configure-nophysics.log
           grep -q "Audio: not in this build" configure-nophysics.log
+          grep -q "Engine modules: network OFF" configure-nophysics.log
           cmake --build build-nophysics --parallel --target engine_tests n2player -- -k 0
           ./build-nophysics/bin/engine_tests
           # What the modules cost natively: the desktop player of the full tree above (Jolt, Box2D, particles, soft bodies,
@@ -1455,6 +1456,23 @@ jobs:
               echo "[MODULES-SIZE-NATIVE] $line"
               echo "    $line" >> "$GITHUB_STEP_SUMMARY"
             fi
+          done
+
+      # The network module alone (docs/netcode.html#leaving-it-out): a desktop player with every other module, the same
+      # configure as the full tree above, against the full player's size. N2Server and its tests are not part of it.
+      - name: Build the desktop player without the network module
+        run: |
+          set -e -o pipefail
+          cmake -S . -B build-nonetwork -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DN2ENGINE_RENDERER_VULKAN=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DN2ENGINE_PROJECT=tests/projects/no_network 2>&1 | tee configure-nonetwork.log
+          grep -q "Engine modules: network OFF" configure-nonetwork.log
+          cmake --build build-nonetwork --parallel --target n2player -- -k 0
+          if [ -e build-nonetwork/bin/N2Server ]; then echo "N2Server was built without the network module"; exit 1; fi
+          for tree in build build-nonetwork; do
+            p="$tree/bin/n2player"
+            strip -o "$p.stripped" "$p"
+            line="$tree: n2player raw $(wc -c < "$p") stripped $(wc -c < "$p.stripped")"
+            echo "[NETWORK-SIZE-NATIVE] $line"
+            echo "    $line" >> "$GITHUB_STEP_SUMMARY"
           done
 
       # The vendored Box2D alone: this leg's [BOX2D-DETERMINISM] line, which must equal every other leg's
@@ -2002,7 +2020,12 @@ jobs:
           grep -q "audio stub (N2ENGINE_WEB_AUDIO)" configure-noaudioui.log
           cmake --build build-web-noaudioui --target web-package -- -k 0
           node scripts/web-package-smoke.mjs build-web-noaudioui/web-package 30 320x180 --precompressed
-          for tree in build-web-size build-web-noparticles build-web-noaudioui build-web-nophysics; do
+          # Every module but network: the netcode sessions are left out, n2net (the replay system uses it) and the components stay
+          emcmake cmake -S . -B build-web-nonetwork -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=size -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_PROJECT=tests/projects/no_network 2>&1 | tee configure-nonetwork.log
+          grep -q "Engine modules: network OFF" configure-nonetwork.log
+          cmake --build build-web-nonetwork --target web-package -- -k 0
+          node scripts/web-package-smoke.mjs build-web-nonetwork/web-package 30 320x180 --precompressed
+          for tree in build-web-size build-web-noparticles build-web-noaudioui build-web-nonetwork build-web-nophysics; do
             w="$tree/web-package/index.wasm"
             j="$tree/web-package/index.js"
             line="$tree: index.wasm raw $(wc -c < "$w") gzip $(gzip -9 -c "$w" | wc -c) brotli $(wc -c < "$w.br"); index.js raw $(wc -c < "$j") brotli $(wc -c < "$j.br" 2>/dev/null || echo n/a)"

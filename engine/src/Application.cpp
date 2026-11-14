@@ -703,6 +703,8 @@ void Application::Tick(const TickOptions &options)
     // frame delta as it is. The fixed dt itself (Time::GetFixedDeltaTime) is never scaled.
     double frameDelta = static_cast<double>(Time::GetUnscaledDeltaTime());
     double resyncSeconds = 0.0;
+#if N2ENGINE_NETWORK_ENABLED
+    // Without the network module there is no client session to ask
     if (!_fixedTickDriver && _simulationClock.GetMode() == SimulationMode::Authoritative)
     {
         if (Network::NetworkClient *const client = Network::NetworkClient::Active();
@@ -713,6 +715,7 @@ void Application::Tick(const TickOptions &options)
                             static_cast<double>(Time::GetFixedUnscaledDeltaTime());
         }
     }
+#endif
     _simulationClock.BeginFrame(frameDelta);
     if (resyncSeconds != 0.0)
     {

@@ -32,6 +32,8 @@
 #include "engine/rendering/ParticleSystem.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
+#include "engine/network/NetworkObject.hpp"
+#include "engine/network/NetworkTransform.hpp"
 #include "engine/serialization/ComponentRegistry.hpp"
 #include "engine/ui/Button.hpp"
 #include "engine/ui/Canvas.hpp"
@@ -41,7 +43,7 @@
 #include "engine/ui/UIText.hpp"
 
 #if !defined(N2ENGINE_PARTICLES_ENABLED) || !defined(N2ENGINE_SOFTBODIES_ENABLED) || !defined(N2ENGINE_AUDIO_ENABLED) ||     \
-    !defined(N2ENGINE_UI_ENABLED)
+    !defined(N2ENGINE_UI_ENABLED) || !defined(N2ENGINE_NETWORK_ENABLED)
 
 using namespace N2Engine;
 
@@ -494,6 +496,41 @@ TEST_F(LeftOutModuleTest, UILuaMethodsExist)
 }
 
 #endif // UI
+
+#ifndef N2ENGINE_NETWORK_ENABLED
+
+// The network module's components stay registered, with the fields the fingerprint hashes (so a registry is the same in a build
+// with the module), and keep their data through a save and a load; what is gone is the sessions and the Network Lua table.
+TEST_F(LeftOutModuleTest, NetworkComponentsAreRegisteredWithTheirFields)
+{
+    for (const char *type : {"NetworkObject", "NetworkTransform", "LagCompensatedHitbox"})
+    {
+        EXPECT_TRUE(ComponentRegistry::Instance().IsRegistered(type)) << type;
+    }
+    for (const char *field : {"positionStep", "replicatePosition", "position", "rotation", "scale", "teleportSerial"})
+    {
+        EXPECT_TRUE(HasField("NetworkTransform", field)) << field;
+    }
+}
+
+TEST_F(LeftOutModuleTest, ANetworkObjectKeepsItsDataThroughASaveAndALoad)
+{
+    auto go = Make("Net");
+    go->AddComponent<Network::NetworkObject>();
+    go->AddComponent<Network::NetworkTransform>();
+    const auto back = RoundTrip("Net");
+    ASSERT_NE(back, nullptr);
+    EXPECT_NE(back->GetComponent<Network::NetworkObject>(), nullptr);
+    EXPECT_NE(back->GetComponent<Network::NetworkTransform>(), nullptr);
+}
+
+TEST_F(LeftOutModuleTest, TheNetworkLuaTableAndTheLagCompensatedCastsAreNotThere)
+{
+    EXPECT_TRUE(Eval<bool>("Network == nil"));
+    EXPECT_TRUE(Eval<bool>("Physics == nil or Physics.RaycastLagCompensated == nil"));
+}
+
+#endif // network
 
 #endif // any module left out
 

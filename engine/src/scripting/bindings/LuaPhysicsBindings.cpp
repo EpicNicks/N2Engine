@@ -350,6 +350,7 @@ namespace N2Engine::Scripting::Bindings
 
         // ===== Raycasts (global) =====
         lua["Physics"] = lua.create_table_with(
+#if N2ENGINE_NETWORK_ENABLED
             "RaycastLagCompensated", [](Network::ClientId client, std::uint64_t time,
                 const Math::Vector3 &origin, const Math::Vector3 &direction, float distance,
                 sol::optional<std::int64_t> mask, sol::optional<std::uint32_t> ignore,
@@ -378,6 +379,7 @@ namespace N2Engine::Scripting::Bindings
                 return lua.create_table_with("netId",hit->object.value,"hitbox",hit->hitbox,"point",hit->point,
                     "normal",hit->normal,"distance",hit->distance,"timeMicros",hit->timeMicros);
             },
+#endif
             // Physics.IsGpuAvailable() -> true when the physics scene runs on the GPU (physics.gpu auto/on and the
             // probe succeeded); false otherwise, including without a physics backend
             "IsGpuAvailable", []() -> bool
