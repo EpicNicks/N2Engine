@@ -64,6 +64,9 @@ every stage. Stages still run in the order of section 5, each after the stages i
 - Stage 13, iOS on MoltenVK, branch `feat-bt13c-ios-moltenvk`: MoltenVK's static iOS library (its release, named by
   `N2_MOLTENVK_IOS`) linked into the app; the view's layer is a `CAMetalLayer` where MoltenVK finds a GPU, else the
   software renderer; the CI runs the app on Vulkan in the simulator.
+- Follow-ups without the user's hardware, branch `feat-build-targets-followups` (#366): MoltenVK's size and speed measured
+  on macOS and the iOS simulator by the on-demand `Apple measurements` workflow (`metal-spike.md`, "Measured";
+  `docs/apple.html#measured`); the Android emulator smoke also checks that audio started; section 7 re-checked item by item.
 
 ## 1. Goal
 
@@ -295,16 +298,52 @@ stage 6 is mechanical.
 
 ## 7. Not verified
 
-- That the engine builds with the Android NDK's clang and libc++ beyond `std::generator` (no NDK build was tried).
-- openal-soft 1.24 on Android in this engine's configuration.
-- The software renderer's frame rate on mid-range phones at the game's resolution (stages 8 and 10 ship with it).
-- The LZMA SDK 7z reader's code size in the web player, and non-solid 7z load times against zip (stage 4).
-- That the iOS simulator on GitHub's macOS runners can run the smoke plans headlessly within the job time limits.
-- How many of the `std::filesystem` call sites assume a real disk (a stage 4 audit).
-- The Switch: whether its SDK allows this plugin shape. Only a developer account can tell.
-- Which projects and saved files hold GLFW key numbers today (the stage 5 migration needs the full list), and how the editor
-  inspector shows a binding's key.
-- The size of a zip reader in the web player (stage 4).
+Each item was re-checked on 2026-11-13 (PR #366): what CI or an earlier stage now shows moved to "Verified since", with
+its evidence; what needs the user's own hardware or an account stays below, tagged so. The run links are to master's
+Tests run 43436223939 (head `6d2d17a2`), unless they name another.
+
+Still not verified (each needs the user's hardware or an account; CI cannot stand in):
+
+- **[needs a phone]** The software renderer's frame rate on mid-range phones at the game's resolution (stages 8 and 10 ship
+  with it), and Vulkan's on a phone against it (stage 12): `docs/android.html#checklist` item 2. The CI emulator (x86_64, no
+  GPU, a debug APK) logs about 4 to 8 fps, which stands for no phone.
+- **[needs a phone]** Sound heard on Android (`docs/android.html#checklist` item 10). CI shows only that OpenAL Soft opens an
+  output (below).
+- **[needs an iPhone and an Apple Developer account]** The iOS app on a device: signing (D7), MoltenVK's device slice
+  (`ios-arm64`) at run time, and the frame rate there (`docs/apple.html#checklist` item 6). The simulator's numbers (MoltenVK's
+  size and speed, `docs/apple.html#measured`) are not a device's.
+- **[needs a Mac]** The macOS player in a window on a real Mac's GPU, OpenGL and Vulkan on MoltenVK
+  (`docs/apple.html#checklist` item 5). The runners are virtual machines with Apple's paravirtual GPU and no OpenGL context.
+- **[needs a developer account with the vendor]** The Switch: whether its SDK allows this plugin shape.
+
+Verified since (with the evidence):
+
+- *That the engine builds with the Android NDK's clang and libc++ beyond `std::generator`.* It does: the `android` job builds
+  the engine and `lua_project` into an APK with the pinned NDK (`targets/android/target.json`), with the software renderer
+  and again with the Vulkan renderer, on every pull request (stage 8, #343; stage 12, #349). Evidence: the `android` job of
+  [run 43436223939](https://github.com/EpicNicks/N2Engine/actions/runs/43436223939/job/131922692222).
+- *openal-soft 1.24 on Android in this engine's configuration.* It builds into the APK (`lib/x86_64/libopenal.so`) and opens
+  an output on the API 30 emulator: the game logs `AudioSystem initialized with 32 pooled sources`, in both APKs (the same
+  job). From #366 the emulator smoke (`scripts/android-emulator-smoke.sh`) fails when that line is missing. Whether sound is
+  heard stays a device item (above).
+- *The LZMA SDK 7z reader's code size in the web player, and non-solid 7z load times against zip.* Measured in stage 4
+  (#338; `docs/packs.html`, `measured-web` and `measured-load`): the 7z reader would add 47,153 bytes of wasm (17,812
+  brotli), so the web player reads zip packs only; `lua_project` loads in 21.2 ms from its folder, 6.4 ms from a zip,
+  4.2 ms stored and 5.7 ms from a non-solid 7z (Windows, Release, the median of 7, `PackedProjectTest.LoadTimesOfAFolderAndItsPacks`).
+- *The size of a zip reader in the web player.* Stage 4 (#338, `docs/packs.html#measured-web`): 28,916 bytes of wasm
+  (13,607 gzip, 11,464 brotli).
+- *That the iOS simulator on GitHub's macOS runners can run the smoke headlessly within the job time limits.* It does, on
+  every pull request: the `apple` jobs build the simulator app and run it until it logs a first frame and frame-rate lines,
+  once with the software renderer and once with MoltenVK. In run 43436223939 they took 20 and 17 minutes of their 90
+  ([iOS](https://github.com/EpicNicks/N2Engine/actions/runs/43436223939/job/131922692176),
+  [iOS with MoltenVK](https://github.com/EpicNicks/N2Engine/actions/runs/43436223939/job/131922692246)).
+- *How many of the `std::filesystem` call sites assume a real disk.* The stage 4 audit (#338, `docs/packs.html#audit`):
+  every read of game data now goes through `IO::Vfs`.
+- *Which saved files hold GLFW key numbers, and how the editor inspector shows a binding's key.* None do: a binding saves its
+  key's name (`KeyboardButtonBinding::Serialize` writes the `Input::Key` enum, which `InputTypes.hpp` serializes by name), so
+  stage 5 needed no migration (#340; `InputDeviceTest.AnActionMapSavedBeforeThisStageLoadsUnchanged`). The editor has no
+  binding editor: the frontend (`N2EngineWebFrontend` master `04659c9`) has no action-map or binding UI, so an action map
+  is edited as its JSON file, where the key is a name.
 
 ## 8. Risks
 

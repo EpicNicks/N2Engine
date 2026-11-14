@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # The Android emulator smoke test (build targets stage 8; docs/android.html): installs an APK n2build made, starts the
-# game, and passes when the player logs its first frame and then a frame-rate line, with no crash of the app's process.
+# game, and passes when the player logs its first frame and then a frame-rate line, with no crash of the app's process,
+# and its audio started (OpenAL Soft opened an output).
 #
 #   scripts/android-emulator-smoke.sh <package folder> [seconds]
 #
@@ -53,6 +54,13 @@ if [ "$passed" != 1 ]; then
 fi
 if [ -z "$pid" ]; then
   echo "::error::The game logged frames but is no longer running"
+  exit 1
+fi
+# OpenAL Soft (its OpenSL ES backend) opened an output and the engine's audio started. The emulator runs with -noaudio,
+# so this proves the library loads and opens a device on Android, not that sound is heard (the device checklist's item)
+if ! grep -q "AudioSystem initialized with" "$log"; then
+  grep -E "OpenAL|AudioSystem|audio" "$log" | tail -20 || true
+  echo "::error::The game's audio did not start (no 'AudioSystem initialized' in its log)"
   exit 1
 fi
 grep -E "N2Engine Android player: [0-9]+ frames" "$log" | tail -1

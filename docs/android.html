@@ -214,7 +214,7 @@ The software renderer needs neither: its present finds the current window each f
 </ul>
 
 <h2 id="ci">CI</h2>
-<p>The <code>android</code> job in <code>.github/workflows/tests.yml</code> builds <code>lua_project</code> into a debug APK through n2build, for the emulator's ABI only (<code>x86_64</code>). It checks that the APK holds the pack and the native libraries. It then installs the APK on an API 30 emulator with no GPU, where <code>scripts/android-emulator-smoke.sh</code> passes when the game logs its first frame and a frame-rate line and is still running.</p>
+<p>The <code>android</code> job in <code>.github/workflows/tests.yml</code> builds <code>lua_project</code> into a debug APK through n2build, for the emulator's ABI only (<code>x86_64</code>). It checks that the APK holds the pack and the native libraries. It then installs the APK on an API 30 emulator with no GPU, where <code>scripts/android-emulator-smoke.sh</code> passes when the game logs its first frame and a frame-rate line, is still running, and has started its audio: the log must say <code>AudioSystem initialized</code>, so OpenAL Soft opened an output. The emulator runs with <code>-noaudio</code>, so this shows that OpenAL Soft loads and opens a device on Android, not that sound is heard (checklist item 10).</p>
 
 <h2 id="checklist">Device checklist</h2>
 <p>CI runs the game only on an emulator. Check these on a real phone before a release, and record the results in the PR or the release notes.</p>

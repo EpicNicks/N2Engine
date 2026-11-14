@@ -1,0 +1,182 @@
+name: Apple measurements
+
+# MoltenVK's size and speed on macOS and iOS (build targets stage 13; orchestrator/proposals/metal-spike.md, "Measured";
+# docs/apple.html#measured). Release builds of lua_project, measured by scripts/apple-measure.py:
+#
+#   - macOS, twice: without MoltenVK (the OpenGL and software renderers only) and with it. Both report the package's and
+#     the player's size. The build with MoltenVK also times frames: the software renderer offscreen (--headless; the
+#     runner has no OpenGL context, so OpenGL cannot run) against the Vulkan renderer on MoltenVK in a window, vsync off
+#     and on.
+#   - iOS: the simulator app without and with MoltenVK's static library, their sizes, and each run in the simulator for
+#     60 seconds (the player's own frame-rate lines).
+#
+# GitHub's macOS runners are virtual machines with Apple's paravirtual GPU, and the simulator's Metal runs on that GPU:
+# the numbers are not a Mac's or an iPhone's (docs/apple.html says so beside them).
+#
+# Heavy (three macOS jobs), so it never runs on every pull request: on demand, and on a pull request that changes this
+# workflow or its script. It gates nothing and is not a required check; the Tests workflow is unchanged.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/apple-measure.yml
+      - scripts/apple-measure.py
+
+concurrency:
+  group: apple-measure-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: apple measure (macOS, ${{ matrix.moltenvk && 'with' || 'without' }} MoltenVK)
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        moltenvk: [false, true]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      # Without MoltenVK installed, the macOS build has no Vulkan renderer (cmake/N2EngineApple.cmake)
+      - name: Install Ninja (and MoltenVK, its headers and glslang for the build with it)
+        run: |
+          brew install ninja
+          if [ "${{ matrix.moltenvk }}" = true ]; then brew install molten-vk vulkan-headers glslang; fi
+          brew list --versions molten-vk || echo "MoltenVK: not installed"
+
+      - name: n2build build (macos, release)
+        run: node tools/n2build/n2build.mjs build --target macos --project lua_project --config release --build-dir "$RUNNER_TEMP/n2build" --out "$RUNNER_TEMP/package/LuaDemo"
+
+      - name: Size
+        run: |
+          pkg="$RUNNER_TEMP/package/LuaDemo"
+          ls -la "$pkg"
+          otool -L "$pkg/lua_project" | tee otool.txt
+          if [ "${{ matrix.moltenvk }}" = true ]; then
+            test -f "$pkg/libMoltenVK.dylib"
+            grep -q "@executable_path/libMoltenVK.dylib" otool.txt
+            id=macos-moltenvk; label="macOS player, with MoltenVK"
+          else
+            if [ -e "$pkg/libMoltenVK.dylib" ] || grep -q MoltenVK otool.txt; then echo "::error::The build without MoltenVK has it"; exit 1; fi
+            id=macos-no-moltenvk; label="macOS player, without MoltenVK"
+          fi
+          python3 scripts/apple-measure.py size --id "$id" --label "$label" --package "$pkg" --binary "$pkg/lua_project" --out "measure/size-$id.json"
+
+      - name: Frame times (software offscreen, Vulkan on MoltenVK vsync off and on)
+        if: matrix.moltenvk
+        run: |
+          player="$RUNNER_TEMP/package/LuaDemo/lua_project"
+          python3 scripts/apple-measure.py frames --id macos-1-software --label "macOS VM, software renderer, offscreen 1280x720 (--headless)" \
+            --expect "Using Software renderer, headless" --log software.log --out measure/frames-macos-software.json -- "$player" --console-log --headless
+          N2_VULKAN_VSYNC=0 python3 scripts/apple-measure.py frames --id macos-2-vulkan --label "macOS VM, Vulkan on MoltenVK, window, vsync off" \
+            --expect "Using Vulkan renderer" --log vulkan.log --out measure/frames-macos-vulkan.json -- "$player" --console-log --renderer vulkan
+          python3 scripts/apple-measure.py frames --id macos-3-vulkan-vsync --label "macOS VM, Vulkan on MoltenVK, window, vsync on" \
+            --expect "Using Vulkan renderer" --log vulkan-vsync.log --out measure/frames-macos-vulkan-vsync.json -- "$player" --console-log --renderer vulkan
+          # What the Vulkan renderer said about the device and the swapchain
+          grep -iE "vulkan|swapchain|device" vulkan.log | head -20 || true
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: apple-measure-macos-${{ matrix.moltenvk && 'moltenvk' || 'no-moltenvk' }}
+          path: |
+            measure/
+            *.log
+          if-no-files-found: ignore
+
+  ios:
+    name: apple measure (iOS simulator, without and with MoltenVK)
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install Ninja and glslang
+        run: brew install ninja glslang
+
+      # MoltenVK's own release, pinned and checked, as in the Tests workflow's apple job
+      - name: MoltenVK for iOS (v1.4.2)
+        run: |
+          mkdir -p "$RUNNER_TEMP/moltenvk"
+          cd "$RUNNER_TEMP/moltenvk"
+          curl -fsSL -o MoltenVK-all.tar https://github.com/KhronosGroup/MoltenVK/releases/download/v1.4.2/MoltenVK-all.tar
+          echo "562a15a29bc358446a56a4091c5f7e08f604184187c1d34f712148b61ef17276  MoltenVK-all.tar" | shasum -a 256 -c
+          tar -xf MoltenVK-all.tar MoltenVK/MoltenVK/include MoltenVK/MoltenVK/static
+          rm MoltenVK-all.tar
+          ls -la MoltenVK/MoltenVK/static/MoltenVK.xcframework/*/
+
+      # Two build trees: the first without N2_MOLTENVK_IOS (the software renderer only), the second with it
+      - name: n2build build (ios, release, without MoltenVK)
+        run: node tools/n2build/n2build.mjs build --target ios --project lua_project --config release --build-dir "$RUNNER_TEMP/n2build-sw" --out "$RUNNER_TEMP/package/sw"
+
+      - name: n2build build (ios, release, with MoltenVK)
+        env:
+          N2_MOLTENVK_IOS: ${{ runner.temp }}/moltenvk/MoltenVK/MoltenVK
+        run: node tools/n2build/n2build.mjs build --target ios --project lua_project --config release --build-dir "$RUNNER_TEMP/n2build-mvk" --out "$RUNNER_TEMP/package/mvk"
+
+      - name: Size
+        run: |
+          xcf="$RUNNER_TEMP/moltenvk/MoltenVK/MoltenVK/static/MoltenVK.xcframework"
+          for variant in sw mvk; do
+            app="$(ls -d "$RUNNER_TEMP/package/$variant"/*.app)"
+            exe="$(plutil -extract CFBundleExecutable raw "$app/Info.plist")"
+            if [ "$variant" = mvk ]; then
+              python3 scripts/apple-measure.py size --id ios-moltenvk --label "iOS simulator app, with MoltenVK" --package "$app" --binary "$app/$exe" \
+                --extra "libMoltenVK.a, device slice (ios-arm64)=$xcf/ios-arm64/libMoltenVK.a" \
+                --extra "libMoltenVK.a, simulator slice (arm64 and x86_64)=$xcf/ios-arm64_x86_64-simulator/libMoltenVK.a" \
+                --out measure/size-ios-moltenvk.json
+            else
+              python3 scripts/apple-measure.py size --id ios-no-moltenvk --label "iOS simulator app, without MoltenVK" --package "$app" --binary "$app/$exe" \
+                --out measure/size-ios-no-moltenvk.json
+            fi
+          done
+
+      # The app is installed over the previous one (one bundle id); each run is 60 seconds of the player's five-second
+      # frame-rate lines
+      - name: Run in the simulator (without MoltenVK, then with it)
+        run: |
+          node tools/n2build/n2build.mjs run --target ios --project lua_project --config release --out "$RUNNER_TEMP/package/sw" --no-build --seconds 60 | tee ios-software.log
+          python3 scripts/apple-measure.py fps --id ios-1-software --label "iOS simulator, software renderer" --log ios-software.log \
+            --expect "N2Engine iOS player: first frame, the software renderer" --out measure/fps-ios-software.json
+          node tools/n2build/n2build.mjs run --target ios --project lua_project --config release --out "$RUNNER_TEMP/package/mvk" --no-build --seconds 60 | tee ios-moltenvk.log
+          python3 scripts/apple-measure.py fps --id ios-2-moltenvk --label "iOS simulator, Vulkan on MoltenVK" --log ios-moltenvk.log \
+            --expect "N2Engine iOS player: first frame, the Vulkan renderer (MoltenVK)" --out measure/fps-ios-moltenvk.json
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: apple-measure-ios
+          path: |
+            measure/
+            *.log
+          if-no-files-found: ignore
+
+  report:
+    name: apple measure (report)
+    needs: [macos, ios]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: apple-measure-*
+          path: records
+
+      - name: Report
+        run: |
+          python3 scripts/apple-measure.py report records | tee -a "$GITHUB_STEP_SUMMARY"
