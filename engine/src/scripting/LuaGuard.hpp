@@ -32,6 +32,9 @@ namespace N2Engine::Scripting::Detail
     void RepairThreadAfterPanic(lua_State *L);
     // Also there: the length of the registry's free list (what luaL_ref reuses before it allocates), up to limit
     int CountFreeRegistrySlots(lua_State *L, int limit);
+    // Also there: the instructions a thread ran since its count hook last fired, its countdown restarted (0 without a
+    // count hook)
+    int TakeUncountedInstructions(lua_State *L);
 
     struct LuaGuardState
     {
@@ -148,4 +151,14 @@ namespace N2Engine::Scripting::Detail
     /// Makes pcall and xpcall hand the budget error on, and setmetatable refuse a metatable with __gc (LuaRuntime.cpp):
     /// the sandbox every state that runs script code under a LuaGuardState gets. The state needs the base library.
     void InstallBudgetSandbox(sol::state_view lua);
+
+    /// Coroutines under the budget (LuaRuntime.cpp). Lua's debug hooks are per thread, so before a coroutine runs
+    /// (resume, or close running its pending to-be-closed variables) it gets the hook the entry is armed with...
+    void PrepareThreadHook(lua_State *thread);
+    /// ...and after the run, what it executed since its hook last fired is charged to the entry's budget. True when the
+    /// budget is spent (by the run or before it): the caller then raises, or reports, the budget error.
+    bool ChargeThread(lua_State *thread);
+    /// Replaces coroutine.resume, coroutine.wrap and coroutine.close with versions that do both, and that hand the
+    /// budget error on as pcall does. The state needs the coroutine library opened.
+    void InstallCoroutineGuards(sol::state_view lua);
 }

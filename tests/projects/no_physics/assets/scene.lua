@@ -1,5 +1,6 @@
--- The smallest game: it leaves every optional module out, physics, particles and soft bodies (docs/project-modules.html). The web
--- CI job builds and runs a package of it, which is what shows a player without them still starts and draws.
+-- The smallest game: it leaves every optional module out, physics, particles, soft bodies, audio and UI
+-- (docs/project-modules.html). The web CI job builds and runs a package of it, which is what shows a player without them still
+-- starts and draws.
 
 local scene = SceneManager.GetCurrentScene()
 if scene == nil then

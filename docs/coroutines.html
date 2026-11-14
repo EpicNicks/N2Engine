@@ -332,9 +332,30 @@ std::generator&lt;ICoroutineWait&gt; Land(const CharacterMotor *motor)
 </code></pre>
 <p class="src">Source: <code>engine/src/gameobject/GameObject.cpp</code> — <code>RemoveComponent</code>, <code>SetScene</code>, <code>~GameObject</code>; <code>engine/include/engine/scheduling/CoroutineScheduler.hpp</code></p>
 
-<h2 id="lua">Lua</h2>
-<p>Coroutines are C++ only. No scheduler or wait type is bound to Lua, and the Lua runtime opens only the <code>base</code>, <code>math</code>, <code>string</code> and <code>table</code> libraries (<code>package</code> is no longer opened <span class="badge">PR #34</span>), so Lua's own <code>coroutine</code> library is not available to scripts either. Lua scripts that need timed behaviour have to count time in <code>OnUpdate</code>. See <a href="scripting-lua.html">Lua scripting</a>.</p>
-<p class="src">Source: <code>engine/src/scripting/LuaRuntime.cpp</code> — <code>open_libraries</code>; <code>engine/src/scripting/bindings/</code> (no coroutine bindings)</p>
+<h2 id="lua">Lua <span class="badge">PR #371</span></h2>
+<p>A script starts a coroutine of its own object with <code>self.component:StartCoroutine(fn, ...)</code>; the extra values are <code>fn</code>'s arguments. It runs in a Lua coroutine that the object's scheduler resumes once per frame, exactly like a C++ coroutine: the first resume is on the first scheduler update after the call (nothing of the body runs inside <code>StartCoroutine</code>), and the coroutine stops when the object is deactivated or destroyed.</p>
+<pre><code class="language-lua">function Lamp:Start()
+    self.blink = self.component:StartCoroutine(function(times)
+        for i = 1, times do
+            self.lit = not self.lit
+            coroutine.yield(0.5)      -- wait half a second
+        end
+    end, 6)
+end</code></pre>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Yield</th><th>Waits</th></tr></thead>
+<tbody>
+<tr><td><code>coroutine.yield()</code> or <code>coroutine.yield(nil)</code></td><td>The next frame</td></tr>
+<tr><td><code>coroutine.yield(seconds)</code></td><td><code>seconds</code> of game time (a finite number &gt;= 0; 0 is the next frame)</td></tr>
+<tr><td>Anything else</td><td>An error: logged once, and that coroutine ends</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>StartCoroutine</code> returns a <code>ScriptCoroutine</code> with <code>Stop()</code> and <code>IsRunning()</code>, or <code>nil</code> when none started (the object is inactive, or the script is switched off). <code>self.component:StopAllCoroutines()</code> stops every coroutine this component started. Stopping a coroutine from inside its own body takes effect at its next yield or return (the rest of the current step still runs). A coroutine also ends when its component's script is replaced or reloaded.</p>
+<p><strong>Limits.</strong> Each resume is an entry into Lua like <code>OnUpdate</code>: it gets the instruction budget (<a href="scripting-lua.html">Lua scripting</a>), an error is logged as the component's script error, and a budget or memory error switches the component off. Lua's own <code>coroutine</code> library is open too (<code>create</code>, <code>resume</code>, <code>wrap</code>, <code>yield</code>, <code>status</code>, <code>isyieldable</code>, <code>running</code>, <code>close</code>); <code>resume</code>, <code>wrap</code> and <code>close</code> are replaced by versions that run the coroutine under the budget of the call that resumed it, so a coroutine cannot loop forever without yielding, and the budget error is handed on rather than caught.</p>
+<p>Not there: waiting on another coroutine or on a condition (yield in a loop instead), and <code>GameObject:StartCoroutine</code> (go through a <code>LuaComponent</code>).</p>
+<p class="src">Source: <code>engine/src/scripting/LuaScriptCoroutines.cpp</code>; <code>engine/src/scripting/LuaRuntime.cpp</code> &mdash; <code>InstallCoroutineGuards</code>; <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code>; tests: <code>LuaScriptCoroutineTest.*</code> (<code>tests/engine/scripting/LuaScriptCoroutineTests.cpp</code>)</p>
 
 <div class="page-footer">
 <span>Describes master through PR #34.</span>

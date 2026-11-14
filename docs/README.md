@@ -2,8 +2,14 @@
 
 This folder is a static HTML site that documents how the engine **behaves**: guarantees, ordering, lifetimes, edge cases and error handling. Start at [`index.html`](index.html).
 
+<<<<<<< HEAD
 - No build step, no external fonts or scripts. Everything is plain HTML plus `assets/style.css` and two small scripts: `assets/highlight.js` colours the code blocks (`<pre class="lang-*">`) and `assets/search.js` adds the search box (see [Search](#search)). The pages read fine without either.
 - Works opened straight from disk (`file://`) and on GitHub Pages (serve the `docs/` folder from the default branch). All links are relative.
+=======
+- No build step, no external fonts or scripts. Everything is plain HTML plus `assets/style.css` and one small script, `assets/highlight.js`, that colours the code blocks (`<pre class="lang-*">`); the pages read fine without it.
+- Works opened straight from disk (`file://`) and from any static host. All links are relative.
+- Published at https://n2engine-docs.vercel.app by `.github/workflows/docs-deploy.yml` (the `docs (Vercel)` job): a push to `master` that touches `docs/` deploys to production, and a pull request that touches `docs/` gets a preview deployment.
+>>>>>>> origin/master
 - Light and dark themes follow the reader's system setting (`prefers-color-scheme`).
 
 ## Search
@@ -25,7 +31,7 @@ The stale-index check runs on every docs deployment: `vercel.json` sets the Verc
 
 ## Current baseline
 
-The pages describe `master`. PRs #26–#34 have all merged; their `PR #nn` badges stay as history, pointing readers at the PR that introduced or changed a behaviour. Every page's footer says "Describes master through PR #34."; update it on every page (and in `_template.html`) when a later PR brings the pages up to date.
+The pages describe `master`. `PR #nn` badges stay as history, pointing readers at the PR that introduced or changed a behaviour. Each page's footer says "Describes master through PR #nn." with the PR through which that page was last brought up to date as a whole, so the number differs from page to page; update a page's footer when a PR brings that whole page up to date.
 
 ## Pages
 
@@ -56,10 +62,18 @@ The pages describe `master`. PRs #26–#34 have all merged; their `PR #nn` badge
 | `logging-and-editor.html` | Logger, engine health, the editor host |
 | `editor.html` | Editor projects: `project.n2proj`, `--create`, opening a project, scene files, unsaved changes, the hierarchy and entity commands, project settings, per-project `user://` |
 | `mcp.html` | The `n2-mcp` bridge (a separate program in the frontend repository): running it (`--launch`, `--connect`, flags), the safety model, the tools that exist, sharing the host with a person and the Hello `yield` flag, what is not built yet |
-| `netcode.html` | n2net, the netcode packet layer: the `ITransport` interface, the packet byte layout, acks, the reliable-ordered and unreliable-sequenced channels, fragmentation and its limits, bounded parsing of untrusted input, the deterministic network simulator and how to use it in tests, the native UDP transport, the secure layer and N2Server, the network world (the `NetworkObject` component, net ids, scene objects matched by UUID, prefab spawns and despawns, the join fingerprint, the world messages, `NetworkServer` and `NetworkClient`), field replication (`.Replicated()`, Lua `replicated = true`, the codecs, deltas against the acknowledged baseline, `NetworkTransform`), what is not built yet (interpolation, inputs, RPCs, prediction) |
+| `netcode.html` | n2net, the netcode packet layer: the `ITransport` interface, the packet byte layout, acks, the reliable-ordered and unreliable-sequenced channels, fragmentation and its limits, bounded parsing of untrusted input, the deterministic network simulator and how to use it in tests, the native UDP transport, the secure layer and N2Server, the network world (the `NetworkObject` component, net ids, scene objects matched by UUID, prefab spawns and despawns, the join fingerprint, the world messages, `NetworkServer` and `NetworkClient`), field replication (`.Replicated()`, Lua `replicated = true`, the codecs, deltas against the acknowledged baseline, `NetworkTransform`), player input, clock sync and interpolation, client prediction, RPCs, lockstep, rollback, the editor's Network panel, lag compensation, relevance, the browser WebSocket transport, what is not there yet |
 | `web-build.html` | The WebAssembly build (stages 0 to 2 of #155): Emscripten toolchain and pinned version, `N2ENGINE_PLATFORM_WEB`, the dev/size/speed profiles, building locally, the reduced target set and exclusions, the web player (canvas, loop, input, assets, page), building and hosting the static package, the output contract, the size report, what is not done yet |
 | `web-checklist.html` | What to check by hand in a real browser for the web player (loading, canvas, input, resize, hosting from a subdirectory, MIME fallback, performance), which CI cannot do |
-| `build-targets.html` | Build targets: `n2build` (list, doctor, build, run, `--json`), the windows, linux and web targets, build trees and packages, the desktop player (`players/desktop`), the physics check per target, target descriptors |
+| `build-targets.html` | Build targets: `n2build` (list, doctor, build, run, cook, apple-workflow, `--json`), the windows, linux, web, android, ios and macos targets, build trees and packages, the desktop player (`players/desktop`), the physics check per target, per-target settings, target descriptors |
+| `project-modules.html` | Project modules: the module list in `project.n2proj`, a list per build target, the scan, what a left-out module does at run time, the size it saves |
+| `platform.html` | The platform layer: `Platform::IPlatformHost`, its backends, renderer surfaces |
+| `packs.html` | Packs and the virtual filesystem: pack formats, the cook step, how a player finds its game, measurements |
+| `android.html` | The Android target: building an APK, toolchains, settings, signing and the AAB, running on a device, the player, the Vulkan renderer, CI |
+| `apple.html` | The iOS and macOS targets: building on a Mac or in GitHub Actions, settings, the players, signing, CI |
+| `private-targets.html` | Private targets: a target folder outside the repository, with its own player, backend and renderer |
+| `physics2d.html` | 2D physics on Box2D: components, the world and fixed step, events, bodies and shapes, layers, queries, Lua, networking, leaving it out |
+| `sprite2d.html` | `Sprite2D`: shapes, fields, draw order, colour effects, the software renderer, Lua |
 | `testing.html` | Test layout, CI, conventions, pixel tests with the headless software renderer, the Jolt smoke test and its cross-leg state hash, the typed physics tests over both backends and the Jolt backend determinism numbers |
 
 ## Adding or changing a page

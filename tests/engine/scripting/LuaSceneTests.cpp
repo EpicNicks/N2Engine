@@ -43,6 +43,7 @@
 #include "engine/ui/Canvas.hpp"
 #include "engine/ui/Image.hpp"
 #include "engine/ui/UIText.hpp"
+#include "../modules/ModuleGuards.hpp"
 
 using namespace N2Engine;
 using namespace N2Engine::Scripting;
@@ -467,6 +468,7 @@ TEST_F(LuaProjectSceneTest, SmokeWorldTextAndEffects)
 
 TEST_F(LuaProjectSceneTest, SmokeWorldCanvasButtonCountsClicks)
 {
+    N2_SKIP_WITHOUT_UI();
     const auto *canvas = ComponentOf<UI::Canvas>(Find("Smoke World Canvas"));
     ASSERT_NE(canvas, nullptr);
     EXPECT_TRUE(canvas->IsWorldSpace());
@@ -486,6 +488,7 @@ TEST_F(LuaProjectSceneTest, SmokeWorldCanvasButtonCountsClicks)
 
 TEST_F(LuaProjectSceneTest, SmokeScreenUIButtonsCountAndToggle)
 {
+    N2_SKIP_WITHOUT_UI();
     const auto panel = Find("Smoke UI Panel");
     ASSERT_NE(panel, nullptr);
     const auto *canvas = ComponentOf<UI::Canvas>(panel);
@@ -605,6 +608,7 @@ TEST_F(LuaProjectSceneTest, SmokeModelIsInstantiatedWithItsHierarchy)
 
 TEST_F(LuaProjectSceneTest, SmokeHudShowsTheFirstStation)
 {
+    N2_SKIP_WITHOUT_UI();
     const auto hud = Find("Smoke HUD");
     ASSERT_NE(hud, nullptr);
     auto *script = hud->GetComponent<LuaComponent>();

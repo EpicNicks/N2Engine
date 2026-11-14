@@ -70,11 +70,67 @@ From the `metal-spike` job of PR #350 (macos-15 runner, 2026-11-12):
   - The fix is small and does not change other platforms: where the device lacks `imageViewFormatSwizzle`, store such
     textures as RGBA (expand on upload) or apply the swizzle in the shader.
   - The one skip is the no-compiled-shaders fallback test, which skips on every platform with compiled shaders.
-- **Not measured yet:** frame rate (MoltenVK against the software renderer, and against Metal if B is built), MoltenVK's size
-  in an app, and an iOS app on MoltenVK (static XCFramework, `VK_EXT_metal_surface` from the iOS backend).
+- **Not measured by the spike:** frame rate (MoltenVK against the software renderer, and against Metal if B is built),
+  MoltenVK's size in an app, and an iOS app on MoltenVK (static XCFramework, `VK_EXT_metal_surface` from the iOS backend).
+  The iOS app on MoltenVK came with PR #353; the size and the frame rate are measured below ("Measured").
 
 The spike's evidence supports the recommendation: the existing renderer runs on MoltenVK as it is, apart from one
 documented portability limit with a contained fix.
+
+## Measured: MoltenVK's size and speed (follow-up, PR #366)
+
+The `Apple measurements` workflow (`.github/workflows/apple-measure.yml`, script `scripts/apple-measure.py`; it runs on
+demand and on a pull request that changes it, and gates nothing) builds `lua_project` in **Release** on `macos-15` runners,
+without and with MoltenVK v1.4.2, and times it. First run:
+[43525490291](https://github.com/EpicNicks/N2Engine/actions/runs/43525490291) (PR #366, 2026-11-13).
+
+**These are a virtual machine's numbers.** The runners are VMs with Apple's paravirtual GPU, and the iOS simulator's Metal
+runs on that GPU through the Mac. They say how the pieces compare on one machine, not what a Mac or an iPhone does.
+
+Size (MiB; "stripped" is the executable with debug and local symbols stripped, measured on a copy; "zipped" is the whole
+package in one deflate zip, about what a download costs):
+
+| Build | Package | Zipped | Executable | Stripped |
+|---|---|---|---|---|
+| macOS player, without MoltenVK | 29.78 | 6.78 | 28.52 | 19.93 |
+| macOS player, with MoltenVK | 35.30 | 8.45 | 28.96 | 20.39 |
+| iOS simulator app, without MoltenVK | 26.29 | 5.58 | 26.25 | 18.17 |
+| iOS simulator app, with MoltenVK | 31.13 | 7.07 | 31.10 | 21.75 |
+
+- **macOS:** MoltenVK itself is `libMoltenVK.dylib` beside the player, 5.08 MiB; the player's own Vulkan renderer adds
+  0.45 MiB (stripped). The package grows 5.53 MiB, 1.68 MiB zipped.
+- **iOS:** MoltenVK is linked into the executable: MoltenVK and the Vulkan renderer together add 3.58 MiB (stripped), so
+  MoltenVK's own part is about 3.1 MiB once the renderer's 0.45 MiB measured on macOS is taken off. The app grows 4.84 MiB,
+  1.49 MiB zipped. The static library before linking: 6.80 MiB for a device (`ios-arm64`), 13.48 MiB for the simulator
+  (arm64 and x86_64); the linker keeps only what is used. A device build's size is not measured.
+
+Speed (the same scene, `lua_project`'s `scene.lua`):
+
+| Run | Frame time | Frame rate | How |
+|---|---|---|---|
+| macOS VM, software renderer, offscreen 1280x720 (`--headless`) | 5.75 ms | 174 fps | (330 - 30 frames) wall time / 300, median of 3 (5.50, 6.47, 5.75 ms) |
+| macOS VM, Vulkan on MoltenVK, window, vsync off (`N2_VULKAN_VSYNC=0`) | 16.52 ms | 60.5 fps | the same (4.45, 17.99, 16.52 ms) |
+| macOS VM, Vulkan on MoltenVK, window, vsync on | 19.43 ms | 51.5 fps | the same (21.28, 19.43, 18.69 ms) |
+| iOS simulator, software renderer | 18.2 ms | 54.8 fps | the player's five-second lines over 60 s, median of 16 (32.8 to 58.8 fps) |
+| iOS simulator, Vulkan on MoltenVK | 48.3 ms | 20.7 fps | the same, median of 11 (10.9 to 24.7 fps) |
+
+What they show, and what they do not:
+
+- **On the macOS VM the Vulkan window runs at about the display's rate** (60 Hz) even with vsync off, in two of three
+  repeats; the third ran at 4.45 ms (225 fps). Presenting through the VM's window server paces it, so the frame's own cost
+  is not what this measures. The software renderer's 174 fps is offscreen and presents nothing (the runner has no OpenGL
+  context, so neither OpenGL nor the software renderer's window can run there): the rows are not a like-for-like race.
+  They show that both are well inside a 60 Hz frame for this scene on this VM.
+- **In the simulator, MoltenVK is slower than the software renderer** (about 21 against 55 fps; the display link caps both
+  at 60). The simulator forwards Metal to the Mac's GPU, and there the app runs MoltenVK without Metal argument buffers
+  (`docs/apple.html#moltenvk-ios`); neither is so on a device. This is not evidence for or against MoltenVK on an iPhone:
+  only a device run can say (`docs/apple.html#checklist` item 6, which needs a developer account).
+- The Tests workflow's `apple` jobs build Debug, which is why they log about 3 fps in the simulator; Release runs at 55 there.
+- The workflow takes about 46 macOS runner minutes (the two macOS jobs, 8 and 10 minutes, in parallel with the iOS job, 28)
+  and under a minute on Linux for the report. It does not run on ordinary pull requests.
+
+Still not measured: an iPhone (a device build's size, its frame rate), a Mac's own GPU, and a native Metal renderer (not
+built; see the pick).
 
 ## The pick
 

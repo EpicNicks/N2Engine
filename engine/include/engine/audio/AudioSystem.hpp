@@ -90,8 +90,17 @@ namespace N2Engine::Audio
         /// Longest step AdvanceStream takes at once (a debugger pause shouldn't mix minutes of audio)
         static constexpr double MaxStreamAdvanceSeconds = 1.0;
 
+        /// Whether this build has the audio module (N2ENGINE_USE_AUDIO; docs/project-modules.html). Without it no OpenAL Soft is
+        /// linked (a no-op OpenAL stands in), Initialize always fails, no clip loads, and AudioSource and AudioListener keep
+        /// their data and play nothing.
+        [[nodiscard]] static bool IsInBuild();
+        /// In a build without the audio module: logs, once per process, that `who` will play nothing, naming the option.
+        /// Does nothing in a build with it.
+        static void WarnIfNotInBuild(std::string_view who);
+
         /// Opens the output (the default sound card, or a loopback device) and an OpenAL context on it.
         /// Idempotent for the same output; false if already initialized with the other one (Shutdown first).
+        /// Always false in a build without the audio module (IsInBuild).
         bool Initialize(AudioOutput output = AudioOutput::Device);
         void Shutdown();
         [[nodiscard]] bool IsInitialized() const { return _initialized; }

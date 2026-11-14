@@ -18,6 +18,7 @@
 #include "engine/ui/Rect.hpp"
 
 #include "TextureTestSupport.hpp"
+#include "../modules/ModuleGuards.hpp"
 
 // GpuCache: one GPU texture per (renderer, asset), shared and refcounted, under the renderer lifetime-token
 // rules. Exercised directly through handles and through UI::Image sprites, with a renderer that counts calls.
@@ -253,6 +254,7 @@ TEST(GpuCacheTest, ARendererRecreatedAtTheSameAddressGetsItsOwnEntry)
 
 TEST(ImageSpriteTest, TwoImagesShareOneTextureAndTheLastToLetGoDestroysIt)
 {
+    N2_SKIP_WITHOUT_UI();
     CountingRenderer renderer;
     const auto texture = MakeTexture();
     ImageObject a = MakeImage("SpriteA", texture);
@@ -276,6 +278,7 @@ TEST(ImageSpriteTest, TwoImagesShareOneTextureAndTheLastToLetGoDestroysIt)
 
 TEST(ImageSpriteTest, EachRendererGetsItsOwnTexture)
 {
+    N2_SKIP_WITHOUT_UI();
     CountingRenderer first;
     CountingRenderer second;
     const auto texture = MakeTexture();
@@ -303,6 +306,7 @@ TEST(ImageSpriteTest, EachRendererGetsItsOwnTexture)
 
 TEST(ImageSpriteTest, ARendererRecreatedAtTheSameAddressGetsNewTextures)
 {
+    N2_SKIP_WITHOUT_UI();
     RendererCounts oldCounts;
     RendererCounts newCounts;
     std::optional<CountingRenderer> renderer;
@@ -331,6 +335,7 @@ TEST(ImageSpriteTest, ARendererRecreatedAtTheSameAddressGetsNewTextures)
 
 TEST(ImageSpriteTest, DestroyedAfterItsRendererTheImageNeverCallsIt)
 {
+    N2_SKIP_WITHOUT_UI();
     const std::size_t baseline = GpuCache::GetEntryCount();
     RendererCounts counts;
     auto renderer = std::make_unique<CountingRenderer>(counts);
@@ -346,6 +351,7 @@ TEST(ImageSpriteTest, DestroyedAfterItsRendererTheImageNeverCallsIt)
 
 TEST(ImageSpriteTest, ARawTextureWinsOverTheSprite)
 {
+    N2_SKIP_WITHOUT_UI();
     CountingRenderer renderer;
     ImageObject a = MakeImage("SpriteRaw", MakeTexture());
     constexpr std::uint8_t white[4] = {255, 255, 255, 255};
@@ -366,6 +372,7 @@ TEST(ImageSpriteTest, ARawTextureWinsOverTheSprite)
 
 TEST(ImageSpriteTest, ChangingOrClearingTheSpriteReleasesTheOldShare)
 {
+    N2_SKIP_WITHOUT_UI();
     CountingRenderer renderer;
     const auto first = MakeTexture(10);
     const auto second = MakeTexture(20);

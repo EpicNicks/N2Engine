@@ -28,6 +28,7 @@
 #include "engine/ui/Rect.hpp"
 #include "engine/ui/RectTransform.hpp"
 #include "engine/ui/UISystem.hpp"
+#include "../modules/ModuleGuards.hpp"
 
 // The acceleration of picking (#101): the mesh BVH and the shared canvas layout. Each must answer exactly as the
 // plain path does (RaycastMeshLinear, the layout made per call), also after the scene or the mesh changed.
@@ -523,6 +524,7 @@ namespace
 
 TEST(PickLayoutCacheTest, TheCanvasBoundsFromASharedLayoutAreTheCanvasBounds)
 {
+    N2_SKIP_WITHOUT_UI();
     auto scene = EditScene("PickLayout_Bounds");
     auto canvas = UI::UISystem::CreateCanvas("Canvas", UI::CanvasRenderMode::WorldSpace);
     scene->AddRootGameObject(canvas);
@@ -539,6 +541,7 @@ TEST(PickLayoutCacheTest, TheCanvasBoundsFromASharedLayoutAreTheCanvasBounds)
 
 TEST(PickLayoutCacheTest, EntityBoundsWithASharedCacheMatchThoseWithout)
 {
+    N2_SKIP_WITHOUT_UI();
     auto scene = EditScene("PickLayout_Entities");
     auto canvas = UI::UISystem::CreateCanvas("Canvas", UI::CanvasRenderMode::WorldSpace);
     canvas->GetPositionable()->SetPosition(Vector3(1.0f, 2.0f, 3.0f));
@@ -574,6 +577,7 @@ TEST(PickLayoutCacheTest, EntityBoundsWithASharedCacheMatchThoseWithout)
 
 TEST(PickLayoutCacheTest, ACanvasIsLaidOutOncePerPickAndOncePerBoundsRequest)
 {
+    N2_SKIP_WITHOUT_UI();
     auto scene = EditScene("PickLayout_Counts");
     std::vector<GameObject::Ptr> objects;
     for (int c = 0; c < 2; ++c)
@@ -613,6 +617,7 @@ TEST(PickLayoutCacheTest, ACanvasIsLaidOutOncePerPickAndOncePerBoundsRequest)
 
 TEST(PickLayoutCacheTest, PicksAcrossCanvasChangesMatchAFreshLayout)
 {
+    N2_SKIP_WITHOUT_UI();
     auto scene = EditScene("PickLayout_Picks");
     auto canvas = UI::UISystem::CreateCanvas("Canvas", UI::CanvasRenderMode::WorldSpace);
     scene->AddRootGameObject(canvas);

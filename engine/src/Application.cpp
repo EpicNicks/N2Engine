@@ -286,7 +286,10 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
                 row.detail += kSoftBodiesLeftOut;
             }
 #endif
-            (void)row;
+            if (row.name == "Audio" && !Audio::AudioSystem::IsInBuild())
+            {
+                row.detail += "; not in this build (N2ENGINE_USE_AUDIO is OFF)";
+            }
         }
         _health.subsystems.push_back(Network::MakeNetworkStatus(networkSettings, networkValidation));
         _initialized = false;
@@ -507,6 +510,12 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         // subsystem is never initialised; every AudioSystem call the tick makes is then a no-op, as after a failed open.
         audioStatus.state = SubsystemState::Disabled;
         audioStatus.detail = "Audio is off (ApplicationOptions::audio)";
+    }
+    else if (!Audio::AudioSystem::IsInBuild())
+    {
+        // A build without the audio module (docs/project-modules.html): nothing is opened, as for a dedicated server
+        audioStatus.state = SubsystemState::Disabled;
+        audioStatus.detail = "Not in this build (N2ENGINE_USE_AUDIO is OFF): there is no sound";
     }
     else if (audioToLoopback)
     {

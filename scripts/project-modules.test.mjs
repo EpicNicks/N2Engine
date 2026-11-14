@@ -98,7 +98,7 @@ test('the list is read and checked', () => {
   assert.deepEqual(readModuleList({ build: { modules: { physics3d: 'none' } } }), { physics3d: 'none' });
   assert.throws(() => readModuleList({ build: { modules: { physics3d: 'havok' } } }), /physics3d must be one of/);
   assert.throws(() => readModuleList({ build: { modules: { physics2d: 'no' } } }), /physics2d must be true or false/);
-  assert.throws(() => readModuleList({ build: { modules: { audio: false } } }), /unknown module "audio"/);
+  assert.throws(() => readModuleList({ build: { modules: { sound: false } } }), /unknown module "sound"/);
   assert.throws(() => readModuleList({ build: { modules: [] } }), /must be an object/);
 });
 
@@ -154,7 +154,7 @@ test('generated and hidden folders are not scanned, and a broken scene is report
 
 test('the suggestion is the smallest list the scan can justify', () => {
   const suggest = (project, files) => suggestList(scanProject(makeProject({ name: 'p', ...project }, files)));
-  const none = { physics3d: 'none', physics2d: false, particles: false, softbodies: false };
+  const none = { physics3d: 'none', physics2d: false, particles: false, softbodies: false, audio: false, ui: false };
   assert.deepEqual(suggest({}, {}), none);
   assert.deepEqual(suggest({}, { 'assets/a.lua': 'Physics2D.Raycast(a, b)' }), { ...none, physics2d: true });
   assert.deepEqual(suggest({}, { 'assets/a.lua': 'Physics.Raycast(a, b)' }), { ...none, physics3d: 'physx' });
@@ -202,6 +202,44 @@ test('particles and softbodies must be true or false', () => {
   assert.throws(() => readModuleList({ build: { modules: { softbody: false } } }), /unknown module "softbody"/);
 });
 
+test('audio is found by AudioSource and the Audio global, and an AudioListener alone is not a use', () => {
+  const modules = (source) => scanLua(source).uses.map((use) => use.module);
+  assert.deepEqual(modules('go:AddComponent("AudioSource")'), ['audio']);
+  assert.deepEqual(modules('Audio.PlayOneShot("res://sfx/hit.wav")'), ['audio']);
+  assert.deepEqual(modules('Audio.SetMasterVolume(0.5)'), ['audio']);
+  assert.deepEqual(modules('go:AddComponent("AudioListener")'), []);
+  assert.deepEqual(modules('local MyAudio = {}; MyAudio.Play = 1; local AudioSource = 2'), []);
+
+  const listener = makeProject({ name: 'p', build: { modules: { audio: false } } }, { 'scenes/a.scene': sceneWith('Camera', 'AudioListener') });
+  assert.deepEqual(findConflicts(scanProject(listener)), []);
+  const source = makeProject({ name: 'p', build: { modules: { audio: false } } }, { 'scenes/a.scene': sceneWith('AudioSource') });
+  assert.match(findConflicts(scanProject(source))[0], /scenes\/a\.scene uses AudioSource, but the list leaves audio out/);
+  const script = makeProject({ name: 'p', build: { modules: { audio: false } } }, { 'assets/a.lua': '\nAudio.PlayOneShot(path)' });
+  assert.match(findConflicts(scanProject(script))[0], /assets\/a\.lua:2 uses Audio\.PlayOneShot/);
+});
+
+test('UI is found by its components and the UI global', () => {
+  const modules = (source) => scanLua(source).uses.map((use) => use.module);
+  assert.deepEqual(modules('UI.CreateCanvas("HUD")'), ['ui']);
+  for (const component of ['Canvas', 'RectTransform', 'Image', 'UIText', 'Button']) {
+    assert.deepEqual(modules(`go:GetComponent("${component}")`), ['ui'], component);
+  }
+  assert.deepEqual(modules('local GUI = {}; GUI.Draw = 1; local path = "res://Image.png"'), []);
+
+  for (const component of ['Canvas', 'UIText', 'Button']) {
+    const scene = makeProject({ name: 'p', build: { modules: { ui: false } } }, { 'scenes/hud.scene': sceneWith('RectTransform', component) });
+    assert.match(findConflicts(scanProject(scene)).join('\n'), new RegExp(`scenes/hud\\.scene uses ${component}, but the list leaves ui out`));
+  }
+  const kept = makeProject({ name: 'p', build: { modules: { physics3d: 'none', audio: true, ui: true } } }, {
+    'scenes/a.scene': sceneWith('Canvas', 'AudioSource'),
+    'assets/a.lua': 'UI.CreateText("t"); Audio.PlayOneShot(p)',
+  });
+  assert.deepEqual(findConflicts(scanProject(kept)), []);
+  assert.deepEqual(readModuleList({ build: { modules: { audio: false, ui: true } } }), { audio: false, ui: true });
+  assert.throws(() => readModuleList({ build: { modules: { ui: 'no' } } }), /ui must be true or false/);
+  assert.throws(() => readModuleList({ build: { modules: { audio: 1 } } }), /audio must be true or false/);
+});
+
 test('the command line exits 0 when clean, 1 on a conflict and 2 on bad use', () => {
   const clean = makeProject({ name: 'p', build: { modules: { physics3d: 'none', physics2d: false } } }, { 'assets/scene.lua': 'print("hi")' });
   assert.equal(run(clean).status, 0);
@@ -222,7 +260,7 @@ test('--suggest prints a block that can be pasted, and --json the whole report',
   const suggested = run(folder, '--suggest');
   assert.equal(suggested.status, 0);
   assert.deepEqual(JSON.parse(suggested.stdout), {
-    build: { modules: { physics3d: 'none', physics2d: true, particles: false, softbodies: false } },
+    build: { modules: { physics3d: 'none', physics2d: true, particles: false, softbodies: false, audio: false, ui: false } },
   });
   assert.match(suggested.stderr, /computed name/);
 

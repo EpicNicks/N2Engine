@@ -87,7 +87,7 @@
 <li><a href="#remote">Building in GitHub Actions</a></li>
 <li><a href="#settings">Project settings</a></li>
 <li><a href="#player">The iOS player</a></li>
-<li><a href="#macos">macOS</a></li>
+<li><a href="#macos">macOS</a> (<a href="#measured">MoltenVK measured</a>)</li>
 <li><a href="#signing">Devices and signing</a></li>
 <li><a href="#ci">CI and what was verified</a></li>
 <li><a href="#checklist">Checklist</a></li>
@@ -174,9 +174,45 @@ node tools/n2build/n2build.mjs build  --target macos --project path/to/game</cod
 <li><strong>Where MoltenVK comes from:</strong> Homebrew's MoltenVK is macOS-only. Take MoltenVK's own release from Khronos (<code>MoltenVK-all.tar</code>, unpacked: the folder <code>MoltenVK/MoltenVK</code>, holding <code>include/</code> and <code>static/MoltenVK.xcframework</code>) or the Vulkan SDK's <code>iOS</code> folder. Name it with the environment variable <code>N2_MOLTENVK_IOS</code> (or the CMake option <code>N2ENGINE_IOS_MOLTENVK</code>) before <code>n2build build --target ios</code>.</li>
 <li><strong>The build:</strong> the xcframework's slice is chosen by the SDK the tree builds for: <code>ios-arm64_x86_64-simulator</code> for the simulator, <code>ios-arm64</code> for a device. The shader compiler (<code>glslangValidator</code>, <code>brew install glslang</code>) runs on the Mac. Without MoltenVK named, the app is built as before, with the software renderer only.</li>
 <li><strong>At run time:</strong> the app asks MoltenVK for a GPU when it starts, before the view is made. With one, the view's layer is a <code>CAMetalLayer</code> and the renderer makes its surface on it (<code>VK_EXT_metal_surface</code>). Without one, the app keeps the software renderer. The log says which, at the start and again in the first-frame line: <code>first frame, the Vulkan renderer (MoltenVK)</code> or <code>first frame, the software renderer</code>.</li>
-<li><strong>The simulator:</strong> Apple's simulator draws through a Metal service on the Mac (SimMetalHost), which crashes on MoltenVK's Metal argument buffers when the first pipelines are made (seen on the CI's macOS 15 runner). In a simulator build the app therefore sets <code>MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS=0</code> before its first Vulkan call, unless it is set already, and MoltenVK binds resources by discrete indexes instead. A device build keeps argument buffers. The simulator draws at about 3 fps on the CI runner, as the software renderer does there.</li>
+<li><strong>The simulator:</strong> Apple's simulator draws through a Metal service on the Mac (SimMetalHost), which crashes on MoltenVK's Metal argument buffers when the first pipelines are made (seen on the CI's macOS 15 runner). In a simulator build the app therefore sets <code>MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS=0</code> before its first Vulkan call, unless it is set already, and MoltenVK binds resources by discrete indexes instead. A device build keeps argument buffers. In the simulator a Release app draws at about 21 fps with MoltenVK and 55 with the software renderer (<a href="#measured">measured</a>); the CI's Debug apps draw at about 3 fps either way.</li>
 <li><strong>The CI:</strong> the <code>apple</code> job builds the iOS app twice, as n2build builds it by default and with MoltenVK v1.4.2 (downloaded and checked against its SHA-256), and runs both in the simulator.</li>
 <li><strong>Not yet:</strong> the n2build-apple workflow for a game's own repository does not fetch MoltenVK; a game that wants it sets <code>N2_MOLTENVK_IOS</code> in its workflow. A device run is a checklist item.</li>
+</ul>
+
+<h3 id="measured">MoltenVK's size and speed, measured <span class="badge">PR #366</span></h3>
+<p>The <code>Apple measurements</code> workflow (<code>.github/workflows/apple-measure.yml</code>, with <code>scripts/apple-measure.py</code>) builds <code>lua_project</code> in Release on <code>macos-15</code> runners, without and with MoltenVK v1.4.2, and times it. It runs on demand (<code>workflow_dispatch</code>) and on a pull request that changes the workflow or its script; it gates nothing. One run takes about 46 macOS runner minutes. The numbers below are from its first run, <a href="https://github.com/EpicNicks/N2Engine/actions/runs/43525490291">43525490291</a> (2026-11-13).</p>
+<div class="callout warning">
+<p class="callout-title">A virtual machine's numbers</p>
+<p>The runners are virtual machines with Apple's paravirtual GPU, and the iOS simulator's Metal runs on that GPU through the Mac. The numbers compare builds and renderers on one machine. They are not what a Mac or an iPhone does.</p>
+</div>
+<table>
+<thead><tr><th>Build (MiB)</th><th>Package</th><th>Zipped</th><th>Executable</th><th>Stripped</th></tr></thead>
+<tbody>
+<tr><td>macOS player, without MoltenVK</td><td>29.78</td><td>6.78</td><td>28.52</td><td>19.93</td></tr>
+<tr><td>macOS player, with MoltenVK</td><td>35.30</td><td>8.45</td><td>28.96</td><td>20.39</td></tr>
+<tr><td>iOS simulator app, without MoltenVK</td><td>26.29</td><td>5.58</td><td>26.25</td><td>18.17</td></tr>
+<tr><td>iOS simulator app, with MoltenVK</td><td>31.13</td><td>7.07</td><td>31.10</td><td>21.75</td></tr>
+</tbody>
+</table>
+<p>"Stripped" is the executable without its debug and local symbols (<code>strip -S -x</code>, on a copy); "zipped" is the whole package in one deflate zip, about what a download costs.</p>
+<ul>
+<li><strong>What MoltenVK adds on macOS:</strong> <code>libMoltenVK.dylib</code> beside the player, 5.08 MiB. The player's own Vulkan renderer adds 0.45 MiB (stripped). The package grows 5.53 MiB, 1.68 MiB zipped.</li>
+<li><strong>What MoltenVK adds on iOS:</strong> MoltenVK and the Vulkan renderer, linked into the executable, add 3.58 MiB (stripped), so MoltenVK's own part is about 3.1 MiB. The app grows 4.84 MiB, 1.49 MiB zipped. A device build's size is not measured (the static library's device slice is 6.80 MiB before linking; the linker keeps only what is used).</li>
+</ul>
+<table>
+<thead><tr><th>Run (<code>lua_project</code>'s scene)</th><th>Frame time</th><th>Frame rate</th></tr></thead>
+<tbody>
+<tr><td>macOS VM, software renderer, offscreen 1280x720 (<code>--headless</code>)</td><td>5.75 ms</td><td>174 fps</td></tr>
+<tr><td>macOS VM, Vulkan on MoltenVK, window, vsync off (<code>N2_VULKAN_VSYNC=0</code>)</td><td>16.52 ms</td><td>60.5 fps</td></tr>
+<tr><td>macOS VM, Vulkan on MoltenVK, window, vsync on</td><td>19.43 ms</td><td>51.5 fps</td></tr>
+<tr><td>iOS simulator, software renderer</td><td>18.2 ms</td><td>54.8 fps</td></tr>
+<tr><td>iOS simulator, Vulkan on MoltenVK</td><td>48.3 ms</td><td>20.7 fps</td></tr>
+</tbody>
+</table>
+<p>How: on macOS, the wall time of a 330-frame run less that of a 30-frame run, divided by 300 (start-up cancels out), the median of three. In the simulator, the player's five-second frame-rate lines over 60 seconds, the first left out, the median.</p>
+<ul>
+<li><strong>The macOS rows are not a race.</strong> The Vulkan window ran at about the display's 60 Hz even with vsync off in two of three repeats (the third ran at 4.45 ms), so presenting through the VM's window server paces it. The software renderer presents nothing offscreen, and the runner has no OpenGL context, so OpenGL and the software renderer's window cannot run there. Both are well inside a 60 Hz frame for this scene.</li>
+<li><strong>In the simulator MoltenVK is slower than the software renderer.</strong> The simulator forwards Metal to the Mac's GPU and runs MoltenVK without argument buffers (above); neither is so on a device. Only a device run can say how MoltenVK does on an iPhone (checklist item 6).</li>
 </ul>
 
 
@@ -186,9 +222,10 @@ node tools/n2build/n2build.mjs build  --target macos --project path/to/game</cod
 <h2 id="ci">CI and what was verified</h2>
 <p>The <code>apple</code> jobs in <code>.github/workflows/tests.yml</code> run on <code>macos-15</code>, with the same commands as the game workflow:</p>
 <ul>
-<li><strong>macOS:</strong> builds lua_project's package and runs it for 60 frames with <code>--headless</code>. The runner is a virtual machine with no GPU, so it has no OpenGL context. The windowed run on a Mac is checklist item 5.</li>
-<li><strong>iOS:</strong> builds the simulator app, checks its bundle (the pack and the bundle identifier), and runs it in the simulator. The run must log a first frame and a frame rate.</li>
+<li><strong>macOS:</strong> builds lua_project's package (Debug) and runs it for 60 frames with <code>--headless</code>, then 60 frames with <code>--renderer vulkan</code> in a window on MoltenVK, loaded from beside the player. The runner is a virtual machine: its paravirtual GPU runs MoltenVK, but it has no OpenGL context. The OpenGL window on a Mac is checklist item 5.</li>
+<li><strong>iOS:</strong> builds the simulator app (Debug), checks its bundle (the pack and the bundle identifier), and runs it in the simulator. The run must log a first frame and a frame rate.</li>
 </ul>
+<p>The <code>Apple measurements</code> workflow is separate and on demand (<a href="#measured">above</a>).</p>
 <div class="callout note">
 <p class="callout-title">Verified only in CI</p>
 <p>This machine has no Mac, so every Apple build and run on this page was verified only in CI. n2build's Apple and GitHub Actions logic is unit tested anywhere (<code>n2build.test.mjs</code>): the descriptors, the doctor off and on a Mac, the configure options, finding and packaging the app, the simulator choice and run, and the git checks and the <code>gh</code> flow against a fake <code>gh</code>.</p>

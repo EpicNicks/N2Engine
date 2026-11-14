@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -12,6 +13,7 @@
 #include <renderer/common/TextureOptions.hpp>
 
 #include "engine/base/Asset.hpp"
+#include "engine/common/Color.hpp"
 
 namespace N2Engine::Rendering
 {
@@ -71,6 +73,41 @@ namespace N2Engine::Rendering
         [[nodiscard]] static std::shared_ptr<Texture> CreateFromEncoded(std::span<const std::uint8_t> fileBytes,
                                                                         const TextureSettings &settings = {},
                                                                         std::string_view debugName = "texture");
+
+        /// The widest outline MakeOutline makes, in pixels
+        static constexpr int MaxOutlineWidth = 256;
+        /// A source texel counts as solid for MakeOutline when its alpha is at least this: half opaque, the line the
+        /// software renderer cuts a textured sprite out at
+        static constexpr std::uint8_t OutlineSolidAlpha = 128;
+        /// How many outlines MakeOutline keeps for reuse; the least recently asked for is dropped first
+        static constexpr std::size_t OutlineCacheCapacity = 32;
+
+        /**
+         * An outline of `source`'s shape, made on the CPU once (docs/meshes.html#outline): a new texture `widthPixels`
+         * larger on every side, `colour` wherever a solid texel of the source (alpha >= OutlineSolidAlpha) is within
+         * `widthPixels` (Euclidean, so corners are round) and transparent black elsewhere. The source's own shape is inside
+         * it, so it is drawn BEHIND the source, as a second sprite sized up by the padding. Width 0 is the source's
+         * silhouette at its own size. The colour's components are clamped to 0..1 (a non-finite one is 0) and stored as
+         * 8-bit RGBA, alpha included.
+         *
+         * The result keeps the source's filter, mipmaps and srgb, and its rows in the same order, with wrap set to clamp so
+         * nothing bleeds in from the opposite edge. It is a runtime texture, like Create's: not a project asset, so a scene
+         * saved with it does not find it again; make it again when the scene loads.
+         *
+         * Cached by (the source object, the width, the 8-bit colour): asking again while the source lives returns the same
+         * texture, without rebuilding it. Up to OutlineCacheCapacity outlines are kept; the cache holds the source only
+         * weakly, so an outline is dropped once its source is freed.
+         *
+         * nullptr and an error logged for a null or empty source, a width below 0 or above MaxOutlineWidth, or a result
+         * over the image size caps (16384 a side, 256 MiB). A fully transparent source gives a fully transparent texture.
+         * Thread-safe.
+         */
+        [[nodiscard]] static std::shared_ptr<Texture> MakeOutline(const std::shared_ptr<const Texture> &source, int widthPixels,
+                                                                  const Common::Color &colour);
+        /// How many outlines MakeOutline holds now (tests)
+        [[nodiscard]] static std::size_t GetOutlineCacheSize();
+        /// Forgets every cached outline (tests; textures in use stay alive with their users)
+        static void ClearOutlineCache();
 
         /// The settings in a .meta customData object (its "texture" member), on top of `defaults`. Missing
         /// keys keep the default; a key with the wrong type or an unknown value is ignored with a warning.

@@ -25,6 +25,7 @@
 #include "engine/ui/Image.hpp"
 #include "engine/ui/RectTransform.hpp"
 #include "engine/ui/UISystem.hpp"
+#include "../modules/ModuleGuards.hpp"
 
 // Picking end to end in a real PhysX scene: an injected click goes through Camera::ScreenPointToRay and
 // Raycast::Single to OnMouseDown on the box under it; and the Lua Physics.Raycast/RaycastAll bindings
@@ -205,6 +206,7 @@ TEST_F(PickingPhysicsTest, BeyondTheFarPlaneIsNotPicked)
 
 TEST_F(PickingPhysicsTest, TheNearerOfAWorldCanvasAndAColliderWins)
 {
+    N2_SKIP_WITHOUT_UI();
     // A 2 x 2 unit world canvas at z = 0 under the centre of the view, covered by one raycast-target panel, and
     // the application's UI hit provider rule (overlay, then world canvases unless a collider is nearer)
     const auto canvas = UI::UISystem::CreateCanvas("WorldCanvas", UI::CanvasRenderMode::WorldSpace);
@@ -289,6 +291,7 @@ TEST_F(PickingPhysicsTest, RaycastCanSkipTriggers)
 
 TEST_F(PickingPhysicsTest, ATriggerAroundAWorldCanvasDoesntBlockIt)
 {
+    N2_SKIP_WITHOUT_UI();
     const auto panel = AddWorldCanvasPanel(*_scene);
     _dispatcher.SetUIHitProvider([this](const Vector2 &screen)
     {
@@ -313,6 +316,7 @@ TEST_F(PickingPhysicsTest, ATriggerAroundAWorldCanvasDoesntBlockIt)
 
 TEST_F(PickingPhysicsTest, AColliderAroundTheCameraDoesntBlockAWorldCanvas)
 {
+    N2_SKIP_WITHOUT_UI();
     const auto panel = AddWorldCanvasPanel(*_scene);
     _dispatcher.SetUIHitProvider([this](const Vector2 &screen)
     {

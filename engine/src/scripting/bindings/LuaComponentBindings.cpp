@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -29,6 +30,7 @@
 #include "engine/example/renderers/SphereRenderer.hpp"
 #include <assetimport/ModelImporters.hpp>
 #include "engine/io/ResourcePath.hpp"
+#include "engine/scripting/ScriptCoroutine.hpp"
 #include "engine/physics/BoxCollider.hpp"
 #include "engine/physics/CapsuleCollider.hpp"
 #include "engine/physics/CharacterController.hpp"
@@ -571,6 +573,54 @@ namespace N2Engine::Scripting::Bindings
                 sprite->SetTexture(path ? LoadTextureOrThrow(*path, "Sprite2D:SetTexture") : nullptr);
             },
             "HasTexture", [](const Sprite2DRef &ref) { return ref.Pin()->GetTexture() != nullptr; },
+            // The texture's size in pixels, or nil without one (for an outline's padding maths)
+            "GetTextureSize", [](const Sprite2DRef &ref) -> sol::optional<Math::Vector2>
+            {
+                const auto sprite = ref.Pin();
+                const auto &texture = sprite->GetTexture();
+                if (!texture)
+                {
+                    return sol::nullopt;
+                }
+                return Math::Vector2(static_cast<float>(texture->GetWidth()), static_cast<float>(texture->GetHeight()));
+            },
+            // This sprite's texture becomes Texture::MakeOutline of `source` (a res:// path, or a Sprite2D whose texture it
+            // takes): `widthPixels` (a whole number, 0 to Texture::MaxOutlineWidth) larger on every side, in `color`.
+            // Errors leave the texture as it was.
+            "SetOutlineTextureOf", [](const Sprite2DRef &ref, const sol::object &source, const double widthPixels,
+                                      const Common::Color &color)
+            {
+                constexpr std::string_view caller = "Sprite2D:SetOutlineTextureOf";
+                std::shared_ptr<Rendering::Texture> sourceTexture;
+                if (source.get_type() == sol::type::string)
+                {
+                    sourceTexture = LoadTextureOrThrow(source.as<std::string>(), caller);
+                }
+                else if (source.is<Sprite2DRef>())
+                {
+                    sourceTexture = source.as<Sprite2DRef>().Pin()->GetTexture();
+                    if (!sourceTexture)
+                    {
+                        throw std::runtime_error(std::format("{}: the source Sprite2D has no texture", caller));
+                    }
+                }
+                else
+                {
+                    throw std::runtime_error(std::format("{}: the source must be a res:// path or a Sprite2D", caller));
+                }
+                if (!std::isfinite(widthPixels) || widthPixels != std::floor(widthPixels) || widthPixels < 0.0 ||
+                    widthPixels > static_cast<double>(Rendering::Texture::MaxOutlineWidth))
+                {
+                    throw std::runtime_error(std::format("{}: the width must be a whole number of pixels from 0 to {}", caller,
+                                                         Rendering::Texture::MaxOutlineWidth));
+                }
+                auto outline = Rendering::Texture::MakeOutline(sourceTexture, static_cast<int>(widthPixels), color);
+                if (!outline)
+                {
+                    throw std::runtime_error(std::format("{}: can't make the outline (see the log)", caller));
+                }
+                ref.Pin()->SetTexture(std::move(outline));
+            },
             "SetRegion", Forward<Sprite2DRef, &Rendering::Sprite2D::SetRegion>(),
             "GetRegionOffset", Forward<Sprite2DRef, &Rendering::Sprite2D::GetRegionOffset>(),
             "GetRegionSize", Forward<Sprite2DRef, &Rendering::Sprite2D::GetRegionSize>(),
@@ -979,8 +1029,28 @@ namespace N2Engine::Scripting::Bindings
                     return sol::lua_nil;
                 }
                 return instance;
-            }
+            },
+            // Runs a function as a coroutine of this object (docs/coroutines.html#lua): StartCoroutine(fn, ...) passes the
+            // extra values to fn; inside it coroutine.yield() waits a frame and coroutine.yield(seconds) waits that long.
+            // Returns a ScriptCoroutine (Stop, IsRunning), or nil when none started (the object is inactive, or the script
+            // is switched off). Stopped with the object, and by StopAllCoroutines.
+            "StartCoroutine", [](const LuaComponentRef &c, const sol::variadic_args args) -> sol::object
+            {
+                lua_State *L = args.lua_state();
+                const ScriptCoroutineHandle handle =
+                    c.Pin()->StartScriptCoroutine(L, args.stack_index(), static_cast<int>(args.size()));
+                if (!handle.IsRunning())
+                {
+                    return sol::lua_nil;
+                }
+                return sol::make_object(L, handle);
+            },
+            "StopAllCoroutines", [](const LuaComponentRef &c) { c.Pin()->StopAllScriptCoroutines(); }
         );
+
+        lua.new_usertype<ScriptCoroutineHandle>("ScriptCoroutine", sol::no_constructor,
+            "Stop", &ScriptCoroutineHandle::Stop,
+            "IsRunning", &ScriptCoroutineHandle::IsRunning);
 
         // ===== Model (global): a model file's GameObject hierarchy =====
         // Model.Instantiate(path [, parent]): the root object of a new instance. Under `parent` when given (at its

@@ -1,0 +1,15 @@
+{
+  "build": {
+    "modules": {
+      "audio": false,
+      "ui": false
+    }
+  },
+  "engineVersion": "1.0.0",
+  "formatVersion": 1,
+  "name": "no_audio_ui",
+  "projectId": "3a7e9c14-6b2d-4f85-9e01-b8d45c2f7a63",
+  "scenes": [],
+  "settings": {},
+  "startupScene": ""
+}

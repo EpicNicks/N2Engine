@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <math/Matrix.hpp>
@@ -83,6 +84,14 @@ namespace N2Engine::UI
     class UISystem
     {
     public:
+        /// Whether this build has the UI module (N2ENGINE_USE_UI; docs/project-modules.html). Without it nothing is laid out,
+        /// drawn or hit: CollectGraphics and CollectWorldCanvasGraphics are empty, so canvases draw nothing and the pointer
+        /// passes through them to the world, and the UI components keep their data.
+        [[nodiscard]] static bool IsInBuild();
+        /// In a build without the UI module: logs, once per process, that `who` will draw nothing, naming the option. Does
+        /// nothing in a build with it.
+        static void WarnIfNotInBuild(std::string_view who);
+
         /// Lays out every screen-space overlay canvas in the scene for the viewport and returns its graphics in
         /// draw order. Empty for an empty viewport. World-space canvases are skipped.
         [[nodiscard]] static std::vector<UIDrawItem> CollectGraphics(const Scene &scene, const Vector2i &viewport);

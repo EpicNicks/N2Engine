@@ -39,6 +39,7 @@
 <li><a href="text.html">Text &amp; fonts</a></li>
 <li><a href="ui.html">UI</a></li>
 <li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="sprite2d.html">Sprites &amp; 2D shapes</a></li>
 <li><a href="particles.html">Particles</a></li>
 <li><a href="soft-bodies.html">Soft bodies</a></li>
 <li><a href="resources.html">Resources &amp; paths</a></li>
@@ -136,7 +137,7 @@
 <li>a pack named directly (<code>n2player path/to/game.n2pack</code>): mounted at <code>path/to/game</code>;</li>
 <li>a folder that does not exist with <code>&lt;folder&gt;.n2pack</code> beside it: that pack, mounted at the folder. A packaged game is this case.</li>
 </ul>
-<p>A folder that exists wins over a pack beside it (a developer's unpacked game). The web player mounts <code>/game.n2pack</code> at <code>/project</code> when the package holds one.</p>
+<p>A folder that exists wins over a pack beside it (a developer's unpacked game). The web player mounts <code>/game.n2pack</code> at <code>/project</code> when the package holds one. The Android player copies <code>game.n2pack</code> out of the APK's assets into the app's files folder (an APK asset cannot be read at random positions) and mounts that copy (<a href="android.html#player">Android: the player</a>); the iOS player mounts <code>game.n2pack</code> where it is in the app bundle (<a href="apple.html">iOS &amp; macOS</a>).</p>
 
 <h2 id="measured">Measured</h2>
 <p>Measured 2026-11-11 on the machine that wrote this stage.</p>
@@ -177,7 +178,6 @@
 <h2 id="not-yet">Not done yet</h2>
 <ul>
 <li><strong>Persistent web saves.</strong> <code>user://</code> on the web is in memory (Emscripten's MEMFS): a game's saves are lost when the page closes. Mounting IDBFS there and syncing after each write is the next step for the web; until then, this is the gap.</li>
-<li><strong>Platform bundles.</strong> Android's APK assets and iOS's app bundle are mounts the mobile stages add (an <code>IMount</code> over <code>AAssetManager</code>, a folder mount over the bundle).</li>
 <li><strong>Streaming reads.</strong> A file is read whole; a mount that streams (large audio, video) can come later behind the same interface.</li>
 </ul>
 

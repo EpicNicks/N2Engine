@@ -297,3 +297,236 @@ TEST(DeterminismSettingTest, ApplyProjectSettingsValidatesItAndChangesNothingLiv
     // Validation only: the configured seed is still unset
     EXPECT_FALSE(LuaRuntime::GetLuaSeed().has_value());
 }
+
+// Random.NewStream(seed) / RandomStream(seed): streams of their own, the algorithm of the seeded global Random
+class LuaRandomStreamTest : public ::testing::Test
+{
+protected:
+    static void SetUpTestSuite() { ASSERT_TRUE(LuaRuntime::Instance().Initialize()); }
+    void SetUp() override { Math::Random::Unseed(); }
+    void TearDown() override { Math::Random::Unseed(); }
+
+    static sol::state &Lua() { return LuaRuntime::Instance().GetState(); }
+
+    // The error text of a chunk that must fail, empty if it succeeded
+    static std::string ErrorOf(const std::string &code)
+    {
+        const sol::protected_function_result result = Lua().safe_script(code, sol::script_pass_on_error);
+        if (result.valid())
+        {
+            return {};
+        }
+        const sol::error err = result;
+        return err.what();
+    }
+
+    // Every function of a stream once, as text (floats to 9 digits, which round-trips a float)
+    static constexpr const char *StreamDrawScript = R"(
+        local out = {}
+        out[#out + 1] = string.format("%.9g", s:Float())
+        out[#out + 1] = tostring(s:Int(1, 100))
+        out[#out + 1] = string.format("%.9g", s:Range(0.5, 1.5))
+        local inside = s:InUnitCircle()
+        out[#out + 1] = string.format("%.9g,%.9g", inside.x, inside.y)
+        local on = s:OnUnitCircle()
+        out[#out + 1] = string.format("%.9g,%.9g", on.x, on.y)
+        return table.concat(out, ";")
+    )";
+};
+
+// Golden values: the integers the algorithm gives for these seeds (computed from the algorithm's definition, and the
+// first u32 of seed 1 is DeterministicRandomTest.KnownSequence's), the same on every platform
+TEST_F(LuaRandomStreamTest, KnownSequences)
+{
+    EXPECT_EQ(Eval(Lua(), R"(
+        local s = Random.NewStream(1)
+        local out = {}
+        for i = 1, 6 do out[#out + 1] = tostring(s:Int(1, 100)) end
+        out[#out + 1] = string.format("%.9g", s:Float())
+        out[#out + 1] = tostring(s:GetState())
+        return table.concat(out, ",")
+    )"), "12,37,65,40,45,78,0.972367644,1401181200");
+    EXPECT_EQ(Eval(Lua(), R"(
+        local s = RandomStream(42)
+        local out = {}
+        for i = 1, 6 do out[#out + 1] = tostring(s:Int(1, 100)) end
+        out[#out + 1] = string.format("%.9g", s:Float())
+        return table.concat(out, ",")
+    )"), "25,57,32,18,60,86,0.131385505");
+    EXPECT_EQ(Eval(Lua(), R"(
+        local s = RandomStream.new(123456789)
+        local out = {}
+        for i = 1, 6 do out[#out + 1] = tostring(s:Int(1, 100)) end
+        out[#out + 1] = string.format("%.9g", s:Float())
+        out[#out + 1] = tostring(s:GetState())
+        return table.concat(out, ",")
+    )"), "22,100,75,94,7,27,0.851841033,1524637988");
+}
+
+// A stream seeded n draws what C++ Math::DeterministicRandom(n) draws
+TEST_F(LuaRandomStreamTest, MatchesADeterministicRandomWithTheSameSeed)
+{
+    const std::string fromLua = Eval(Lua(), R"(
+        local s = Random.NewStream(9001)
+        local out = {}
+        for i = 1, 20 do out[#out + 1] = tostring(s:Int(-1000, 1000)) end
+        out[#out + 1] = string.format("%.9g", s:Float())
+        return table.concat(out, ",")
+    )");
+    Math::DeterministicRandom reference(9001);
+    std::string expected;
+    for (int i = 0; i < 20; ++i)
+    {
+        expected += std::to_string(reference.NextInt(-1000, 1000)) + ",";
+    }
+    char text[64];
+    std::snprintf(text, sizeof(text), "%.9g", static_cast<double>(reference.NextFloat()));
+    expected += text;
+    EXPECT_EQ(fromLua, expected);
+}
+
+// Function for function, a stream seeded n is the global Random after Random.Seed(n)
+TEST_F(LuaRandomStreamTest, DrawsWhatTheSeededGlobalRandomDraws)
+{
+    const std::string global = Eval(Lua(), std::string(R"(
+        Random.Seed(77)
+        local s = {
+            Float = function() return Random.Float() end,
+            Int = function(_, a, b) return Random.Int(a, b) end,
+            Range = function(_, a, b) return Random.Range(a, b) end,
+            InUnitCircle = function() return Random.InUnitCircle() end,
+            OnUnitCircle = function() return Random.OnUnitCircle() end,
+        }
+        local function run()
+    )") + StreamDrawScript + R"(
+        end
+        return run() .. "|" .. run()
+    )");
+    Math::Random::Unseed();
+    const std::string stream = Eval(Lua(), std::string(R"(
+        local s = Random.NewStream(77)
+        local function run()
+    )") + StreamDrawScript + R"(
+        end
+        return run() .. "|" .. run()
+    )");
+    EXPECT_FALSE(stream.empty());
+    EXPECT_EQ(global, stream);
+}
+
+// Two streams, and a stream and the global Random, do not disturb each other
+TEST_F(LuaRandomStreamTest, StreamsAreIndependent)
+{
+    // Alone: the first five draws of a stream seeded 5
+    const std::string alone = Eval(Lua(), R"(
+        local a = Random.NewStream(5)
+        local out = {}
+        for i = 1, 5 do out[#out + 1] = tostring(a:Int(0, 1000000)) end
+        return table.concat(out, ",")
+    )");
+    // The same, interleaved with draws from another stream with the same seed, a different seed and the global Random
+    // (seeded and unseeded)
+    const std::string interleaved = Eval(Lua(), R"(
+        local a = Random.NewStream(5)
+        local twin = Random.NewStream(5)
+        local other = Random.NewStream(6)
+        local out = {}
+        for i = 1, 5 do
+            twin:Int(0, 1000000)
+            other:Float()
+            other:OnUnitCircle()
+            Random.Float()
+            if i == 3 then Random.Seed(5) end
+            Random.Int(0, 10)
+            out[#out + 1] = tostring(a:Int(0, 1000000))
+        end
+        return table.concat(out, ",")
+    )");
+    EXPECT_FALSE(alone.empty());
+    EXPECT_EQ(alone, interleaved);
+
+    // Seeding the global Random does not reseed or restart a stream either
+    const std::string afterGlobalSeed = Eval(Lua(), R"(
+        local a = Random.NewStream(5)
+        local first = a:Int(0, 1000000)
+        Random.Seed(5)
+        local second = a:Int(0, 1000000)
+        return tostring(first) .. "," .. tostring(second)
+    )");
+    EXPECT_EQ(afterGlobalSeed, alone.substr(0, alone.find(',', alone.find(',') + 1)));
+}
+
+// GetState/SetState put a stream back where it was; Seed restarts it; Clone is a second stream at the same point
+TEST_F(LuaRandomStreamTest, StateSaveAndRestore)
+{
+    EXPECT_EQ(Eval(Lua(), R"(
+        local s = Random.NewStream(31337)
+        for i = 1, 10 do s:Float() end
+        local saved = s:GetState()
+        local function draws()
+            local out = {}
+            for i = 1, 8 do out[#out + 1] = tostring(s:Int(1, 6)) .. string.format(":%.9g", s:Range(-1, 1)) end
+            local p = s:InUnitCircle()
+            out[#out + 1] = string.format("%.9g,%.9g", p.x, p.y)
+            return table.concat(out, ",")
+        end
+        local first = draws()
+        s:SetState(saved)
+        local again = draws()
+        local copy
+        s:SetState(saved)
+        copy = s:Clone()
+        local fromClone = (function() local keep = s; s = copy; local r = draws(); s = keep; return r end)()
+        local fromOriginal = draws()
+        -- A state is an integer in [0, 2^32), so it fits any field and JSON
+        local inRange = math.type(saved) == "integer" and saved >= 0 and saved < 4294967296
+        return tostring(first == again) .. tostring(first == fromClone) .. tostring(first == fromOriginal) ..
+            tostring(inRange)
+    )"), "truetruetruetrue");
+
+    // Seed(n) restarts the sequence of RandomStream(n); a seed is taken modulo 2^32, as Random.Seed takes it
+    EXPECT_EQ(Eval(Lua(), R"(
+        local s = RandomStream(8)
+        local first = s:Int(1, 1000000)
+        s:Int(1, 1000000)
+        s:Seed(8)
+        local restarted = s:Int(1, 1000000)
+        local wrapped = RandomStream(8 + 4294967296):Int(1, 1000000)
+        local negative = RandomStream(-1):GetState()
+        return tostring(first == restarted) .. tostring(first == wrapped) .. tostring(negative)
+    )"), "truetrue4294967295");
+}
+
+// The state matches C++: a state saved from Lua seeds a C++ DeterministicRandom to the same point, and back
+TEST_F(LuaRandomStreamTest, TheStateIsTheCppState)
+{
+    Math::DeterministicRandom reference(2024);
+    for (int i = 0; i < 7; ++i)
+    {
+        (void) reference.NextU32();
+    }
+    const std::string fromLua = Eval(Lua(), R"(
+        local s = RandomStream(2024)
+        for i = 1, 7 do s:Int(0, 4294967295 // 2) end
+        return tostring(s:GetState())
+    )");
+    // Int(0, 2^31 - 1) has a span of 2^31, which divides 2^32: no rejection, so one u32 per draw
+    EXPECT_EQ(fromLua, std::to_string(reference.State()));
+}
+
+// Bad arguments are Lua errors, not truncations
+TEST_F(LuaRandomStreamTest, BadArgumentsAreErrors)
+{
+    EXPECT_FALSE(ErrorOf("Random.NewStream()").empty());
+    EXPECT_FALSE(ErrorOf("RandomStream()").empty());
+    EXPECT_NE(ErrorOf("Random.NewStream(1.5)").find("must be an integer"), std::string::npos);
+    EXPECT_NE(ErrorOf("Random.NewStream('5')").find("must be an integer"), std::string::npos);
+    EXPECT_NE(ErrorOf("RandomStream(1):SetState({})").find("must be an integer"), std::string::npos);
+    EXPECT_NE(ErrorOf("RandomStream(1):Int(1, 2.5)").find("must be an integer"), std::string::npos);
+    EXPECT_NE(ErrorOf("RandomStream(1):Int(0, 4294967296)").find("outside the 32-bit integer range"),
+              std::string::npos);
+    // An integral float is an integer
+    EXPECT_EQ(Eval(Lua(), "return tostring(RandomStream(3.0):GetState())"), "3");
+    // An empty or reversed Int range gives min, as Random.Int does when seeded
+    EXPECT_EQ(Eval(Lua(), "local s = RandomStream(3) return tostring(s:Int(7, 7)) .. tostring(s:Int(9, 2))"), "79");
+}

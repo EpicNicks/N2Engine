@@ -1,5 +1,6 @@
-// What Lua's panic path leaves behind, repaired. The C API has no call for it, so this file reads the internal
-// thread state (lstate.h of the Lua the engine builds from external/lua); nothing else in the engine does.
+// What Lua's panic path leaves behind, repaired, and the instructions a coroutine ran since its count hook last fired.
+// The C API has no call for either, so this file reads the internal thread state (lstate.h of the Lua the engine builds
+// from external/lua); nothing else in the engine does.
 
 // The system headers Lua's headers include, first, so none of them is first seen inside the extern "C" block
 #include <assert.h>
@@ -16,7 +17,7 @@ extern "C"
 }
 
 #if LUA_VERSION_RELEASE_NUM != 50408
-#error "LuaPanicRepair depends on Lua 5.4.8 internals (lstate.h): re-audit nCcalls/allowhook/status handling before upgrading"
+#error "LuaPanicRepair depends on Lua 5.4.8 internals (lstate.h): re-audit nCcalls/allowhook/status/hookcount handling before upgrading"
 #endif
 
 namespace N2Engine::Scripting::Detail
@@ -75,6 +76,23 @@ namespace N2Engine::Scripting::Detail
             lua_pop(L, 1);
         }
         return count;
+    }
+
+    // The instructions a thread ran since its count hook last fired (or was set), and its count restarted, so they are
+    // never taken twice. Lua keeps one countdown per thread (hookcount, from basehookcount down; ldebug.c's
+    // luaG_traceexec decrements it per instruction and calls the hook at 0), and a coroutine's countdown is its own: what
+    // a coroutine runs between two hook calls would be lost when it yields or ends (each new coroutine starts a fresh
+    // countdown), so every resume and close of a coroutine charges it to the entry's budget after the run
+    // (LuaRuntime.cpp, ChargeThread). 0 for a thread with no count hook.
+    int TakeUncountedInstructions(lua_State *L)
+    {
+        if ((L->hookmask & LUA_MASKCOUNT) == 0)
+        {
+            return 0;
+        }
+        const int uncounted = L->basehookcount - L->hookcount;
+        L->hookcount = L->basehookcount; // resethookcount (ldebug.h)
+        return uncounted > 0 ? uncounted : 0;
     }
 
     // For the tests: the size of the registry table (array slots plus hash nodes). It changes when the registry grows
