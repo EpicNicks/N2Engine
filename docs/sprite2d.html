@@ -129,6 +129,50 @@
 <h2 id="software">On the software renderer</h2>
 <p>The software renderer cannot blend (<code>IRenderer::SupportsBlending</code> is false). There a textured sprite's pixels whose texture alpha is below 0.5 are not drawn, whatever the sprite's own alpha, so a texture's transparent parts are cut out instead of drawn as boxes. Partial transparency, such as a soft edge, is lost there. Solid shapes look the same on every renderer, and so do <a href="#effects">the colour effects</a>. The cut-out uses <code>Material::SetBlendDiscardBelow</code>, which applies only to blended materials and is not saved in <code>.mat</code> files. <span class="badge">PR #358</span> A sprite whose colour alpha is 0 draws nothing there (the test never falls to 0, which would keep every pixel). The rule is <code>Renderer::Common::BlendCutOutBelow</code> (<code>renderer/include/renderer/common/BlendCutOut.hpp</code>), and the UI <a href="ui.html#image"><code>Image</code></a> cuts a textured image out the same way (it sets the shader's <code>uAlphaCutoff</code> itself). A game can ask with <code>Graphics.CanBlend()</code> in Lua and skip soft glow sprites where it is false: a soft disc would become a hard one at half strength.</p>
 
+<h2 id="texture-outline">Outlines of textured sprites <span class="badge">PR #369</span></h2>
+<p><code>outline</code> draws a border of a <em>shape</em>. A textured sprite's visible shape is its texture's alpha, which no shape follows, so its outline is a second texture made from the first: <a href="meshes.html#outline"><code>Texture::MakeOutline(source, widthPixels, colour)</code></a>. It grows the source's solid texels (alpha at least 128, half opaque) by <code>widthPixels</code> in every direction (round corners), pads the texture by the same width on every side, and paints the grown shape in <code>colour</code>, transparent elsewhere. It is made once on the CPU and cached by (source, width, colour), so asking again costs a lookup. Being a plain texture, it draws the same on OpenGL, Vulkan, WebGPU and the software renderer; there, like any textured sprite, it is <a href="#software">cut out at half alpha</a>, which suits its hard edge.</p>
+<p>Draw it as a second <code>Sprite2D</code> <strong>behind</strong> the original (a lower <code>sortingOrder</code>): the grown shape contains the original, which covers all of it but the ring. The second sprite must be larger by the padding. For a source texture of <code>W</code> × <code>H</code> pixels whose shown part (the region) is <code>cw = regionSize.x · W</code> by <code>ch = regionSize.y · H</code> pixels on a sprite of <code>size</code> world units, one texel is <code>size.x / cw</code> world units wide, so a width of <code>p</code> pixels adds <code>p · size.x / cw</code> world units on each side:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Outline sprite field</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td><code>size</code></td><td><code>(size.x · (cw + 2p) / cw, size.y · (ch + 2p) / ch)</code></td></tr>
+<tr><td><code>regionOffset</code></td><td><code>(regionOffset.x · W / (W + 2p), regionOffset.y · H / (H + 2p))</code></td></tr>
+<tr><td><code>regionSize</code></td><td><code>((cw + 2p) / (W + 2p), (ch + 2p) / (H + 2p))</code></td></tr>
+<tr><td><code>pivot</code></td><td><code>((pivot.x · cw + p) / (cw + 2p), (pivot.y · ch + p) / (ch + 2p))</code>: the same point of the picture, so (0.5, 0.5) stays (0.5, 0.5)</td></tr>
+<tr><td><code>flipX</code>, <code>flipY</code></td><td>The original's: both mirror around the object's position</td></tr>
+<tr><td><code>sortingOrder</code></td><td>Lower than the original's</td></tr>
+</tbody>
+</table>
+</div>
+<p>With the whole texture shown (the default region) this is simply a size of <code>size · (W + 2p) / W</code> on x (<code>H</code> on y), the default region and the same pivot when it is the middle. A <code>Sprite2D</code> can share its object with another (several per object are allowed), so the outline follows the original with no parenting:</p>
+<pre class="lang-lua"><code>-- An outline px texture pixels wide behind body, a textured Rect Sprite2D on go
+local function AddTextureOutline(go, body, px, color)
+    local ring = go:AddComponent('Sprite2D')
+    ring:SetOutlineTextureOf(body, px, color) -- or a res:// path
+    local tex = body:GetTextureSize()         -- W, H in pixels
+    local size, pivot = body:GetSize(), body:GetPivot()
+    local offset, region = body:GetRegionOffset(), body:GetRegionSize()
+    local cw, ch = region.x * tex.x, region.y * tex.y
+    ring:SetSize(Vector2(size.x * (cw + 2 * px) / cw, size.y * (ch + 2 * px) / ch))
+    ring:SetRegion(Vector2(offset.x * tex.x / (tex.x + 2 * px), offset.y * tex.y / (tex.y + 2 * px)),
+                   Vector2((cw + 2 * px) / (tex.x + 2 * px), (ch + 2 * px) / (tex.y + 2 * px)))
+    ring:SetPivot(Vector2((pivot.x * cw + px) / (cw + 2 * px), (pivot.y * ch + px) / (ch + 2 * px)))
+    ring:SetFlipX(body:GetFlipX())
+    ring:SetFlipY(body:GetFlipY())
+    ring:SetSortingOrder(body:GetSortingOrder() - 1)
+    return ring
+end
+
+local ring = AddTextureOutline(player, body, 2, Color(1, 0.9, 0.2, 1))</code></pre>
+<ul>
+<li><strong>Sprite sheets.</strong> The whole texture is outlined, so a neighbouring cell's texels within <code>p</code> pixels of the shown cell grow into its outline. Leave at least the width of transparent pixels between cells. A new region (an animation frame) needs the outline's region set again with the formulas above; the texture itself stays the same.</li>
+<li><strong>Colour and fading.</strong> The colour's alpha is stored in the texture. Keep it opaque and fade the outline sprite's <code>color</code> instead: on the software renderer an outline texture under half alpha is cut out entirely, while a faded <code>color</code> keeps it until 0 (<a href="#software">the cut-out</a>). A white outline tinted by the sprite's <code>color</code> serves every colour from one texture.</li>
+<li><strong>Width.</strong> A whole number of pixels from 0 to 256 (<code>Texture::MaxOutlineWidth</code>); 0 is the silhouette at the source's size (for a hit-flash shadow, say). Each new (source, width, colour) is a new texture, made in time linear in its pixel count, whatever the width; up to 32 are cached. To animate a moving outline, scale the outline sprite rather than asking for a new width every frame.</li>
+<li><strong>Not saved.</strong> The outline is a runtime texture, not a project asset: a scene saved with it does not find it again. Make it in a script (in <code>Start</code>, say).</li>
+<li><strong>Shapes.</strong> The recipe is for a <code>Rect</code> sprite. A textured circle shows only the middle of its texture, which the outline texture does not know about.</li>
+</ul>
+
 <h2 id="performance">Performance</h2>
 <p>Each sprite is one draw call. Sprites with the same shape, size, outline, region and pivot share one mesh, kept while any sprite uses it. <code>tests/engine/rendering/Sprite2DTests.cpp</code> draws 2,000 circles on the software renderer and prints the time as a <code>[SPRITE2D-PERF]</code> line. Batching many sprites into one draw is not done yet.</p>
 
@@ -151,12 +195,13 @@ body:SetFlash(Color(1, 1, 1, 0.8))
 body:SetFlash(Color(0, 0, 0, 0))
 icon:SetSaturation(0)</code></pre>
 <p>Every field has a setter and a getter with the C++ name. <code>SetTexture</code> takes a <code>res://</code> path or <code>nil</code>; <code>SetVertices</code> takes an array of <code>Vector2</code>. Annotations are in <code>engine-api.lua</code>.</p>
+<p><span class="badge">PR #369</span> <code>GetTextureSize()</code> is the texture's size in pixels as a <code>Vector2</code>, or <code>nil</code> without a texture. <code>SetOutlineTextureOf(source, widthPixels, color)</code> sets the sprite's texture to <a href="#texture-outline">the outline</a> of <code>source</code>, a <code>res://</code> path or another <code>Sprite2D</code> (its texture). A source that does not load, a <code>Sprite2D</code> with no texture, any other source, or a width that is not a whole number from 0 to 256 raises an error naming <code>Sprite2D:SetOutlineTextureOf</code> and keeps the sprite's texture.</p>
 
 <h2 id="not-yet">Not yet</h2>
-<p>Glow and outline glow (recipes in <code>orchestrator/proposals/effects-design.md</code>: a gradient texture behind the sprite, child outlines), sprite animation (a script can change the region), batching, nine-slice, named sorting layers, and editor gizmos.</p>
+<p>Glow and outline glow (recipes in <code>orchestrator/proposals/effects-design.md</code>: a gradient texture behind the sprite, child outlines), a soft (blurred) texture outline, sprite animation (a script can change the region), batching, nine-slice, named sorting layers, and editor gizmos.</p>
 
 <div class="page-footer">
-<span>Describes master through PR #327.</span>
+<span>Describes master through PR #369.</span>
 <a href="index.html">Back to overview</a>
 </div>
 
