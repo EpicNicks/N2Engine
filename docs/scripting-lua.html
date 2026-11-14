@@ -228,6 +228,7 @@
 <thead><tr><th>What</th><th>How</th><th>Effect</th></tr></thead>
 <tbody>
 <tr><td>Engine <code>Random</code></td><td><code>Random.Seed(n)</code> in Lua, <code>Math::Random::Seed(n)</code> in C++</td><td><code>Random.Float/Range/Int/InUnitCircle/OnUnitCircle</code> draw from <code>Math::DeterministicRandom</code> from then on: the same <code>n</code> gives the same sequence on every platform (<a href="math.html#deterministic-random">math</a>). <code>n</code> is taken modulo 2<sup>32</sup>. Calling it again restarts the sequence.</td></tr>
+<tr><td>Streams of a script's own</td><td><code>Random.NewStream(n)</code> or <code>RandomStream(n)</code> in Lua, no setting</td><td>Always seeded and independent of everything else (<a href="#random-streams">below</a>).</td></tr>
 <tr><td>Lua string hash seed</td><td>project setting <code>determinism.luaSeed</code> (integer &gt;= 0)</td><td>The hash seed is a constant derived from the seed, so <code>pairs()</code> visits the string keys of a table built the same way in the same order on every run.</td></tr>
 <tr><td><code>math.random</code></td><td>the same setting</td><td><code>math.random</code> starts as <code>math.randomseed(seed)</code> would start it (second seed 0). <code>math.randomseed()</code> with no argument, which asks for a random seed, gives that seed again.</td></tr>
 </tbody>
@@ -251,6 +252,37 @@
 <p>Lua 5.4.8 takes both seeds in code, not in a setting: <code>luai_makeseed</code> in <code>lstate.c</code> (a <code>static</code> function unless a macro of that name is defined) and <code>randseed</code> in <code>lmathlib.c</code>. Defining the macro would replace the default for every state and cannot reach <code>randseed</code>, so the engine's copy carries two patches, each marked "N2Engine local patch", that ask one small module, <code>external/lua/n2seed.{h,c}</code> (added by the engine, not part of Lua), whether a seed is configured, and otherwise run the original code unchanged. The module is a process-wide switch set from the main thread before a state is created (it is not thread safe); because it sits inside the Lua library, a test that makes plain <code>sol::state</code>s gets the seeded behaviour too.</p>
 </div>
 <p class="src">Source: <code>external/lua/n2seed.h</code>, <code>n2seed.c</code>, <code>lstate.c</code> (<code>luai_makeseed</code>), <code>lmathlib.c</code> (<code>randseed</code>); <code>engine/include/engine/scripting/LuaRuntime.hpp</code> — <code>SetLuaSeed</code>, <code>GetLuaSeed</code>; <code>engine/src/ProjectSettings.cpp</code> — <code>ReadDeterminismLuaSeed</code>; <code>engine/src/Application.cpp</code> — <code>Application::Init</code>; tests: <code>LuaDeterminismSeedTest</code>, <code>LuaRandomSeedTest</code>, <code>DeterminismSettingTest</code> (engine_tests)</p>
+
+<h3 id="random-streams">Independent random streams: <code>Random.NewStream</code> and <code>RandomStream</code></h3>
+<p><code>Random.Seed</code> switches <em>one</em> global stream, which every script and the engine's C++ <code>Math::Random</code> callers draw from, so a draw anywhere moves every other user's sequence. <code>math.random</code> is one stream per state too, and its state cannot be read. A script that needs a sequence of its own (a level generator, a loot table, an AI that must replay the same way) makes a stream:</p>
+<pre class="lang-lua"><code>local rng = Random.NewStream(1234)   -- or RandomStream(1234), or RandomStream.new(1234)
+local roll = rng:Int(1, 6)
+local spread = rng:Range(-0.5, 0.5)
+local saved = rng:GetState()         -- an integer; keep it in a field, a save, a snapshot
+-- ... later
+rng:SetState(saved)                  -- the same draws again from here</code></pre>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Method</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td><code>Random.NewStream(seed)</code>, <code>RandomStream(seed)</code>, <code>RandomStream.new(seed)</code></td><td>A new stream. <code>seed</code> is any integer (a Lua integer, or a float with an integer value), taken modulo 2<sup>32</sup> as <code>Random.Seed</code> takes it: <code>-1</code> is 4294967295, 2<sup>32</sup> + 8 is 8. A missing seed, a string (even <code>"5"</code>), a table or <code>1.5</code> is a Lua error.</td></tr>
+<tr><td><code>s:Float()</code></td><td>In [0, 1): 24 random bits, exactly representable.</td></tr>
+<tr><td><code>s:Range(min, max)</code></td><td><code>min + Float() * (max - min)</code>, computed in float, the formula of <code>Random.Range</code> (reversed bounds give a value between them).</td></tr>
+<tr><td><code>s:Int(min, max)</code></td><td>An integer in [min, max], both ends included, by rejection sampling (no modulo bias); <code>min</code> when <code>max &lt;= min</code>. Both bounds must be integers in the 32-bit range, or it is a Lua error.</td></tr>
+<tr><td><code>s:InUnitCircle()</code>, <code>s:OnUnitCircle()</code></td><td>A <code>Vector2</code> uniform over the unit disc, and on the unit circle, with no trigonometry (<a href="math.html#deterministic-random">math</a>).</td></tr>
+<tr><td><code>s:Seed(seed)</code></td><td>Restarts the stream: afterwards it draws what <code>RandomStream(seed)</code> draws.</td></tr>
+<tr><td><code>s:GetState()</code>, <code>s:SetState(state)</code></td><td>The whole state of the stream is one integer in [0, 2<sup>32</sup>). <code>SetState</code> takes what <code>GetState</code> gave (any integer, modulo 2<sup>32</sup>) and puts the stream back to that point.</td></tr>
+<tr><td><code>s:Clone()</code></td><td>A second stream at the same point; the two then move independently.</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li><strong>The engine's algorithm.</strong> A stream is a <code>Math::DeterministicRandom</code>, the generator of the seeded global <code>Random</code> and of the particle systems. So <code>RandomStream(n)</code> draws, call for call, exactly what <code>Random.*</code> draws after <code>Random.Seed(n)</code>, and what C++ <code>Math::DeterministicRandom(n)</code> gives; <code>GetState</code> is its <code>State()</code>. Integer arithmetic and one exact multiplication only, no <code>std::uniform_*_distribution</code>: the same values on every platform and compiler.</li>
+<li><strong>Independent.</strong> Nothing draws from a stream but its own methods: not <code>Random.*</code>, not <code>Random.Seed</code>, not another stream with the same seed, not the clock. It needs no setting and works whether or not <code>Random.Seed</code> or <code>determinism.luaSeed</code> is set.</li>
+<li><strong>Snapshots are the script's.</strong> A stream is a Lua value, so nothing outside the script saves it: a rollback snapshot (<code>RollbackWorld</code>) keeps the global stream's state (<code>Math::Random::SeededState</code>) and the C++ streams registered with <code>RollbackWorld::AddRandomStream</code>, not a script's streams. A script whose simulation must survive a rollback keeps <code>GetState()</code> with the rest of its state (for example in a field) and calls <code>SetState</code> when it restores.</li>
+<li><strong>A value, not a handle.</strong> A stream is a plain userdata copy of the generator: assigning it to another variable shares it, <code>Clone</code> copies it. Each costs a few bytes of the Lua memory cap.</li>
+</ul>
+<p class="src">Source: <code>engine/src/scripting/bindings/LuaMathBindings.cpp</code> — <code>BindMath</code> (<code>Random.NewStream</code>, the <code>RandomStream</code> usertype); <code>math/include/math/DeterministicRandom.hpp</code>; <code>engine/src/scripting/bindings/engine-api.lua</code>; tests: <code>LuaRandomStreamTest</code> (engine_tests: <code>KnownSequences</code>, <code>MatchesADeterministicRandomWithTheSameSeed</code>, <code>DrawsWhatTheSeededGlobalRandomDraws</code>, <code>StreamsAreIndependent</code>, <code>StateSaveAndRestore</code>, <code>TheStateIsTheCppState</code>, <code>BadArgumentsAreErrors</code>)</p>
 
 <h3 id="deterministic-lua">Deterministic Lua math and Ordered.pairs <span class="badge">PR #200</span></h3>
 <p>Two more sources of difference between runs and platforms, for simulation code that has to be the same on every peer (netcode item C1):</p>
@@ -1159,7 +1191,7 @@ self.gameObject:SetLayer(Layers.NameToLayer("Player"))
 <table>
 <thead><tr><th>Global</th><th>Kind</th><th>What it covers</th><th>Binding source</th></tr></thead>
 <tbody>
-<tr><td><code>Math</code>, <code>Random</code></td><td>tables</td><td>Constants (<code>PI</code>, <code>DEG_TO_RAD</code>, <code>EPSILON</code>, …); <code>Random.Float/Range/Int/InUnitCircle/OnUnitCircle</code>; <code>Random.Seed(n)</code> makes them reproducible <span class="badge">PR #172</span> (<a href="#lua-determinism">Reproducible Lua</a>)</td><td><code>LuaMathBindings.cpp</code></td></tr>
+<tr><td><code>Math</code>, <code>Random</code></td><td>tables</td><td>Constants (<code>PI</code>, <code>DEG_TO_RAD</code>, <code>EPSILON</code>, …); <code>Random.Float/Range/Int/InUnitCircle/OnUnitCircle</code>; <code>Random.Seed(n)</code> makes them reproducible <span class="badge">PR #172</span> (<a href="#lua-determinism">Reproducible Lua</a>); <code>Random.NewStream(n)</code> and the <code>RandomStream</code> value type, independent seeded streams (<a href="#random-streams">Independent random streams</a>)</td><td><code>LuaMathBindings.cpp</code></td></tr>
 <tr><td><code>Vector2</code>, <code>Vector3</code>, <code>Vector4</code>, <code>Quaternion</code>, <code>Matrix4</code></td><td>value types</td><td>Constructors, operators, methods, copy-returning constants</td><td><code>LuaMathBindings.cpp</code></td></tr>
 <tr><td><code>Color</code></td><td>value type</td><td><code>r g b a</code>, constants, <code>FromHex</code>/<code>ToHex</code></td><td><code>LuaUtilityBindings.cpp</code></td></tr>
 <tr><td><code>GameObject</code>, <code>Positionable</code>, <code>Component</code></td><td>handles</td><td>Create, hierarchy, find, components, validity</td><td><code>LuaCoreBindings.cpp</code>, <code>LuaComponentBindings.cpp</code></td></tr>

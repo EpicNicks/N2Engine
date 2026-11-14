@@ -47,6 +47,68 @@ function Random.InUnitCircle() end
 ---@return Vector2
 function Random.OnUnitCircle() end
 
+---Switch Random.* to the deterministic generator and restart it from `seed` (taken modulo 2^32): the same seed gives
+---the same sequence on every platform. One global stream, shared by every script.
+---@param seed integer
+function Random.Seed(seed) end
+
+---A random stream of its own, independent of Random.* and of every other stream (same as RandomStream(seed))
+---@param seed integer Any integer, taken modulo 2^32
+---@return RandomStream
+function Random.NewStream(seed) end
+
+-- ===== RANDOMSTREAM =====
+
+---An independent, seeded random stream: the algorithm of the seeded global Random, so RandomStream(n) draws what
+---Random.* draws after Random.Seed(n), on every platform. Its whole state is one integer (GetState/SetState).
+---@class RandomStream
+RandomStream = {}
+
+---Create a stream (RandomStream(seed) works too)
+---@param seed integer Any integer, taken modulo 2^32
+---@return RandomStream
+function RandomStream.new(seed) end
+
+---A float in [0, 1)
+---@return number
+function RandomStream:Float() end
+
+---min + Float() * (max - min), in float (as Random.Range)
+---@param min number
+---@param max number
+---@return number
+function RandomStream:Range(min, max) end
+
+---An integer in [min, max], both ends included, without modulo bias; min when max <= min. Both must fit 32 bits.
+---@param min integer
+---@param max integer
+---@return integer
+function RandomStream:Int(min, max) end
+
+---A point uniform over the unit disc
+---@return Vector2
+function RandomStream:InUnitCircle() end
+
+---A point uniform on the unit circle
+---@return Vector2
+function RandomStream:OnUnitCircle() end
+
+---Restart the stream from `seed` (taken modulo 2^32), as RandomStream(seed) starts
+---@param seed integer
+function RandomStream:Seed(seed) end
+
+---The whole state: an integer in [0, 2^32). SetState(GetState()) later puts the stream back to this point.
+---@return integer
+function RandomStream:GetState() end
+
+---Put the stream at a state GetState returned (any integer, taken modulo 2^32)
+---@param state integer
+function RandomStream:SetState(state) end
+
+---A second, independent stream at the same point
+---@return RandomStream
+function RandomStream:Clone() end
+
 -- ===== VECTOR2 =====
 
 ---@class Vector2
