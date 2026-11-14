@@ -98,6 +98,7 @@
 <tr><td><code>physics2d</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_USE_BOX2D</code></td></tr>
 <tr><td><code>particles</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_USE_PARTICLES</code></td></tr>
 <tr><td><code>softbodies</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_USE_SOFTBODIES</code></td></tr>
+<tr><td><code>network</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_USE_NETWORK</code></td></tr>
 </tbody>
 </table>
 </div>
@@ -138,6 +139,9 @@ node scripts/project-modules.mjs path/to/game --target android   # the list a bu
 <li><strong>2D physics:</strong> see <a href="physics2d.html#stripping">Leaving it out of a game</a>.</li>
 <li><strong>Particles:</strong> a <code>ParticleSystem</code> keeps its settings, plays and stops, and emits and draws nothing (<a href="particles.html#leaving-it-out">Leaving it out</a>).</li>
 <li><strong>Soft bodies:</strong> a <code>SoftBody</code> keeps its settings and never starts, so its <code>MeshRenderer</code> draws the mesh as it is (<a href="soft-bodies.html#leaving-it-out">Leaving it out</a>).</li>
+</ul>
+<ul>
+<li><strong>Network:</strong> the server and client sessions, lockstep, rollback, replication, prediction and the <code>Network</code> Lua table are not in the build, and N2Server is not built (<a href="netcode.html#leaving-it-out">Leaving it out</a>). The network components, the settings and the fingerprint registry stay, so the fingerprint does not change.</li>
 </ul>
 <p>Particles and soft bodies do not depend on physics: each has a CPU backend, so a game can keep them with <code>"physics3d": "none"</code>. Leaving one out removes all of its backends, the PhysX GPU one included, from a build that keeps PhysX.</p>
 

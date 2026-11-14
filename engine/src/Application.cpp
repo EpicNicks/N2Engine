@@ -579,6 +579,15 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
                                             _3DphysicsBackend ? std::string(_3DphysicsBackend->BackendId())
                                                               : std::string("none"));
     }
+#if !N2ENGINE_NETWORK_ENABLED
+    if (networkSettings.preset != Network::NetworkPreset::None)
+    {
+        // The sessions are not compiled in: the preset's simulation mode runs, but nothing connects
+        networkStatus.detail += "; the network module is not in this build (N2ENGINE_USE_NETWORK is OFF): no session can start";
+        Logger::Warn("network.preset is set, but the network module is not in this build (N2ENGINE_USE_NETWORK is OFF): "
+                     "no server or client session will start");
+    }
+#endif
     if (presetMode != SimulationMode::None)
     {
         // The mode the application actually runs in, read back rather than assumed
@@ -703,6 +712,8 @@ void Application::Tick(const TickOptions &options)
     // frame delta as it is. The fixed dt itself (Time::GetFixedDeltaTime) is never scaled.
     double frameDelta = static_cast<double>(Time::GetUnscaledDeltaTime());
     double resyncSeconds = 0.0;
+#if N2ENGINE_NETWORK_ENABLED
+    // Without the network module there is no client session to ask
     if (!_fixedTickDriver && _simulationClock.GetMode() == SimulationMode::Authoritative)
     {
         if (Network::NetworkClient *const client = Network::NetworkClient::Active();
@@ -713,6 +724,7 @@ void Application::Tick(const TickOptions &options)
                             static_cast<double>(Time::GetFixedUnscaledDeltaTime());
         }
     }
+#endif
     _simulationClock.BeginFrame(frameDelta);
     if (resyncSeconds != 0.0)
     {

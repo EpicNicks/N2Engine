@@ -44,11 +44,17 @@ export const MODULES = {
     components: ['Canvas', 'RectTransform', 'Image', 'UIText', 'Button'],
     luaPatterns: [/\bUI\.[A-Za-z]\w*/],
   },
+  // The sessions (server, client, lockstep, rollback) and the Network Lua table. A project whose settings pick a network
+  // preset also needs them (scanProject adds that use). The components keep their data without the module, but do nothing.
+  network: {
+    components: ['NetworkObject', 'NetworkTransform', 'LagCompensatedHitbox'],
+    luaPatterns: [/(?<![\w.])Network\.[A-Za-z]\w*/, /\bPhysics\.(Raycast|SphereCast)LagCompensated\b/],
+  },
 };
 
 export const PHYSICS3D_VALUES = ['none', 'physx', 'jolt', 'both'];
 /** The modules a list turns on (true) or off (false) */
-export const BOOLEAN_MODULES = ['physics2d', 'particles', 'softbodies', 'audio', 'ui'];
+export const BOOLEAN_MODULES = ['physics2d', 'particles', 'softbodies', 'audio', 'ui', 'network'];
 
 const SCENE_EXTENSIONS = new Set(['.scene', '.prefab', '.json']);
 const SKIPPED_FOLDERS = new Set(['.import', '.n2', '.git', 'node_modules', 'build']);
@@ -241,6 +247,10 @@ export function scanProject(folder, target) {
   const backend = settings.physics?.backend;
   const needsJolt = backend === 'jolt' || settings.network?.preset === 'deterministic';
   const needsPhysx = backend === 'physx';
+  const preset = settings.network?.preset;
+  if (preset === 'authoritative' || preset === 'deterministic') {
+    uses.push({ module: 'network', what: `the network preset "${preset}"`, file: 'project.n2proj' });
+  }
   return { name: project.name, list, uses, unresolved, unreadable, needsJolt, needsPhysx };
 }
 

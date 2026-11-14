@@ -740,7 +740,9 @@ namespace N2Engine::Scripting
         // Gameplay systems
         Bindings::BindPhysics(*this);
         Bindings::BindPhysics2D(*this);
+#if N2ENGINE_NETWORK_ENABLED
         Bindings::BindNetworkInterest(*this);
+#endif
         Bindings::BindAudio(*this);
         Bindings::BindSaveData(*this);
 
@@ -750,7 +752,9 @@ namespace N2Engine::Scripting
 
         // Engine services
         Bindings::BindTime(*this);
+#if N2ENGINE_NETWORK_ENABLED
         Bindings::BindNetwork(*this);
+#endif
         Bindings::BindDebug(*this);
         Bindings::BindApplication(*this);
         Bindings::BindWindow(*this);

@@ -51,6 +51,13 @@ message(STATUS "Engine modules: particles ${N2ENGINE_USE_PARTICLES}, softbodies 
 option(N2ENGINE_USE_AUDIO "Build sound (OpenAL Soft, the audio decoders, AudioSource)" ON)
 option(N2ENGINE_USE_UI "Build the UI's layout, drawing and pointer hits (Canvas, Image, UIText, Button)" ON)
 message(STATUS "Engine modules: audio ${N2ENGINE_USE_AUDIO}, ui ${N2ENGINE_USE_UI}")
+# OFF leaves out the online part of the netcode: the server and client sessions, the lockstep and rollback runtimes, replication,
+# prediction and the Network Lua table, and N2Server is not built. The network components (NetworkObject, NetworkTransform,
+# LagCompensatedHitbox), the network settings with their validation, the RPC and fingerprint registries, the input layout and
+# n2net itself (the replay system uses it) stay, so a scene and a replay load the same and a build with the module keeps its
+# network fingerprint. A project's build.modules list sets it ("network").
+option(N2ENGINE_USE_NETWORK "Build the network sessions (NetworkServer, NetworkClient, lockstep, rollback) and N2Server" ON)
+message(STATUS "Engine modules: network ${N2ENGINE_USE_NETWORK}")
 # OFF compiles the Vulkan renderer out: the build then needs no Vulkan headers or loader, and --renderer vulkan / the
 # VULKAN render backend fail with a clear message. ON (the default) needs the Vulkan SDK (Windows) or libvulkan-dev (Linux).
 option(N2ENGINE_RENDERER_VULKAN "Build the Vulkan renderer backend" ON)
@@ -438,7 +445,9 @@ add_subdirectory(lua_project)
 add_subdirectory(players/desktop)
 add_subdirectory(editor-server)
 # The dedicated game server (netcode stage A6): UDP sockets and the crypto library, so not part of the web build
+if(N2ENGINE_USE_NETWORK)
 add_subdirectory(n2server)
+endif()
 endif()
 
 if(TARGET test_project AND N2ENGINE_PHYSX_AVAILABLE)
