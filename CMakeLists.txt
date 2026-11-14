@@ -159,10 +159,10 @@ endif()
 
 # A project's renderer keys never turn a backend on (docs/project-modules.html): say so when one asks for what this target lacks
 if(N2ENGINE_PROJECT_WANTS_VULKAN AND NOT N2ENGINE_RENDERER_VULKAN)
-    message(WARNING "build.modules.vulkan is true, but this target builds no Vulkan renderer: a project's list can only leave a backend out")
+    message(STATUS "Note: build.modules.vulkan is true, but this target builds no Vulkan renderer: a project's list can only leave a backend out")
 endif()
 if(N2ENGINE_PROJECT_WANTS_WEBGPU AND NOT N2ENGINE_RENDERER_WEBGPU)
-    message(WARNING "build.modules.webgpu is true, but this target builds no WebGPU renderer: a project's list can only leave a backend out")
+    message(STATUS "Note: build.modules.webgpu is true, but this target builds no WebGPU renderer: a project's list can only leave a backend out")
 endif()
 message(STATUS "Renderers: Vulkan ${N2ENGINE_RENDERER_VULKAN}, WebGPU ${N2ENGINE_RENDERER_WEBGPU} (the software renderer is always built)")
 

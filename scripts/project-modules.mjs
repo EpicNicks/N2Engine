@@ -295,6 +295,12 @@ export function suggestList(scan) {
   for (const module of BOOLEAN_MODULES) {
     list[module] = used.has(module);
   }
+  // The scan cannot see a renderer, so what the project's list already says stays
+  for (const renderer of RENDERER_MODULES) {
+    if (scan.list && typeof scan.list[renderer] === 'boolean') {
+      list[renderer] = scan.list[renderer];
+    }
+  }
   return list;
 }
 
