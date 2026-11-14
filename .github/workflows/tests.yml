@@ -1469,6 +1469,7 @@ jobs:
           grep -q "Engine modules: scripting OFF" configure-noscripting.log
           grep -q "Scripting: not in this build" configure-noscripting.log
           cmake --build build-noscripting --parallel --target engine_tests n2player n2_replay -- -k 0
+          if [ -e build-noscripting/bin/N2Server ] || [ -e build-noscripting/bin/N2EditorHost ]; then echo "an editor or server binary was built without scripting"; exit 1; fi
           ./build-noscripting/bin/engine_tests
           ./build-noscripting/bin/engine_tests --gtest_filter='LeftOutScripting*'
           # No Lua is left in the player: the VM and sol2 are not linked

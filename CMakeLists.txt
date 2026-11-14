@@ -63,7 +63,7 @@ message(STATUS "Engine modules: scripting ${N2ENGINE_USE_SCRIPTING}")
 # LagCompensatedHitbox), the network settings with their validation, the RPC and fingerprint registries, the input layout and
 # n2net itself (the replay system uses it) stay, so a scene and a replay load the same and a build with the module keeps its
 # network fingerprint. A project's build.modules list sets it ("network").
-option(N2ENGINE_USE_NETWORK "Build the network sessions (NetworkServer, NetworkClient, lockstep, rollback) and N2Server" ON)
+option(N2ENGINE_USE_NETWORK "Build the network sessions (NetworkServer, NetworkClient, lockstep, rollback) and N2Server (which also needs the scripting module)" ON)
 message(STATUS "Engine modules: network ${N2ENGINE_USE_NETWORK}")
 # OFF compiles the Vulkan renderer out: the build then needs no Vulkan headers or loader, and --renderer vulkan / the
 # VULKAN render backend fail with a clear message. ON (the default) needs the Vulkan SDK (Windows) or libvulkan-dev (Linux).
