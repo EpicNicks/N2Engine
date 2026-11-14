@@ -384,6 +384,160 @@ ol.steps > li { margin: 0.25rem 0; }
   gap: 0.5rem;
 }
 
+/* ---------- Search (assets/search.js adds this bar as the first child of <main>) ---------- */
+
+/* A sticky header strip across the top of the content area; the box sits at its right end. */
+.docsearch-bar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  justify-content: flex-end;
+  margin: -2rem -2.5rem 1rem;
+  padding: 0.55rem 2.5rem;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+/* Anchored headings land below the strip, not under it. */
+h2[id], h3[id], h4[id] { scroll-margin-top: 4rem; }
+
+.docsearch { position: relative; width: 20rem; max-width: 100%; }
+
+.docsearch-label,
+.docsearch-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.docsearch-toggle,
+.docsearch-close {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-sidebar);
+  color: var(--fg);
+  cursor: pointer;
+  padding: 0;
+}
+.docsearch-toggle { width: 2.5rem; height: 2.5rem; }
+.docsearch-close { width: 2rem; height: 2rem; flex: none; border: none; background: none; color: var(--fg-muted); }
+
+.docsearch-field {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-sidebar);
+  padding: 0 0.5rem;
+}
+.docsearch-field:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.docsearch-icon { flex: none; color: var(--fg-muted); }
+
+.docsearch-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.92rem;
+  padding: 0.4rem 0;
+  outline: none;
+}
+.docsearch-input::placeholder { color: var(--fg-muted); opacity: 1; }
+.docsearch-input::-webkit-search-cancel-button { display: none; }
+
+.docsearch-kbd {
+  flex: none;
+  font-size: 0.75rem;
+  line-height: 1;
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.15rem 0.4rem;
+}
+.docsearch-field:focus-within .docsearch-kbd { display: none; }
+
+.docsearch-toggle:focus-visible,
+.docsearch-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.docsearch-results {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  width: min(36rem, calc(100vw - 2rem));
+  max-height: min(70vh, 34rem);
+  overflow-y: auto;
+  margin: 0;
+  padding: 0.3rem;
+  list-style: none;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+.docsearch-results[hidden] { display: none; }
+
+.docsearch-result a {
+  display: block;
+  padding: 0.45rem 0.6rem;
+  border-radius: 6px;
+  color: var(--fg);
+  text-decoration: none;
+}
+.docsearch-result a:hover { background: var(--bg-sidebar); }
+.docsearch-result[aria-selected="true"] a {
+  background: var(--bg-code);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.docsearch-where {
+  display: block;
+  font-weight: 600;
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+}
+.docsearch-section { color: var(--link); }
+.docsearch-sep { color: var(--fg-muted); }
+.docsearch-snippet {
+  display: block;
+  font-size: 0.83rem;
+  color: var(--fg-muted);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.docsearch-results mark {
+  background: var(--open-bg);
+  color: var(--fg);
+  box-shadow: inset 0 -2px 0 var(--open-border);
+  border-radius: 2px;
+}
+.docsearch-empty {
+  padding: 0.6rem;
+  font-size: 0.9rem;
+  color: var(--fg-muted);
+}
+
+@media (min-width: 90rem) {
+  .docsearch-bar {
+    margin-right: calc(-2.5rem - var(--sidebar-width));
+    padding-right: 2.5rem;
+  }
+}
+
 /* ---------- Responsive ---------- */
 
 @media (max-width: 52rem) {
@@ -407,9 +561,50 @@ ol.steps > li { margin: 0.25rem 0; }
   th, td { min-width: 6rem; }
   td:first-child, th:first-child { min-width: 8rem; }
   h1 { font-size: 1.6rem; }
+
+  /* Narrow screens: the search collapses to a button in the top right corner of the screen; it opens a
+     full-width bar across the top. */
+  .docsearch-bar {
+    position: static;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+  }
+  h2[id], h3[id], h4[id] { scroll-margin-top: 1rem; }
+  .docsearch {
+    position: fixed;
+    top: 0.6rem;
+    right: 0.75rem;
+    width: auto;
+    z-index: 30;
+  }
+  .docsearch-toggle { display: inline-flex; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); }
+  .docsearch-panel { display: none; }
+  .docsearch.is-open {
+    left: 0;
+    right: 0;
+    top: 0;
+    padding: 0.6rem 1rem;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  }
+  .docsearch.is-open .docsearch-toggle { display: none; }
+  .docsearch.is-open .docsearch-panel { display: block; }
+  .docsearch-close { display: inline-flex; }
+  .docsearch-kbd { display: none; }
+  .docsearch-input { font-size: 1rem; padding: 0.55rem 0; }
+  .docsearch-results {
+    position: static;
+    width: auto;
+    max-height: calc(100vh - 5rem);
+    margin-top: 0.5rem;
+    box-shadow: none;
+  }
 }
 
 @media print {
-  .sidebar, .skip-link { display: none; }
+  .sidebar, .skip-link, .docsearch-bar { display: none; }
   main { padding: 0; }
 }

@@ -2,10 +2,32 @@
 
 This folder is a static HTML site that documents how the engine **behaves**: guarantees, ordering, lifetimes, edge cases and error handling. Start at [`index.html`](index.html).
 
+<<<<<<< HEAD
+- No build step, no external fonts or scripts. Everything is plain HTML plus `assets/style.css` and two small scripts: `assets/highlight.js` colours the code blocks (`<pre class="lang-*">`) and `assets/search.js` adds the search box (see [Search](#search)). The pages read fine without either.
+- Works opened straight from disk (`file://`) and on GitHub Pages (serve the `docs/` folder from the default branch). All links are relative.
+=======
 - No build step, no external fonts or scripts. Everything is plain HTML plus `assets/style.css` and one small script, `assets/highlight.js`, that colours the code blocks (`<pre class="lang-*">`); the pages read fine without it.
 - Works opened straight from disk (`file://`) and from any static host. All links are relative.
 - Published at https://n2engine-docs.vercel.app by `.github/workflows/docs-deploy.yml` (the `docs (Vercel)` job): a push to `master` that touches `docs/` deploys to production, and a pull request that touches `docs/` gets a preview deployment.
+>>>>>>> origin/master
 - Light and dark themes follow the reader's system setting (`prefers-color-scheme`).
+
+## Search
+
+Every page has a search box in the top right (on narrow screens, a search button in the top right corner that opens a bar across the top). `/` or Ctrl+K (Cmd+K on macOS) focuses it, the arrow keys move through the results, Enter opens one and Escape closes the list. Each result shows the page title, the nearest `h2`/`h3` with an `id`, and a snippet with the match highlighted; it links to `page.html#that-id`. A section matches when it contains every word typed (anywhere in its page title, heading or text); headings weigh more than body text.
+
+There is no server. `assets/search.js` loads a prebuilt index, `assets/search-index.js`, the first time the box is used. The index is a script (it sets `window.N2DocsSearchIndex`) rather than JSON so the search also works from `file://`, where browsers block `fetch`.
+
+**Regenerate the index after changing any page** (plain Node 16 or later, no npm packages):
+
+```sh
+node docs/tools/build-search-index.mjs           # writes docs/assets/search-index.js
+node docs/tools/build-search-index.mjs --check   # exits 1 if the committed index is stale
+```
+
+The generator reads every `docs/*.html` except `_template.html`, takes the text inside `<main>` (without the "On this page" box and the page footer) and makes one record per `h2`/`h3` that has an `id`; text before the first one belongs to the page itself. A heading without an `id` stays in the section before it, so give headings ids if they should be search targets. Line endings are normalised, so Windows and Linux checkouts produce the same file.
+
+The stale-index check runs on every docs deployment: `vercel.json` sets the Vercel build command to `node tools/build-search-index.mjs --check`, so a pull request whose index is out of date fails its `docs (Vercel)` check and gets no preview, and master cannot deploy a stale index.
 
 ## Current baseline
 
@@ -60,6 +82,7 @@ The pages describe `master`. `PR #nn` badges stay as history, pointing readers a
 2. Set `<title>` to `<Page title> · N2Engine docs` and add `aria-current="page"` to the page's own sidebar link.
 3. Add the new page to the sidebar of **every** page. There is no JavaScript to generate it, so the sidebar is repeated verbatim in each file. Keep the order and grouping identical everywhere.
 4. Add the page to the table above and, if it is a subsystem, a card on `index.html`.
+5. Keep the `<script src="assets/search.js" defer></script>` line from the template, and regenerate the search index (see [Search](#search)).
 
 ## Writing conventions
 
