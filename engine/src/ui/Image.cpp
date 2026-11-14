@@ -133,6 +133,13 @@ namespace N2Engine::UI
     void Image::RenderUI(Renderer::Common::IRenderer *renderer, const Rect &rect,
                          const Renderer::Common::RenderState &state, const Matrix4 &canvasToWorld)
     {
+#ifndef N2ENGINE_UI_ENABLED
+        // A build without the UI module (N2ENGINE_USE_UI, defined on this file by engine/CMakeLists.txt) draws no UI
+        static_cast<void>(renderer);
+        static_cast<void>(rect);
+        static_cast<void>(state);
+        static_cast<void>(canvasToWorld);
+#else
         if (!renderer || !rect.HasArea())
         {
             return;
@@ -172,6 +179,7 @@ namespace N2Engine::UI
 
         const Matrix4 model = ComposeModel(canvasToWorld, ModelMatrixFor(rect));
         renderer->DrawMesh(_mesh, model.Data(), _material, state);
+#endif
     }
 
     void Image::OnDestroy()

@@ -5,6 +5,8 @@
 #include "engine/Positionable.hpp"
 #include "engine/common/ScriptUtils.hpp"
 
+#include <format>
+
 namespace N2Engine::Audio
 {
     AudioSource::AudioSource(GameObject& gameObject)
@@ -285,6 +287,11 @@ namespace N2Engine::Audio
 
     void AudioSource::OnEnable()
     {
+        // A build without the audio module: one warning per process, from the first source enabled (docs/project-modules.html)
+        if (!AudioSystem::IsInBuild())
+        {
+            AudioSystem::WarnIfNotInBuild(std::format("AudioSource on '{}'", GetGameObject().GetName()));
+        }
         if (_playOnAwake && _clip)
         {
             Play();

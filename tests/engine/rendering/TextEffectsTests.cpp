@@ -36,6 +36,7 @@
 #include "engine/text/TextEffects.hpp"
 #include "engine/ui/Rect.hpp"
 #include "engine/ui/UIText.hpp"
+#include "../modules/ModuleGuards.hpp"
 
 // Text effects (outline, shadow, softness) on TextRenderer and UIText: the settings, how they become the text
 // material's uniforms (TextDrawing::ResolveEffects), the clamping to the font's SDF spread, saving and Lua.
@@ -491,6 +492,7 @@ TEST(TextEffectsTest, TheUniformsAreSetOnEveryDrawWithoutNewMaterials)
 
 TEST(TextEffectsTest, UITextSetsTheSameUniforms)
 {
+    N2_SKIP_WITHOUT_UI();
     const auto font = DefaultFont();
     ASSERT_NE(font, nullptr);
     RecordingRenderer renderer;

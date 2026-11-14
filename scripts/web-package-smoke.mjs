@@ -191,9 +191,12 @@ expect(!badFrame, badFrame ?? '');
 expect(output.some((line) => line.startsWith('N2_WEB_SMOKE_DONE')), 'the player did not print N2_WEB_SMOKE_DONE');
 // Audio (stage 4): node has no WebAudio, so the player must start without sound (the frames above prove it ran, did not
 // crash and did not hang) and its health must report the audio subsystem as failed, not running or missing. The engine's log
-// does not reach this output, so the one warning itself is not counted here.
+// does not reach this output, so the one warning itself is not counted here. A player built without the audio module
+// (docs/project-modules.html) never tries: its row is disabled, and the player says so with module=off.
 const audioLines = output.filter((line) => line.startsWith('N2_WEB_AUDIO'));
-expect(audioLines.length === 1 && audioLines[0] === 'N2_WEB_AUDIO state=failed', `expected 'N2_WEB_AUDIO state=failed' under node (no WebAudio), got ${JSON.stringify(audioLines)}`);
+const audioOk = audioLines.length === 1
+  && (audioLines[0] === 'N2_WEB_AUDIO state=failed' || audioLines[0] === 'N2_WEB_AUDIO state=disabled module=off');
+expect(audioOk, `expected 'N2_WEB_AUDIO state=failed' under node (no WebAudio), or 'state=disabled module=off' without the audio module, got ${JSON.stringify(audioLines)}`);
 if (lastFrame) {
   const colours = new Set();
   let notBlack = 0;

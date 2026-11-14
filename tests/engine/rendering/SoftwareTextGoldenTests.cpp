@@ -22,6 +22,7 @@
 #include "engine/ui/RectTransform.hpp"
 #include "engine/ui/UISystem.hpp"
 #include "engine/ui/UIText.hpp"
+#include "../modules/ModuleGuards.hpp"
 
 // Golden-image tests through the engine: a TextRenderer drawn by Scene::Render, and a UI Image and UIText
 // drawn by the UI pass, rasterized by a headless SoftwareRenderer (no window or GPU) and read back. The checks are
@@ -273,6 +274,7 @@ TEST(SoftwareTextGoldenTest, AChangedColourRedrawsInTheNewColour)
 
 TEST(SoftwareUIGoldenTest, AnImageFillsItsRect)
 {
+    N2_SKIP_WITHOUT_UI();
     constexpr int width = 64;
     constexpr int height = 48;
     SoftwareRenderer renderer;
@@ -320,6 +322,7 @@ TEST(SoftwareUIGoldenTest, AnImageFillsItsRect)
 
 TEST(SoftwareUIGoldenTest, APressedButtonDrawsItsImageWithThePressedTint)
 {
+    N2_SKIP_WITHOUT_UI();
     constexpr int width = 32;
     constexpr int height = 32;
     SoftwareRenderer renderer;
@@ -436,6 +439,7 @@ namespace
 
 TEST(SoftwareUIGoldenTest, UITextInkSitsInsideItsRectWithItsAlignment)
 {
+    N2_SKIP_WITHOUT_UI();
     constexpr int width = 200;
     constexpr int height = 80;
     // The rect (canvas space, y up) and the text size: 32 px per em, so one font unit is 0.032 px
@@ -536,6 +540,7 @@ TEST(SoftwareUIGoldenTest, UITextInkSitsInsideItsRectWithItsAlignment)
 
 TEST(SoftwareUIGoldenTest, UITextDrawsOverAnImageInHierarchyOrder)
 {
+    N2_SKIP_WITHOUT_UI();
     constexpr int width = 120;
     constexpr int height = 60;
     SoftwareRenderer renderer;
@@ -656,6 +661,7 @@ namespace
 
 TEST(SoftwareUIGoldenTest, UITextCharacterColourColoursOnlyThatCharacter)
 {
+    N2_SKIP_WITHOUT_UI();
     constexpr int width = 200;
     constexpr int height = 80;
     SoftwareRenderer renderer;
@@ -691,6 +697,7 @@ TEST(SoftwareUIGoldenTest, UITextCharacterColourColoursOnlyThatCharacter)
 
 TEST(SoftwareUIGoldenTest, UITextCharacterScaleHidesGrowsAndClears)
 {
+    N2_SKIP_WITHOUT_UI();
     constexpr int width = 200;
     constexpr int height = 80;
     SoftwareRenderer renderer;
@@ -730,6 +737,7 @@ TEST(SoftwareUIGoldenTest, UITextCharacterScaleHidesGrowsAndClears)
 
 TEST(SoftwareUIGoldenTest, UITextCharacterAlphaZeroHidesItsOutlineToo)
 {
+    N2_SKIP_WITHOUT_UI();
     // The character colour's alpha fades the outline (and shadow) with the face, so a character at alpha 0 leaves nothing
     constexpr int width = 200;
     constexpr int height = 80;

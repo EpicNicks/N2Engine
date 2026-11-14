@@ -48,6 +48,32 @@ foreach(_n2_module PARTICLES SOFTBODIES)
     endif()
 endforeach()
 
+# The audio and UI modules (N2ENGINE_USE_AUDIO, N2ENGINE_USE_UI; docs/project-modules.html), the same way. Audio is the audio system's device code (the
+# decoders in AudioLoaders.cpp stay, see below); without it the root
+# CMakeLists.txt links a no-op OpenAL in place of OpenAL Soft. UI is the layout, the drawing and the pointer hits. What stays
+# is every component with its fields, registration and Lua methods, and the headers are the same whatever the options
+# (AudioSystem::IsInBuild and UISystem::IsInBuild say which build this is).
+# AudioLoaders.cpp (the decoders) stays in every build: editor-server previews waveforms with the decoders the engine library
+# holds. Nothing in a game calls them without the audio module, and the linker drops them from a player.
+set(N2ENGINE_AUDIO_SOURCES)
+set(N2ENGINE_AUDIO_DEFINED_ON src/audio/AudioSystem.cpp src/audio/AudioClipLoader.cpp)
+set(N2ENGINE_UI_SOURCES)
+set(N2ENGINE_UI_DEFINED_ON src/ui/UISystem.cpp src/ui/Image.cpp src/ui/UIText.cpp)
+foreach(_n2_module AUDIO UI)
+    foreach(_n2_source IN LISTS N2ENGINE_${_n2_module}_SOURCES N2ENGINE_${_n2_module}_DEFINED_ON)
+        if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_n2_source}")
+            message(FATAL_ERROR "The ${_n2_module} module's lists name a file that does not exist: ${_n2_source}")
+        endif()
+    endforeach()
+    if(N2ENGINE_USE_${_n2_module})
+        set_property(SOURCE ${N2ENGINE_${_n2_module}_DEFINED_ON} APPEND PROPERTY COMPILE_DEFINITIONS N2ENGINE_${_n2_module}_ENABLED=1)
+    else()
+        foreach(_n2_source IN LISTS N2ENGINE_${_n2_module}_SOURCES)
+            list(REMOVE_ITEM ENGINE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/${_n2_source}")
+        endforeach()
+    endif()
+endforeach()
+
 # The desktop platform backend and the GLFW input device are GLFW's only callers (build targets stage 6): not in the web
 # build, which has no GLFW (its player runs on the headless backend)
 if (N2ENGINE_PLATFORM_WEB OR N2ENGINE_PLATFORM_ANDROID OR N2ENGINE_PLATFORM_IOS)

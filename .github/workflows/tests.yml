@@ -1425,8 +1425,9 @@ jobs:
           ./build/bin/jolt_smoke_tests | tee jolt-smoke.log
           { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-DETERMINISM\]' jolt-smoke.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
 
-      # A native build from the same list: the engine with no physics, particles or soft-body module at all, with its whole test
-      # suite (the tests of a module left out are not built; tests/engine/modules/LeftOutModulesTests.cpp checks the components)
+      # A native build from the same list: the engine with no physics, particles, soft-body, audio or UI module at all, with its
+      # whole test suite (the tests of a module left out are not built or skip themselves; tests/engine/modules/
+      # LeftOutModulesTests.cpp checks the components), and its desktop player, whose size is printed
       - name: Build and test with no physics modules
         run: |
           set -e -o pipefail
@@ -1434,8 +1435,27 @@ jobs:
           grep -q "PhysX disabled" configure-nophysics.log
           if grep -q "Jolt Physics (vendored\|Box2D (vendored" configure-nophysics.log; then echo "a physics module was still configured"; exit 1; fi
           grep -q "Engine modules: particles OFF, softbodies OFF" configure-nophysics.log
-          cmake --build build-nophysics --parallel --target engine_tests -- -k 0
+          grep -q "Engine modules: audio OFF, ui OFF" configure-nophysics.log
+          grep -q "Audio: not in this build" configure-nophysics.log
+          cmake --build build-nophysics --parallel --target engine_tests n2player -- -k 0
           ./build-nophysics/bin/engine_tests
+          # What the modules cost natively: the desktop player of the full tree above (Jolt, Box2D, particles, soft bodies,
+          # audio, UI; PhysX and Vulkan are off on this leg) against this one, as built and stripped of symbols, and the OpenAL
+          # Soft library the full player ships beside it
+          for tree in build build-nophysics; do
+            p="$tree/bin/n2player"
+            strip -o "$p.stripped" "$p"
+            line="$tree: n2player raw $(wc -c < "$p") stripped $(wc -c < "$p.stripped")"
+            echo "[MODULES-SIZE-NATIVE] $line"
+            echo "    $line" >> "$GITHUB_STEP_SUMMARY"
+          done
+          for lib in build/bin/libopenal.so* build/_deps/openal-build/libopenal.so*; do
+            if [ -f "$lib" ] && [ ! -L "$lib" ]; then
+              line="build: $(basename "$lib") $(wc -c < "$lib") (shipped beside the full player, not without audio)"
+              echo "[MODULES-SIZE-NATIVE] $line"
+              echo "    $line" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
 
       # The vendored Box2D alone: this leg's [BOX2D-DETERMINISM] line, which must equal every other leg's
       - name: Box2D determinism numbers
@@ -1957,8 +1977,9 @@ jobs:
           done
 
       # Games that list their modules (docs/project-modules.html): a player with no optional module at all (no_physics: no physics,
-      # particles or soft bodies), and one without only particles and soft bodies (no_particles_softbodies), must each build,
-      # start and draw, and the sizes are what leaving them out saves. Size profile, against the full package just built.
+      # particles, soft bodies, audio or UI), one without only particles and soft bodies (no_particles_softbodies) and one without
+      # only audio and UI (no_audio_ui), must each build, start and draw, and the sizes are what leaving them out saves. Size
+      # profile, against the full package just built.
       - name: Build and run a project with no physics modules
         run: |
           set -e -o pipefail
@@ -1974,9 +1995,17 @@ jobs:
           grep -q "Engine modules: particles OFF, softbodies OFF" configure-noparticles.log
           cmake --build build-web-noparticles --target web-package -- -k 0
           node scripts/web-package-smoke.mjs build-web-noparticles/web-package 30 320x180 --precompressed
-          for tree in build-web-size build-web-noparticles build-web-nophysics; do
+          # Every module but audio and UI (PhysX, Jolt, Box2D, particles and soft bodies kept): the audio backend is forced to the
+          # stub, so index.js has no WebAudio glue either, and its size is printed too
+          emcmake cmake -S . -B build-web-noaudioui -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=size -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_PROJECT=tests/projects/no_audio_ui 2>&1 | tee configure-noaudioui.log
+          grep -q "Engine modules: audio OFF, ui OFF" configure-noaudioui.log
+          grep -q "audio stub (N2ENGINE_WEB_AUDIO)" configure-noaudioui.log
+          cmake --build build-web-noaudioui --target web-package -- -k 0
+          node scripts/web-package-smoke.mjs build-web-noaudioui/web-package 30 320x180 --precompressed
+          for tree in build-web-size build-web-noparticles build-web-noaudioui build-web-nophysics; do
             w="$tree/web-package/index.wasm"
-            line="$tree: index.wasm raw $(wc -c < "$w") gzip $(gzip -9 -c "$w" | wc -c) brotli $(wc -c < "$w.br")"
+            j="$tree/web-package/index.js"
+            line="$tree: index.wasm raw $(wc -c < "$w") gzip $(gzip -9 -c "$w" | wc -c) brotli $(wc -c < "$w.br"); index.js raw $(wc -c < "$j") brotli $(wc -c < "$j.br" 2>/dev/null || echo n/a)"
             echo "[MODULES-SIZE] $line"
             echo "    $line" >> "$GITHUB_STEP_SUMMARY"
           done

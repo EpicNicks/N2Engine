@@ -618,6 +618,17 @@ open:GetComponent("Button"):AddOnClick(function() print("opening") end)
 <p>A missing field keeps its default (for <code>UIText</code>, <code>raycastTarget</code> stays off; a scene saved before sprites existed loads with none). The resolved rect, an <code>Image</code>'s raw texture, the text's layout and mesh, and a graphic's tint are not saved.</p>
 <p class="src">Source: <code>engine/src/serialization/BuiltinComponents.cpp</code>; <code>engine/include/engine/serialization/MathSerialization.hpp</code> (<code>Vector2</code>); <code>engine/include/engine/text/TextJson.hpp</code> (alignment names); tests: <code>RectTransformLayoutTest.SerializationRoundTrip</code>, <code>WorldCanvasTest.RenderModeIsSavedByName</code>, <code>WorldCanvasTest.OldScenesAndUnknownNamesLoadAsOverlay</code>, <code>UITextTest.SettingsSurviveASceneRoundTrip</code>, <code>ButtonTest.SceneRoundTripKeepsTheSettingsButNotTheListeners</code></p>
 
+<h2 id="leaving-it-out">Leaving it out of a game <span class="badge">stripping stage 3</span></h2>
+<p>A game with no UI can build with <code>-DN2ENGINE_USE_UI=OFF</code>, or list <code>"ui": false</code> in its project (<a href="project-modules.html">Project modules</a>):</p>
+<ul>
+<li>Nothing is laid out: <code>UISystem::CollectGraphics</code> and <code>CollectWorldCanvasGraphics</code> are empty, so neither the UI pass nor a world-space canvas draws anything, and <code>Image</code> and <code>UIText</code> draw nothing even when called directly.</li>
+<li>Nothing is hit: <code>HitTestScreenPoint</code> and <code>HitTestWorldCanvases</code> find nothing, so the pointer goes to the world, and a <code>Button</code> is never pressed by the pointer (<code>Click()</code> from code still calls its listeners).</li>
+<li><code>Canvas</code>, <code>RectTransform</code>, <code>Image</code>, <code>UIText</code> and <code>Button</code> still register with every field, so a scene loads and saves unchanged and the network fingerprint does not depend on the option. The <code>UI</code> table and every Lua method still exist, and <code>UI.CreateCanvas</code> and the other factories still build their objects. The first canvas the UI pass finds logs one warning per process. <code>UISystem::IsInBuild()</code> is false.</li>
+<li>The text library stays: <code>TextRenderer</code> uses it too.</li>
+</ul>
+<p>The scan treats any of the five components in a scene or prefab, their names in quotes in a script, and any <code>UI.</code> call as a use.</p>
+<p class="src">Source: <code>engine/src/ui/UISystem.cpp</code> (<code>IsInBuild</code>, <code>WarnIfNotInBuild</code>), <code>Image.cpp</code> and <code>UIText.cpp</code> (<code>RenderUI</code>), <code>engine/CMakeLists.txt</code>; tests: <code>LeftOutModuleTest.UI*</code> (<code>tests/engine/modules/LeftOutModulesTests.cpp</code>, built only without the module)</p>
+
 <h2 id="not-yet">Not yet</h2>
 <ul>
 <li>For <strong>Button</strong>: sprite-swap and animation transitions, keyboard and gamepad navigation and selection (Unity's <code>Selected</code> state), persistent (saved) listeners, and pointer events bubbling to a parent.</li>
