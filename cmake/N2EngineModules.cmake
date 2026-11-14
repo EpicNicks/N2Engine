@@ -14,7 +14,12 @@
 #   "softbodies": true | false                        N2ENGINE_USE_SOFTBODIES
 #   "audio": true | false                             N2ENGINE_USE_AUDIO
 #   "ui": true | false                                N2ENGINE_USE_UI
+#   "vulkan": true | false                            N2ENGINE_RENDERER_VULKAN
+#   "webgpu": true | false                            N2ENGINE_RENDERER_WEBGPU (the web build's)
 #
+# The renderer keys are different: the target's own setting is the ceiling. false leaves the backend out of a target that would
+# build it; true never turns on a backend the target does not build (no Vulkan on the web, no WebGPU natively), it keeps what the
+# target builds. The software renderer (and OpenGL on the desktop) stays in every build, so a list can never leave a game with none.
 # With -DN2ENGINE_TARGET=<name> (n2build sets it; build targets stage 3, docs/build-targets.html#settings), the target's own
 # "build.targets.<name>.modules" is read first, key by key, and "build.modules" fills in the keys it does not name.
 #
@@ -158,6 +163,37 @@ if(N2ENGINE_PROJECT)
                 message(STATUS "Engine modules: ${_n2_module} ${_n2_module_value}, from ${_n2_where} in ${N2ENGINE_PROJECT}")
             endif()
         endforeach()
+
+        # The renderer backends. false sets the options (and what a target derives from them) OFF as plain variables, which win over the
+        # targets' forced cache values; the web build's own switch is read where it is set (CMakeLists.txt). true changes nothing.
+        foreach(_n2_pair IN ITEMS "vulkan:VULKAN" "webgpu:WEBGPU")
+            string(REPLACE ":" ";" _n2_pair "${_n2_pair}")
+            list(GET _n2_pair 0 _n2_module)
+            list(GET _n2_pair 1 _n2_backend)
+            set(N2ENGINE_PROJECT_NO_${_n2_backend} OFF)
+            set(N2ENGINE_PROJECT_WANTS_${_n2_backend} OFF)
+            _n2_module_lookup(${_n2_module} _n2_found _n2_module_value _n2_where)
+            if(_n2_found)
+                if(NOT _n2_lookup_type STREQUAL "BOOLEAN")
+                    message(FATAL_ERROR "${_n2_where}.${_n2_module} must be true or false")
+                endif()
+                if(_n2_module_value)
+                    set(N2ENGINE_PROJECT_WANTS_${_n2_backend} ON)
+                else()
+                    set(N2ENGINE_PROJECT_NO_${_n2_backend} ON)
+                endif()
+                message(STATUS "Engine modules: ${_n2_module} ${_n2_module_value}, from ${_n2_where} in ${N2ENGINE_PROJECT}")
+            endif()
+        endforeach()
+        if(N2ENGINE_PROJECT_NO_VULKAN)
+            set(N2ENGINE_RENDERER_VULKAN OFF)
+            # What the Android and Apple targets would otherwise derive a Vulkan build from (cmake/N2EngineAndroid.cmake, N2EngineApple.cmake)
+            set(N2ENGINE_ANDROID_VULKAN OFF)
+            set(N2ENGINE_APPLE_MOLTENVK OFF)
+        endif()
+        if(N2ENGINE_PROJECT_NO_WEBGPU)
+            set(N2ENGINE_RENDERER_WEBGPU OFF)
+        endif()
 
         # Before anything is compiled: a build this long should not end by reporting a mistake it could have reported now
         _n2_find_module_node(_n2_node)

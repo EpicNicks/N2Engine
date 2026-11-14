@@ -98,12 +98,25 @@
 <tr><td><code>physics2d</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_USE_BOX2D</code></td></tr>
 <tr><td><code>particles</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_USE_PARTICLES</code></td></tr>
 <tr><td><code>softbodies</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_USE_SOFTBODIES</code></td></tr>
+<tr><td><code>vulkan</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_RENDERER_VULKAN</code> (only ever off; see <a href="#renderers">Renderer backends</a>)</td></tr>
+<tr><td><code>webgpu</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_RENDERER_WEBGPU</code> (the web build's; only ever off)</td></tr>
 </tbody>
 </table>
 </div>
 <p>A module the list does not name keeps its usual option. A project with no list builds everything. Unknown modules and values stop the configure with a message.</p>
 
 <div class="callout note" id="design-explicit-list"><p class="callout-title">Design decision: the list is explicit, and the scan only checks it</p><p>Lua can reach a component through a computed name, as in <code>AddComponent(kinds[i])</code>, and no scan can resolve that. Stripping from the scan alone could remove something a script needs, and the game would break only when that line ran. So a person writes the list, and the scan suggests one and checks it.</p></div>
+
+<h2 id="renderers">Renderer backends</h2>
+<p><code>vulkan</code> and <code>webgpu</code> leave a renderer backend out of the player. They follow one rule: <strong>the build target's own setting is the ceiling</strong>. A key can turn a backend off that the target would build, and can never turn one on that the target does not build (no Vulkan on the web, no WebGPU natively). <code>true</code> is the same as no key: the target keeps what it builds, and a <code>true</code> for a backend the target lacks prints a configure warning. A target that forces a backend on (Android with <code>build.targets.android.renderer</code> <code>vulkan</code>, macOS and iOS with MoltenVK) keeps it unless the key is <code>false</code>; then it builds without it.</p>
+<ul>
+<li><strong>The software renderer is always built</strong> (and OpenGL in the desktop build), so a list can never leave a game with no renderer, and no configure fails for that. The scan does refuse one contradiction: <code>build.targets.&lt;T&gt;.renderer</code> naming a backend that the list leaves out.</li>
+<li><strong>Vulkan off</strong> needs no Vulkan headers, loader or <code>glslc</code>. <code>n2player --renderer vulkan</code> then stops at once with <code>this player was built without the Vulkan renderer</code>; the engine's window code says the same for any other host.</li>
+<li><strong>WebGPU off (web)</strong> leaves out the emdawnwebgpu port and the page's device probe: the shell's <code>n2-webgpu</code> tag is <code>no</code>, so the canvas stays free for the software renderer, and the player refuses <code>--renderer webgpu</code>. Natively WebGPU is a CI-only backend that is off by default, so the key changes nothing there.</li>
+<li>Games pick a renderer at run time (<code>--renderer</code>, or the target's <code>renderer</code> setting); the list decides only which ones the build contains.</li>
+<li>OpenGL and the software renderer are not keys: they are small, share the window and presentation code, and the software renderer is the fallback for everything else.</li>
+</ul>
+<p>Test project: <code>tests/projects/no_vulkan</code>. The Linux CI job builds its player, checks that <code>--renderer vulkan</code> is refused and that the game runs on the software renderer, and prints the size against the full player as <code>[MODULES-SIZE-NATIVE]</code> lines. The web job builds it too (the WebGPU half) and prints <code>[MODULES-SIZE]</code>.</p>
 
 <h2 id="building">Building a game with its list</h2>
 <pre class="lang-shell"><code>cmake -S . -B build-mygame -DN2ENGINE_PROJECT=path/to/game</code></pre>

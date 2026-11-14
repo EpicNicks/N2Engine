@@ -32,6 +32,7 @@
 #include "engine/sceneManagement/SceneFile.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
+#include <renderer/common/RendererConfig.hpp>
 
 namespace
 {
@@ -126,6 +127,15 @@ int main(int argc, char *argv[])
         std::printf("%s\n", Player::PlayerUsage(programName).c_str());
         return 0;
     }
+#if !N2ENGINE_RENDERER_VULKAN
+    // A renderer left out of this build (docs/project-modules.html): say so before anything starts, not as a window failure
+    if (options.renderBackend == Config::ApplicationOptions::RenderBackend::VULKAN)
+    {
+        Report("--renderer vulkan: this player was built without the Vulkan renderer (the game's build.modules.vulkan is false, "
+               "or N2ENGINE_RENDERER_VULKAN is OFF). Use --renderer opengl or software.");
+        return 1;
+    }
+#endif
     if (options.projectDir.empty())
     {
         options.projectDir = ExecutableDir(argc > 0 ? argv[0] : nullptr) / "game";

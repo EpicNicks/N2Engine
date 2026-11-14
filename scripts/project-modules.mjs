@@ -46,6 +46,14 @@ export const MODULES = {
   },
 };
 
+// The renderer backends are keys of the list too, but not modules a scene can use: a game picks its renderer at run time
+// (--renderer) or, for a build target, with build.targets.<T>.renderer, and the scan reads that one (see findConflicts)
+// "vulkan": false leaves the Vulkan renderer out of a target that would build it; true changes nothing (the target is the ceiling)
+export const RENDERER_MODULES = ['vulkan', 'webgpu'];
+for (const renderer of RENDERER_MODULES) {
+  MODULES[renderer] = { components: [], luaPatterns: [] };
+}
+
 export const PHYSICS3D_VALUES = ['none', 'physx', 'jolt', 'both'];
 /** The modules a list turns on (true) or off (false) */
 export const BOOLEAN_MODULES = ['physics2d', 'particles', 'softbodies', 'audio', 'ui'];
@@ -173,7 +181,7 @@ function checkList(modules, where) {
   if (modules.physics3d !== undefined && !PHYSICS3D_VALUES.includes(modules.physics3d)) {
     throw new Error(`${where}.physics3d must be one of ${PHYSICS3D_VALUES.join(', ')}, not ${JSON.stringify(modules.physics3d)}`);
   }
-  for (const module of BOOLEAN_MODULES) {
+  for (const module of [...BOOLEAN_MODULES, ...RENDERER_MODULES]) {
     if (modules[module] !== undefined && typeof modules[module] !== 'boolean') {
       throw new Error(`${where}.${module} must be true or false, not ${JSON.stringify(modules[module])}`);
     }
@@ -241,7 +249,9 @@ export function scanProject(folder, target) {
   const backend = settings.physics?.backend;
   const needsJolt = backend === 'jolt' || settings.network?.preset === 'deterministic';
   const needsPhysx = backend === 'physx';
-  return { name: project.name, list, uses, unresolved, unreadable, needsJolt, needsPhysx };
+  // The renderer the build target asks for (build.targets.<T>.renderer): a backend the list leaves out cannot be the one asked for
+  const renderer = target ? project.build?.targets?.[target]?.renderer : undefined;
+  return { name: project.name, list, uses, unresolved, unreadable, needsJolt, needsPhysx, renderer, target };
 }
 
 /** What contradicts the list: every one of these would misbehave in a game built from it. */
@@ -257,6 +267,9 @@ export function findConflicts(scan) {
       const where = use.line ? `${use.file}:${use.line}` : use.file;
       conflicts.push(`${where} uses ${use.what}, but the list leaves ${use.module} out`);
     }
+  }
+  if (RENDERER_MODULES.includes(scan.renderer) && list[scan.renderer] === false) {
+    conflicts.push(`build.targets.${scan.target}.renderer asks for "${scan.renderer}", but the list leaves ${scan.renderer} out (the software renderer is always built)`);
   }
   if (list.physics3d !== undefined) {
     if (scan.needsJolt && !['jolt', 'both'].includes(list.physics3d)) {
@@ -328,7 +341,7 @@ function main(argv) {
 
   console.log(`Project: ${scan.name ?? folders[0]}`);
   console.log(scan.list ? `List: ${JSON.stringify(scan.list)}` : 'List: none, so every module is built');
-  for (const module of Object.keys(MODULES)) {
+  for (const module of Object.keys(MODULES).filter((name) => !RENDERER_MODULES.includes(name))) {
     const uses = scan.uses.filter((use) => use.module === module);
     console.log(`  ${module}: ${uses.length > 0 ? `used (${uses.length} place${uses.length === 1 ? '' : 's'}; first: ${uses[0].file})` : 'no use found'}`);
   }
