@@ -192,6 +192,147 @@ namespace N2Engine::Scripting
             end
             )");
         }
+
+        void PrepareThreadHook(lua_State *thread)
+        {
+            const LuaGuardState *guard = LuaGuardState::Of(thread);
+            if (guard->limit == 0)
+            {
+                if (lua_gethookmask(thread) != 0)
+                {
+                    lua_sethook(thread, nullptr, 0, 0);
+                }
+                return;
+            }
+            // Set only when it differs: lua_sethook restarts the thread's countdown, and the countdown of a coroutine
+            // that yields is charged by ChargeThread after each run, not dropped
+            const int step = static_cast<int>(guard->step);
+            if (lua_gethook(thread) != &LuaGuardState::CountHook || lua_gethookmask(thread) != LUA_MASKCOUNT ||
+                lua_gethookcount(thread) != step)
+            {
+                lua_sethook(thread, &LuaGuardState::CountHook, LUA_MASKCOUNT, step);
+            }
+        }
+
+        bool ChargeThread(lua_State *thread)
+        {
+            LuaGuardState *guard = LuaGuardState::Of(thread);
+            const int uncounted = TakeUncountedInstructions(thread);
+            if (guard->limit == 0)
+            {
+                return false;
+            }
+            if (!guard->exhausted)
+            {
+                guard->remaining -= uncounted;
+                if (guard->remaining <= 0)
+                {
+                    // As the count hook does when the budget runs out (see CountHook)
+                    guard->exhausted = true;
+                    guard->step = 1;
+                }
+            }
+            return guard->exhausted;
+        }
+
+        namespace
+        {
+            // The budget error, raised in the thread that resumed (or closed) a coroutine: the error the count hook
+            // raises, and from now on that thread's hook fires on every instruction, as the count hook arranges for
+            // the thread it runs in
+            int RaiseBudgetError(lua_State *L)
+            {
+                const LuaGuardState *guard = LuaGuardState::Of(L);
+                lua_sethook(L, &LuaGuardState::CountHook, LUA_MASKCOUNT, 1);
+                return luaL_error(L, "%s of %I", BudgetErrorText.data(), static_cast<lua_Integer>(guard->limit));
+            }
+
+            // coroutine.resume and coroutine.close; upvalue 1 is the library's own function. Both run Lua code in the
+            // coroutine (its body, or its pending to-be-closed variables). A coroutine that ran out of budget makes
+            // resume return false and the error, and close the same: handed on instead, as the sandbox's pcall does.
+            // No C++ object lives in this frame: a Lua error leaves it by longjmp.
+            int GuardedThreadCall(lua_State *L)
+            {
+                lua_State *thread = lua_tothread(L, 1); // null when the argument is no coroutine: the library's error
+                if (thread == L)
+                {
+                    thread = nullptr; // the running coroutine itself: the library refuses it, and its count runs on
+                }
+                if (thread != nullptr)
+                {
+                    PrepareThreadHook(thread);
+                }
+                lua_pushvalue(L, lua_upvalueindex(1));
+                lua_insert(L, 1);
+                lua_call(L, lua_gettop(L) - 1, LUA_MULTRET);
+                const bool spent = thread != nullptr && ChargeThread(thread);
+                if (spent || LuaGuardState::Of(L)->exhausted)
+                {
+                    return RaiseBudgetError(L);
+                }
+                return lua_gettop(L);
+            }
+
+            // What coroutine.wrap returns: upvalue 1 is the library's wrapper function, upvalue 2 its coroutine. The
+            // library's function raises the coroutine's error itself (after closing it, which runs its pending
+            // to-be-closed variables in the coroutine), so it is called protected, charged, and its error raised again.
+            int GuardedWrapped(lua_State *L)
+            {
+                lua_State *thread = lua_tothread(L, lua_upvalueindex(2));
+                if (thread == L)
+                {
+                    thread = nullptr;
+                }
+                if (thread != nullptr)
+                {
+                    PrepareThreadHook(thread);
+                }
+                lua_pushvalue(L, lua_upvalueindex(1));
+                lua_insert(L, 1);
+                const int status = lua_pcall(L, lua_gettop(L) - 1, LUA_MULTRET, 0);
+                const bool spent = thread != nullptr && ChargeThread(thread);
+                if (spent || LuaGuardState::Of(L)->exhausted)
+                {
+                    return RaiseBudgetError(L);
+                }
+                if (status != LUA_OK)
+                {
+                    return lua_error(L); // the error object the library raised, unchanged
+                }
+                return lua_gettop(L);
+            }
+
+            // coroutine.wrap; upvalue 1 is the library's own. The library's wrapper keeps its coroutine as its first
+            // upvalue (lcorolib.c, luaB_cowrap), read here with the C API's lua_getupvalue.
+            int GuardedWrap(lua_State *L)
+            {
+                lua_pushvalue(L, lua_upvalueindex(1));
+                lua_insert(L, 1);
+                lua_call(L, lua_gettop(L) - 1, 1);
+                if (lua_getupvalue(L, -1, 1) == nullptr || lua_type(L, -1) != LUA_TTHREAD)
+                {
+                    return luaL_error(L, "coroutine.wrap: the library's wrapper has no coroutine");
+                }
+                lua_pushcclosure(L, &GuardedWrapped, 2);
+                return 1;
+            }
+        }
+
+        void InstallCoroutineGuards(sol::state_view lua)
+        {
+            lua_State *L = lua.lua_state();
+            lua_getglobal(L, "coroutine");
+            for (const char *name : {"resume", "close"})
+            {
+                lua_getfield(L, -1, name);
+                lua_pushcclosure(L, &GuardedThreadCall, 1);
+                lua_setfield(L, -2, name);
+            }
+            lua_getfield(L, -1, "wrap");
+            lua_pushcclosure(L, &GuardedWrap, 1);
+            lua_setfield(L, -2, "wrap");
+            lua_pop(L, 1);
+        }
     }
 
     LuaRuntime *LuaRuntime::_instance = nullptr;
@@ -267,7 +408,9 @@ namespace N2Engine::Scripting
             sol::lib::base,
             sol::lib::math,
             sol::lib::string,
-            sol::lib::table
+            sol::lib::table,
+            // Lua's coroutines, under the budget: resume, wrap and close are replaced below (InstallCoroutineGuards)
+            sol::lib::coroutine
         );
 
         // Scripts are project content, so they get no way past the asset pipeline: no reading files
@@ -292,6 +435,8 @@ namespace N2Engine::Scripting
 
         // pcall, xpcall and setmetatable (shared with the declaration evaluator, which has its own state)
         Detail::InstallBudgetSandbox(_lua);
+        // Each coroutine is a Lua thread with hooks of its own: it runs under the entry's count hook and is charged
+        Detail::InstallCoroutineGuards(_lua);
 
         // The order-stable iteration helper is in every state. The engine-owned math functions replace Lua's own (the C
         // library's, whose last bits differ between platforms) exactly when the seed is set: determinism.luaSeed is the
