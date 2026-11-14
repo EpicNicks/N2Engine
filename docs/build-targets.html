@@ -39,6 +39,7 @@
 <li><a href="text.html">Text &amp; fonts</a></li>
 <li><a href="ui.html">UI</a></li>
 <li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="sprite2d.html">Sprites &amp; 2D shapes</a></li>
 <li><a href="particles.html">Particles</a></li>
 <li><a href="soft-bodies.html">Soft bodies</a></li>
 <li><a href="resources.html">Resources &amp; paths</a></li>
@@ -90,7 +91,7 @@
 <li><a href="#settings">Per-target settings in the project</a></li>
 <li><a href="#descriptors">Target descriptors</a></li>
 <li><a href="#json">JSON output</a></li>
-<li><a href="#not-yet">Not done yet</a></li>
+<li><a href="#not-yet">Status</a></li>
 </ol>
 </div>
 
@@ -100,6 +101,7 @@
 node tools/n2build/n2build.mjs doctor --target web                    # what the target needs, and what is missing
 node tools/n2build/n2build.mjs build  --target windows --project path/to/game --archive zip
 node tools/n2build/n2build.mjs run    --target web --project path/to/game   # build, then serve on http://127.0.0.1:8080/</code></pre>
+<p>Two more commands: <code>cook</code> makes the game's pack alone (<a href="packs.html#cook">The cook step</a>), and <code>apple-workflow</code> writes the GitHub Actions workflow that builds iOS and macOS off a Mac (<a href="apple.html#remote">Building in GitHub Actions</a>).</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Option</th><th>Commands</th><th>Meaning</th></tr></thead>
@@ -112,6 +114,9 @@ node tools/n2build/n2build.mjs run    --target web --project path/to/game   # bu
 <tr><td><code>--archive zip|7z</code></td><td>build</td><td>Also writes <code>&lt;package&gt;.zip</code> or <code>.7z</code> beside the package folder, with CMake's own archiver</td></tr>
 <tr><td><code>--jobs N</code></td><td>build, run</td><td>Parallel compile jobs. Default: the machine's processor count</td></tr>
 <tr><td><code>--dry-run</code></td><td>build</td><td>Prints the build tree, the CMake commands and the package folder, and runs nothing</td></tr>
+<tr><td><code>--pack zip|stored|7z|folder</code></td><td>build, cook (not <code>folder</code>)</td><td>How the game's files are packaged (<a href="packs.html#formats">Pack formats</a>)</td></tr>
+<tr><td><code>--signing PROFILE</code></td><td>build</td><td>A signing profile from your <code>n2build.json</code> instead of the project's (<a href="android.html#signing">Android signing</a>)</td></tr>
+<tr><td><code>--device SERIAL</code>, <code>--seconds N</code></td><td>run (Android; <code>--seconds</code> also the iOS simulator)</td><td>The device to run on, and how long to follow the game's log (<a href="android.html#run">Running on a device</a>)</td></tr>
 <tr><td><code>--no-build</code></td><td>run</td><td>Runs the package already built</td></tr>
 <tr><td><code>--frames N</code></td><td>run</td><td>Desktop: the player quits after N frames. Web: runs the package under node for N frames (<code>scripts/web-package-smoke.mjs</code>) instead of serving it</td></tr>
 <tr><td><code>--port N</code></td><td>run (web)</td><td>The local server's port. Default 8080; 0 picks a free one</td></tr>
@@ -173,7 +178,7 @@ node tools/n2build/n2build.mjs run    --target web --project path/to/game   # bu
 <p class="src">Source: <code>players/desktop/src/Main.cpp</code>, <code>players/desktop/src/PlayerOptions.cpp</code>; tests: <code>tests/players/PlayerOptionsTests.cpp</code></p>
 
 <h2 id="physics">The physics check per target</h2>
-<p>A target lists the 3D physics values it can build (<code>physics3d</code> in its descriptor). A project whose <code>build.modules.physics3d</code> asks for one the target cannot build fails before configuring, with the target's list. A project without a list gets every backend the target has. Today all three targets build PhysX; the check matters for the mobile targets, which will build Jolt and Box2D only (decision D8). Test: <code>build refuses a project whose physics the target cannot build, before compiling anything</code>.</p>
+<p>A target lists the 3D physics values it can build (<code>physics3d</code> in its descriptor). A project whose <code>build.modules.physics3d</code> asks for one the target cannot build fails before configuring, with the target's list. A project without a list gets every backend the target has. <code>windows</code>, <code>linux</code> and <code>web</code> list <code>none</code>, <code>physx</code>, <code>jolt</code> and <code>both</code>; <code>android</code>, <code>ios</code> and <code>macos</code> list <code>none</code> and <code>jolt</code> only: no PhysX there (decision D8). Test: <code>build refuses a project whose physics the target cannot build, before compiling anything</code>.</p>
 
 <h2 id="settings">Per-target settings in the project <span class="badge">protocol 1.29.0</span></h2>
 <p>A project keeps its settings for each target in <code>project.n2proj</code>, under <code>build.targets</code>, beside <code>build.modules</code>. The editor writes them with <code>SetBuildTargets</code> (<a href="editor.html#project-commands">Project commands</a>); the Build Settings panel (stage 3) is where a person edits them.</p>
@@ -264,11 +269,11 @@ node tools/n2build/n2build.mjs run    --target web --project path/to/game   # bu
 </table>
 </div>
 
-<h2 id="not-yet">Not done yet</h2>
+<h2 id="not-yet">Status</h2>
 <ul>
-<li><strong>The editor.</strong> The Build Settings panel (stage 3, in the frontend). n2build already reads the per-target settings (<a href="#settings-n2build">above</a>).</li>
-<li><strong>Packs</strong> are stage 4: a package carries <code>game.n2pack</code> (zip by default, <code>--pack stored|7z|folder</code>), and <code>n2build cook</code> makes one alone (<a href="packs.html">Packs &amp; the virtual filesystem</a>).</li>
-<li><strong>CI</strong> builds every desktop and web package through n2build: Linux in the <code>n2build</code> job (run for 60 frames under Xvfb), Windows and the web in <code>n2build-packages</code>. The Windows package's files are checked, but it is not run: the runner has no OpenGL 3.3 context. The web package runs n2build's node smoke for 30 frames.</li>
+<li><strong>The editor.</strong> The Build Settings panel (stage 3) is in the frontend and writes the per-target settings with <code>SetBuildTargets</code> (editor protocol 1.29.0); n2build reads them (<a href="#settings-n2build">above</a>).</li>
+<li><strong>Packs</strong> (stage 4, PR #338): a package carries <code>game.n2pack</code> (zip by default, <code>--pack stored|7z|folder</code>), and <code>n2build cook</code> makes one alone (<a href="packs.html">Packs &amp; the virtual filesystem</a>).</li>
+<li><strong>CI</strong> builds every desktop and web package through n2build: Linux in the <code>n2build</code> job (run for 60 frames under Xvfb), Windows and the web in <code>n2build-packages</code>. The Windows package's files are checked, but it is not run: the runner has no OpenGL 3.3 context. The web package runs n2build's node smoke for 30 frames. Android is built and run on an x86_64 emulator in <code>android (APK of lua_project, emulator smoke)</code>, and macOS and iOS (the simulator) on a macOS runner in the <code>apple</code> matrix job.</li>
 <li><strong>Package size on Windows.</strong> A build with PhysX ships <code>PhysXGpu_64.dll</code> (about 360 MB of the 374 MB <code>lua_project</code> package, measured 2026-11-10), because the engine's PhysX build always lists it. n2build leaves it out of the package unless the project's <code>physics.gpu</code> is <code>on</code> or <code>auto</code> (the default is <code>off</code>), and logs that it did; the build tree still has it, so turning GPU physics on needs only a new package (<code>runtimeFilesFor</code> in <code>tools/n2build/lib/build.mjs</code>). A project with <code>"physics3d": "none"</code> or <code>"jolt"</code> ships no PhysX at all.</li>
 <li><strong>Android</strong> builds an APK, and with a signing profile a signed release APK and AAB; <code>run</code> installs it on a device and streams its log (<a href="android.html">Android</a>). <strong>iOS and macOS</strong> build on a Mac, or in GitHub Actions from any machine (stage 10, <a href="apple.html">iOS &amp; macOS</a>). A target folder outside the repository adds a <a href="private-targets.html">private target</a>, with its own player, backend and renderer (stage 11).</li>
 </ul>
