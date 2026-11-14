@@ -1,5 +1,6 @@
-/* Web (Emscripten) build: a no-op OpenAL, linked only with N2ENGINE_WEB_AUDIO=stub (the default build links Emscripten's
- * own OpenAL on WebAudio instead). See CMakeLists.txt in this directory.
+/* A no-op OpenAL. The web build links it with N2ENGINE_WEB_AUDIO=stub (the default web build links Emscripten's own OpenAL on
+ * WebAudio instead; see CMakeLists.txt in this directory), and every platform links it in place of OpenAL Soft when the audio
+ * module is left out (N2ENGINE_USE_AUDIO=OFF; cmake/openal-stub, and the web forces N2ENGINE_WEB_AUDIO=stub then).
  *
  * Only the functions the engine calls are defined. No device opens, so there is never a context, and (like OpenAL with
  * no context) every object function reports AL_INVALID_OPERATION through alGetError and does nothing else. No extension
@@ -52,6 +53,11 @@ void alSourcePlay(ALuint source) { (void)source; SetNoContextError(); }
 void alSourcePause(ALuint source) { (void)source; SetNoContextError(); }
 void alSourceStop(ALuint source) { (void)source; SetNoContextError(); }
 void alSourcef(ALuint source, ALenum param, ALfloat value) { (void)source; (void)param; (void)value; SetNoContextError(); }
+void alSource3f(ALuint source, ALenum param, ALfloat value1, ALfloat value2, ALfloat value3)
+{
+    (void)source; (void)param; (void)value1; (void)value2; (void)value3;
+    SetNoContextError();
+}
 void alSourcei(ALuint source, ALenum param, ALint value) { (void)source; (void)param; (void)value; SetNoContextError(); }
 void alGetSourcei(ALuint source, ALenum param, ALint *value)
 {
@@ -61,4 +67,9 @@ void alGetSourcei(ALuint source, ALenum param, ALint *value)
 }
 
 void alListenerf(ALenum param, ALfloat value) { (void)param; (void)value; SetNoContextError(); }
+void alListener3f(ALenum param, ALfloat value1, ALfloat value2, ALfloat value3)
+{
+    (void)param; (void)value1; (void)value2; (void)value3;
+    SetNoContextError();
+}
 void alListenerfv(ALenum param, const ALfloat *values) { (void)param; (void)values; SetNoContextError(); }

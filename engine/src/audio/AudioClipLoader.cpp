@@ -1,5 +1,6 @@
 #include "engine/audio/AudioClip.hpp"
 #include "engine/audio/AudioLoaders.hpp"
+#include "engine/audio/AudioSystem.hpp"
 #include "engine/io/Resources.hpp"
 #include "engine/Logger.hpp"
 
@@ -10,6 +11,12 @@ namespace N2Engine::Audio
     // dropped it and audio files could never be loaded by extension.)
     std::shared_ptr<Base::Asset> LoadAudioClipFromFile(const std::filesystem::path &path)
     {
+#ifndef N2ENGINE_AUDIO_ENABLED
+        // A build without the audio module (N2ENGINE_USE_AUDIO, defined on this file by engine/CMakeLists.txt) has no decoders
+        // (AudioLoaders.cpp is not compiled) and no audio device to put a clip on: every load fails, and says why once
+        AudioSystem::WarnIfNotInBuild(std::format("AudioClip '{}'", path.generic_string()));
+        return nullptr;
+#else
         std::string ext = path.extension().string();
         std::ranges::transform(ext, ext.begin(), ::tolower);
 
@@ -53,5 +60,6 @@ namespace N2Engine::Audio
         }
 
         return clip;
+#endif
     }
 }

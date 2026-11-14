@@ -9,6 +9,8 @@
 #include <format>
 #include <limits>
 #include <ranges>
+#include <string_view>
+#include <utility>
 
 #if defined(N2ENGINE_PLATFORM_WEB) && defined(N2ENGINE_WEB_WEBAUDIO)
 #include <emscripten.h>
@@ -51,8 +53,39 @@ namespace N2Engine::Audio
         return *instance;
     }
 
+    // The audio module (N2ENGINE_USE_AUDIO, defined on this file only by engine/CMakeLists.txt). Without it OpenAL is the no-op
+    // stub, Initialize refuses before opening anything, and so nothing below ever has a device or a context.
+    bool AudioSystem::IsInBuild()
+    {
+#ifdef N2ENGINE_AUDIO_ENABLED
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    void AudioSystem::WarnIfNotInBuild(const std::string_view who)
+    {
+#ifdef N2ENGINE_AUDIO_ENABLED
+        static_cast<void>(who);
+#else
+        static bool warned = false;
+        if (!std::exchange(warned, true))
+        {
+            Logger::Warn(std::format("{}: this build has no audio module (N2ENGINE_USE_AUDIO is OFF), so audio keeps its data "
+                                     "and plays nothing",
+                                     who));
+        }
+#endif
+    }
+
     bool AudioSystem::Initialize(AudioOutput output)
     {
+#ifndef N2ENGINE_AUDIO_ENABLED
+        static_cast<void>(output);
+        WarnIfNotInBuild("AudioSystem::Initialize");
+        return false;
+#else
         if (_initialized)
         {
             if (output != _output)
@@ -72,6 +105,7 @@ namespace N2Engine::Audio
             return false;
         }
         return true;
+#endif
     }
 
     bool AudioSystem::OpenDevice()

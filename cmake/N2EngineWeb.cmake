@@ -41,6 +41,11 @@ add_link_options(-fwasm-exceptions)
 # audio system disables itself exactly as on a machine with no sound card (docs/web-build.html).
 set(N2ENGINE_WEB_AUDIO "webaudio" CACHE STRING "Web audio backend: webaudio (Emscripten's OpenAL on WebAudio) or stub (no sound)")
 set_property(CACHE N2ENGINE_WEB_AUDIO PROPERTY STRINGS webaudio stub)
+# Without the audio module (N2ENGINE_USE_AUDIO=OFF, docs/project-modules.html) the backend is always the stub: no WebAudio
+# glue (library_openal.js) is linked. A normal variable, so it wins over the cached value in this tree.
+if(NOT N2ENGINE_USE_AUDIO)
+    set(N2ENGINE_WEB_AUDIO "stub")
+endif()
 if(NOT N2ENGINE_WEB_AUDIO MATCHES "^(webaudio|stub)$")
     message(FATAL_ERROR "N2ENGINE_WEB_AUDIO must be webaudio or stub (got '${N2ENGINE_WEB_AUDIO}')")
 endif()

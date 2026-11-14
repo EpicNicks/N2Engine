@@ -32,6 +32,7 @@
 #include "engine/ui/Rect.hpp"
 #include "engine/ui/RectTransform.hpp"
 #include "engine/ui/UISystem.hpp"
+#include "../modules/ModuleGuards.hpp"
 
 // CPU picking and world bounds (#80, E7b): IRenderable::GetWorldBounds of each renderer, the ray tests, and
 // PickGameObject / GetGameObjectBounds over scenes that were never attached (edit mode). No window, GPU or physics.
@@ -301,6 +302,7 @@ TEST(WorldBoundsTest, TextIsItsLaidOutRectangleInTheObjectsPlane)
 
 TEST(WorldBoundsTest, AWorldCanvasCoversItsRectAndTheGraphicsOutsideIt)
 {
+    N2_SKIP_WITHOUT_UI();
     auto scene = EditScene("WorldBounds_Canvas");
     auto canvas = AddWorldCanvas(*scene, Vector3(0.0f, 0.0f, 0.0f));
     auto *component = canvas->GetComponent<UI::Canvas>();
@@ -500,6 +502,7 @@ TEST(PickingTest, APerspectiveCameraRayPicksWhatIsUnderThePixel)
 
 TEST(PickingTest, AWorldCanvasPicksTheGraphicUnderTheRayAndPassesThroughTheRest)
 {
+    N2_SKIP_WITHOUT_UI();
     auto scene = EditScene("Pick_Canvas");
     auto canvas = AddWorldCanvas(*scene, Vector3(0.0f, 0.0f, 0.0f));
     // The left half of the canvas (x -0.5 to 0 in the world) is a panel; the right half is empty; a small panel
@@ -585,6 +588,7 @@ TEST(EntityBoundsTest, AnObjectWithNothingToMeasureGetsItsPickSphereBox)
 
 TEST(EntityBoundsTest, AUiElementOfAWorldCanvasIsItsRectInTheWorld)
 {
+    N2_SKIP_WITHOUT_UI();
     auto scene = EditScene("Bounds_UiElement");
     auto canvas = AddWorldCanvas(*scene, Vector3(0.0f, 0.0f, 0.0f));
     const auto panel = AddPanel(canvas, "Panel", UI::Rect{0.0f, 0.0f, 50.0f, 100.0f});
@@ -818,6 +822,7 @@ TEST(PickingNormalTest, APickSphereHasItsOutwardNormal)
 
 TEST(PickingNormalTest, TextAndAWorldCanvasHaveTheNormalOfTheirPlane)
 {
+    N2_SKIP_WITHOUT_UI();
     auto scene = EditScene("Normal_Planes");
     auto label = GameObject::Create("Label");
     auto *text = label->AddComponent<Rendering::TextRenderer>();

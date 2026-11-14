@@ -43,6 +43,14 @@ option(N2ENGINE_USE_BOX2D "Build the vendored Box2D library" ON)
 option(N2ENGINE_USE_PARTICLES "Build the particle simulation (ParticleSystem)" ON)
 option(N2ENGINE_USE_SOFTBODIES "Build the soft-body simulation (SoftBody)" ON)
 message(STATUS "Engine modules: particles ${N2ENGINE_USE_PARTICLES}, softbodies ${N2ENGINE_USE_SOFTBODIES}")
+# OFF leaves sound out: no OpenAL Soft is fetched or built (a no-op OpenAL stands in, external/web-stubs/openal_stub.c, on every
+# platform; on the web it is N2ENGINE_WEB_AUDIO=stub), the audio decoders (dr_wav, dr_mp3, dr_flac, stb_vorbis) are not linked,
+# and the audio system never starts. OFF for UI leaves out its layout, drawing and pointer hits: canvases draw nothing and are
+# never hit. AudioSource, AudioListener and the UI components stay registered and keep their data (docs/project-modules.html).
+# A project's build.modules list sets them ("audio", "ui").
+option(N2ENGINE_USE_AUDIO "Build sound (OpenAL Soft, the audio decoders, AudioSource)" ON)
+option(N2ENGINE_USE_UI "Build the UI's layout, drawing and pointer hits (Canvas, Image, UIText, Button)" ON)
+message(STATUS "Engine modules: audio ${N2ENGINE_USE_AUDIO}, ui ${N2ENGINE_USE_UI}")
 # OFF compiles the Vulkan renderer out: the build then needs no Vulkan headers or loader, and --renderer vulkan / the
 # VULKAN render backend fail with a clear message. ON (the default) needs the Vulkan SDK (Windows) or libvulkan-dev (Linux).
 option(N2ENGINE_RENDERER_VULKAN "Build the Vulkan renderer backend" ON)
@@ -445,6 +453,11 @@ add_library(dummy_target INTERFACE)
 target_include_directories(dummy_target INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/dummy_include)
 
 # == Audio ==
+# Without the audio module (N2ENGINE_USE_AUDIO=OFF) nothing of OpenAL Soft is fetched or built: a no-op OpenAL with OpenAL
+# Soft's own headers stands in under the same target names (cmake/openal-stub), so the engine and the players link as before
+if(NOT N2ENGINE_USE_AUDIO)
+add_subdirectory(cmake/openal-stub)
+else()
 set(ALSOFT_UTILS OFF CACHE BOOL "" FORCE)
 set(ALSOFT_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(ALSOFT_INSTALL OFF CACHE BOOL "" FORCE)
@@ -458,6 +471,7 @@ FetchContent_Declare(
         GIT_TAG 1.24.0
 )
 FetchContent_MakeAvailable(OpenAL)
+endif()
 endif()
 
 # == A private target's own code (build targets stage 11; docs/private-targets.html) ==

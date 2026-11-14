@@ -34,11 +34,21 @@ export const MODULES = {
     components: ['SoftBody'],
     luaPatterns: [],
   },
+  // AudioListener is not a use: a listener with no sound to hear does nothing, so a scene that only has one (on its camera)
+  // can still leave audio out. Audio.PlayOneShot and the other Audio functions are.
+  audio: {
+    components: ['AudioSource'],
+    luaPatterns: [/\bAudio\.[A-Za-z]\w*/],
+  },
+  ui: {
+    components: ['Canvas', 'RectTransform', 'Image', 'UIText', 'Button'],
+    luaPatterns: [/\bUI\.[A-Za-z]\w*/],
+  },
 };
 
 export const PHYSICS3D_VALUES = ['none', 'physx', 'jolt', 'both'];
 /** The modules a list turns on (true) or off (false) */
-export const BOOLEAN_MODULES = ['physics2d', 'particles', 'softbodies'];
+export const BOOLEAN_MODULES = ['physics2d', 'particles', 'softbodies', 'audio', 'ui'];
 
 const SCENE_EXTENSIONS = new Set(['.scene', '.prefab', '.json']);
 const SKIPPED_FOLDERS = new Set(['.import', '.n2', '.git', 'node_modules', 'build']);

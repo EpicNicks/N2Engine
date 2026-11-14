@@ -43,6 +43,7 @@
 #include "engine/Logger.hpp"
 #include "engine/ProjectSettings.hpp"
 #include "engine/Window.hpp"
+#include "engine/audio/AudioSystem.hpp"
 #include "engine/input/GamepadSource.hpp"
 #include "engine/input/InputSystem.hpp"
 #include "engine/input/KeySource.hpp"
@@ -408,7 +409,8 @@ namespace
         emscripten_cancel_main_loop();
         if (g_player.smokeFrames > 0)
         {
-            // The audio row of the engine's health, for the node smoke test (node has no WebAudio: it must be "failed")
+            // The audio row of the engine's health, for the node smoke test (node has no WebAudio: it must be "failed", or
+            // "disabled" with module=off in a build without the audio module, docs/project-modules.html)
             for (const SubsystemStatus &status : Application::GetInstance().GetHealth().subsystems)
             {
                 if (status.name == "Audio")
@@ -417,7 +419,8 @@ namespace
                                         : status.state == SubsystemState::Failed   ? "failed"
                                         : status.state == SubsystemState::Disabled ? "disabled"
                                                                                    : "not-started";
-                    std::printf("N2_WEB_AUDIO state=%s\n", state);
+                    std::printf("N2_WEB_AUDIO state=%s%s\n", state,
+                                Audio::AudioSystem::IsInBuild() ? "" : " module=off");
                 }
             }
         }

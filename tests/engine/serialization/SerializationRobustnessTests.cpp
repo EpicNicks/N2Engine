@@ -418,6 +418,11 @@ protected:
         _skipped = true;
         GTEST_SKIP() << "The web build has no audio device yet (stage 4)";
 #endif
+        if (!Audio::AudioSystem::IsInBuild())
+        {
+            _skipped = true;
+            GTEST_SKIP() << "the audio module is not in this build (N2ENGINE_USE_AUDIO is OFF)";
+        }
 #ifdef _WIN32
         _putenv_s("ALSOFT_DRIVERS", "null");
 #else
@@ -442,7 +447,7 @@ protected:
     }
 
 private:
-    bool _skipped = false; // set only by the web build's skip in SetUp
+    bool _skipped = false; // set by a skip in SetUp: the web build's, or a build without the audio module
 };
 
 TEST_F(AudioAssetReferenceTest, AudioFilesLoadByExtension)

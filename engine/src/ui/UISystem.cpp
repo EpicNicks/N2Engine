@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <format>
 #include <functional>
 #include <ranges>
+#include <utility>
 
 #include <math/Vector3.hpp>
 
@@ -11,6 +13,7 @@
 #include "engine/Camera.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/Layers.hpp"
+#include "engine/Logger.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/physics/Raycast.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
@@ -68,6 +71,7 @@ namespace N2Engine::UI
             }
         }
 
+#ifdef N2ENGINE_UI_ENABLED
         void LayOut(GameObject &gameObject, const Rect &parentRect, const bool isCanvas, std::vector<UIDrawItem> &out)
         {
             if (!gameObject.IsActiveInHierarchy())
@@ -105,6 +109,8 @@ namespace N2Engine::UI
             }
         }
 
+#endif
+
         /// Every root canvas in the scene, in hierarchy order (both render modes)
         std::vector<RootCanvas> FindAllCanvases(const Scene &scene)
         {
@@ -116,16 +122,61 @@ namespace N2Engine::UI
             return canvases;
         }
 
+#ifdef N2ENGINE_UI_ENABLED
         /// The canvas rect of a world-space canvas: (0, 0, its size)
         Rect WorldCanvasRect(const Canvas &canvas)
         {
             const Math::Vector2 size = canvas.GetSize();
             return Rect{0.0f, 0.0f, size.x, size.y};
         }
+#endif
+
+#ifndef N2ENGINE_UI_ENABLED
+        /// Set by the one warning of a build without the UI module, so the scene is not searched for canvases again
+        bool g_leftOutWarned = false;
+#endif
+    }
+
+    // The UI module (N2ENGINE_USE_UI, defined on this file, Image.cpp and UIText.cpp only by engine/CMakeLists.txt). Without
+    // it nothing is laid out: the two Collect functions below are empty, so nothing is drawn or hit, and the hit tests stop
+    // before the ray maths. The objects, their components and the factories (CreateCanvas, ...) are the same in both builds.
+    bool UISystem::IsInBuild()
+    {
+#ifdef N2ENGINE_UI_ENABLED
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    void UISystem::WarnIfNotInBuild(const std::string_view who)
+    {
+#ifdef N2ENGINE_UI_ENABLED
+        static_cast<void>(who);
+#else
+        if (!std::exchange(g_leftOutWarned, true))
+        {
+            Logger::Warn(std::format("{}: this build has no UI module (N2ENGINE_USE_UI is OFF), so UI keeps its data, draws "
+                                     "nothing and is never hit",
+                                     who));
+        }
+#endif
     }
 
     std::vector<UIDrawItem> UISystem::CollectGraphics(const Scene &scene, const Vector2i &viewport)
     {
+#ifndef N2ENGINE_UI_ENABLED
+        static_cast<void>(viewport);
+        // The one warning, from the first scene that has a canvas
+        if (!g_leftOutWarned)
+        {
+            if (const std::vector<RootCanvas> canvases = FindAllCanvases(scene); !canvases.empty())
+            {
+                WarnIfNotInBuild(std::format("Canvas on '{}'", canvases.front().gameObject->GetName()));
+            }
+        }
+        return {};
+#else
         std::vector<UIDrawItem> items;
         if (viewport[0] <= 0 || viewport[1] <= 0)
         {
@@ -144,6 +195,7 @@ namespace N2Engine::UI
             LayOut(*canvas.gameObject, canvasRect, true, items);
         }
         return items;
+#endif
     }
 
     void UISystem::Render(const Scene &scene, Renderer::Common::IRenderer *renderer, const Vector2i &viewport)
@@ -221,6 +273,10 @@ namespace N2Engine::UI
 
     std::vector<UIDrawItem> UISystem::CollectWorldCanvasGraphics(const Canvas &canvas)
     {
+#ifndef N2ENGINE_UI_ENABLED
+        WarnIfNotInBuild(std::format("Canvas on '{}'", canvas.GetGameObject().GetName()));
+        return {};
+#else
         std::vector<UIDrawItem> items;
         GameObject &gameObject = canvas.GetGameObject();
         if (!canvas.IsWorldSpace() || !canvas.IsActive() || !gameObject.IsActiveInHierarchy() ||
@@ -230,6 +286,7 @@ namespace N2Engine::UI
         }
         LayOut(gameObject, WorldCanvasRect(canvas), true, items);
         return items;
+#endif
     }
 
     void UISystem::RenderWorldCanvas(const Canvas &canvas, Renderer::Common::IRenderer *renderer,
@@ -308,6 +365,12 @@ namespace N2Engine::UI
 
     WorldUIHit UISystem::HitTestWorldCanvases(const Scene &scene, const Math::Ray &ray, const float maxDistance)
     {
+#ifndef N2ENGINE_UI_ENABLED
+        static_cast<void>(scene);
+        static_cast<void>(ray);
+        static_cast<void>(maxDistance);
+        return {};
+#else
         WorldUIHit best;
         for (const RootCanvas &root : FindAllCanvases(scene))
         {
@@ -334,12 +397,22 @@ namespace N2Engine::UI
             }
         }
         return best;
+#endif
     }
 
     GameObject* UISystem::HitTestScreenPoint(const Scene &scene, const Camera *camera,
                                              const Math::Vector2 &windowPoint, const Vector2i &viewport,
                                              const std::uint32_t physicsMask)
     {
+#ifndef N2ENGINE_UI_ENABLED
+        // Nothing is laid out, so nothing can be hit: the pointer goes to the world
+        static_cast<void>(scene);
+        static_cast<void>(camera);
+        static_cast<void>(windowPoint);
+        static_cast<void>(viewport);
+        static_cast<void>(physicsMask);
+        return nullptr;
+#else
         // Overlay canvases first: they are drawn over everything. This also rejects a point outside the viewport.
         if (GameObject *overlayHit = HitTestWindowPoint(scene, windowPoint, viewport))
         {
@@ -385,6 +458,7 @@ namespace N2Engine::UI
             }
         }
         return hit.gameObject;
+#endif
     }
 
     Math::Matrix<float, 4, 4> UISystem::OverlayProjection(const Vector2i &viewport)

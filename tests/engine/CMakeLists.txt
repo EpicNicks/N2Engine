@@ -56,7 +56,27 @@ set(N2ENGINE_SOFTBODIES_TESTS
 if(N2ENGINE_PHYSX_AVAILABLE)
     list(APPEND N2ENGINE_SOFTBODIES_TESTS physics/PhysXSoftBodiesBackendTests.cpp)
 endif()
-foreach(_n2_module PARTICLES SOFTBODIES)
+# The audio and UI modules (N2ENGINE_USE_AUDIO, N2ENGINE_USE_UI) the same way: the files that only test the module are left out,
+# and a test of another subsystem that also needs one skips itself (modules/ModuleGuards.hpp)
+set(N2ENGINE_AUDIO_TESTS
+    audio/AudioTests.cpp
+    audio/LoopbackAudioTests.cpp
+)
+set(N2ENGINE_UI_TESTS
+    rendering/SoftwareImageGoldenTests.cpp
+    rendering/SoftwareWorldCanvasGoldenTests.cpp
+    scripting/LuaImageSpriteTests.cpp
+    scripting/LuaUITests.cpp
+    ui/ButtonTests.cpp
+    ui/ImageColorEffectsTests.cpp
+    ui/ImageCutOutTests.cpp
+    ui/UITests.cpp
+    ui/UITextCharacterStyleTests.cpp
+    ui/UITextOffsetTests.cpp
+    ui/UITextTests.cpp
+    ui/WorldCanvasTests.cpp
+)
+foreach(_n2_module PARTICLES SOFTBODIES AUDIO UI)
     foreach(_n2_test IN LISTS N2ENGINE_${_n2_module}_TESTS)
         if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_n2_test}")
             message(FATAL_ERROR "N2ENGINE_${_n2_module}_TESTS names a file that does not exist: ${_n2_test}")
@@ -76,7 +96,7 @@ endif()
 # The particles and soft-body modules: on the whole program, not per file as Box2D's, because the shared test fakes
 # (particles/FakePhysicsBackend.hpp, included by tests of other subsystems too) run those modules' CPU backends.
 # modules/LeftOutModulesTests.cpp has tests only for a module that is left out.
-foreach(_n2_module PARTICLES SOFTBODIES)
+foreach(_n2_module PARTICLES SOFTBODIES AUDIO UI)
     if(N2ENGINE_USE_${_n2_module})
         target_compile_definitions(engine_tests PRIVATE N2ENGINE_${_n2_module}_ENABLED=1)
     endif()
