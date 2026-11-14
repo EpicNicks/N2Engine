@@ -74,6 +74,22 @@ foreach(_n2_module AUDIO UI)
     endif()
 endforeach()
 
+# The scripting module (N2ENGINE_USE_SCRIPTING; docs/project-modules.html): the Lua runtime and every binding. OFF removes all of
+# src/scripting except the new-script template (plain text) and src/scripting/LuaComponentInert.cpp, which stands in for the
+# LuaComponent so a scene saved with scripts still loads (the data kept, nothing run, one warning). ON drops that stand-in. The
+# macro is PUBLIC, because LuaComponent.hpp is a different class in the two builds; Lua and sol2 are linked only with the module.
+file(GLOB_RECURSE N2ENGINE_SCRIPTING_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/scripting/*.cpp")
+set(N2ENGINE_SCRIPTING_KEPT "${CMAKE_CURRENT_SOURCE_DIR}/src/scripting/LuaScriptTemplate.cpp")
+if(NOT EXISTS "${N2ENGINE_SCRIPTING_KEPT}" OR NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/scripting/LuaComponentInert.cpp")
+    message(FATAL_ERROR "The scripting module's lists name a file that does not exist")
+endif()
+if(N2ENGINE_USE_SCRIPTING)
+    list(REMOVE_ITEM ENGINE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/scripting/LuaComponentInert.cpp")
+else()
+    list(REMOVE_ITEM N2ENGINE_SCRIPTING_SOURCES ${N2ENGINE_SCRIPTING_KEPT} "${CMAKE_CURRENT_SOURCE_DIR}/src/scripting/LuaComponentInert.cpp")
+    list(REMOVE_ITEM ENGINE_SOURCES ${N2ENGINE_SCRIPTING_SOURCES})
+endif()
+
 # The desktop platform backend and the GLFW input device are GLFW's only callers (build targets stage 6): not in the web
 # build, which has no GLFW (its player runs on the headless backend)
 if (N2ENGINE_PLATFORM_WEB OR N2ENGINE_PLATFORM_ANDROID OR N2ENGINE_PLATFORM_IOS)
@@ -114,7 +130,7 @@ target_compile_definitions(engine PRIVATE N2ENGINE_VERSION="${PROJECT_VERSION}")
 # The Lua allocator's fault hook (LuaRuntime.cpp): lets a test refuse the state's growth allocations from the Nth on, so
 # a registry growth fails where the test wants it. Compiled in only when the unit tests are built; a shipped build
 # (N2ENGINE_BUILD_TESTS=OFF) has neither the hook's functions nor its check in the allocator.
-if (N2ENGINE_BUILD_TESTS)
+if (N2ENGINE_BUILD_TESTS AND N2ENGINE_USE_SCRIPTING)
     target_compile_definitions(engine PRIVATE N2ENGINE_LUA_ALLOC_FAULT_HOOK=1)
 endif ()
 
@@ -127,6 +143,11 @@ target_compile_definitions(engine PUBLIC
 # script (nil, a different usertype, `.` instead of `:`) is an unchecked cast in Release. PUBLIC so every
 # target that includes sol through the engine agrees on sol's layout (a mismatch would be an ODR violation).
 target_compile_definitions(engine PUBLIC SOL_ALL_SAFETIES_ON=1)
+# The scripting module is in this build: LuaComponent is the real class (LuaComponent.hpp), not the inert one
+if(N2ENGINE_USE_SCRIPTING)
+    target_compile_definitions(engine PUBLIC N2ENGINE_SCRIPTING_ENABLED=1)
+    target_link_libraries(engine PUBLIC lua)
+endif()
 
 # PhysX is optional (N2ENGINE_USE_PHYSX, or the binaries failed to download). Without it the engine
 # runs with no physics backend: components cope with a null backend and health reports it Disabled.
@@ -202,7 +223,6 @@ target_link_libraries(engine
     N2Engine::assetimport # image decoding for Texture assets; no assetimport type is in an engine header
     PUBLIC
     OpenAL::OpenAL # public audio headers include <AL/al.h>
-    lua
     N2Engine::text # public: engine/text/Font.hpp exposes the text library's types
     n2net # public: the network headers (NetworkServer, NetworkClient) expose its Connection and ITransport
 )

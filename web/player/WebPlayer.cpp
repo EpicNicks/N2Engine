@@ -57,7 +57,10 @@
 #include "engine/io/Vfs.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
+#include "engine/sceneManagement/SceneFile.hpp"
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 
 using namespace N2Engine;
 
@@ -607,8 +610,10 @@ int main(int argc, char *argv[])
         emscripten_set_canvas_element_size("#canvas", startSize.width, startSize.height);
     }
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
     SceneManager::AddScene(Scene::Create("Web Scene"), true);
     SceneManager::ProcessAnyPendingSceneChange();
+#endif
 
     // As lua_project/src/Main.cpp: scripts load through ResourceLoader, which resolves res:// under <project>/assets
     if (const auto project = IO::ProjectFile::Load(projectDir); project)
@@ -627,10 +632,34 @@ int main(int argc, char *argv[])
         IO::ResourceLoader::Instance().Initialize(projectDir);
     }
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
     if (!Scripting::LuaRuntime::Instance().RunFile(IO::ResourcePath("res://scene.lua")))
     {
         return Fail("The project's scene.lua failed to run (see the log)");
     }
+#else
+    // No scripting module in this build (docs/project-modules.html): the game is its project's startupScene
+    {
+        const auto project = IO::ProjectFile::Load(projectDir);
+        if (!project || project->startupScene.empty())
+        {
+            return Fail("The project names no startupScene, and this build has no scripting module to run assets/scene.lua");
+        }
+        const auto file = IO::ResourceLoader::Instance().Load<SceneFile>(IO::ResourcePath(project->startupScene));
+        if (file == nullptr)
+        {
+            return Fail("The startup scene could not be read (see the log)");
+        }
+        std::unique_ptr<Scene> scene = Scene::FromJSON(file->GetData(), true);
+        if (scene == nullptr)
+        {
+            return Fail("The startup scene is not a valid scene (see the log)");
+        }
+        scene->SetUUID(file->GetUUID());
+        SceneManager::AddScene(std::move(scene), true);
+        SceneManager::ProcessAnyPendingSceneChange();
+    }
+#endif
 
     // Keys and mouse buttons come from the page's events, gamepads from the Gamepad API, not from a window
     Input::KeySource::Set(&g_player.keys);

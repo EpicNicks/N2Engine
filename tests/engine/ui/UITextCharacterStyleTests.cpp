@@ -14,8 +14,12 @@
 #include "engine/GameObjectScene.hpp"
 #include "engine/common/Color.hpp"
 #include "engine/rendering/TextDrawing.hpp"
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaHandles.hpp"
+#endif
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 #include "engine/ui/UISystem.hpp"
 #include "engine/ui/UIText.hpp"
 
@@ -191,6 +195,7 @@ TEST(UITextCharacterStyleTest, ValuesAreClampedAndKeptAcrossSetText)
     EXPECT_EQ(text.GetCharacterScales().size(), 1u);
 }
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 TEST(UITextCharacterStyleTest, AScriptCanSetAndClearThem)
 {
     ASSERT_TRUE(Scripting::LuaRuntime::Instance().Initialize());
@@ -232,3 +237,4 @@ TEST(UITextCharacterStyleTest, AScriptCanSetAndClearThem)
     EXPECT_TRUE(text->GetCharacterColors().empty());
     EXPECT_TRUE(text->GetCharacterScales().empty());
 }
+#endif

@@ -31,7 +31,9 @@
 #include "engine/physics/jolt/JoltBackend.hpp"
 #include "engine/physics/physx/PhysXBackend.hpp"
 #include "engine/softbody/SoftBodyBackendSelection.hpp"
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 #include "engine/ui/UISystem.hpp"
 
 using namespace N2Engine;
@@ -150,7 +152,12 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         // network preset's requirements are checked against that
         networkEnv.gpuMode = options.physicsGpu ? ReadPhysicsGpuMode(project->settings) : Physics::GpuMode::Off;
         networkEnv.simdTier = ReadMathSimdTier(project->settings);
+#ifdef N2ENGINE_SCRIPTING_ENABLED
         networkEnv.luaSeedSet = ReadDeterminismLuaSeed(project->settings).has_value();
+#else
+        // No Lua runs in this build, so there is no Lua state whose hash seed or math could differ between machines
+        networkEnv.luaSeedSet = true;
+#endif
         networkEnv.fixedTimestepSeconds = Time::GetFixedTimestep();
         if (const auto physics = project->settings.find("physics"); physics != project->settings.end() &&
                                                                     physics->is_object())
@@ -290,12 +297,19 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
             {
                 row.detail += "; not in this build (N2ENGINE_USE_AUDIO is OFF)";
             }
+#ifndef N2ENGINE_SCRIPTING_ENABLED
+            if (row.name == "Scripting")
+            {
+                row.detail += "; not in this build (N2ENGINE_USE_SCRIPTING is OFF)";
+            }
+#endif
         }
         _health.subsystems.push_back(Network::MakeNetworkStatus(networkSettings, networkValidation));
         _initialized = false;
         return _health;
     }
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
     // Before the first Instance(): the Lua state reads its seeds as it is created. Unset (also with no project) is
     // upstream Lua's behaviour. A bad value is reported by ApplyProjectSettings, as for physics.gpu.
     std::optional<std::uint64_t> luaSeed;
@@ -319,6 +333,12 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         scriptingStatus.state = SubsystemState::Failed;
         scriptingStatus.detail = "Lua bindings failed to register (see log)";
     }
+#else
+    // A build without the scripting module (docs/project-modules.html): there is no Lua state, so nothing is started; a
+    // scene's LuaComponents keep their data and run nothing
+    scriptingStatus.state = SubsystemState::Disabled;
+    scriptingStatus.detail = "Not in this build (N2ENGINE_USE_SCRIPTING is OFF): scripts do not run";
+#endif
 
     // A bad value is reported by ApplyProjectSettings (the hosts call it after Init), as for physics.gpu, so it is
     // warned once, not twice

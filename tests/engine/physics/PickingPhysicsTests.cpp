@@ -20,7 +20,9 @@
 #include "engine/physics/SphereCollider.hpp"
 #include "engine/physics/physx/PhysXBackend.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 #include "engine/ui/Canvas.hpp"
 #include "engine/ui/Image.hpp"
 #include "engine/ui/RectTransform.hpp"
@@ -62,7 +64,9 @@ class PickingPhysicsTest : public ::testing::Test
 protected:
     static void SetUpTestSuite()
     {
+#ifdef N2ENGINE_SCRIPTING_ENABLED
         ASSERT_TRUE(Scripting::LuaRuntime::Instance().Initialize());
+#endif
         auto backend = std::make_unique<PhysXBackend>();
         ASSERT_TRUE(backend->Initialize());
         Application::GetInstance().Set3DPhysicsBackend(std::move(backend));
@@ -131,6 +135,7 @@ protected:
         _dispatcher.Process(PointerState::FromMouse(_mouse));
     }
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
     static sol::state &Lua() { return Scripting::LuaRuntime::Instance().GetState(); }
 
     template <typename T>
@@ -146,6 +151,7 @@ protected:
         }
         return result.get<T>();
     }
+#endif
 };
 
 TEST_F(PickingPhysicsTest, ClickOverABoxSendsItOnMouseDown)
@@ -368,6 +374,7 @@ TEST_F(PickingPhysicsTest, CursorOutsideTheWindowPicksNothing)
     EXPECT_EQ(_dispatcher.GetHovered(), nullptr);
 }
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 TEST_F(PickingPhysicsTest, LuaRaycastReturnsHitTables)
 {
     SpawnBox("LuaNear", Vector3(0.0f, 0.0f, 0.0f));
@@ -413,4 +420,5 @@ TEST_F(PickingPhysicsTest, LuaRayFromTheCameraHitsTheBox)
     Lua()["picking_physics_camera"] = sol::lua_nil;
 }
 
+#endif
 #endif

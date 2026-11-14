@@ -218,7 +218,8 @@ namespace N2Engine::IO::BuildTargets
                         return std::unexpected(path + ".physics3d: must be \"none\", \"physx\", \"jolt\" or \"both\"");
                     }
                 }
-                else if (key == "physics2d" || key == "particles" || key == "softbodies" || key == "audio" || key == "ui")
+                else if (key == "physics2d" || key == "particles" || key == "softbodies" || key == "audio" || key == "ui" ||
+                         key == "scripting")
                 {
                     if (!value.is_boolean())
                     {
@@ -228,7 +229,7 @@ namespace N2Engine::IO::BuildTargets
                 else
                 {
                     return std::unexpected(std::format("{}: unknown module \"{}\" (known: physics3d, physics2d, particles, "
-                                                       "softbodies, audio, ui)", path, Quote(key)));
+                                                       "softbodies, audio, ui, scripting)", path, Quote(key)));
                 }
             }
             return {};

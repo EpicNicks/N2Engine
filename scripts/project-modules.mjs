@@ -44,11 +44,17 @@ export const MODULES = {
     components: ['Canvas', 'RectTransform', 'Image', 'UIText', 'Button'],
     luaPatterns: [/\bUI\.[A-Za-z]\w*/],
   },
+  // Scripting is the Lua runtime itself: any .lua file under assets or scenes is a use (scanProject adds it), and so is a
+  // LuaComponent in a scene or prefab (a scene saved with scripts still loads without the module, but its scripts do not run)
+  scripting: {
+    components: ['LuaComponent'],
+    luaPatterns: [],
+  },
 };
 
 export const PHYSICS3D_VALUES = ['none', 'physx', 'jolt', 'both'];
 /** The modules a list turns on (true) or off (false) */
-export const BOOLEAN_MODULES = ['physics2d', 'particles', 'softbodies', 'audio', 'ui'];
+export const BOOLEAN_MODULES = ['physics2d', 'particles', 'softbodies', 'audio', 'ui', 'scripting'];
 
 const SCENE_EXTENSIONS = new Set(['.scene', '.prefab', '.json']);
 const SKIPPED_FOLDERS = new Set(['.import', '.n2', '.git', 'node_modules', 'build']);
@@ -214,6 +220,7 @@ export function scanProject(folder, target) {
     const relative = path.relative(folder, file).split(path.sep).join('/');
     const extension = path.extname(file).toLowerCase();
     if (extension === '.lua') {
+      uses.push({ module: 'scripting', what: 'a Lua file', file: relative });
       const result = scanLua(fs.readFileSync(file, 'utf8'));
       uses.push(...result.uses.map((use) => ({ ...use, file: relative })));
       unresolved.push(...result.unresolved.map((item) => ({ ...item, file: relative })));
@@ -241,7 +248,9 @@ export function scanProject(folder, target) {
   const backend = settings.physics?.backend;
   const needsJolt = backend === 'jolt' || settings.network?.preset === 'deterministic';
   const needsPhysx = backend === 'physx';
-  return { name: project.name, list, uses, unresolved, unreadable, needsJolt, needsPhysx };
+  // Without a startupScene the players run assets/scene.lua in an empty scene, so a game without Lua must name one
+  const startsFromLua = typeof project.startupScene !== 'string' || project.startupScene === '';
+  return { name: project.name, list, uses, unresolved, unreadable, needsJolt, needsPhysx, startsFromLua };
 }
 
 /** What contradicts the list: every one of these would misbehave in a game built from it. */
@@ -257,6 +266,9 @@ export function findConflicts(scan) {
       const where = use.line ? `${use.file}:${use.line}` : use.file;
       conflicts.push(`${where} uses ${use.what}, but the list leaves ${use.module} out`);
     }
+  }
+  if (list.scripting === false && scan.startsFromLua) {
+    conflicts.push('the project has no startupScene, so a player runs assets/scene.lua, but the list leaves scripting out: name a startupScene');
   }
   if (list.physics3d !== undefined) {
     if (scan.needsJolt && !['jolt', 'both'].includes(list.physics3d)) {

@@ -27,7 +27,9 @@
 #include "engine/network/NetworkTimeDilation.hpp"
 #include "engine/network/NetworkWorld.hpp"
 #include "engine/network/n2net/SimTransport.hpp"
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 
@@ -696,6 +698,7 @@ TEST(TimeDilationSessionTest, TheControlsCanBeChangedWhileTheClientRuns)
 
 // ---- Lua ----------------------------------------------------------------------------------------------------------------
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 TEST(TimeDilationSessionTest, LuaReadsAndChangesTheDilationAndReadsTheSuggestedTick)
 {
     static const bool luaReady = Scripting::LuaRuntime::Instance().Initialize();
@@ -745,6 +748,7 @@ TEST(TimeDilationSessionTest, LuaReadsAndChangesTheDilationAndReadsTheSuggestedT
     ASSERT_TRUE(lead.valid());
     EXPECT_EQ(lead.get_type(), sol::type::number);
 }
+#endif
 
 // ---- The Application hook ---------------------------------------------------------------------------------------------
 

@@ -45,7 +45,9 @@
 #include "engine/network/n2net/MultiplexTransport.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 #include "engine/security/Crypto.hpp"
 #include "engine/serialization/JsonLimits.hpp"
 
@@ -426,7 +428,9 @@ namespace N2Engine::Server
         try
         {
             // The project's own Lua runs here: this is the game, not an editor
+#ifdef N2ENGINE_SCRIPTING_ENABLED
             Scripting::LuaRuntime::SetExecutionPolicy(Scripting::LuaExecutionPolicy::Run);
+#endif
 
             auto &app = Application::GetInstance();
             // Before Init, which may have started part of the engine before it throws

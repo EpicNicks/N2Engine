@@ -13,7 +13,9 @@
 
 #include "engine/GameObject.hpp"
 #include "engine/common/Color.hpp"
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 #include "engine/ui/Image.hpp"
 #include "engine/ui/Rect.hpp"
 #include "engine/ui/UISystem.hpp"
@@ -124,6 +126,7 @@ TEST(ImageColorEffectsTest, TheEffectsAreSavedAndAnOlderImageLoadsWithoutThem)
     EXPECT_FLOAT_EQ(plain->GetFlash().a, 0.0f);
 }
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 TEST(ImageColorEffectsTest, AScriptCanSetTheEffects)
 {
     ASSERT_TRUE(Scripting::LuaRuntime::Instance().Initialize());
@@ -144,3 +147,4 @@ TEST(ImageColorEffectsTest, AScriptCanSetTheEffects)
         FAIL() << error.what();
     }
 }
+#endif

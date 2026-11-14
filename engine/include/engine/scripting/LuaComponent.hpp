@@ -1,6 +1,5 @@
 #pragma once
 
-#include "engine/scripting/ScriptCoroutine.hpp"
 #include "engine/network/NetworkId.hpp"
 #include "engine/network/NetworkRpc.hpp"
 #include "engine/serialization/ComponentSerializer.hpp"
@@ -10,14 +9,55 @@
 #include <memory>
 #include <optional>
 #include <vector>
+#include <string>
 #include <string_view>
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include <sol/sol.hpp>
+#endif
 
 namespace N2Engine
 {
     class LuaScript;
 }
 
+#ifndef N2ENGINE_SCRIPTING_ENABLED
+// A build without the scripting module (N2ENGINE_USE_SCRIPTING is OFF; docs/project-modules.html): the component is registered and
+// its data is kept and saved again, and nothing runs. LuaComponentInert.cpp.
+namespace N2Engine::Scripting
+{
+    class LuaComponent : public SerializableComponent
+    {
+    private:
+        // As saved: the script's UUID, or its path. Both are kept as they were read, so a scene saved from this build holds
+        // the scripts it was loaded with.
+        nlohmann::json _scriptUuid;
+        IO::ResourcePath _scriptPath;
+        nlohmann::json _scriptData = nlohmann::json::object();
+
+    public:
+        explicit LuaComponent(GameObject &gameObject);
+
+        void SetScript(const IO::ResourcePath &path) { _scriptPath = path; }
+        void SetScriptData(const nlohmann::json &data);
+
+        [[nodiscard]] const IO::ResourcePath &GetScriptPath() const { return _scriptPath; }
+        [[nodiscard]] const nlohmann::json &GetScriptData() const { return _scriptData; }
+        [[nodiscard]] bool HasMissingScript() const { return false; }
+        [[nodiscard]] bool HasUnresolvedReferences() const { return false; }
+        [[nodiscard]] bool IsFaulted() const { return false; }
+        /// No script runs, so there is no tick state to find
+        [[nodiscard]] std::vector<std::string> FindTickStateOutsideSnapshot(bool) const { return {}; }
+
+        [[nodiscard]] std::string GetTypeName() const override { return "LuaComponent"; }
+
+        [[nodiscard]] nlohmann::json Serialize() const override;
+        void Deserialize(const nlohmann::json &j, ReferenceResolver *resolver) override;
+        [[nodiscard]] std::vector<FieldInfo> DescribeFields() const override;
+        void SetEditorFields(const nlohmann::json &values, ReferenceResolver *resolver) override;
+    };
+}
+#else
+#include "engine/scripting/ScriptCoroutine.hpp"
 namespace N2Engine::Scripting
 {
     struct DeclarationResult;
@@ -292,3 +332,4 @@ namespace N2Engine::Scripting
         [[nodiscard]] std::vector<std::string> FindTickStateOutsideSnapshot(bool networked) const;
     };
 }
+#endif

@@ -31,7 +31,9 @@
 #include "engine/common/Color.hpp"
 #include "engine/rendering/TextDrawing.hpp"
 #include "engine/rendering/TextRenderer.hpp"
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 #include "engine/text/Font.hpp"
 #include "engine/text/TextEffects.hpp"
 #include "engine/ui/Rect.hpp"
@@ -607,6 +609,7 @@ TEST(TextEffectsTest, EffectsSurviveASceneLoad)
     ExpectNoEffects(old->GetEffects());
 }
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 TEST(TextEffectsTest, LuaGetsAndSetsTheEffects)
 {
     using Scripting::LuaRuntime;
@@ -664,3 +667,4 @@ TEST(TextEffectsTest, LuaGetsAndSetsTheEffects)
         run("text_fx_go = nil; text_fx = nil");
     }
 }
+#endif

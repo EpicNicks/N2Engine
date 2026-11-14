@@ -23,7 +23,9 @@
 #include "engine/ProjectSettings.hpp"
 #include "engine/physics/GpuStatus.hpp"
 #include "engine/physics/physx/PhysXBackend.hpp"
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 
 // The physics.gpu setting (parse, validate, round trip), the Particles health row mapping, and the disabled path of
 // the GPU probe. Nothing here needs a GPU: the probe itself (physics.gpu auto/on) is never run, because CI has no
@@ -547,6 +549,7 @@ TEST(GpuProbeTest, CpuOnlyBuildsReportUnavailableNotFailed)
 
 #endif
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 namespace
 {
     class LuaGpuTest : public ::testing::Test
@@ -555,8 +558,10 @@ namespace
         static void SetUpTestSuite() { ASSERT_TRUE(Scripting::LuaRuntime::Instance().Initialize()); }
     };
 }
+#endif
 
 #if defined(N2ENGINE_PHYSX_ENABLED) && defined(N2ENGINE_PARTICLES_ENABLED) && defined(N2ENGINE_SOFTBODIES_ENABLED)
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 TEST_F(LuaGpuTest, IsGpuAvailableFollowsTheSceneNotTheParticleFeature)
 {
     InjectedBackend rig(GpuMode::Auto);
@@ -592,7 +597,9 @@ TEST_F(LuaGpuTest, IsGpuAvailableFollowsTheSceneNotTheParticleFeature)
     Application::GetInstance().Set3DPhysicsBackend(nullptr);
 }
 #endif
+#endif
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 TEST_F(LuaGpuTest, IsGpuAvailableIsFalseWithoutAGpuScene)
 {
     Application::GetInstance().Set3DPhysicsBackend(nullptr);
@@ -601,3 +608,4 @@ TEST_F(LuaGpuTest, IsGpuAvailableIsFalseWithoutAGpuScene)
     ASSERT_TRUE(result.valid());
     EXPECT_FALSE(result.get<bool>());
 }
+#endif

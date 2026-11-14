@@ -78,7 +78,7 @@
 <div class="content">
 
 <h1>Project modules</h1>
-<p class="lead">A game can leave out the engine modules it does not use, so its build is smaller. The project lists its modules, a scan checks the list against what the project uses, and the build compiles the rest out. So far the list covers physics, particles and soft bodies; other modules will follow.</p>
+<p class="lead">A game can leave out the engine modules it does not use, so its build is smaller. The project lists its modules, a scan checks the list against what the project uses, and the build compiles the rest out. So far the list covers physics, particles, soft bodies, audio, UI and scripting; other modules will follow.</p>
 
 <h2 id="list">The list</h2>
 <p>A project lists its modules in <code>project.n2proj</code>. The editor keeps the key when it saves the file.</p>
@@ -98,6 +98,7 @@
 <tr><td><code>physics2d</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_USE_BOX2D</code></td></tr>
 <tr><td><code>particles</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_USE_PARTICLES</code></td></tr>
 <tr><td><code>softbodies</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_USE_SOFTBODIES</code></td></tr>
+<tr><td><code>scripting</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_USE_SCRIPTING</code></td></tr>
 </tbody>
 </table>
 </div>
@@ -140,6 +141,17 @@ node scripts/project-modules.mjs path/to/game --target android   # the list a bu
 <li><strong>Soft bodies:</strong> a <code>SoftBody</code> keeps its settings and never starts, so its <code>MeshRenderer</code> draws the mesh as it is (<a href="soft-bodies.html#leaving-it-out">Leaving it out</a>).</li>
 </ul>
 <p>Particles and soft bodies do not depend on physics: each has a CPU backend, so a game can keep them with <code>"physics3d": "none"</code>. Leaving one out removes all of its backends, the PhysX GPU one included, from a build that keeps PhysX.</p>
+
+<h2 id="scripting">Scripting</h2>
+<p><code>"scripting": false</code> leaves out the Lua runtime, sol2 and every Lua binding: <code>LuaRuntime</code>, the sandbox, the <code>coroutine</code> support and the bindings of every other module. It is for a game with no Lua scripts at all.</p>
+<ul>
+<li><strong>How such a game starts.</strong> Without Lua there is no <code>assets/scene.lua</code> to run, so the game must name a <code>startupScene</code>. The desktop, Android, iOS and web players load it; the scan reports a project with no <code>startupScene</code> as a conflict. The dedicated server keeps working with no Lua to run.</li>
+<li><strong>A scene saved with scripts still loads.</strong> <code>LuaComponent</code> stays registered and keeps its script reference (<code>scriptUUID</code> or <code>scriptPath</code>) and its <code>scriptData</code>, saves them again as it read them, and runs nothing. The first one read logs one warning (<code>N2ENGINE_USE_SCRIPTING is OFF</code>); there is one per process, not one per component. <code>.lua</code> files are still assets of type <code>LuaScript</code>.</li>
+<li><strong>The scan.</strong> Any <code>.lua</code> file under <code>assets</code> or <code>scenes</code>, and any <code>LuaComponent</code> in a scene or prefab, is a use of the module, so the list cannot leave it out while the project has scripts.</li>
+<li><strong>Health.</strong> The <code>Scripting</code> row is <code>Disabled</code>: "Not in this build". With the Deterministic network preset, <code>determinism.luaSeed</code> is not required (there is no Lua state whose hash seed or math could differ).</li>
+<li><strong>The editor.</strong> The editor host runs project scripts and editor extensions in Lua, so a tree with <code>N2ENGINE_USE_SCRIPTING=OFF</code> does not build <code>editor-server</code>, <code>lua_project</code> or the editor host's tests. An editor's tree never sets the option (see above), so the editor keeps Lua. The golden replay's two Lua scenes (<code>lua_sim</code>, <code>lua_driven</code>) are not in a build without the module; <code>transforms</code> is.</li>
+<li><strong>Tests.</strong> A build without the module leaves out every test of the Lua runtime and its bindings (<code>tests/engine/scripting</code> and the other files that run Lua), skips the cases of other files that run a script, and runs <code>tests/engine/modules/LeftOutScriptingTests.cpp</code>. The size numbers are in the PR that added it.</li>
+</ul>
 
 <h2 id="size">What it saves</h2>
 <p>Measured in the web CI job of PR #315: the size profile's <code>index.wasm</code>, the full player against <code>tests/projects/no_physics</code> (no PhysX, Jolt or Box2D).</p>

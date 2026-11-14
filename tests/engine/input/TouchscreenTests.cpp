@@ -3,7 +3,9 @@
 #include <string>
 
 #include "engine/input/Touchscreen.hpp"
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 
 using namespace N2Engine;
 using namespace N2Engine::Input;
@@ -106,6 +108,7 @@ TEST(TouchscreenTest, AtMostMaxTouches)
     EXPECT_EQ(s.screen.GetTouchCount(), Touchscreen::MaxTouches);
 }
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 TEST(TouchscreenLuaTest, TouchesFromLua)
 {
     ScopedTouchscreen s;
@@ -124,3 +127,4 @@ TEST(TouchscreenLuaTest, TouchesFromLua)
     EXPECT_EQ(r.get<std::string>(4), "Began");
     EXPECT_TRUE(r.get<bool>(5));
 }
+#endif

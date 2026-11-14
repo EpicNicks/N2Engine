@@ -256,7 +256,13 @@ TEST(GoldenReplayTest, InputsHeldBetweenRowsAreEquivalentToRepeatedRows)
 {
     // "Held until the next row" means a row repeated every tick changes nothing
     ReplayLog sparse = SmallLog();
-    sparse.scene = "lua_driven";
+#ifdef N2ENGINE_SCRIPTING_ENABLED
+    constexpr const char *kLuaScene = "lua_driven";
+#else
+    // The Lua replay scenes need the scripting module (N2ENGINE_USE_SCRIPTING); the transforms scene stands in
+    constexpr const char *kLuaScene = "transforms";
+#endif
+    sparse.scene = kLuaScene;
     sparse.inputs = {{0, 0, 40, -40, 1}};
     ReplayLog dense = sparse;
     dense.inputs.clear();
