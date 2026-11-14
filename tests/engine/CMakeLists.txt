@@ -98,7 +98,47 @@ foreach(_n2_module PARTICLES SOFTBODIES AUDIO UI SCRIPTING)
     endforeach()
 endforeach()
 
+# The network module (N2ENGINE_USE_NETWORK) the same way: the tests that run a session (server, client, lockstep, rollback,
+# replication, prediction) or call one are left out of a build without it. What stays runs in every build: the settings, the
+# presets, the validation, the RPC and replication codecs, the fingerprint, the lag-compensation history and n2net.
+set(N2ENGINE_NETWORK_TESTS
+    network/LockstepRelayTests.cpp
+    network/NetworkClockInterpolationTests.cpp
+    network/NetworkInputSessionTests.cpp
+    network/NetworkInputTests.cpp
+    network/NetworkPredictionSessionTests.cpp
+    network/NetworkPredictionTests.cpp
+    network/NetworkProtocolTests.cpp
+    network/NetworkReplicationTests.cpp
+    network/NetworkRpcTests.cpp
+    network/NetworkSessionTests.cpp
+    network/NetworkTimeDilationTests.cpp
+    network/RollbackLuaTests.cpp
+    network/RollbackRuntimeTests.cpp
+    network/RollbackSessionNetworkTests.cpp
+    network/RollbackTests.cpp
+    network/StateHashTests.cpp
+    network/n2net/N2NetLockstepTests.cpp
+    physics/RollbackPhysicsTests.cpp
+    replay/InputFrameMappingTests.cpp
+    replay/LockstepReplayTests.cpp
+    scripting/LuaPrefabSpawnTests.cpp
+    scripting/LuaReplicationTests.cpp
+    scripting/LuaStateHashTests.cpp
+)
+foreach(_n2_test IN LISTS N2ENGINE_NETWORK_TESTS)
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_n2_test}")
+        message(FATAL_ERROR "N2ENGINE_NETWORK_TESTS names a file that does not exist: ${_n2_test}")
+    endif()
+    if(NOT N2ENGINE_USE_NETWORK)
+        list(REMOVE_ITEM ENGINE_TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/${_n2_test}")
+    endif()
+endforeach()
+
 add_executable(engine_tests ${ENGINE_TEST_SOURCES})
+if(N2ENGINE_USE_NETWORK)
+    target_compile_definitions(engine_tests PRIVATE N2ENGINE_NETWORK_ENABLED=1)
+endif()
 
 # On this file only, so a build without Box2D recompiles almost nothing else
 if(N2ENGINE_USE_BOX2D)

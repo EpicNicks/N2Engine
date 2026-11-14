@@ -90,6 +90,50 @@ else()
     list(REMOVE_ITEM ENGINE_SOURCES ${N2ENGINE_SCRIPTING_SOURCES})
 endif()
 
+# The network module (N2ENGINE_USE_NETWORK; docs/project-modules.html) is the online part of the netcode: the server and client
+# sessions, the lockstep and rollback runtimes, replication, prediction, interpolation, the clock and the Network Lua table.
+# What stays in every build: the components (NetworkObject, NetworkTransform, LagCompensatedHitbox), the settings, presets and
+# validation (the Network health row), the RPC and replication-codec registries, the prefab table, the input layout, the
+# fingerprint (a registry hash, so it is the same whatever the option) and n2net, which the replay system uses and which is
+# its own library below. The few files that call a session get N2ENGINE_NETWORK_ENABLED on themselves only.
+set(N2ENGINE_NETWORK_SOURCES
+    src/network/LockstepInputMapping.cpp
+    src/network/LockstepProtocol.cpp
+    src/network/LockstepRelay.cpp
+    src/network/LockstepRuntime.cpp
+    src/network/NetworkClient.cpp
+    src/network/NetworkClock.cpp
+    src/network/NetworkInput.cpp
+    src/network/NetworkInterpolation.cpp
+    src/network/NetworkPrediction.cpp
+    src/network/NetworkProtocol.cpp
+    src/network/NetworkReplication.cpp
+    src/network/NetworkServer.cpp
+    src/network/NetworkTimeDilation.cpp
+    src/network/ReplicationLayout.cpp
+    src/network/RollbackEvents.cpp
+    src/network/RollbackRuntime.cpp
+    src/network/RollbackSession.cpp
+    src/network/RollbackWorld.cpp
+    src/network/StateHash.cpp
+    src/scripting/bindings/LuaNetworkBindings.cpp
+    src/scripting/bindings/LuaNetworkInterestBindings.cpp
+)
+set(N2ENGINE_NETWORK_DEFINED_ON src/Application.cpp src/scripting/LuaComponent.cpp src/scripting/LuaRuntime.cpp
+    src/scripting/bindings/LuaPhysicsBindings.cpp src/scripting/bindings/LuaPrefabBindings.cpp)
+foreach(_n2_source IN LISTS N2ENGINE_NETWORK_SOURCES N2ENGINE_NETWORK_DEFINED_ON)
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_n2_source}")
+        message(FATAL_ERROR "The network module's lists name a file that does not exist: ${_n2_source}")
+    endif()
+endforeach()
+if(N2ENGINE_USE_NETWORK)
+    set_property(SOURCE ${N2ENGINE_NETWORK_DEFINED_ON} APPEND PROPERTY COMPILE_DEFINITIONS N2ENGINE_NETWORK_ENABLED=1)
+else()
+    foreach(_n2_source IN LISTS N2ENGINE_NETWORK_SOURCES)
+        list(REMOVE_ITEM ENGINE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/${_n2_source}")
+    endforeach()
+endif()
+
 # The desktop platform backend and the GLFW input device are GLFW's only callers (build targets stage 6): not in the web
 # build, which has no GLFW (its player runs on the headless backend)
 if (N2ENGINE_PLATFORM_WEB OR N2ENGINE_PLATFORM_ANDROID OR N2ENGINE_PLATFORM_IOS)

@@ -688,6 +688,7 @@ namespace N2Engine::Scripting
         }
 
         Network::RpcSendResult result = Network::RpcSendResult::NoTarget;
+#if N2ENGINE_NETWORK_ENABLED
         if (found->direction == Network::RpcDirection::ClientToServer)
         {
             if (Network::NetworkClient *const active = Network::NetworkClient::Active())
@@ -702,6 +703,15 @@ namespace N2Engine::Scripting
                                                   : (client.has_value() ? Network::RpcTarget::Client : Network::RpcTarget::All);
             result = active->CallRpc(*this, name, args, target, client.value_or(Network::kServerClientId));
         }
+#else
+        (void)client;
+        static bool warned = false;
+        if (!warned)
+        {
+            warned = true;
+            Logger::Warn("Rpc: the network module is not in this build (N2ENGINE_USE_NETWORK is OFF): the call is not sent");
+        }
+#endif
         return result == Network::RpcSendResult::Sent;
     }
 

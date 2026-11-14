@@ -15,6 +15,7 @@
 #   "audio": true | false                             N2ENGINE_USE_AUDIO
 #   "ui": true | false                                N2ENGINE_USE_UI
 #   "scripting": true | false                         N2ENGINE_USE_SCRIPTING
+#   "network": true | false                           N2ENGINE_USE_NETWORK
 #
 # With -DN2ENGINE_TARGET=<name> (n2build sets it; build targets stage 3, docs/build-targets.html#settings), the target's own
 # "build.targets.<name>.modules" is read first, key by key, and "build.modules" fills in the keys it does not name.
@@ -143,7 +144,8 @@ if(N2ENGINE_PROJECT)
         # The modules that are on or off, each with its option
         foreach(_n2_pair IN ITEMS "physics2d:N2ENGINE_USE_BOX2D" "particles:N2ENGINE_USE_PARTICLES"
                                   "softbodies:N2ENGINE_USE_SOFTBODIES" "audio:N2ENGINE_USE_AUDIO" "ui:N2ENGINE_USE_UI"
-                                  "scripting:N2ENGINE_USE_SCRIPTING")
+                                  "scripting:N2ENGINE_USE_SCRIPTING"
+                                  "network:N2ENGINE_USE_NETWORK")
             string(REPLACE ":" ";" _n2_pair "${_n2_pair}")
             list(GET _n2_pair 0 _n2_module)
             list(GET _n2_pair 1 _n2_option)

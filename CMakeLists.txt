@@ -58,6 +58,13 @@ message(STATUS "Engine modules: audio ${N2ENGINE_USE_AUDIO}, ui ${N2ENGINE_USE_U
 # sets it ("scripting").
 option(N2ENGINE_USE_SCRIPTING "Build the Lua runtime and every Lua binding (LuaComponent runs scripts)" ON)
 message(STATUS "Engine modules: scripting ${N2ENGINE_USE_SCRIPTING}")
+# OFF leaves out the online part of the netcode: the server and client sessions, the lockstep and rollback runtimes, replication,
+# prediction and the Network Lua table, and N2Server is not built. The network components (NetworkObject, NetworkTransform,
+# LagCompensatedHitbox), the network settings with their validation, the RPC and fingerprint registries, the input layout and
+# n2net itself (the replay system uses it) stay, so a scene and a replay load the same and a build with the module keeps its
+# network fingerprint. A project's build.modules list sets it ("network").
+option(N2ENGINE_USE_NETWORK "Build the network sessions (NetworkServer, NetworkClient, lockstep, rollback) and N2Server" ON)
+message(STATUS "Engine modules: network ${N2ENGINE_USE_NETWORK}")
 # OFF compiles the Vulkan renderer out: the build then needs no Vulkan headers or loader, and --renderer vulkan / the
 # VULKAN render backend fail with a clear message. ON (the default) needs the Vulkan SDK (Windows) or libvulkan-dev (Linux).
 option(N2ENGINE_RENDERER_VULKAN "Build the Vulkan renderer backend" ON)
@@ -452,9 +459,12 @@ if(N2ENGINE_USE_SCRIPTING)
 add_subdirectory(editor-server)
 # The dedicated game server (netcode stage A6): UDP sockets and the crypto library, so not part of the web build. It takes its
 # options and scene loading from the editor host's library, so it needs the scripting module too
+if(N2ENGINE_USE_NETWORK)
 add_subdirectory(n2server)
+endif()
 else()
 message(STATUS "Scripting: not in this build (N2ENGINE_USE_SCRIPTING is OFF), so the editor host, the dedicated server and lua_project are not built")
+endif()
 endif()
 endif()
 
