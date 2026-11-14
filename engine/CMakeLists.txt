@@ -48,14 +48,14 @@ foreach(_n2_module PARTICLES SOFTBODIES)
     endif()
 endforeach()
 
-# The audio and UI modules (N2ENGINE_USE_AUDIO, N2ENGINE_USE_UI; docs/project-modules.html), the same way. Audio is its decoders
-# (AudioLoaders.cpp: dr_wav, dr_mp3, dr_flac and the stb_vorbis calls) and the audio system's device code; without it the root
+# The audio and UI modules (N2ENGINE_USE_AUDIO, N2ENGINE_USE_UI; docs/project-modules.html), the same way. Audio is the audio system's device code (the
+# decoders in AudioLoaders.cpp stay, see below); without it the root
 # CMakeLists.txt links a no-op OpenAL in place of OpenAL Soft. UI is the layout, the drawing and the pointer hits. What stays
 # is every component with its fields, registration and Lua methods, and the headers are the same whatever the options
 # (AudioSystem::IsInBuild and UISystem::IsInBuild say which build this is).
-set(N2ENGINE_AUDIO_SOURCES
-    src/audio/AudioLoaders.cpp
-)
+# AudioLoaders.cpp (the decoders) stays in every build: editor-server previews waveforms with the decoders the engine library
+# holds. Nothing in a game calls them without the audio module, and the linker drops them from a player.
+set(N2ENGINE_AUDIO_SOURCES)
 set(N2ENGINE_AUDIO_DEFINED_ON src/audio/AudioSystem.cpp src/audio/AudioClipLoader.cpp)
 set(N2ENGINE_UI_SOURCES)
 set(N2ENGINE_UI_DEFINED_ON src/ui/UISystem.cpp src/ui/Image.cpp src/ui/UIText.cpp)

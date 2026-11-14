@@ -44,7 +44,7 @@ option(N2ENGINE_USE_PARTICLES "Build the particle simulation (ParticleSystem)" O
 option(N2ENGINE_USE_SOFTBODIES "Build the soft-body simulation (SoftBody)" ON)
 message(STATUS "Engine modules: particles ${N2ENGINE_USE_PARTICLES}, softbodies ${N2ENGINE_USE_SOFTBODIES}")
 # OFF leaves sound out: no OpenAL Soft is fetched or built (a no-op OpenAL stands in, external/web-stubs/openal_stub.c, on every
-# platform; on the web it is N2ENGINE_WEB_AUDIO=stub), the audio decoders (dr_wav, dr_mp3, dr_flac, stb_vorbis) are not linked,
+# platform; on the web it is N2ENGINE_WEB_AUDIO=stub), clip loads fail (the decoders stay for the editor server),
 # and the audio system never starts. OFF for UI leaves out its layout, drawing and pointer hits: canvases draw nothing and are
 # never hit. AudioSource, AudioListener and the UI components stay registered and keep their data (docs/project-modules.html).
 # A project's build.modules list sets them ("audio", "ui").
