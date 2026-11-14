@@ -73,6 +73,7 @@ namespace N2Engine::Scripting
         // The script coroutines this component started (self.component:StartCoroutine), for StopAllCoroutines. Owned by
         // the GameObject's coroutine scheduler; an entry expires when its coroutine is freed.
         std::vector<std::weak_ptr<ScriptCoroutineState>> _coroutines;
+        std::size_t _coroutinesPruneAt = 16;
 
         // Cache lifecycle method existence for performance
         bool _hasOnUpdate = false;
@@ -189,8 +190,6 @@ namespace N2Engine::Scripting
         [[nodiscard]] const sol::table& GetScriptInstance() const { return _scriptInstance; }
 
         // Script coroutines (LuaScriptCoroutines.cpp): Lua coroutines the GameObject's scheduler resumes once per frame
-        /// The running instance's lifetime flag: false once the component is destroyed or the instance replaced
-        [[nodiscard]] std::shared_ptr<const bool> GetScriptLifetime() const { return _alive; }
         /// True while a call into the script ran out of instructions or memory and the script is switched off
         [[nodiscard]] bool IsFaulted() const { return _faulted; }
         /// LuaComponent:StartCoroutine: runs the function at stack index firstIndex of L, with the count-1 values after it

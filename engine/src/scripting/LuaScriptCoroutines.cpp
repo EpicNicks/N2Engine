@@ -9,7 +9,9 @@
 // and the coroutine's thread under the entry's count hook, charged after the run (LuaRuntime.cpp, PrepareThreadHook and
 // ChargeThread). An error is logged as a component's script error; a budget or memory error switches the component off.
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <format>
 #include <generator>
 #include <memory>
@@ -41,12 +43,26 @@ namespace N2Engine::Scripting
         std::shared_ptr<const bool> lifetime;
         Scheduling::Coroutine *handle = nullptr;
 
-        ~ScriptCoroutineState()
+        ~ScriptCoroutineState() { ReleaseThread(); }
+
+        // Frees the Lua thread (its stack and what it references) as soon as the coroutine is over
+        void ReleaseThread()
         {
             if (ref != LUA_NOREF && main != nullptr && LuaRuntime::HasInstance())
             {
                 luaL_unref(main, LUA_REGISTRYINDEX, ref);
             }
+            ref = LUA_NOREF;
+            thread = nullptr;
+        }
+
+        // Ends the state: the scheduler can destroy the generator without running any of our code (the object is
+        // deactivated or destroyed), so this also runs from the generator frame's destructor
+        void Finish()
+        {
+            finished = true;
+            handle = nullptr;
+            ReleaseThread();
         }
 
         [[nodiscard]] bool OwnerAlive() const { return lifetime && *lifetime && owner != nullptr; }
@@ -77,6 +93,11 @@ namespace N2Engine::Scripting
             int results = 0;
             const int status = lua_resume(thread, state.main, state.pendingArguments, &results);
             state.pendingArguments = 0;
+            if (state.stopped)
+            {
+                lua_settop(thread, 0);
+                return {}; // stopped from inside its own body: it ends here, at this yield or return
+            }
             const bool spent = Detail::ChargeThread(thread);
 
             if (spent)
@@ -92,9 +113,17 @@ namespace N2Engine::Scripting
             }
             if (status != LUA_YIELD)
             {
-                const char *text = lua_type(thread, -1) == LUA_TSTRING ? lua_tostring(thread, -1) : nullptr;
-                const std::string message = LuaRuntime::Instance().LimitAwareError(
-                    text != nullptr ? std::string_view(text) : std::string_view("unknown error"), status == LUA_ERRMEM);
+                const int type = lua_type(thread, -1);
+                std::string text;
+                if (type == LUA_TSTRING || type == LUA_TNUMBER)
+                {
+                    text = lua_tostring(thread, -1);
+                }
+                else
+                {
+                    text = std::format("(error object is a {} value)", luaL_typename(thread, -1));
+                }
+                const std::string message = LuaRuntime::Instance().LimitAwareError(text, status == LUA_ERRMEM);
                 lua_settop(thread, 0);
                 owner->ReportCoroutineError(message);
                 return {};
@@ -110,7 +139,7 @@ namespace N2Engine::Scripting
                     const double seconds = lua_tonumber(thread, -results);
                     if (std::isfinite(seconds) && seconds >= 0.0)
                     {
-                        step.seconds = static_cast<float>(seconds);
+                        step.seconds = static_cast<float>(std::min(seconds, static_cast<double>(std::numeric_limits<float>::max())));
                     }
                     else
                     {
@@ -129,14 +158,20 @@ namespace N2Engine::Scripting
             return step;
         }
 
+        struct FinishGuard
+        {
+            std::shared_ptr<ScriptCoroutineState> state;
+            ~FinishGuard() { state->Finish(); }
+        };
+
         std::generator<Scheduling::ICoroutineWait> RunScriptCoroutine(std::shared_ptr<ScriptCoroutineState> state)
         {
+            const FinishGuard guard{state};
             while (true)
             {
                 const Step step = ResumeOnce(*state);
                 if (step.done)
                 {
-                    state->finished = true;
                     co_return;
                 }
                 if (step.seconds > 0.0f)
@@ -149,7 +184,6 @@ namespace N2Engine::Scripting
                 }
                 if (state->IsOver() || !state->OwnerAlive())
                 {
-                    state->finished = true;
                     co_return;
                 }
             }
@@ -185,7 +219,12 @@ namespace N2Engine::Scripting
 
     void LuaComponent::TrackScriptCoroutine(const std::shared_ptr<ScriptCoroutineState> &state)
     {
-        std::erase_if(_coroutines, [](const std::weak_ptr<ScriptCoroutineState> &w) { return w.expired(); });
+        // Pruned when the list has doubled since the last prune, so starting k coroutines costs O(k) in all
+        if (_coroutines.size() >= _coroutinesPruneAt)
+        {
+            std::erase_if(_coroutines, [](const std::weak_ptr<ScriptCoroutineState> &w) { return w.expired(); });
+            _coroutinesPruneAt = std::max<std::size_t>(16, _coroutines.size() * 2);
+        }
         _coroutines.push_back(state);
     }
 
@@ -208,11 +247,7 @@ namespace N2Engine::Scripting
         {
             throw std::runtime_error("LuaComponent:StartCoroutine: the first argument must be a function");
         }
-        if (!LuaRuntime::RunsScripts() || !_scriptInstance.valid())
-        {
-            return {};
-        }
-        if (_faulted)
+        if (!LuaRuntime::RunsScripts() || !_scriptInstance.valid() || _faulted)
         {
             return {};
         }
@@ -223,6 +258,10 @@ namespace N2Engine::Scripting
             throw std::runtime_error("LuaComponent:StartCoroutine: " + error);
         }
 
+        if (lua_checkstack(L, count + 2) == 0)
+        {
+            throw std::runtime_error("LuaComponent:StartCoroutine: too many arguments");
+        }
         auto state = std::make_shared<ScriptCoroutineState>();
         state->main = LuaRuntime::Instance().GetState().lua_state();
         state->owner = this;
@@ -230,6 +269,10 @@ namespace N2Engine::Scripting
         lua_State *thread = lua_newthread(L); // a memory error here is a Lua error: the binding's caller reports it
         state->ref = luaL_ref(L, LUA_REGISTRYINDEX); // takes the thread off L's stack
         state->thread = thread;
+        if (lua_checkstack(thread, count + 2) == 0)
+        {
+            throw std::runtime_error("LuaComponent:StartCoroutine: too many arguments"); // the state frees the thread
+        }
         for (int i = 0; i < count; ++i)
         {
             lua_pushvalue(L, firstIndex + i);

@@ -19,7 +19,7 @@ namespace N2Engine::Scripting
 
         /// True until the coroutine has finished, failed or been stopped
         [[nodiscard]] bool IsRunning() const;
-        /// Stops it: no further part of its body runs. Does nothing once it is over.
+        /// Stops it: no further part of its body runs, except the rest of the current step when called from inside its own body (it ends at the next yield). Does nothing once it is over.
         void Stop() const;
     };
 }
