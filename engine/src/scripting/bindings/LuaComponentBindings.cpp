@@ -30,6 +30,7 @@
 #include "engine/example/renderers/SphereRenderer.hpp"
 #include <assetimport/ModelImporters.hpp>
 #include "engine/io/ResourcePath.hpp"
+#include "engine/scripting/ScriptCoroutine.hpp"
 #include "engine/physics/BoxCollider.hpp"
 #include "engine/physics/CapsuleCollider.hpp"
 #include "engine/physics/CharacterController.hpp"
@@ -1028,8 +1029,28 @@ namespace N2Engine::Scripting::Bindings
                     return sol::lua_nil;
                 }
                 return instance;
-            }
+            },
+            // Runs a function as a coroutine of this object (docs/coroutines.html#lua): StartCoroutine(fn, ...) passes the
+            // extra values to fn; inside it coroutine.yield() waits a frame and coroutine.yield(seconds) waits that long.
+            // Returns a ScriptCoroutine (Stop, IsRunning), or nil when none started (the object is inactive, or the script
+            // is switched off). Stopped with the object, and by StopAllCoroutines.
+            "StartCoroutine", [](const LuaComponentRef &c, const sol::variadic_args args) -> sol::object
+            {
+                lua_State *L = args.lua_state();
+                const ScriptCoroutineHandle handle =
+                    c.Pin()->StartScriptCoroutine(L, args.stack_index(), static_cast<int>(args.size()));
+                if (!handle.IsRunning())
+                {
+                    return sol::lua_nil;
+                }
+                return sol::make_object(L, handle);
+            },
+            "StopAllCoroutines", [](const LuaComponentRef &c) { c.Pin()->StopAllScriptCoroutines(); }
         );
+
+        lua.new_usertype<ScriptCoroutineHandle>("ScriptCoroutine", sol::no_constructor,
+            "Stop", &ScriptCoroutineHandle::Stop,
+            "IsRunning", &ScriptCoroutineHandle::IsRunning);
 
         // ===== Model (global): a model file's GameObject hierarchy =====
         // Model.Instantiate(path [, parent]): the root object of a new instance. Under `parent` when given (at its

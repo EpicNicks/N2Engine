@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/scripting/ScriptCoroutine.hpp"
 #include "engine/network/NetworkId.hpp"
 #include "engine/network/NetworkRpc.hpp"
 #include "engine/serialization/ComponentSerializer.hpp"
@@ -20,6 +21,7 @@ namespace N2Engine
 namespace N2Engine::Scripting
 {
     struct DeclarationResult;
+    struct ScriptCoroutineState;
 
     class LuaComponent : public SerializableComponent
     {
@@ -68,6 +70,10 @@ namespace N2Engine::Scripting
         // Set when a call into the script ran out of instructions or memory (LuaLimits): its lifecycle calls are skipped
         // until the script is set again or reloaded, so a looping OnUpdate doesn't burn the whole budget every frame
         bool _faulted = false;
+        // The script coroutines this component started (self.component:StartCoroutine), for StopAllCoroutines. Owned by
+        // the GameObject's coroutine scheduler; an entry expires when its coroutine is freed.
+        std::vector<std::weak_ptr<ScriptCoroutineState>> _coroutines;
+        std::size_t _coroutinesPruneAt = 16;
 
         // Cache lifecycle method existence for performance
         bool _hasOnUpdate = false;
@@ -182,6 +188,19 @@ namespace N2Engine::Scripting
         /// The running script's instance table (the script's `self`): invalid when no script runs (none set, a load
         /// that failed, DeclarationsOnly). Lua's LuaComponent:GetScript and GameObject:GetScript return it.
         [[nodiscard]] const sol::table& GetScriptInstance() const { return _scriptInstance; }
+
+        // Script coroutines (LuaScriptCoroutines.cpp): Lua coroutines the GameObject's scheduler resumes once per frame
+        /// True while a call into the script ran out of instructions or memory and the script is switched off
+        [[nodiscard]] bool IsFaulted() const { return _faulted; }
+        /// LuaComponent:StartCoroutine: runs the function at stack index firstIndex of L, with the count-1 values after it
+        /// as its arguments, as a coroutine of this object (ScriptCoroutine.hpp). An empty handle when none could start.
+        ScriptCoroutineHandle StartScriptCoroutine(lua_State *L, int firstIndex, int count);
+        /// Keeps a coroutine this component started, for StopAllScriptCoroutines
+        void TrackScriptCoroutine(const std::shared_ptr<ScriptCoroutineState> &state);
+        /// Stops every coroutine this component started: none of them runs any further part of its body
+        void StopAllScriptCoroutines();
+        /// A script coroutine's error, reported as a call's: logged, and a budget or memory error faults the component
+        void ReportCoroutineError(std::string_view message) { ReportScriptError("coroutine", message); }
 
         template<typename T>
         [[nodiscard]] T GetField(const std::string& fieldName, T defaultValue = T{}) const;

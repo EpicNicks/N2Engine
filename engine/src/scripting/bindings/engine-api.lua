@@ -1460,6 +1460,26 @@ function LuaComponent:HasMissingScript() end
 ---@return table|nil
 function LuaComponent:GetScript() end
 
+---Runs fn(...) as a coroutine of this object, resumed once per frame by its scheduler (the first resume is on the next
+---update, not inside this call). Inside it, coroutine.yield() waits a frame and coroutine.yield(seconds) waits that long.
+---Stops with the object. Returns nil when none started (inactive object, script switched off).
+---@param fn function
+---@param ... any passed to fn
+---@return ScriptCoroutine|nil
+function LuaComponent:StartCoroutine(fn, ...) end
+
+---Stops every coroutine this component started.
+function LuaComponent:StopAllCoroutines() end
+
+---@class ScriptCoroutine
+ScriptCoroutine = {}
+
+---Stops it: no further part of its body runs.
+function ScriptCoroutine:Stop() end
+
+---@return boolean true until it has finished, failed or been stopped
+function ScriptCoroutine:IsRunning() end
+
 ---@class Component
 Component = {}
 
