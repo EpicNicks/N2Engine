@@ -704,7 +704,13 @@ namespace N2Engine::Scripting
             result = active->CallRpc(*this, name, args, target, client.value_or(Network::kServerClientId));
         }
 #else
-        (void)client; // there is no session to send through: the call is not sent
+        (void)client;
+        static bool warned = false;
+        if (!warned)
+        {
+            warned = true;
+            Logger::Warn("Rpc: the network module is not in this build (N2ENGINE_USE_NETWORK is OFF): the call is not sent");
+        }
 #endif
         return result == Network::RpcSendResult::Sent;
     }

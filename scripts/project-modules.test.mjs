@@ -246,6 +246,7 @@ test('network is found by its components, the Network global and a network prese
   assert.deepEqual(modules('Physics.RaycastLagCompensated(1, 2, a, b, 5)'), ['physics3d', 'network']);
   assert.deepEqual(modules('go:GetComponent("NetworkObject")'), ['network']);
   assert.deepEqual(modules('local MyNetwork = {}; MyNetwork.Spawn = 1'), []);
+  assert.deepEqual(modules('local host = Settings.Network.host'), []);
 
   for (const component of ['NetworkObject', 'NetworkTransform', 'LagCompensatedHitbox']) {
     const scene = makeProject({ name: 'p', build: { modules: { network: false } } }, { 'scenes/a.scene': sceneWith(component) });

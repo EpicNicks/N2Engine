@@ -48,7 +48,7 @@ export const MODULES = {
   // preset also needs them (scanProject adds that use). The components keep their data without the module, but do nothing.
   network: {
     components: ['NetworkObject', 'NetworkTransform', 'LagCompensatedHitbox'],
-    luaPatterns: [/\bNetwork\.[A-Za-z]\w*/, /\bPhysics\.(Raycast|SphereCast)LagCompensated\b/],
+    luaPatterns: [/(?<![\w.])Network\.[A-Za-z]\w*/, /\bPhysics\.(Raycast|SphereCast)LagCompensated\b/],
   },
 };
 
