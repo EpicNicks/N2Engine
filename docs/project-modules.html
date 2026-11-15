@@ -98,6 +98,8 @@
 <tr><td><code>physics2d</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_USE_BOX2D</code></td></tr>
 <tr><td><code>particles</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_USE_PARTICLES</code></td></tr>
 <tr><td><code>softbodies</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_USE_SOFTBODIES</code></td></tr>
+<tr><td><code>audio</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_USE_AUDIO</code></td></tr>
+<tr><td><code>ui</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_USE_UI</code></td></tr>
 <tr><td><code>scripting</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_USE_SCRIPTING</code></td></tr>
 <tr><td><code>network</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_USE_NETWORK</code></td></tr>
 <tr><td><code>vulkan</code></td><td><code>true</code>, <code>false</code></td><td><code>N2ENGINE_RENDERER_VULKAN</code> (only ever off; see <a href="#renderers">Renderer backends</a>)</td></tr>
@@ -112,7 +114,7 @@
 <h2 id="renderers">Renderer backends</h2>
 <p><code>vulkan</code> and <code>webgpu</code> leave a renderer backend out of the player. They follow one rule: <strong>the build target's own setting is the ceiling</strong>. A key can turn a backend off that the target would build, and can never turn one on that the target does not build (no Vulkan on the web, no WebGPU natively). <code>true</code> is the same as no key: the target keeps what it builds, and a <code>true</code> for a backend the target lacks prints a configure note. A target that forces a backend on (Android with <code>build.targets.android.renderer</code> <code>vulkan</code>, macOS and iOS with MoltenVK) keeps it unless the key is <code>false</code>; then it builds without it.</p>
 <ul>
-<li><strong>The software renderer is always built</strong> (and OpenGL in the desktop build), so a list can never leave a game with no renderer, and no configure fails for that. The scan does refuse one contradiction: <code>build.targets.&lt;T&gt;.renderer</code> naming a backend that the list leaves out.</li>
+<li><strong>The software renderer is always built</strong> (and OpenGL in the desktop build), so a list can never leave a game with no renderer, and no configure fails for that. Besides the checks described under <a href="#scan">The scan</a>, it refuses this contradiction: <code>build.targets.&lt;T&gt;.renderer</code> naming a backend that the list leaves out.</li>
 <li><strong>Vulkan off</strong> needs no Vulkan headers, loader or <code>glslc</code>. <code>n2player --renderer vulkan</code> then stops at once with <code>this player was built without the Vulkan renderer</code>; the engine's window code says the same for any other host.</li>
 <li><strong>WebGPU off (web)</strong> leaves out the emdawnwebgpu port and the page's device probe: the shell's <code>n2-webgpu</code> tag is <code>no</code>, so the canvas stays free for the software renderer, and the player refuses <code>--renderer webgpu</code>. Natively WebGPU is a CI-only backend that is off by default, so the key changes nothing there.</li>
 <li>Games pick a renderer at run time (<code>--renderer</code>, or the target's <code>renderer</code> setting); the list decides only which ones the build contains.</li>

@@ -319,7 +319,7 @@ export function suggestList(scan) {
   }
   // The scan cannot see a renderer, so what the project's list already says stays
   for (const renderer of RENDERER_MODULES) {
-    if (scan.list && typeof scan.list[renderer] === 'boolean') {
+    if (!scan.target && scan.list && typeof scan.list[renderer] === 'boolean') { // with a target, scan.list has the target's keys laid over build.modules: not what to paste into build.modules
       list[renderer] = scan.list[renderer];
     }
   }

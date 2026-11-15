@@ -2069,9 +2069,9 @@ jobs:
           grep -q "audio stub (N2ENGINE_WEB_AUDIO)" configure-noaudioui.log
           cmake --build build-web-noaudioui --target web-package -- -k 0
           node scripts/web-package-smoke.mjs build-web-noaudioui/web-package 30 320x180 --precompressed
-          # Only the WebGPU renderer left out (build.modules.webgpu false): the page's tag says so, and the package still starts
+          # Only the WebGPU renderer left out, Jolt on as in the other trees (build.modules.webgpu false): the page's tag says so, and the package still starts
           # and draws with software
-          emcmake cmake -S . -B build-web-nowebgpu -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=size -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_PROJECT=tests/projects/no_vulkan 2>&1 | tee configure-nowebgpu.log
+          emcmake cmake -S . -B build-web-nowebgpu -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=size -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_PROJECT=tests/projects/no_vulkan 2>&1 | tee configure-nowebgpu.log
           grep -q "Engine modules: webgpu OFF" configure-nowebgpu.log
           grep -q "Web: WebGPU renderer left out" configure-nowebgpu.log
           cmake --build build-web-nowebgpu --target web-package -- -k 0
