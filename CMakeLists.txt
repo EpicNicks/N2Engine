@@ -51,6 +51,20 @@ message(STATUS "Engine modules: particles ${N2ENGINE_USE_PARTICLES}, softbodies 
 option(N2ENGINE_USE_AUDIO "Build sound (OpenAL Soft, the audio decoders, AudioSource)" ON)
 option(N2ENGINE_USE_UI "Build the UI's layout, drawing and pointer hits (Canvas, Image, UIText, Button)" ON)
 message(STATUS "Engine modules: audio ${N2ENGINE_USE_AUDIO}, ui ${N2ENGINE_USE_UI}")
+# OFF leaves Lua out: no Lua VM, no sol2 and none of the Lua bindings are built (docs/project-modules.html), so a game with no
+# Lua scripts is smaller, and it starts from its project's startupScene (there is no assets/scene.lua to run). A saved scene
+# that has LuaComponents still loads: they keep their data, do nothing and are warned about once. The editor host, which runs
+# extensions and project scripts, and lua_project need Lua, so they are not built without it. A project's build.modules list
+# sets it ("scripting").
+option(N2ENGINE_USE_SCRIPTING "Build the Lua runtime and every Lua binding (LuaComponent runs scripts)" ON)
+message(STATUS "Engine modules: scripting ${N2ENGINE_USE_SCRIPTING}")
+# OFF leaves out the online part of the netcode: the server and client sessions, the lockstep and rollback runtimes, replication,
+# prediction and the Network Lua table, and N2Server is not built. The network components (NetworkObject, NetworkTransform,
+# LagCompensatedHitbox), the network settings with their validation, the RPC and fingerprint registries, the input layout and
+# n2net itself (the replay system uses it) stay, so a scene and a replay load the same and a build with the module keeps its
+# network fingerprint. A project's build.modules list sets it ("network").
+option(N2ENGINE_USE_NETWORK "Build the network sessions (NetworkServer, NetworkClient, lockstep, rollback) and N2Server (which also needs the scripting module)" ON)
+message(STATUS "Engine modules: network ${N2ENGINE_USE_NETWORK}")
 # OFF compiles the Vulkan renderer out: the build then needs no Vulkan headers or loader, and --renderer vulkan / the
 # VULKAN render backend fail with a clear message. ON (the default) needs the Vulkan SDK (Windows) or libvulkan-dev (Linux).
 option(N2ENGINE_RENDERER_VULKAN "Build the Vulkan renderer backend" ON)
@@ -406,6 +420,7 @@ file(GLOB LUA_SOURCES
 list(FILTER LUA_SOURCES EXCLUDE REGEX ".*lua\\.c$")
 list(FILTER LUA_SOURCES EXCLUDE REGEX ".*luac\\.c$")
 
+if(N2ENGINE_USE_SCRIPTING)
 add_library(lua STATIC ${LUA_SOURCES})
 if(N2ENGINE_PLATFORM_IOS)
     # iOS has no system(): Lua's own switch makes os.execute report that no shell is there
@@ -417,6 +432,7 @@ if(WIN32)
     set_target_properties(lua PROPERTIES
             MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
     )
+endif()
 endif()
 
 # The pack readers' decoders (zip: miniz inflate; 7z: the LZMA SDK), linked privately by the engine (docs/packs.html)
@@ -448,12 +464,22 @@ if(N2ENGINE_PLATFORM_IOS)
 endif()
 if(NOT N2ENGINE_PLATFORM_WEB AND NOT N2ENGINE_PLATFORM_ANDROID AND NOT N2ENGINE_PLATFORM_IOS)
 add_subdirectory(test_project)
+if(N2ENGINE_USE_SCRIPTING)
 add_subdirectory(lua_project)
+endif()
 # The desktop player that tools/n2build packages for the windows and linux targets (docs/build-targets.html)
 add_subdirectory(players/desktop)
+if(N2ENGINE_USE_SCRIPTING)
+# The editor host runs project scripts and editor extensions in Lua: a tree without the scripting module has none
 add_subdirectory(editor-server)
-# The dedicated game server (netcode stage A6): UDP sockets and the crypto library, so not part of the web build
+# The dedicated game server (netcode stage A6): UDP sockets and the crypto library, so not part of the web build. It takes its
+# options and scene loading from the editor host's library, so it needs the scripting module too
+if(N2ENGINE_USE_NETWORK)
 add_subdirectory(n2server)
+endif()
+else()
+message(STATUS "Scripting: not in this build (N2ENGINE_USE_SCRIPTING is OFF), so the editor host, the dedicated server and lua_project are not built")
+endif()
 endif()
 
 if(TARGET test_project AND N2ENGINE_PHYSX_AVAILABLE)

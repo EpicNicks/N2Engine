@@ -13,14 +13,18 @@
 #include <string_view>
 
 #include <nlohmann/json.hpp>
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include <sol/sol.hpp>
+#endif
 
 #include <math/DeterministicMath.hpp>
 #include <math/DeterministicRandom.hpp>
 #include <math/FloatEnvironment.hpp>
 #include <math/Vector3.hpp>
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaDeterministic.hpp"
+#endif
 
 namespace N2Engine::Replay
 {
@@ -181,10 +185,12 @@ namespace N2Engine::Replay
 
         constexpr std::uint32_t kSnapshotFormat = 1;
         constexpr std::size_t kMaxSceneNameBytes = 64;
+#ifdef N2ENGINE_SCRIPTING_ENABLED
         constexpr std::size_t kMaxLuaDepth = 16;
         constexpr std::size_t kMaxLuaEntries = 1u << 20;
         constexpr std::size_t kMaxLuaStringBytes = 1u << 20;
         constexpr std::size_t kMaxGlobals = 256;
+#endif
 
         std::uint64_t MakeIdentity(const std::string_view layout, const std::string_view script)
         {
@@ -194,6 +200,7 @@ namespace N2Engine::Replay
             return fnv.Value();
         }
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
         // A key of a saved Lua table. Keys sort in one fixed order (numbers by value, an integer before an equal float,
         // then strings bytewise): the order they are written, and the only order a blob may hold them in
         struct LuaKey
@@ -503,6 +510,7 @@ namespace N2Engine::Replay
             return true;
         }
 
+#endif
         /// What a slot holds right now (the last input row at or before the tick)
         struct Held
         {
@@ -633,6 +641,7 @@ namespace N2Engine::Replay
             std::array<float, kCount> _yaw{};
         };
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
         // ---------------------------------------------------------------------------------------------------------
         // The Lua scenes: a state with only the base, math, string and table libraries, the engine math shims, Ordered.pairs
         // and a seeded engine random stream; math.random is removed
@@ -1007,6 +1016,7 @@ end
             static constexpr int kCount = 16;
             std::array<Math::Vector3, kCount> _position;
         };
+#endif
 
         std::unique_ptr<Scene> MakeScene(const std::string &name, const std::uint32_t seed)
         {
@@ -1014,6 +1024,7 @@ end
             {
                 return std::make_unique<TransformsScene>(seed);
             }
+#ifdef N2ENGINE_SCRIPTING_ENABLED
             if (name == "lua_sim")
             {
                 return std::make_unique<LuaSimScene>(seed);
@@ -1022,13 +1033,19 @@ end
             {
                 return std::make_unique<LuaDrivenScene>(seed);
             }
+#endif
             return nullptr;
         }
     }
 
     std::vector<std::string> SceneNames()
     {
+#ifdef N2ENGINE_SCRIPTING_ENABLED
         return {"transforms", "lua_sim", "lua_driven"};
+#else
+        // The Lua scenes need the scripting module (N2ENGINE_USE_SCRIPTING)
+        return {"transforms"};
+#endif
     }
 
     std::string FormatHash(const std::uint64_t hash)

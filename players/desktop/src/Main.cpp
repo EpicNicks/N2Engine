@@ -31,7 +31,9 @@
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/sceneManagement/SceneFile.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 #include <renderer/common/RendererConfig.hpp>
 
 namespace
@@ -100,7 +102,13 @@ namespace
 
         SceneManager::AddScene(Scene::Create(project.name.empty() ? std::string("Game") : project.name), true);
         SceneManager::ProcessAnyPendingSceneChange();
+#ifdef N2ENGINE_SCRIPTING_ENABLED
         return Scripting::LuaRuntime::Instance().RunFile(IO::ResourcePath("res://scene.lua"));
+#else
+        // No scripting module in this build (docs/project-modules.html): a game starts from its startupScene alone
+        Logger::Error("The project names no startupScene, and this build has no scripting module to run assets/scene.lua");
+        return false;
+#endif
     }
 }
 

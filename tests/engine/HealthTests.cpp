@@ -15,7 +15,9 @@
 #include "engine/ProjectSettings.hpp"
 #include "engine/io/ProjectFile.hpp"
 #include "engine/network/NetworkSettings.hpp"
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 
 using namespace N2Engine;
 
@@ -144,6 +146,7 @@ TEST(WindowHealthTest, UninitializedWindowAccessorsAreSafe)
 // Scripting
 // ============================================================================
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 TEST(ScriptingHealthTest, LuaRuntimeInitializeReportsSuccess)
 {
     auto &lua = Scripting::LuaRuntime::Instance();
@@ -154,6 +157,7 @@ TEST(ScriptingHealthTest, LuaRuntimeInitializeReportsSuccess)
     EXPECT_TRUE(lua.GetState()["require"].valid());
     EXPECT_NO_THROW(lua.GetState().script("local x = 1 + 1"));
 }
+#endif
 
 // ============================================================================
 // The network preset at startup (kept last in this file: it leaves a health report behind, and the test above that

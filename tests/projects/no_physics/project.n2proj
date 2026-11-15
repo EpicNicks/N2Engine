@@ -2,6 +2,7 @@
   "build": {
     "modules": {
       "audio": false,
+      "network": false,
       "particles": false,
       "physics2d": false,
       "physics3d": "none",

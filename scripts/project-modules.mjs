@@ -44,6 +44,18 @@ export const MODULES = {
     components: ['Canvas', 'RectTransform', 'Image', 'UIText', 'Button'],
     luaPatterns: [/\bUI\.[A-Za-z]\w*/],
   },
+  // Scripting is the Lua runtime itself: any .lua file under assets or scenes is a use (scanProject adds it), and so is a
+  // LuaComponent in a scene or prefab (a scene saved with scripts still loads without the module, but its scripts do not run)
+  scripting: {
+    components: ['LuaComponent'],
+    luaPatterns: [],
+  },
+  // The sessions (server, client, lockstep, rollback) and the Network Lua table. A project whose settings pick a network
+  // preset also needs them (scanProject adds that use). The components keep their data without the module, but do nothing.
+  network: {
+    components: ['NetworkObject', 'NetworkTransform', 'LagCompensatedHitbox'],
+    luaPatterns: [/(?<![\w.])Network\.[A-Za-z]\w*/, /\bPhysics\.(Raycast|SphereCast)LagCompensated\b/],
+  },
 };
 
 // The renderer backends are keys of the list too, but not modules a scene can use: a game picks its renderer at run time
@@ -56,7 +68,7 @@ for (const renderer of RENDERER_MODULES) {
 
 export const PHYSICS3D_VALUES = ['none', 'physx', 'jolt', 'both'];
 /** The modules a list turns on (true) or off (false) */
-export const BOOLEAN_MODULES = ['physics2d', 'particles', 'softbodies', 'audio', 'ui'];
+export const BOOLEAN_MODULES = ['physics2d', 'particles', 'softbodies', 'audio', 'ui', 'scripting', 'network'];
 
 const SCENE_EXTENSIONS = new Set(['.scene', '.prefab', '.json']);
 const SKIPPED_FOLDERS = new Set(['.import', '.n2', '.git', 'node_modules', 'build']);
@@ -222,6 +234,7 @@ export function scanProject(folder, target) {
     const relative = path.relative(folder, file).split(path.sep).join('/');
     const extension = path.extname(file).toLowerCase();
     if (extension === '.lua') {
+      uses.push({ module: 'scripting', what: 'a Lua file', file: relative });
       const result = scanLua(fs.readFileSync(file, 'utf8'));
       uses.push(...result.uses.map((use) => ({ ...use, file: relative })));
       unresolved.push(...result.unresolved.map((item) => ({ ...item, file: relative })));
@@ -251,7 +264,13 @@ export function scanProject(folder, target) {
   const needsPhysx = backend === 'physx';
   // The renderer the build target asks for (build.targets.<T>.renderer): a backend the list leaves out cannot be the one asked for
   const renderer = target ? project.build?.targets?.[target]?.renderer : undefined;
-  return { name: project.name, list, uses, unresolved, unreadable, needsJolt, needsPhysx, renderer, target };
+  // Without a startupScene the players run assets/scene.lua in an empty scene, so a game without Lua must name one
+  const startsFromLua = typeof project.startupScene !== 'string' || project.startupScene === '';
+  const preset = settings.network?.preset;
+  if (preset === 'authoritative' || preset === 'deterministic') {
+    uses.push({ module: 'network', what: `the network preset "${preset}"`, file: 'project.n2proj' });
+  }
+  return { name: project.name, list, uses, unresolved, unreadable, needsJolt, needsPhysx, startsFromLua, renderer, target };
 }
 
 /** What contradicts the list: every one of these would misbehave in a game built from it. */
@@ -270,6 +289,9 @@ export function findConflicts(scan) {
   }
   if (RENDERER_MODULES.includes(scan.renderer) && list[scan.renderer] === false) {
     conflicts.push(`build.targets.${scan.target}.renderer asks for "${scan.renderer}", but the list leaves ${scan.renderer} out (the software renderer is always built)`);
+  }
+  if (list.scripting === false && scan.startsFromLua) {
+    conflicts.push('the project has no startupScene, so a player runs assets/scene.lua, but the list leaves scripting out: name a startupScene');
   }
   if (list.physics3d !== undefined) {
     if (scan.needsJolt && !['jolt', 'both'].includes(list.physics3d)) {
@@ -301,6 +323,8 @@ export function suggestList(scan) {
       list[renderer] = scan.list[renderer];
     }
   }
+  // A project with no startupScene is started from assets/scene.lua, which needs the runtime
+  list.scripting = list.scripting || scan.startsFromLua;
   return list;
 }
 

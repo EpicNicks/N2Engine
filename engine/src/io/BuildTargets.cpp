@@ -219,6 +219,8 @@ namespace N2Engine::IO::BuildTargets
                     }
                 }
                 else if (key == "physics2d" || key == "particles" || key == "softbodies" || key == "audio" || key == "ui" ||
+                         key == "scripting" ||
+                         key == "network" ||
                          key == "vulkan" || key == "webgpu")
                 {
                     if (!value.is_boolean())
@@ -229,7 +231,7 @@ namespace N2Engine::IO::BuildTargets
                 else
                 {
                     return std::unexpected(std::format("{}: unknown module \"{}\" (known: physics3d, physics2d, particles, "
-                                                       "softbodies, audio, ui, vulkan, webgpu)", path, Quote(key)));
+                                                       "softbodies, audio, ui, scripting, network, vulkan, webgpu)", path, Quote(key)));
                 }
             }
             return {};

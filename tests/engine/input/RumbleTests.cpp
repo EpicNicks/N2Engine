@@ -6,7 +6,9 @@
 #include <vector>
 
 #include "engine/input/Rumble.hpp"
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 
 using namespace N2Engine;
 using namespace N2Engine::Input;
@@ -110,6 +112,7 @@ TEST(RumbleTest, StopAllStopsEveryRumblingPad)
     EXPECT_EQ(scoped.output.calls.size(), 4u);
 }
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 TEST(RumbleLuaTest, SetAndStopFromLua)
 {
     ScopedOutput scoped;
@@ -128,3 +131,4 @@ TEST(RumbleLuaTest, SetAndStopFromLua)
     ASSERT_TRUE(stopped.valid());
     EXPECT_FALSE(Rumble::IsActive(0));
 }
+#endif

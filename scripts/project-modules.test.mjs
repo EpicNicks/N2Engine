@@ -153,13 +153,14 @@ test('generated and hidden folders are not scanned, and a broken scene is report
 });
 
 test('the suggestion is the smallest list the scan can justify', () => {
-  const suggest = (project, files) => suggestList(scanProject(makeProject({ name: 'p', ...project }, files)));
-  const none = { physics3d: 'none', physics2d: false, particles: false, softbodies: false, audio: false, ui: false };
+  const suggest = (project, files) => suggestList(scanProject(makeProject({ name: 'p', startupScene: 'res://scenes/a.scene', ...project }, files)));
+  const none = { physics3d: 'none', physics2d: false, particles: false, softbodies: false, audio: false, ui: false, scripting: false, network: false };
+  const withLua = { ...none, scripting: true };
   assert.deepEqual(suggest({}, {}), none);
-  assert.deepEqual(suggest({}, { 'assets/a.lua': 'Physics2D.Raycast(a, b)' }), { ...none, physics2d: true });
-  assert.deepEqual(suggest({}, { 'assets/a.lua': 'Physics.Raycast(a, b)' }), { ...none, physics3d: 'physx' });
-  assert.deepEqual(suggest({ settings: { network: { preset: 'deterministic' } } }, {}), { ...none, physics3d: 'jolt' });
-  assert.deepEqual(suggest({}, { 'assets/a.lua': 'go:AddComponent("ParticleSystem")' }), { ...none, particles: true });
+  assert.deepEqual(suggest({}, { 'assets/a.lua': 'Physics2D.Raycast(a, b)' }), { ...withLua, physics2d: true });
+  assert.deepEqual(suggest({}, { 'assets/a.lua': 'Physics.Raycast(a, b)' }), { ...withLua, physics3d: 'physx' });
+  assert.deepEqual(suggest({ settings: { network: { preset: 'deterministic' } } }, {}), { ...none, physics3d: 'jolt', network: true });
+  assert.deepEqual(suggest({}, { 'assets/a.lua': 'go:AddComponent("ParticleSystem")' }), { ...withLua, particles: true });
   assert.deepEqual(suggest({}, { 'scenes/a.scene': sceneWith('MeshRenderer', 'SoftBody') }), { ...none, softbodies: true });
 });
 
@@ -240,6 +241,27 @@ test('UI is found by its components and the UI global', () => {
   assert.throws(() => readModuleList({ build: { modules: { audio: 1 } } }), /audio must be true or false/);
 });
 
+test('network is found by its components, the Network global and a network preset in the settings', () => {
+  const modules = (source) => scanLua(source).uses.map((use) => use.module);
+  assert.deepEqual(modules('Network.Spawn(prefab)'), ['network']);
+  assert.deepEqual(modules('Physics.RaycastLagCompensated(1, 2, a, b, 5)'), ['physics3d', 'network']);
+  assert.deepEqual(modules('go:GetComponent("NetworkObject")'), ['network']);
+  assert.deepEqual(modules('local MyNetwork = {}; MyNetwork.Spawn = 1'), []);
+  assert.deepEqual(modules('local host = Settings.Network.host'), []);
+
+  for (const component of ['NetworkObject', 'NetworkTransform', 'LagCompensatedHitbox']) {
+    const scene = makeProject({ name: 'p', build: { modules: { network: false } } }, { 'scenes/a.scene': sceneWith(component) });
+    assert.match(findConflicts(scanProject(scene)).join('\n'), new RegExp(`scenes/a\.scene uses ${component}, but the list leaves network out`));
+  }
+  const preset = makeProject({ name: 'p', build: { modules: { network: false } }, settings: { network: { preset: 'authoritative' } } }, {});
+  assert.match(findConflicts(scanProject(preset)).join('\n'), /project\.n2proj uses the network preset "authoritative", but the list leaves network out/);
+  const none = makeProject({ name: 'p', build: { modules: { network: false } }, settings: { network: { preset: 'none' } } }, {});
+  assert.deepEqual(findConflicts(scanProject(none)), []);
+  const kept = makeProject({ name: 'p', build: { modules: { physics3d: 'jolt', network: true } }, settings: { network: { preset: 'deterministic' } } }, {});
+  assert.deepEqual(findConflicts(scanProject(kept)), []);
+  assert.throws(() => readModuleList({ build: { modules: { network: 'no' } } }), /network must be true or false/);
+});
+
 test('the command line exits 0 when clean, 1 on a conflict and 2 on bad use', () => {
   const clean = makeProject({ name: 'p', build: { modules: { physics3d: 'none', physics2d: false } } }, { 'assets/scene.lua': 'print("hi")' });
   assert.equal(run(clean).status, 0);
@@ -260,7 +282,7 @@ test('--suggest prints a block that can be pasted, and --json the whole report',
   const suggested = run(folder, '--suggest');
   assert.equal(suggested.status, 0);
   assert.deepEqual(JSON.parse(suggested.stdout), {
-    build: { modules: { physics3d: 'none', physics2d: true, particles: false, softbodies: false, audio: false, ui: false } },
+    build: { modules: { physics3d: 'none', physics2d: true, particles: false, softbodies: false, audio: false, ui: false, scripting: true, network: false } },
   });
   assert.match(suggested.stderr, /computed name/);
 
@@ -310,4 +332,17 @@ test('the renderer keys leave a backend out, stay in a suggestion, and conflict 
   assert.ok(!('webgpu' in suggestList(scanProject(folder))), 'a renderer the list does not name is not suggested');
   assert.equal(run(folder, '--target', 'android').status, 1);
   assert.equal(run(folder, '--target', 'windows').status, 0);
+});
+
+test('scripting is found by any Lua file and by a LuaComponent, and a game without it needs a startupScene', () => {
+  const lua = makeProject({ name: 'p', startupScene: 'res://scenes/a.scene', build: { modules: { scripting: false } } }, { 'assets/a.lua': 'local x = 1' });
+  assert.match(findConflicts(scanProject(lua)).join(', '), /assets\/a\.lua uses a Lua file, but the list leaves scripting out/);
+  const component = makeProject({ name: 'p', startupScene: 'res://scenes/a.scene', build: { modules: { scripting: false } } }, { 'scenes/a.scene': sceneWith('LuaComponent') });
+  assert.match(findConflicts(scanProject(component)).join(', '), /scenes\/a\.scene uses LuaComponent, but the list leaves scripting out/);
+  const noStart = makeProject({ name: 'p', build: { modules: { scripting: false } } }, { 'scenes/a.scene': sceneWith('MeshRenderer') });
+  assert.match(findConflicts(scanProject(noStart)).join(', '), /no startupScene/);
+  const clean = makeProject({ name: 'p', startupScene: 'res://scenes/a.scene', build: { modules: { scripting: false } } }, { 'scenes/a.scene': sceneWith('MeshRenderer') });
+  assert.deepEqual(findConflicts(scanProject(clean)), []);
+  assert.deepEqual(readModuleList({ build: { modules: { scripting: false } } }), { scripting: false });
+  assert.throws(() => readModuleList({ build: { modules: { scripting: 'no' } } }), /scripting must be true or false/);
 });

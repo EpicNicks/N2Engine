@@ -218,12 +218,14 @@ namespace N2Engine::Scripting
             }
             // A local copy of a networked object would not replicate, have no net id, and on a client diverge: refused
             // while a session runs (replicating spawns by prefab UUID is a later stage)
+#if N2ENGINE_NETWORK_ENABLED
             if (scan.hasNetworkObject &&
                 (Network::NetworkServer::Active() != nullptr || Network::NetworkClient::Active() != nullptr))
             {
                 throw std::runtime_error(std::format(
                     "Prefab.Instantiate: prefab '{}' has a NetworkObject: use Network.Spawn (not available yet)", shown));
             }
+#endif
 
             // Fresh UUIDs, references inside the prefab point at the copies, every other reference is cleared (no
             // resolver for the running scene: a stale UUID there could bind the wrong object)

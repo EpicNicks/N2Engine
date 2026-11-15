@@ -406,7 +406,11 @@ TEST(ReplaySimulation, SteppingByHandEqualsRunReplay)
 
 TEST(LockstepSession, RecordedSessionReplaysToIdenticalHashes)
 {
+#ifdef N2ENGINE_SCRIPTING_ENABLED
     for (const std::string scene : {"transforms", "lua_sim", "lua_driven"})
+#else
+    for (const std::string scene : {"transforms"}) // the Lua scenes need the scripting module (N2ENGINE_USE_SCRIPTING)
+#endif
     {
         constexpr int kTicks = 240;
         Session session(0xA11CE, RoughLink(), 3, scene, 4242, kTicks);
@@ -526,7 +530,11 @@ TEST(LockstepSession, AnInjectedDivergenceIsFoundAndReported)
 TEST(LockstepSession, VersionTwoSessionUnderARichLayoutReplaysToIdenticalHashes)
 {
     const Network::InputLayout layout = RichLayout();
+#ifdef N2ENGINE_SCRIPTING_ENABLED
     for (const std::string scene : {"transforms", "lua_driven"})
+#else
+    for (const std::string scene : {"transforms"}) // the Lua scene needs the scripting module (N2ENGINE_USE_SCRIPTING)
+#endif
     {
         constexpr int kTicks = 240;
         Session session(0xC0DE5, RoughLink(), 3, scene, 777, kTicks, &layout);

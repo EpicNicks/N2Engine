@@ -1,0 +1,16 @@
+{
+  "build": {
+    "modules": {
+      "scripting": false
+    }
+  },
+  "engineVersion": "1.0.0",
+  "formatVersion": 1,
+  "name": "no_scripting",
+  "projectId": "c47a1e90-5d36-4b28-8f0a-2e91b6d3f7c5",
+  "scenes": [
+    "res://scenes/Main.scene"
+  ],
+  "settings": {},
+  "startupScene": "res://scenes/Main.scene"
+}

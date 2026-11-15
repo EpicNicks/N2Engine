@@ -25,8 +25,12 @@
 #include "engine/GameObjectScene.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/network/LagCompensatedHitbox.hpp"
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaHandles.hpp"
+#endif
 #include "engine/network/NetworkClient.hpp"
 #include "engine/network/NetworkFingerprint.hpp"
 #include "engine/network/NetworkObject.hpp"
@@ -1875,6 +1879,7 @@ TEST(NetworkReplicationTest, OptInHitboxComponentIsCapturedAutomaticallyByTheSer
 }
 
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 TEST(NetworkReplicationTest, LuaQueriesAndInterestPoliciesUseTheBoundAuthoritativeWorld)
 {
     Session session;auto &client=session.AddClient();
@@ -1900,3 +1905,4 @@ TEST(NetworkReplicationTest, LuaQueriesAndInterestPoliciesUseTheBoundAuthoritati
     EXPECT_EQ(session.serverSide.world.Find(NetworkId{2})->GetInterestPolicy().relevance,Relevance::OwnerOnly);
     lua["b8910Object"]=sol::lua_nil;lua["b8910Client"]=sol::lua_nil;lua["b8910Time"]=sol::lua_nil;
 }
+#endif

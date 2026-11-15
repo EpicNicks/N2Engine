@@ -31,7 +31,9 @@
 #include "engine/physics/jolt/JoltBackend.hpp"
 #include "engine/physics/physx/PhysXBackend.hpp"
 #include "engine/softbody/SoftBodyBackendSelection.hpp"
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 #include "engine/ui/UISystem.hpp"
 
 using namespace N2Engine;
@@ -290,12 +292,19 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
             {
                 row.detail += "; not in this build (N2ENGINE_USE_AUDIO is OFF)";
             }
+#ifndef N2ENGINE_SCRIPTING_ENABLED
+            if (row.name == "Scripting")
+            {
+                row.detail += "; not in this build (N2ENGINE_USE_SCRIPTING is OFF)";
+            }
+#endif
         }
         _health.subsystems.push_back(Network::MakeNetworkStatus(networkSettings, networkValidation));
         _initialized = false;
         return _health;
     }
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
     // Before the first Instance(): the Lua state reads its seeds as it is created. Unset (also with no project) is
     // upstream Lua's behaviour. A bad value is reported by ApplyProjectSettings, as for physics.gpu.
     std::optional<std::uint64_t> luaSeed;
@@ -319,6 +328,12 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         scriptingStatus.state = SubsystemState::Failed;
         scriptingStatus.detail = "Lua bindings failed to register (see log)";
     }
+#else
+    // A build without the scripting module (docs/project-modules.html): there is no Lua state, so nothing is started; a
+    // scene's LuaComponents keep their data and run nothing
+    scriptingStatus.state = SubsystemState::Disabled;
+    scriptingStatus.detail = "Not in this build (N2ENGINE_USE_SCRIPTING is OFF): scripts do not run";
+#endif
 
     // A bad value is reported by ApplyProjectSettings (the hosts call it after Init), as for physics.gpu, so it is
     // warned once, not twice
@@ -579,6 +594,15 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
                                             _3DphysicsBackend ? std::string(_3DphysicsBackend->BackendId())
                                                               : std::string("none"));
     }
+#if !N2ENGINE_NETWORK_ENABLED
+    if (networkSettings.preset != Network::NetworkPreset::None)
+    {
+        // The sessions are not compiled in: the preset's simulation mode runs, but nothing connects
+        networkStatus.detail += "; the network module is not in this build (N2ENGINE_USE_NETWORK is OFF): no session can start";
+        Logger::Warn("network.preset is set, but the network module is not in this build (N2ENGINE_USE_NETWORK is OFF): "
+                     "no server or client session will start");
+    }
+#endif
     if (presetMode != SimulationMode::None)
     {
         // The mode the application actually runs in, read back rather than assumed
@@ -703,6 +727,8 @@ void Application::Tick(const TickOptions &options)
     // frame delta as it is. The fixed dt itself (Time::GetFixedDeltaTime) is never scaled.
     double frameDelta = static_cast<double>(Time::GetUnscaledDeltaTime());
     double resyncSeconds = 0.0;
+#if N2ENGINE_NETWORK_ENABLED
+    // Without the network module there is no client session to ask
     if (!_fixedTickDriver && _simulationClock.GetMode() == SimulationMode::Authoritative)
     {
         if (Network::NetworkClient *const client = Network::NetworkClient::Active();
@@ -713,6 +739,7 @@ void Application::Tick(const TickOptions &options)
                             static_cast<double>(Time::GetFixedUnscaledDeltaTime());
         }
     }
+#endif
     _simulationClock.BeginFrame(frameDelta);
     if (resyncSeconds != 0.0)
     {
