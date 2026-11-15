@@ -1,0 +1,15 @@
+{
+  "build": {
+    "modules": {
+      "vulkan": false,
+      "webgpu": false
+    }
+  },
+  "engineVersion": "1.0.0",
+  "formatVersion": 1,
+  "name": "no_vulkan",
+  "projectId": "c5d2f8a1-94b3-4e60-a7d9-2e1b8c06f347",
+  "scenes": [],
+  "settings": {},
+  "startupScene": ""
+}

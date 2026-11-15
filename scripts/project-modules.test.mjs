@@ -321,6 +321,19 @@ test('--target checks the target\'s list against the project', () => {
   assert.equal(run(folder, '--target').status, 2, 'a missing value is wrong usage');
 });
 
+test('the renderer keys leave a backend out, stay in a suggestion, and conflict with the target\'s own renderer', () => {
+  assert.deepEqual(readModuleList({ build: { modules: { vulkan: false, webgpu: true } } }), { vulkan: false, webgpu: true });
+  assert.throws(() => readModuleList({ build: { modules: { vulkan: 'no' } } }), /vulkan must be true or false/);
+  const folder = makeProject({ name: 'p', build: { modules: { vulkan: false }, targets: { android: { renderer: 'vulkan' }, windows: { renderer: 'opengl' } } } });
+  assert.match(findConflicts(scanProject(folder, 'android'))[0], /build\.targets\.android\.renderer asks for "vulkan", but the list leaves vulkan out/);
+  assert.deepEqual(findConflicts(scanProject(folder, 'windows')), [], 'another renderer is no conflict');
+  assert.deepEqual(findConflicts(scanProject(folder)), [], 'no target, no renderer to check');
+  assert.equal(suggestList(scanProject(folder)).vulkan, false, 'a renderer the list leaves out stays out');
+  assert.ok(!('webgpu' in suggestList(scanProject(folder))), 'a renderer the list does not name is not suggested');
+  assert.equal(run(folder, '--target', 'android').status, 1);
+  assert.equal(run(folder, '--target', 'windows').status, 0);
+});
+
 test('scripting is found by any Lua file and by a LuaComponent, and a game without it needs a startupScene', () => {
   const lua = makeProject({ name: 'p', startupScene: 'res://scenes/a.scene', build: { modules: { scripting: false } } }, { 'assets/a.lua': 'local x = 1' });
   assert.match(findConflicts(scanProject(lua)).join(', '), /assets\/a\.lua uses a Lua file, but the list leaves scripting out/);

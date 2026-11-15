@@ -140,7 +140,13 @@ if(N2ENGINE_PLATFORM_WEB)
     set(N2ENGINE_RENDERER_VULKAN OFF)
     # The shell probes WebGPU before Start and selects software when unavailable.
     message(STATUS "Web: WebGPU renderer compiled in (emdawnwebgpu); automatic browser selection with software fallback")
-    set(N2ENGINE_RENDERER_WEBGPU ON)
+    if(N2ENGINE_PROJECT_NO_WEBGPU)
+        # The project's build.modules.webgpu is false: the player and the shell go without it (docs/project-modules.html)
+        message(STATUS "Web: WebGPU renderer left out (build.modules.webgpu is false): the player draws with software only")
+        set(N2ENGINE_RENDERER_WEBGPU OFF)
+    else()
+        set(N2ENGINE_RENDERER_WEBGPU ON)
+    endif()
     message(STATUS "Web: no GLFW window or GL context (external/web-stubs stands in for GLFW; the player shows frames on a canvas and reads input from the page), audio is Emscripten's OpenAL on WebAudio (N2ENGINE_WEB_AUDIO, or a no-op stub); the editor host (sockets, TLS), test_project and lua_project are not built")
 endif()
 
@@ -164,6 +170,15 @@ endif()
 if(APPLE)
     include(${CMAKE_SOURCE_DIR}/cmake/N2EngineApple.cmake)
 endif()
+
+# A project's renderer keys never turn a backend on (docs/project-modules.html): say so when one asks for what this target lacks
+if(N2ENGINE_PROJECT_WANTS_VULKAN AND NOT N2ENGINE_RENDERER_VULKAN)
+    message(STATUS "Note: build.modules.vulkan is true, but this target builds no Vulkan renderer: a project's list can only leave a backend out")
+endif()
+if(N2ENGINE_PROJECT_WANTS_WEBGPU AND NOT N2ENGINE_RENDERER_WEBGPU)
+    message(STATUS "Note: build.modules.webgpu is true, but this target builds no WebGPU renderer: a project's list can only leave a backend out")
+endif()
+message(STATUS "Renderers: Vulkan ${N2ENGINE_RENDERER_VULKAN}, WebGPU ${N2ENGINE_RENDERER_WEBGPU} (the software renderer is always built)")
 
 # == PhysX setup ==
 set(N2ENGINE_PHYSX_AVAILABLE OFF)

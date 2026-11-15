@@ -86,21 +86,42 @@ endif()
 # Single-threaded and without cross-origin isolation: no pthreads, no SharedArrayBuffer (cmake/N2EngineWeb.cmake).
 # MODULARIZE: index.js is a factory (createN2Player), which the page calls when it is ready and node's smoke test calls
 # with its own arguments and hooks; callMain is what the page's Start button runs.
+# Without the WebGPU renderer (build.modules.webgpu false) the page is a copy whose n2-webgpu tag says so
+set(N2_WEB_SHELL "${CMAKE_CURRENT_SOURCE_DIR}/shell.html")
+if(NOT N2ENGINE_RENDERER_WEBGPU)
+    file(READ "${N2_WEB_SHELL}" _n2_shell_text)
+    set(_n2_shell_yes "<meta name=\"n2-webgpu\" content=\"yes\">")
+    string(FIND "${_n2_shell_text}" "${_n2_shell_yes}" _n2_shell_at)
+    if(_n2_shell_at LESS 0)
+        message(FATAL_ERROR "web/shell.html has no ${_n2_shell_yes} tag for a build without WebGPU to rewrite")
+    endif()
+    string(REPLACE "${_n2_shell_yes}" "<meta name=\"n2-webgpu\" content=\"no\">" _n2_shell_text "${_n2_shell_text}")
+    # Written only when it changes, so a reconfigure does not relink the player
+    set(_n2_shell_old "")
+    if(EXISTS "${CMAKE_BINARY_DIR}/web/shell.html")
+        file(READ "${CMAKE_BINARY_DIR}/web/shell.html" _n2_shell_old)
+    endif()
+    if(NOT _n2_shell_old STREQUAL _n2_shell_text)
+        file(WRITE "${CMAKE_BINARY_DIR}/web/shell.html" "${_n2_shell_text}")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${N2_WEB_SHELL}")
+    set(N2_WEB_SHELL "${CMAKE_BINARY_DIR}/web/shell.html")
+endif()
 target_link_options(N2WebPlayer PRIVATE
     -sMODULARIZE=1
     -sEXPORT_NAME=createN2Player
     -sEXPORTED_RUNTIME_METHODS=callMain
-    "SHELL:--shell-file \"${CMAKE_CURRENT_SOURCE_DIR}/shell.html\""
+    "SHELL:--shell-file \"${N2_WEB_SHELL}\""
     ${N2_WEB_GAME_PRELOAD}
 )
 n2_check_project_modules(N2WebPlayer)
 set_property(TARGET N2WebPlayer APPEND PROPERTY LINK_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/shell.html" "${CMAKE_CURRENT_SOURCE_DIR}/webgpu-library.js"
+    "${N2_WEB_SHELL}" "${CMAKE_CURRENT_SOURCE_DIR}/webgpu-library.js"
     ${N2_WEB_GAME_DEPENDS})
 
 # Not a node/ctest executable: its map callbacks need a browser event loop and
 # a real GPUDevice. The browser smoke runs it when N2_READBACK_DIR points here.
-if(N2ENGINE_BUILD_TESTS)
+if(N2ENGINE_BUILD_TESTS AND N2ENGINE_RENDERER_WEBGPU)
     add_executable(N2WebGpuReadbackTests EXCLUDE_FROM_ALL
         "${CMAKE_SOURCE_DIR}/tests/browser/WebGpuReadback.cpp")
     target_link_libraries(N2WebGpuReadbackTests PRIVATE renderer)

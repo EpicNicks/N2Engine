@@ -80,6 +80,8 @@ TEST(BuildTargetsTest, EachSettingIsCheckedAndTheErrorNamesTheKey)
         {json{{"icon", "res://.png"}}, "build.targets.t.icon"},
         {json{{"modules", {{"physics3d", "havok"}}}}, "build.targets.t.modules.physics3d"},
         {json{{"modules", {{"physics2d", "yes"}}}}, "build.targets.t.modules.physics2d"},
+        {json{{"modules", {{"vulkan", "no"}}}}, "build.targets.t.modules.vulkan"},
+        {json{{"modules", {{"webgpu", 1}}}}, "build.targets.t.modules.webgpu"},
         {json{{"modules", {{"rendering", true}}}}, "unknown module"},
         {json{{"signing", "release-key"}}, "build.targets.t.signing"},
         {json{{"signing", {{"profile", "has space"}}}}, "build.targets.t.signing.profile"},

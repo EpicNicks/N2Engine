@@ -184,7 +184,7 @@ bool Window::InitWindow(const Config::ApplicationOptions &options)
         _renderer = std::make_unique<Renderer::Vulkan::VulkanRenderer>();
         Logger::Log("Using Vulkan renderer", Logger::LogLevel::Info);
 #else
-        return FailInit("This build has no Vulkan renderer (configured with N2ENGINE_RENDERER_VULKAN=OFF)");
+        return FailInit("This build has no Vulkan renderer (N2ENGINE_RENDERER_VULKAN is OFF, or the game's build.modules.vulkan is false)");
 #endif
     }
     else if (options.renderBackend == Config::ApplicationOptions::RenderBackend::SOFTWARE)

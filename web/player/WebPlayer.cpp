@@ -36,6 +36,7 @@
 #include <vector>
 
 #include <renderer/common/FrameRows.hpp>
+#include <renderer/common/RendererConfig.hpp>
 
 #include "WebInputMap.hpp"
 #include "WebRendererOption.hpp"
@@ -546,6 +547,13 @@ int main(int argc, char *argv[])
                 return Fail(backend.error());
             }
             renderBackend = *backend;
+#if !N2ENGINE_RENDERER_WEBGPU
+            if (renderBackend == Config::ApplicationOptions::RenderBackend::WEBGPU)
+            {
+                return Fail("--renderer webgpu: this package was built without the WebGPU renderer (build.modules.webgpu is "
+                            "false), so it draws with the software renderer only");
+            }
+#endif
         }
         else
         {

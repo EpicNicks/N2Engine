@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- "no" in a package built without the WebGPU renderer (build.modules.webgpu; web/CMakeLists.txt rewrites this one tag) -->
+<meta name="n2-webgpu" content="yes">
 <title>N2Engine</title>
 <style>
   :root { color-scheme: dark; --bg: #101216; --fg: #e6e8ec; --muted: #9aa3b2; --accent: #4f8cff; --error: #ff6b6b; }
@@ -178,9 +180,14 @@
       onEvent: function (name, detail) { log('loader: ' + name + (detail && detail.reason ? ' (' + detail.reason + ')' : '')); }
     });
     var probe = N2Loader.createGpuProbe();
+    // Without the WebGPU renderer in the package (the n2-webgpu tag above) no device is asked for, and the canvas stays free
+    // for the software renderer's 2D context
+    var webGpuTag = document.querySelector('meta[name="n2-webgpu"]');
+    var hasWebGpu = !webGpuTag || webGpuTag.getAttribute('content') !== 'no';
+    if (!hasWebGpu) log('renderer: this package has no WebGPU renderer, so it draws with software');
     // Device acquisition and the asset/wasm downloads run concurrently. The
     // shared session object is filled before Start, after the module is ready.
-    var gpuReady = probe.acquire().then(function (result) {
+    var gpuReady = !hasWebGpu ? Promise.resolve() : probe.acquire().then(function (result) {
       log('renderer: ' + result.reason);
       if (!result.device) return;
       try {

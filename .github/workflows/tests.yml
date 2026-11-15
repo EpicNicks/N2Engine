@@ -530,6 +530,31 @@ jobs:
           if grep -q 'libbox2d' build-nobox2d/build.ninja; then echo 'a build without Box2D still links it'; exit 1; fi
           ./build-nobox2d/bin/engine_tests --gtest_filter='Physics2DStrippedTest.*:LuaPhysics2DStrippedTest.*'
 
+      # A game can leave the Vulkan renderer out (docs/project-modules.html, build.modules.vulkan): its player is built from the project
+      # alone (this tree has the Vulkan SDK, so only the list turns the backend off), must refuse --renderer vulkan with a clear
+      # message, must still start on the software renderer, and its size is printed against the full player of the tree above
+      - name: Build the player without the Vulkan renderer
+        run: |
+          set -e -o pipefail
+          cmake -S . -B build-novulkan -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DN2ENGINE_PROJECT=tests/projects/no_vulkan 2>&1 | tee configure-novulkan.log
+          grep -q "Engine modules: vulkan OFF" configure-novulkan.log
+          grep -q "Renderers: Vulkan OFF" configure-novulkan.log
+          cmake --build build-novulkan --parallel --target n2player -- -k 0
+          if ./build-novulkan/bin/n2player tests/projects/no_vulkan --renderer vulkan --frames 1 > vk.txt 2>&1; then echo "--renderer vulkan was accepted"; exit 1; fi
+          cat vk.txt
+          grep -q "built without the Vulkan renderer" vk.txt
+          ./build-novulkan/bin/n2player tests/projects/no_vulkan --headless --frames 10 --console-log | tee run-novulkan.log
+          grep -q "project without the Vulkan renderer running" run-novulkan.log
+          for tree in build build-novulkan; do
+            p="$tree/bin/n2player"
+            strip -o "$p.stripped" "$p"
+            line="$tree: n2player raw $(wc -c < "$p") stripped $(wc -c < "$p.stripped")"
+            echo "[MODULES-SIZE-NATIVE] $line"
+            echo "    $line" >> "$GITHUB_STEP_SUMMARY"
+          done
+        env:
+          ALSOFT_DRIVERS: "null"
+
       # The vendored Box2D alone: this leg's [BOX2D-DETERMINISM] line, which must equal every other leg's
       - name: Box2D determinism numbers
         run: |
@@ -2044,6 +2069,20 @@ jobs:
           grep -q "audio stub (N2ENGINE_WEB_AUDIO)" configure-noaudioui.log
           cmake --build build-web-noaudioui --target web-package -- -k 0
           node scripts/web-package-smoke.mjs build-web-noaudioui/web-package 30 320x180 --precompressed
+          # Only the WebGPU renderer left out, Jolt on as in the other trees (build.modules.webgpu false): the page's tag says so, and the package still starts
+          # and draws with software
+          emcmake cmake -S . -B build-web-nowebgpu -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=size -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_PROJECT=tests/projects/no_vulkan 2>&1 | tee configure-nowebgpu.log
+          grep -q "Engine modules: webgpu OFF" configure-nowebgpu.log
+          grep -q "Web: WebGPU renderer left out" configure-nowebgpu.log
+          cmake --build build-web-nowebgpu --target web-package -- -k 0
+          # The page may be minified (attributes reordered, quotes dropped): find the tag, then its content
+          for pair in "build-web-nowebgpu no" "build-web-size yes"; do
+            set -- $pair
+            tag=$(grep -aEo '<meta[^>]*n2-webgpu[^>]*>' "$1/web-package/index.html" | head -n 1)
+            echo "$1: $tag"
+            echo "$tag" | grep -Eq "content=\"?$2[\" >]"
+          done
+          node scripts/web-package-smoke.mjs build-web-nowebgpu/web-package 30 320x180 --precompressed
           # Scripting left out and every other module kept: the project starts from its startupScene
           emcmake cmake -S . -B build-web-noscripting -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=size -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_PROJECT=tests/projects/no_scripting 2>&1 | tee configure-noscripting.log
           grep -q "Engine modules: scripting OFF" configure-noscripting.log
@@ -2054,7 +2093,7 @@ jobs:
           grep -q "Engine modules: network OFF" configure-nonetwork.log
           cmake --build build-web-nonetwork --target web-package -- -k 0
           node scripts/web-package-smoke.mjs build-web-nonetwork/web-package 30 320x180 --precompressed
-          for tree in build-web-size build-web-noparticles build-web-noaudioui build-web-nonetwork build-web-noscripting build-web-nophysics; do
+          for tree in build-web-size build-web-noparticles build-web-noaudioui build-web-nonetwork build-web-nowebgpu build-web-noscripting build-web-nophysics; do
             w="$tree/web-package/index.wasm"
             j="$tree/web-package/index.js"
             line="$tree: index.wasm raw $(wc -c < "$w") gzip $(gzip -9 -c "$w" | wc -c) brotli $(wc -c < "$w.br"); index.js raw $(wc -c < "$j") brotli $(wc -c < "$j.br" 2>/dev/null || echo n/a)"
