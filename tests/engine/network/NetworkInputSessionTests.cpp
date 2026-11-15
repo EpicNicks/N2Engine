@@ -22,8 +22,12 @@
 #include "engine/network/NetworkWorld.hpp"
 #include "engine/network/n2net/Connection.hpp"
 #include "engine/network/n2net/SimTransport.hpp"
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaHandles.hpp"
+#endif
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 
 // Player input end to end on the network simulator (netcode stage B4): a NetworkServer and NetworkClients in one process
 // over seeded virtual links with no sleeps, plus hostile peers that send what no honest client sends.
@@ -780,6 +784,7 @@ TEST(NetworkInputSessionTest, TheActiveServerIsTheLastOneMadeAndAliveOnly)
 
 // ---- Lua -------------------------------------------------------------------------------------------------------------
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 namespace
 {
     sol::state &Lua()
@@ -821,7 +826,9 @@ namespace
         void TearDown() override { SetDeclaredInputLayout(InputLayout()); }
     };
 }
+#endif
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 TEST_F(NetworkInputLuaTest, DeclareInputLayoutBuildsTheSameLayoutAsCpp)
 {
     ASSERT_TRUE(RunLua(R"(
@@ -849,7 +856,9 @@ TEST_F(NetworkInputLuaTest, DeclareInputLayoutBuildsTheSameLayoutAsCpp)
     EXPECT_EQ(DeclaredInputLayout().Control(0).range, 1.0f);
     EXPECT_TRUE(DeclaredInputLayout().Control(0).isSigned);
 }
+#endif
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 TEST_F(NetworkInputLuaTest, DeclareInputLayoutRefusesEverythingMalformedAndChangesNothing)
 {
     SetDeclaredInputLayout(GameLayout());
@@ -904,7 +913,9 @@ TEST_F(NetworkInputLuaTest, DeclareInputLayoutRefusesEverythingMalformedAndChang
     EXPECT_TRUE(RunLua("Network.DeclareInputLayout({})"));
     EXPECT_TRUE(DeclaredInputLayout().Empty());
 }
+#endif
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 TEST_F(NetworkInputLuaTest, GetInputNeedsAGameObjectAndAServer)
 {
     EXPECT_FALSE(RunLua("Network.GetInput()"));
@@ -916,7 +927,9 @@ TEST_F(NetworkInputLuaTest, GetInputNeedsAGameObjectAndAServer)
     EXPECT_TRUE(RunLua("local go = GameObject.Create('lonely') noServerInput = Network.GetInput(go)"));
     EXPECT_TRUE(LuaIsTrue("noServerInput == nil"));
 }
+#endif
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 TEST_F(NetworkInputLuaTest, GetInputReturnsTheOwnersInputForTheCurrentTick)
 {
     const ScopedPrefab prefab("InputSessionTest_Pawn");
@@ -957,7 +970,9 @@ TEST_F(NetworkInputLuaTest, GetInputReturnsTheOwnersInputForTheCurrentTick)
     Lua()["inputPawn"] = sol::lua_nil;
     Lua()["serverPawn"] = sol::lua_nil;
 }
+#endif
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 TEST_F(NetworkInputLuaTest, AFailedCallLeavesTheLuaCallStackAsItWas)
 {
     // A call that raises an error must unwind completely: nothing left on the stack and no frame left open (other suites
@@ -983,3 +998,4 @@ TEST_F(NetworkInputLuaTest, AFailedCallLeavesTheLuaCallStackAsItWas)
     EXPECT_EQ(depth(), 0);
     EXPECT_EQ(lua_gettop(Lua().lua_state()), top);
 }
+#endif

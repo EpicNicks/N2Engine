@@ -5,7 +5,9 @@
 #include "engine/input/InputTypes.hpp"
 #include "engine/input/KeySource.hpp"
 #include "engine/input/Keyboard.hpp"
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 
 using namespace N2Engine;
 using namespace N2Engine::Input;
@@ -94,6 +96,7 @@ TEST(KeyboardTest, KeyNamesAreTheActionMapNames)
     EXPECT_FALSE(Keyboard::KeyFromName("").has_value());
 }
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 TEST(KeyboardLuaTest, UnknownKeyNamesAreLuaErrors)
 {
     ASSERT_TRUE(Scripting::LuaRuntime::Instance().Initialize());
@@ -106,3 +109,4 @@ TEST(KeyboardLuaTest, UnknownKeyNamesAreLuaErrors)
     ASSERT_TRUE(text.valid());
     EXPECT_EQ(text.get<std::string>(), "string");
 }
+#endif

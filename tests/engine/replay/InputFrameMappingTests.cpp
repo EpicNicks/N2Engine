@@ -516,7 +516,13 @@ TEST(InputFrameMapping, TheLegacyLayoutMapsExactlyOntoTheOriginalTriple)
 TEST(ReplayLogV2, RoundTripsAndKeepsTheLayoutHeader)
 {
     const InputLayout layout = AllControlsLayout();
-    LockstepRecorder recorder("lua_sim", 11, 10, 2, layout);
+#ifdef N2ENGINE_SCRIPTING_ENABLED
+    constexpr const char *kLuaScene = "lua_sim";
+#else
+    // The Lua replay scenes need the scripting module (N2ENGINE_USE_SCRIPTING); the transforms scene stands in
+    constexpr const char *kLuaScene = "transforms";
+#endif
+    LockstepRecorder recorder(kLuaScene, 11, 10, 2, layout);
     for (int tick = 0; tick < 20; ++tick)
     {
         const std::array<LockstepInput, 2> inputs{*LockstepInput::FromBytes(PackFor(layout, static_cast<std::uint32_t>(tick / 3))),

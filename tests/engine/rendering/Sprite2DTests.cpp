@@ -22,7 +22,9 @@
 #include "engine/rendering/ShapeMesh2D.hpp"
 #include "engine/rendering/Sprite2D.hpp"
 #include "engine/rendering/Texture.hpp"
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 
 #include <nlohmann/json.hpp>
 
@@ -476,6 +478,7 @@ TEST(Sprite2DTest, EveryFieldSurvivesASceneLoad)
     EXPECT_EQ(copy->GetSortingOrder(), -4);
 }
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 TEST(Sprite2DTest, AScriptCanSetEveryField)
 {
     ASSERT_TRUE(Scripting::LuaRuntime::Instance().Initialize());
@@ -518,6 +521,7 @@ TEST(Sprite2DTest, AScriptCanSetEveryField)
         FAIL() << error.what();
     }
 }
+#endif
 
 // ===== Colour effects (effects design, stage E1) =====
 
@@ -626,6 +630,7 @@ TEST(Sprite2DTest, TheEffectsSurviveASceneLoadAndAnOlderSceneLoadsWithoutThem)
     EXPECT_FLOAT_EQ(plain->GetFlash().a, 0.0f);
 }
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 TEST(Sprite2DTest, AScriptCanSetTheEffectsAndAskWhetherTheRendererBlends)
 {
     ASSERT_TRUE(Scripting::LuaRuntime::Instance().Initialize());
@@ -649,3 +654,4 @@ TEST(Sprite2DTest, AScriptCanSetTheEffectsAndAskWhetherTheRendererBlends)
         FAIL() << error.what();
     }
 }
+#endif

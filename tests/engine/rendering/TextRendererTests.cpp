@@ -26,7 +26,9 @@
 #include "engine/Positionable.hpp"
 #include "engine/common/Color.hpp"
 #include "engine/rendering/TextRenderer.hpp"
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 #include "engine/serialization/ComponentRegistry.hpp"
 #include "engine/text/Font.hpp"
 
@@ -785,6 +787,7 @@ TEST(TextRendererTest, SettingsSurviveASceneLoad)
     EXPECT_NE(saved.dump().find("\"Baseline\""), std::string::npos) << saved.dump();
 }
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 TEST(TextRendererTest, LuaCanAddAndConfigureIt)
 {
     using Scripting::LuaRuntime;
@@ -853,3 +856,4 @@ TEST(TextRendererTest, LuaCanAddAndConfigureIt)
         text_test_renderer = nil
     )");
 }
+#endif

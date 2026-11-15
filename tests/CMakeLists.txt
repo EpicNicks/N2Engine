@@ -27,11 +27,14 @@ if(N2ENGINE_PLATFORM_WEB)
 add_subdirectory(web)
 endif()
 if(NOT N2ENGINE_PLATFORM_WEB)
-# The editor host (raw sockets, TLS) is not part of a player
+# The editor host (raw sockets, TLS) is not part of a player, and needs Lua (extensions, project scripts)
+# N2Server's tests and smoke test (UDP sockets and the crypto library: not in the web build either), and the dedicated server
+# itself builds on the editor host's library, so it needs Lua too
+if(N2ENGINE_USE_SCRIPTING)
 add_subdirectory(editor-server)
-# N2Server's tests and smoke test (UDP sockets and the crypto library: not in the web build either)
 if(N2ENGINE_USE_NETWORK)
 add_subdirectory(n2server)
+endif()
 endif()
 # The command-line replay runner (the web build runs the same code in engine_tests)
 add_subdirectory(replay)

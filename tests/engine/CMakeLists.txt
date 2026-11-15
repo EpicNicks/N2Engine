@@ -76,7 +76,18 @@ set(N2ENGINE_UI_TESTS
     ui/UITextTests.cpp
     ui/WorldCanvasTests.cpp
 )
-foreach(_n2_module PARTICLES SOFTBODIES AUDIO UI)
+# The scripting module (N2ENGINE_USE_SCRIPTING): every test of the Lua runtime and its bindings (all of scripting/, and the files
+# whose tests are Lua scripts) is left out of a build without it. Tests of other subsystems that also run a script wrap those
+# cases in N2ENGINE_SCRIPTING_ENABLED; modules/LeftOutScriptingTests.cpp has the tests only a build without it can run.
+file(GLOB N2ENGINE_SCRIPTING_TESTS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/scripting/*.cpp")
+list(APPEND N2ENGINE_SCRIPTING_TESTS
+    modules/LeftOutModulesTests.cpp # its fixture runs Lua for the left-out modules' bindings
+    network/RollbackLuaTests.cpp
+    physics/LuaCharacterControllerTests.cpp
+    physics/LuaPhysicsQueryTests.cpp
+    physics2d/LuaPhysics2DTests.cpp
+)
+foreach(_n2_module PARTICLES SOFTBODIES AUDIO UI SCRIPTING)
     foreach(_n2_test IN LISTS N2ENGINE_${_n2_module}_TESTS)
         if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_n2_test}")
             message(FATAL_ERROR "N2ENGINE_${_n2_module}_TESTS names a file that does not exist: ${_n2_test}")
@@ -141,6 +152,8 @@ foreach(_n2_module PARTICLES SOFTBODIES AUDIO UI)
         target_compile_definitions(engine_tests PRIVATE N2ENGINE_${_n2_module}_ENABLED=1)
     endif()
 endforeach()
+# The scripting module's macro N2ENGINE_SCRIPTING_ENABLED comes from the engine target (PUBLIC), because LuaComponent.hpp differs
+# with it; modules/LeftOutScriptingTests.cpp is empty in a build that has the module
 
 target_link_libraries(engine_tests
         PRIVATE

@@ -33,7 +33,9 @@
 #include "engine/network/n2net/Connection.hpp"
 #include "engine/network/n2net/SimTransport.hpp"
 #include "engine/scripting/LuaComponent.hpp"
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 #include "engine/serialization/ComponentSerializer.hpp"
 
 // RPCs end to end (netcode stage B7): C++ and Lua RPCs over the network simulator, the direction and authority checks,
@@ -1065,6 +1067,7 @@ TEST_F(NetworkRpcSessionTest, ARpcOnADespawnedObjectIsDroppedBeforeItRuns)
     EXPECT_EQ(Count("chat:"), 0u);
 }
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 // ---- Lua ------------------------------------------------------------------------------------------------------------------
 
 namespace
@@ -1315,3 +1318,4 @@ TEST_F(NetworkRpcLuaTest, AMalformedRpcsTableLeavesOutOnlyTheBadEntries)
     ASSERT_EQ(table->size(), 1u);
     EXPECT_EQ((*table)[0].name, "Good");
 }
+#endif

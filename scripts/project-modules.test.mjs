@@ -153,13 +153,14 @@ test('generated and hidden folders are not scanned, and a broken scene is report
 });
 
 test('the suggestion is the smallest list the scan can justify', () => {
-  const suggest = (project, files) => suggestList(scanProject(makeProject({ name: 'p', ...project }, files)));
-  const none = { physics3d: 'none', physics2d: false, particles: false, softbodies: false, audio: false, ui: false, network: false };
+  const suggest = (project, files) => suggestList(scanProject(makeProject({ name: 'p', startupScene: 'res://scenes/a.scene', ...project }, files)));
+  const none = { physics3d: 'none', physics2d: false, particles: false, softbodies: false, audio: false, ui: false, scripting: false, network: false };
+  const withLua = { ...none, scripting: true };
   assert.deepEqual(suggest({}, {}), none);
-  assert.deepEqual(suggest({}, { 'assets/a.lua': 'Physics2D.Raycast(a, b)' }), { ...none, physics2d: true });
-  assert.deepEqual(suggest({}, { 'assets/a.lua': 'Physics.Raycast(a, b)' }), { ...none, physics3d: 'physx' });
+  assert.deepEqual(suggest({}, { 'assets/a.lua': 'Physics2D.Raycast(a, b)' }), { ...withLua, physics2d: true });
+  assert.deepEqual(suggest({}, { 'assets/a.lua': 'Physics.Raycast(a, b)' }), { ...withLua, physics3d: 'physx' });
   assert.deepEqual(suggest({ settings: { network: { preset: 'deterministic' } } }, {}), { ...none, physics3d: 'jolt', network: true });
-  assert.deepEqual(suggest({}, { 'assets/a.lua': 'go:AddComponent("ParticleSystem")' }), { ...none, particles: true });
+  assert.deepEqual(suggest({}, { 'assets/a.lua': 'go:AddComponent("ParticleSystem")' }), { ...withLua, particles: true });
   assert.deepEqual(suggest({}, { 'scenes/a.scene': sceneWith('MeshRenderer', 'SoftBody') }), { ...none, softbodies: true });
 });
 
@@ -281,7 +282,7 @@ test('--suggest prints a block that can be pasted, and --json the whole report',
   const suggested = run(folder, '--suggest');
   assert.equal(suggested.status, 0);
   assert.deepEqual(JSON.parse(suggested.stdout), {
-    build: { modules: { physics3d: 'none', physics2d: true, particles: false, softbodies: false, audio: false, ui: false, network: false } },
+    build: { modules: { physics3d: 'none', physics2d: true, particles: false, softbodies: false, audio: false, ui: false, scripting: true, network: false } },
   });
   assert.match(suggested.stderr, /computed name/);
 
@@ -318,4 +319,17 @@ test('--target checks the target\'s list against the project', () => {
   assert.match(forAndroid.stderr, /leaves physics3d out/);
   assert.equal(run(folder, '--target=android').status, 1);
   assert.equal(run(folder, '--target').status, 2, 'a missing value is wrong usage');
+});
+
+test('scripting is found by any Lua file and by a LuaComponent, and a game without it needs a startupScene', () => {
+  const lua = makeProject({ name: 'p', startupScene: 'res://scenes/a.scene', build: { modules: { scripting: false } } }, { 'assets/a.lua': 'local x = 1' });
+  assert.match(findConflicts(scanProject(lua)).join(', '), /assets\/a\.lua uses a Lua file, but the list leaves scripting out/);
+  const component = makeProject({ name: 'p', startupScene: 'res://scenes/a.scene', build: { modules: { scripting: false } } }, { 'scenes/a.scene': sceneWith('LuaComponent') });
+  assert.match(findConflicts(scanProject(component)).join(', '), /scenes\/a\.scene uses LuaComponent, but the list leaves scripting out/);
+  const noStart = makeProject({ name: 'p', build: { modules: { scripting: false } } }, { 'scenes/a.scene': sceneWith('MeshRenderer') });
+  assert.match(findConflicts(scanProject(noStart)).join(', '), /no startupScene/);
+  const clean = makeProject({ name: 'p', startupScene: 'res://scenes/a.scene', build: { modules: { scripting: false } } }, { 'scenes/a.scene': sceneWith('MeshRenderer') });
+  assert.deepEqual(findConflicts(scanProject(clean)), []);
+  assert.deepEqual(readModuleList({ build: { modules: { scripting: false } } }), { scripting: false });
+  assert.throws(() => readModuleList({ build: { modules: { scripting: 'no' } } }), /scripting must be true or false/);
 });

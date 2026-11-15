@@ -27,7 +27,9 @@
 #include "engine/common/Color.hpp"
 #include "engine/rendering/TextDrawing.hpp"
 #include "engine/rendering/TextRenderer.hpp"
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 #include "engine/text/Font.hpp"
 #include "engine/text/TextEffects.hpp"
 #include "engine/ui/UIText.hpp"
@@ -494,6 +496,7 @@ TEST(SoftwareTextPassesGoldenTest, PassesBeyondTheSpreadAreClampedNotDrawnAsBoxe
 // Lua
 // ============================================================================
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 TEST(TextPassesTest, LuaAddsAndClearsPasses)
 {
     using Scripting::LuaRuntime;
@@ -536,6 +539,7 @@ TEST(TextPassesTest, LuaAddsAndClearsPasses)
         run("text_pass_go = nil; text_pass = nil");
     }
 }
+#endif
 
 // ============================================================================
 // Order

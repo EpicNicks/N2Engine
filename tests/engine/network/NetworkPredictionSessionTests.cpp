@@ -27,7 +27,9 @@
 #include "engine/physics/CharacterController.hpp"
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/prefabs/PrefabManager.hpp"
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 
 // Client prediction end to end (netcode stage B6): a NetworkServer that steps the owner's CharacterController with the
 // owner's input, and NetworkClients that predict the same step, over seeded virtual links with no sleeps, on a real
@@ -500,6 +502,7 @@ TEST_F(PredictionSessionTest, TheTuningCanBeChangedWhileTheClientRuns)
     EXPECT_FALSE(off.client->SetPredictionTuning(wide));
 }
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 TEST_F(PredictionSessionTest, LuaReadsAndChangesTheTuning)
 {
     static const bool luaReady = Scripting::LuaRuntime::Instance().Initialize();
@@ -533,6 +536,7 @@ TEST_F(PredictionSessionTest, LuaReadsAndChangesTheTuning)
     EXPECT_EQ(rig.client->GetPredictionTuning().smoothingMicros, 250'000u);
     EXPECT_FLOAT_EQ(rig.client->GetPredictionTuning().snapDistance, 2.0f);
 }
+#endif
 
 TEST_F(PredictionSessionTest, ALossyReorderingLinkConvergesToTheServersState)
 {
