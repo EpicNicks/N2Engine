@@ -163,6 +163,44 @@ export function componentTypesIn(document) {
   return found;
 }
 
+/** Components that make an object a networked one */
+export const NETWORK_COMPONENTS = MODULES.network.components;
+/** The 3D and 2D physics components: an object with one of these is simulated by a physics backend */
+export const PHYSICS_COMPONENTS = [...MODULES.physics3d.components, ...MODULES.physics2d.components];
+
+/** How many objects of a scene or prefab document hold a networking component and a physics component together */
+export function networkedPhysicsObjectsIn(document) {
+  let count = 0;
+  const walk = (node) => {
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+    } else if (node && typeof node === 'object') {
+      if (Array.isArray(node.components)) {
+        const types = new Set(node.components.map((component) => component?.type));
+        if (NETWORK_COMPONENTS.some((type) => types.has(type)) && PHYSICS_COMPONENTS.some((type) => types.has(type))) {
+          count += 1;
+        }
+      }
+      Object.values(node).forEach(walk);
+    }
+  };
+  walk(document);
+  return count;
+}
+
+/**
+ * build.strictFp: true or false when the project says, undefined when it does not. It asks for the strict floating-point
+ * profile (N2ENGINE_STRICT_FP: no FP contraction, no fast-math) that peers of a network game need to compute the same floats.
+ * Throws on a value that is not a boolean.
+ */
+export function readStrictFp(project) {
+  const value = project?.build?.strictFp;
+  if (value !== undefined && typeof value !== 'boolean') {
+    throw new Error(`build.strictFp must be true or false, not ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
 function filesUnder(folder) {
   const files = [];
   if (!fs.existsSync(folder)) {
@@ -229,6 +267,7 @@ export function scanProject(folder, target) {
   const uses = [];
   const unresolved = [];
   const unreadable = [];
+  const networkedPhysics = [];
 
   for (const file of [...filesUnder(path.join(folder, 'assets')), ...filesUnder(path.join(folder, 'scenes'))]) {
     const relative = path.relative(folder, file).split(path.sep).join('/');
@@ -247,6 +286,10 @@ export function scanProject(folder, target) {
         continue;
       }
       const types = componentTypesIn(document);
+      const together = networkedPhysicsObjectsIn(document);
+      if (together > 0) {
+        networkedPhysics.push({ file: relative, objects: together });
+      }
       for (const [module, { components }] of Object.entries(MODULES)) {
         for (const component of components) {
           if (types.has(component)) {
@@ -270,7 +313,33 @@ export function scanProject(folder, target) {
   if (preset === 'authoritative' || preset === 'deterministic') {
     uses.push({ module: 'network', what: `the network preset "${preset}"`, file: 'project.n2proj' });
   }
-  return { name: project.name, list, uses, unresolved, unreadable, needsJolt, needsPhysx, startsFromLua, renderer, target };
+  const strictFp = readStrictFp(project);
+  return { name: project.name, list, uses, unresolved, unreadable, networkedPhysics, strictFp, needsJolt, needsPhysx, startsFromLua, renderer, target };
+}
+
+/**
+ * Whether a build of this project gets the strict floating-point profile from the project: build.strictFp when it says, else on
+ * for a game that uses networking (a network component, the Network Lua table or a network preset), else null (the build's own
+ * default, N2ENGINE_STRICT_FP, decides). n2build passes the answer to CMake.
+ */
+export function resolveStrictFp(scan) {
+  if (scan.strictFp !== undefined) {
+    return scan.strictFp;
+  }
+  return scan.uses.some((use) => use.module === 'network') ? true : null;
+}
+
+/**
+ * A warning for a project that turned strict floating point off while objects hold a networking component and a physics
+ * component: two peers can then step the same body to different floats. null when there is nothing to warn about.
+ */
+export function strictFpWarning(scan) {
+  if (scan.strictFp !== false || scan.networkedPhysics.length === 0) {
+    return null;
+  }
+  const objects = scan.networkedPhysics.reduce((sum, item) => sum + item.objects, 0);
+  const first = scan.networkedPhysics[0].file;
+  return `build.strictFp is false, but ${objects} object${objects === 1 ? '' : 's'} (first in ${first}) have both a networking component and a physics component: peers built without the strict floating-point profile can compute different physics results and desync. Set build.strictFp to true, or remove it to let the build turn it on`;
 }
 
 /** What contradicts the list: every one of these would misbehave in a game built from it. */

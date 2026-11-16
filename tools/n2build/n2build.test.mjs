@@ -1377,3 +1377,20 @@ test("PhysX's GPU library ships only when the project's physics.gpu is on or aut
   packageDesktop({ treeDir: tree, descriptor: descriptor(), projectDir: makeProject({ name: 'Tri' }), packageDir: gpu, gameName: 'Tri', platform: 'win32', physicsGpu: 'on' });
   assert.ok(fs.existsSync(path.join(gpu, 'PhysXGpu_64.dll')));
 });
+
+test('build turns strict floating point on for a networked game, and warns when the project turned it off', async () => {
+  const scene = { rootGameObjects: [{ name: 'P', components: [{ type: 'NetworkObject' }, { type: 'Rigidbody' }], children: [] }] };
+  const dry = async (project) => {
+    const projectDir = makeProject(project, { 'assets/a.scene': JSON.stringify(scene) });
+    const { reporter, lines } = capture();
+    const ctx = fakeProbe({ files: ['/usr/bin/cmake', '/usr/bin/ninja', '/usr/bin/c++'], env: { HOME: tmp('n2build-home-') }, commands: { cmake: 'cmake version 3.30.0', ninja: '1.12', 'c++': 'g++ 14.2.0' } });
+    assert.equal(await main(['build', '--target', 'linux', '--project', projectDir, '--dry-run', '--json'], { ctx, reporter }), 0);
+    return { logs: lines.filter((l) => l.type === 'log').map((l) => l.text), warned: lines.some((l) => l.type === 'warning' && /build\.strictFp is false/.test(JSON.stringify(l))) };
+  };
+  const auto = await dry({ name: 'Net' });
+  assert.ok(auto.logs.some((t) => t.includes('-DN2ENGINE_STRICT_FP=ON')), auto.logs.join('\n'));
+  assert.equal(auto.warned, false);
+  const off = await dry({ name: 'Net', build: { strictFp: false } });
+  assert.ok(off.logs.some((t) => t.includes('-DN2ENGINE_STRICT_FP=OFF')), off.logs.join('\n'));
+  assert.equal(off.warned, true);
+});
