@@ -43,6 +43,7 @@ namespace physx
 namespace physx
 {
     class PxCudaContextManager;
+    class PxJoint;
 }
 
 #endif
@@ -108,8 +109,9 @@ namespace N2Engine::Physics
         [[nodiscard]] bool SupportsSnapshot() const override { return kSupportsSnapshot; }
         /// True: GetBodyState and SetBodyState teleport a dynamic body and set its velocities and sleep state
         [[nodiscard]] bool SupportsSetState() const override { return kSupportsSetState; }
-        /// Every feature group: layers and the collision matrix, triggers, contact and trigger events, scene queries
-        static constexpr PhysicsFeatureSet kImplementedFeatures = PhysicsFeatureSet::All();
+        /// Every required feature group (layers and the collision matrix, triggers, contact and trigger events, scene
+        /// queries) and the optional joints
+        static constexpr PhysicsFeatureSet kImplementedFeatures = PhysicsFeatureSet::All().With(PhysicsFeature::Joints);
         [[nodiscard]] PhysicsFeatureSet GetImplementedFeatures() const override { return kImplementedFeatures; }
         /// "physx"
         [[nodiscard]] std::string_view BackendId() const override { return "physx"; }
@@ -296,6 +298,14 @@ namespace N2Engine::Physics
             uint32_t layerMask,
             QueryTriggers triggers) override;
 
+        /// Joints (PhysicsFeature::Joints): one PxJoint each (PxFixedJoint, PxRevoluteJoint, PxSphericalJoint,
+        /// PxPrismaticJoint, PxDistanceJoint). Joint frames are built from the bodies' poses at creation, so that is
+        /// the joint's zero. PhysX is not a rollback backend: joints are not part of any snapshot.
+        PhysicsJointHandle CreateJoint(const JointDesc& desc) override;
+        void DestroyJoint(PhysicsJointHandle joint) override;
+        bool ConfigureJoint(PhysicsJointHandle joint, const JointDesc& desc) override;
+        [[nodiscard]] bool IsJointValid(PhysicsJointHandle joint) const override;
+
     private:
         // Outside the PhysX guard so the inline GetGpuStatus compiles without PhysX too
         GpuMode _gpuMode = GpuMode::Off;
@@ -429,6 +439,26 @@ namespace N2Engine::Physics
         std::unordered_map<ICollider*, std::vector<physx::PxShape*>> _colliderShapes;
 
         PhysicsBodyHandle AllocateHandle();
+
+        struct JointData
+        {
+            physx::PxJoint* joint = nullptr;
+            uint32_t generation = 0;
+            bool active = false;
+            JointType type = JointType::Fixed;
+            PhysicsBodyHandle bodyA;
+            PhysicsBodyHandle bodyB; // invalid: the world
+            float restDistance = 0.0f; // Distance without limits: the distance it is held at
+        };
+        std::vector<JointData> _joints;
+        [[nodiscard]] const JointData* GetJointData(PhysicsJointHandle handle) const;
+        /// Ends the joint and wakes the bodies it held (one may be asleep, and without the joint must fall or swing)
+        void ReleaseJoint(JointData& data);
+        /// Ends every joint that holds the body: before its actor is released
+        void ReleaseJointsOf(PhysicsBodyHandle handle);
+        void WakeJointBodies(const JointData& data);
+        /// collideConnected and the limits of `desc` onto the joint (creation and ConfigureJoint)
+        void ApplyJointSettings(const JointData& data, const JointDesc& desc) const;
 
         /// Creates a shape on the body, owned by (and recorded under) the collider that asked for it
         void AttachColliderShape(PhysicsBodyHandle body, ICollider* collider, const physx::PxGeometry& geometry,
