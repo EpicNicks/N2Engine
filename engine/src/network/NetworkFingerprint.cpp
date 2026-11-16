@@ -5,6 +5,9 @@
 #include <vector>
 
 #include "engine/Version.hpp"
+#include <math/DeterministicMath.hpp>
+#include <math/MathRegistrar.hpp>
+
 #include "engine/network/NetworkHash.hpp"
 #include "engine/network/NetworkRpc.hpp"
 #include "engine/network/ReplicationCodec.hpp"
@@ -29,8 +32,97 @@ namespace N2Engine::Network
             return "registry";
         case JoinRefusal::ObjectCount:
             return "object-count";
+        case JoinRefusal::BuildProfile:
+            return "build-profile";
         }
         return "unknown";
+    }
+
+    BuildProfileBits CurrentBuildProfile() noexcept
+    {
+        BuildCompiler compiler = BuildCompiler::Unknown;
+        unsigned major = 0;
+#if defined(__EMSCRIPTEN__)
+        compiler = BuildCompiler::Emscripten;
+        major = __clang_major__;
+#elif defined(__clang__)
+        compiler = BuildCompiler::Clang;
+        major = __clang_major__;
+#elif defined(_MSC_VER)
+        compiler = BuildCompiler::Msvc;
+        major = _MSC_VER / 100;
+#elif defined(__GNUC__)
+        compiler = BuildCompiler::Gcc;
+        major = __GNUC__;
+#endif
+        BuildArch arch = BuildArch::Unknown;
+#if defined(__wasm__)
+        arch = BuildArch::Wasm;
+#elif defined(__x86_64__) || defined(_M_X64)
+        arch = BuildArch::X86_64;
+#elif defined(__i386__) || defined(_M_IX86)
+        arch = BuildArch::X86;
+#elif defined(__aarch64__) || defined(_M_ARM64)
+        arch = BuildArch::Arm64;
+#elif defined(__arm__) || defined(_M_ARM)
+        arch = BuildArch::Arm;
+#endif
+        BuildProfileBits bits = static_cast<BuildProfileBits>(compiler) | (std::min(major, 255u) << 8);
+        bits |= Math::IsStrictFp() ? (1u << 16) : 0u;
+        bits |= Math::IsContractionFree() ? (1u << 17) : 0u;
+#ifndef NDEBUG
+        bits |= 1u << 18;
+#endif
+        bits |= sizeof(void *) == 8 ? (1u << 19) : 0u;
+        bits |= static_cast<BuildProfileBits>(arch) << 20;
+        return bits;
+    }
+
+    std::string DescribeBuildProfile(const BuildProfileBits profile)
+    {
+        static constexpr const char *kCompilers[] = {"unknown compiler", "msvc", "clang", "gcc", "emscripten"};
+        static constexpr const char *kArchs[] = {"unknown arch", "x86_64", "x86", "arm64", "arm", "wasm"};
+        const unsigned compiler = profile & 0xFFu;
+        const unsigned arch = (profile >> 20) & 0xFu;
+        return std::format("{} {} {} {} {} {} {}", compiler < 5 ? kCompilers[compiler] : "unknown compiler",
+                           (profile >> 8) & 0xFFu, ((profile >> 16) & 1u) != 0 ? "strict-fp" : "non-strict-fp",
+                           ((profile >> 17) & 1u) != 0 ? "contraction-free" : "contracting",
+                           ((profile >> 18) & 1u) != 0 ? "debug" : "release", arch < 6 ? kArchs[arch] : "unknown arch",
+                           ((profile >> 19) & 1u) != 0 ? "64-bit" : "32-bit");
+    }
+
+    std::string BuildProfileDifference(const BuildProfileBits a, const BuildProfileBits b)
+    {
+        const BuildProfileBits x = a ^ b;
+        if ((x & 0xFFu) != 0)
+        {
+            return "compiler";
+        }
+        if (((x >> 8) & 0xFFu) != 0)
+        {
+            return "compiler version";
+        }
+        if (((x >> 16) & 1u) != 0)
+        {
+            return "strict floating point";
+        }
+        if (((x >> 17) & 1u) != 0)
+        {
+            return "floating-point contraction";
+        }
+        if (((x >> 18) & 1u) != 0)
+        {
+            return "Debug/Release";
+        }
+        if (((x >> 19) & 1u) != 0)
+        {
+            return "pointer width";
+        }
+        if (((x >> 20) & 0xFu) != 0)
+        {
+            return "architecture";
+        }
+        return {};
     }
 
     std::uint64_t HashSceneJson(const nlohmann::json &scene)
@@ -98,7 +190,7 @@ namespace N2Engine::Network
 
     Fingerprint MakeFingerprint(const std::string_view scenePath, const std::uint64_t sceneHash,
                                 const std::uint32_t sceneObjectCount, const PrefabTable &prefabs,
-                                const InputLayout &inputLayout)
+                                const InputLayout &inputLayout, const bool enforceBuildProfile)
     {
         Fingerprint fingerprint;
         fingerprint.engineVersion = SanitizeText(EngineVersion(), kMaxEngineVersionLength);
@@ -107,6 +199,8 @@ namespace N2Engine::Network
         fingerprint.scenePath = SanitizeText(scenePath, kMaxScenePathLength);
         fingerprint.sceneObjectCount = sceneObjectCount;
         fingerprint.prefabCount = static_cast<std::uint16_t>(prefabs.Size());
+        fingerprint.buildProfile = CurrentBuildProfile();
+        fingerprint.buildProfileEnforced = enforceBuildProfile;
         return fingerprint;
     }
 
@@ -127,6 +221,10 @@ namespace N2Engine::Network
         if (server.sceneObjectCount != client.sceneObjectCount)
         {
             return JoinRefusal::ObjectCount;
+        }
+        if (server.buildProfileEnforced && server.buildProfile != client.buildProfile)
+        {
+            return JoinRefusal::BuildProfile;
         }
         return JoinRefusal::None;
     }
@@ -154,6 +252,11 @@ namespace N2Engine::Network
         case JoinRefusal::ObjectCount:
             return std::format("the server's scene has {} network object(s) and this client's has {}",
                                server.sceneObjectCount, client.sceneObjectCount);
+        case JoinRefusal::BuildProfile:
+            return std::format("the server (a Deterministic session) and this client are built differently ({}): "
+                               "server {}; this client {}",
+                               BuildProfileDifference(server.buildProfile, client.buildProfile),
+                               DescribeBuildProfile(server.buildProfile), DescribeBuildProfile(client.buildProfile));
         }
         return "the fingerprints differ";
     }
