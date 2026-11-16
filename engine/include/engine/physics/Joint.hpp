@@ -25,7 +25,10 @@ namespace N2Engine::Physics
      * either body is disabled. Joints are made in component update order, so the same scene gives the same joints in
      * the same order on every peer.
      *
-     * Not in a rollback snapshot yet: the backend's SaveState and HashState do not cover joints.
+     * In a rollback snapshot (Jolt): SaveState, RestoreState and HashState cover the backend's joints, so a joint that
+     * lives through the whole rollback window rolls back exactly. A joint made or ended inside the window (this
+     * component created, destroyed, disabled or re-enabled, or either body replaced, parked or unparked) makes
+     * RestoreState refuse, because a joint made again takes its zero from the bodies' poses at that moment.
      */
     class Joint final : public SerializableComponent
     {
