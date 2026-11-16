@@ -204,6 +204,16 @@ namespace N2Engine::Network
             Logger::Error("The network session's scene is not the current scene: the session stops");
             return false;
         }
+        if (_window > 0 && scene->GetPhysics2DWorld() != nullptr)
+        {
+            // The constructor falls back to lockstep for a 2D world that exists then; one created after the session began
+            // (a Rigidbody2D added at run time) cannot switch the session mode now, and a rollback would rewind everything
+            // but Box2D, which the snapshot and the desync hash do not hold: stop, loudly, rather than drift
+            Logger::Error("A 2D physics world appeared after the rollback session started; Box2D state is not in a snapshot, "
+                          "so a rollback would desync the peers silently: the session stops. Create the 2D world before the "
+                          "session starts, or use network.deterministic.mode lockstep");
+            return false;
+        }
         Application &app = Application::GetInstance();
         // The counter is the ticks run before this one (the host's hook sees `tick`); StepTicks' BeginTick makes it
         // tick + 1 inside the tick's FixedUpdate, as the first run saw it
