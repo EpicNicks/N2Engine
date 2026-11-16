@@ -499,6 +499,31 @@ TEST_P(SimdDispatchTest, Vector3ExactOperations)
     }
 }
 
+// A single IEEE add, subtract, multiply or negate has one correctly rounded result, so every tier must equal the scalar
+// tier bit for bit (#381 item 10). Dot, Length, Normalized, Cross and the scalar divide are not here: a SIMD tier may sum
+// in another order, fuse, or multiply by a reciprocal, which is why those are tolerance-tested above and why the
+// Deterministic preset requires math.simdTier scalar.
+TEST_P(SimdDispatchTest, ElementwiseArithmeticIsBitIdenticalToScalar)
+{
+    std::vector<Vector3> samples3 = EdgeCaseVectors();
+    for (const Vector3 &v : SampleVectors())
+        samples3.push_back(v);
+    for (size_t i = 0; i < samples3.size(); ++i)
+    {
+        const Vector3 &a = samples3[i];
+        const std::string at = " a=" + std::to_string(i);
+        ExpectIdenticalToScalar([&] { return -a; }, "Negate" + at);
+        ExpectIdenticalToScalar([&] { return a * 2.5f; }, "ScalarMul" + at);
+        for (size_t j = 0; j < samples3.size(); ++j)
+        {
+            const Vector3 &b = samples3[j];
+            const std::string ab = at + " b=" + std::to_string(j);
+            ExpectIdenticalToScalar([&] { return a + b; }, "Add" + ab);
+            ExpectIdenticalToScalar([&] { return a - b; }, "Sub" + ab);
+        }
+    }
+}
+
 TEST_P(SimdDispatchTest, Vector3BatchOperations)
 {
     // An odd count larger than 8 exercises both the AVX batches and their scalar tails
