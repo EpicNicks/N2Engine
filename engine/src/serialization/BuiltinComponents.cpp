@@ -14,6 +14,7 @@
 #include "engine/physics/BoxCollider.hpp"
 #include "engine/physics/CapsuleCollider.hpp"
 #include "engine/physics/CharacterController.hpp"
+#include "engine/physics/Joint.hpp"
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/rendering/Sprite2D.hpp"
 #include "engine/physics2d/Collider2D.hpp"
@@ -57,6 +58,7 @@ namespace N2Engine
         Add<Physics::SphereCollider>(registry, "SphereCollider");
         Add<Physics::CapsuleCollider>(registry, "CapsuleCollider");
         Add<Physics::CharacterController>(registry, "CharacterController");
+        Add<Physics::Joint>(registry, "Joint");
         // Registered with or without Box2D (N2ENGINE_USE_BOX2D), so a stripped build keeps scene data and the same registry
         Add<Physics2D::Rigidbody2D>(registry, "Rigidbody2D");
         Add<Physics2D::BoxCollider2D>(registry, "BoxCollider2D");

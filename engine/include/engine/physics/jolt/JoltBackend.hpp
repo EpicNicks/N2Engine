@@ -104,7 +104,8 @@ namespace N2Engine::Physics
                                                                       .With(PhysicsFeature::Layers)
                                                                       .With(PhysicsFeature::Triggers)
                                                                       .With(PhysicsFeature::Events)
-                                                                      .With(PhysicsFeature::Queries);
+                                                                      .With(PhysicsFeature::Queries)
+                                                                      .With(PhysicsFeature::Joints);
         [[nodiscard]] PhysicsFeatureSet GetImplementedFeatures() const override { return kImplementedFeatures; }
         /// "jolt"
         [[nodiscard]] std::string_view BackendId() const override { return "jolt"; }
@@ -198,6 +199,17 @@ namespace N2Engine::Physics
 
         void SetGravity(const Math::Vector3 &gravity) override;
         [[nodiscard]] Math::Vector3 GetGravity() const override;
+
+        /// Joints (stage a of the joint component): Fixed, Hinge (Jolt's HingeConstraint), Ball (PointConstraint), Slider
+        /// and Distance, each a Jolt TwoBodyConstraint made in world space from the bodies' poses at creation. Destroying
+        /// a body destroys its joints; disabling a body takes its joints out of the simulation until it is enabled again.
+        /// A pair with collideConnected off is kept from colliding by the backend's own pair filter (Jolt has no such
+        /// flag). NOT YET in a snapshot: SaveState and RestoreState neither write nor restore joints and HashState does
+        /// not cover them (stage c), so a rollback session must not use joints yet.
+        PhysicsJointHandle CreateJoint(const JointDesc &desc) override;
+        void DestroyJoint(PhysicsJointHandle joint) override;
+        bool ConfigureJoint(PhysicsJointHandle joint, const JointDesc &desc) override;
+        [[nodiscard]] bool IsJointValid(PhysicsJointHandle joint) const override;
 
         /// Scene queries (J5), through Jolt's NarrowPhaseQuery only, all following QueryRules (Raycast.hpp): hits are
         /// ordered by distance, body handle and collider order, never by Jolt's own order. The layer mask is tested

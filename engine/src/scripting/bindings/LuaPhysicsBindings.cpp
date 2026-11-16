@@ -8,6 +8,7 @@
 #include "engine/physics/SphereCollider.hpp"
 #include "engine/physics/CapsuleCollider.hpp"
 #include "engine/physics/CharacterController.hpp"
+#include "engine/physics/Joint.hpp"
 #include "engine/physics/PhysicsMaterial.hpp"
 #include "engine/physics/PhysicsTypes.hpp"
 #include "engine/physics/ICollider.hpp"
@@ -583,6 +584,69 @@ namespace N2Engine::Scripting::Bindings
             "GetMaterial", Forward<CapsuleColliderRef, &Physics::CapsuleCollider::GetMaterial>(),
             "SetOffset", Forward<CapsuleColliderRef, &Physics::CapsuleCollider::SetOffset>(),
             "GetOffset", Forward<CapsuleColliderRef, &Physics::CapsuleCollider::GetOffset>()
+        );
+
+        // ===== Joint =====
+        // Constrains this object's body to another's (or to the world). Needs a backend with joints (Jolt); on another one
+        // the component warns once and does nothing. A value of the wrong type or a non-finite number is a Lua error.
+        lua.new_enum("JointType",
+            "Fixed", Physics::JointType::Fixed,
+            "Hinge", Physics::JointType::Hinge,
+            "Ball", Physics::JointType::Ball,
+            "Slider", Physics::JointType::Slider,
+            "Distance", Physics::JointType::Distance
+        );
+        using JointRef = ComponentRef<Physics::Joint>;
+        BindComponentType<Physics::Joint>(lua, "Joint",
+            "SetJointType", Forward<JointRef, &Physics::Joint::SetJointType>(),
+            "GetJointType", Forward<JointRef, &Physics::Joint::GetJointType>(),
+            // SetConnectedBody(object|nil): nil joins the body to the world
+            "SetConnectedBody", [](const JointRef &j, const sol::object body)
+            {
+                if (IsAbsent(body))
+                {
+                    j.Pin()->SetConnectedBody(nullptr);
+                    return;
+                }
+                if (!body.is<GameObjectRef>() || !body.as<GameObjectRef>().IsValid())
+                {
+                    throw std::runtime_error("Joint:SetConnectedBody: body must be a GameObject or nil");
+                }
+                j.Pin()->SetConnectedBody(body.as<GameObjectRef>().Lock().get());
+            },
+            "GetConnectedBody", [](const JointRef &j) { return RefOrNil(j.Pin()->GetConnectedBody()); },
+            "SetAnchor", [](const JointRef &j, const sol::object anchor)
+            {
+                j.Pin()->SetAnchor(RequireVector(anchor, "Joint:SetAnchor", "anchor"));
+            },
+            "GetAnchor", Forward<JointRef, &Physics::Joint::GetAnchor>(),
+            "SetConnectedAnchor", [](const JointRef &j, const sol::object anchor)
+            {
+                j.Pin()->SetConnectedAnchor(RequireVector(anchor, "Joint:SetConnectedAnchor", "anchor"));
+            },
+            "GetConnectedAnchor", Forward<JointRef, &Physics::Joint::GetConnectedAnchor>(),
+            "SetAxis", [](const JointRef &j, const sol::object axis)
+            {
+                j.Pin()->SetAxis(RequireVector(axis, "Joint:SetAxis", "axis"));
+            },
+            "GetAxis", Forward<JointRef, &Physics::Joint::GetAxis>(),
+            "SetCollideConnected", Forward<JointRef, &Physics::Joint::SetCollideConnected>(),
+            "GetCollideConnected", Forward<JointRef, &Physics::Joint::GetCollideConnected>(),
+            // SetLimits(enabled, min, max): degrees for a hinge, metres otherwise
+            "SetLimits", [](const JointRef &j, const sol::object enabled, const sol::object minimum, const sol::object maximum)
+            {
+                if (enabled.get_type() != sol::type::boolean)
+                {
+                    throw std::runtime_error("Joint:SetLimits: enabled must be a boolean");
+                }
+                j.Pin()->SetLimits(enabled.as<bool>(), RequireNumber(minimum, "Joint:SetLimits", "min"),
+                                   RequireNumber(maximum, "Joint:SetLimits", "max"));
+            },
+            "GetUseLimits", Forward<JointRef, &Physics::Joint::GetUseLimits>(),
+            "GetLimitMin", Forward<JointRef, &Physics::Joint::GetLimitMin>(),
+            "GetLimitMax", Forward<JointRef, &Physics::Joint::GetLimitMax>(),
+            // IsCreated(): the backend holds the joint now (false while a body is missing or the backend has no joints)
+            "IsCreated", [](const JointRef &j) { return j.Pin()->GetHandle().IsValid(); }
         );
 
         // ===== CharacterController =====

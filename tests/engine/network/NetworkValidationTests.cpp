@@ -557,7 +557,8 @@ TEST(PhysicsBackendDeclarationTest, JoltDeclaresEveryFeatureGroup)
                                                               .With(PhysicsFeature::Layers)
                                                               .With(PhysicsFeature::Triggers)
                                                               .With(PhysicsFeature::Events)
-                                                              .With(PhysicsFeature::Queries));
+                                                              .With(PhysicsFeature::Queries)
+                                                              .With(PhysicsFeature::Joints)); // optional: not required by the preset
     EXPECT_TRUE(Physics::JoltBackend::kImplementedFeatures.Has(PhysicsFeature::Queries));
     EXPECT_TRUE(Physics::JoltBackend::kImplementedFeatures.IsComplete());
     EXPECT_EQ(Physics::JoltBackend::kImplementedFeatures.MissingText(), "");

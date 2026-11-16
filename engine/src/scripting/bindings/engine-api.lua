@@ -868,7 +868,7 @@ function GameObject:FindChildRecursive(name) end
 function GameObject:Destroy() end
 
 ---Add a component by type name and return it.
----Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CharacterController", "Rigidbody2D", "BoxCollider2D",
+---Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CharacterController", "Joint", "Rigidbody2D", "BoxCollider2D",
 ---"CircleCollider2D", "PolygonCollider2D", "CubeRenderer",
 ---"SphereRenderer", "QuadRenderer", "Sprite2D", "MeshRenderer", "TextRenderer", "ParticleSystem", "SoftBody", "Light", "AudioSource", "AudioListener",
 ---"LuaComponent", "RectTransform", "Canvas", "Image", "UIText", "Button". Unknown names raise an error.
@@ -2630,6 +2630,82 @@ function CapsuleCollider:SetOffset(offset) end
 ---Get the offset
 ---@return Vector3
 function CapsuleCollider:GetOffset() end
+
+---@enum JointType
+JointType = {
+    Fixed = 0,
+    Hinge = 1,
+    Ball = 2,
+    Slider = 3,
+    Distance = 4,
+}
+
+---Constrains this object's body to another object's body, or to the world. Needs a physics backend with joints (Jolt);
+---on another one the component warns once and does nothing. The joint is made from the bodies' poses when both exist
+---(that pose is its zero), and again when a body is replaced. A value of the wrong type or a non-finite number raises an error.
+---@class Joint : Component
+Joint = {}
+
+---@param jointType JointType
+function Joint:SetJointType(jointType) end
+
+---@return JointType
+function Joint:GetJointType() end
+
+---The object whose body this one is joined to; nil joins it to the world
+---@param body GameObject|nil
+function Joint:SetConnectedBody(body) end
+
+---@return GameObject|nil
+function Joint:GetConnectedBody() end
+
+---The joint's point on this body, in its local space
+---@param anchor Vector3
+function Joint:SetAnchor(anchor) end
+
+---@return Vector3
+function Joint:GetAnchor() end
+
+---The same point on the connected body (local space); the world position when there is none
+---@param anchor Vector3
+function Joint:SetConnectedAnchor(anchor) end
+
+---@return Vector3
+function Joint:GetConnectedAnchor() end
+
+---Hinge axis or slider direction, in this body's local space
+---@param axis Vector3
+function Joint:SetAxis(axis) end
+
+---@return Vector3
+function Joint:GetAxis() end
+
+---Whether the two joined bodies still collide with each other (default false)
+---@param collide boolean
+function Joint:SetCollideConnected(collide) end
+
+---@return boolean
+function Joint:GetCollideConnected() end
+
+---Limits a hinge's angle (degrees) or a slider's or distance joint's length (metres). A hinge's and a slider's range
+---holds 0, the pose the joint was made at.
+---@param enabled boolean
+---@param min number
+---@param max number
+function Joint:SetLimits(enabled, min, max) end
+
+---@return boolean
+function Joint:GetUseLimits() end
+
+---@return number
+function Joint:GetLimitMin() end
+
+---@return number
+function Joint:GetLimitMax() end
+
+---True while the backend holds the joint (false while a body is missing or the backend has no joints)
+---@return boolean
+function Joint:IsCreated() end
 
 ---An engine-owned character controller (docs/physics.html, "Character controller"): an upright capsule moved once per
 ---fixed tick over the physics backend's capsule casts, so it behaves the same on PhysX and Jolt. It has no body of its

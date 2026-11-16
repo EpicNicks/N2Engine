@@ -12,6 +12,7 @@
 #include "engine/physics/BodyState.hpp"
 #include "engine/physics/DeterminismLevel.hpp"
 #include "engine/physics/GpuStatus.hpp"
+#include "engine/physics/JointTypes.hpp"
 #include "engine/physics/PhysicsFeatures.hpp"
 #include "engine/physics/PhysicsHandle.hpp"
 #include "engine/physics/PhysicsMaterial.hpp"
@@ -260,6 +261,24 @@ namespace N2Engine::Physics
 
         virtual void SetGravity(const Math::Vector3& gravity) = 0;
         [[nodiscard]] virtual Math::Vector3 GetGravity() const = 0;
+
+        // Joints (PhysicsFeature::Joints). The defaults are "unsupported", so a backend without joints still compiles
+        // and the Joint component degrades with a warning (it checks GetImplementedFeatures first). Main thread,
+        // never while the backend is stepping.
+
+        /// Makes a joint from the bodies' poses as they are now (see JointDesc). Returns an invalid handle, with a
+        /// warning, for a stale body, two identical bodies, a non-finite value or an unsupported backend. A joint ends
+        /// when DestroyJoint says so or when either of its bodies is destroyed (IsJointValid then says false); while
+        /// either body is disabled (SetBodyEnabled) the joint is suspended and resumes with the body.
+        virtual PhysicsJointHandle CreateJoint(const JointDesc & /*desc*/) { return INVALID_PHYSICS_JOINT_HANDLE; }
+        /// Ends a joint; a stale or invalid handle does nothing
+        virtual void DestroyJoint(PhysicsJointHandle /*joint*/) {}
+        /// Changes the settings that can change while the joint lives: the limits and collideConnected of `desc`. What
+        /// it is made of (type, bodies, anchors, axis) cannot change: destroy and create it again. False for a stale
+        /// handle, a different type or an unsupported backend.
+        virtual bool ConfigureJoint(PhysicsJointHandle /*joint*/, const JointDesc & /*desc*/) { return false; }
+        /// Whether `joint` is a live joint of this backend
+        [[nodiscard]] virtual bool IsJointValid(PhysicsJointHandle /*joint*/) const { return false; }
 
         // Queries: layerMask selects the layers hit (see Layers); 0 hits nothing. Raycast's wrappers default
         // it to Layers::DefaultRaycastMask. `triggers` (QueryTriggers::Ignore) skips trigger colliders; the
