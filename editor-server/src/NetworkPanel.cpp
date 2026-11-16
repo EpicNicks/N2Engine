@@ -183,7 +183,9 @@ namespace N2Engine::Editor::NetworkPanel
                 return {"None", "Offline. No network model: the engine behaves as it always has."};
             case NetworkPreset::Authoritative:
                 return {"Server authoritative",
-                        "A server simulates the game; clients predict their own avatar and interpolate the rest."};
+                        "A server simulates the game; clients predict their own avatar and interpolate the rest. With PhysX, a "
+                        "client corrects a physics body by setting its pose and velocity (no whole-world rewind), and "
+                        "results are not identical across platforms."};
             case NetworkPreset::Deterministic:
                 return {"Deterministic lockstep/rollback",
                         "Every peer runs the same simulation from the same inputs; needs a cross-platform "
@@ -395,7 +397,9 @@ namespace N2Engine::Editor::NetworkPanel
         std::string detail;
         for (const Network::NetworkRequirement *requirement : validation.Unmet())
         {
-            if (requirement->id == "physics-backend" || requirement->id == "physics-features")
+            // The build-level requirements cannot be fixed from a project setting, so they disable the card too
+            if (requirement->id == "physics-backend" || requirement->id == "physics-features" ||
+                requirement->id == "strict-fp" || requirement->id == "engine-trig")
             {
                 detail += (detail.empty() ? "" : "; ") + requirement->detail;
             }
@@ -405,6 +409,13 @@ namespace N2Engine::Editor::NetworkPanel
             return {};
         }
         const std::vector<std::string> selectable = SelectableBackends(host);
+        const bool backendUnmet = std::ranges::any_of(
+            validation.Unmet(), [](const Network::NetworkRequirement *r)
+            { return r->id == "physics-backend" || r->id == "physics-features"; });
+        if (!backendUnmet)
+        {
+            return "Needs a different build: " + detail;
+        }
         if (selectable.empty())
         {
             return "Requires a deterministic physics backend (none in this build): " + detail;
