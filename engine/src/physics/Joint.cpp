@@ -62,7 +62,7 @@ namespace N2Engine::Physics
     void Joint::OnAttach()
     {
         _attached = true;
-        Refresh();
+        // Made in the first FixedUpdate, like OnEnable (see there)
     }
 
     void Joint::OnDestroy()
@@ -73,12 +73,22 @@ namespace N2Engine::Physics
 
     void Joint::OnEnable()
     {
-        Refresh();
+        // Not made here: a pooled object that is enabled again has its bodies put at their spawn pose only after this, and
+        // the joint's zero is the bodies' poses when it is made. The first FixedUpdate makes it, the same way for an
+        // object that is new and one that is brought back.
     }
 
     void Joint::OnDisable()
     {
         Release();
+    }
+
+    void Joint::OnActiveFlagChanged()
+    {
+        if (!IsActive())
+        {
+            Release();
+        }
     }
 
     void Joint::OnFixedUpdate()
@@ -183,7 +193,10 @@ namespace N2Engine::Physics
     {
         if (_handle.IsValid())
         {
-            if (auto *backend = Application::GetInstance().Get3DPhysicsBackend())
+            // Only a joint that is still this component's: after a rollback restore the handle may be stale, and its slot
+            // may hold another joint now
+            if (auto *backend = Application::GetInstance().Get3DPhysicsBackend();
+                backend && backend->JointHolds(_handle, _bodyA, _bodyB))
             {
                 backend->DestroyJoint(_handle);
             }
@@ -221,18 +234,26 @@ namespace N2Engine::Physics
 
         if (_handle.IsValid())
         {
-            if (backend->IsJointValid(_handle) && bodyA == _bodyA && bodyB == _bodyB)
+            if (bodyA == _bodyA && bodyB == _bodyB && backend->JointHolds(_handle, bodyA, bodyB))
             {
                 return;
             }
-            Release(); // a body was destroyed or replaced
+            Release(); // a body was destroyed or replaced, or a restore changed the joints and the handle is stale
         }
         if (!bodyA.IsValid() || (_connectedBody && !bodyB.IsValid()))
         {
             return;
         }
 
-        _handle = backend->CreateJoint(BuildDesc(bodyA, bodyB));
+        JointDesc desc = BuildDesc(bodyA, bodyB);
+        desc.owned = true;
+        // After a rollback restore the backend may hold this joint already, made again from its saved state: take it back
+        // (it keeps the saved zero pose) instead of making a new one from the bodies' poses now
+        _handle = backend->ClaimJoint(desc);
+        if (!_handle.IsValid())
+        {
+            _handle = backend->CreateJoint(desc);
+        }
         if (_handle.IsValid())
         {
             _bodyA = bodyA;

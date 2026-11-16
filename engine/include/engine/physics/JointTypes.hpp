@@ -62,5 +62,9 @@ namespace N2Engine::Physics
         bool useLimits = false;
         float limitMin = 0.0f;
         float limitMax = 0.0f;
+        /// A component owns the joint (the Joint component sets it). After a rollback restore re-makes such a joint from
+        /// the saved state, it waits for its owner to claim it (IPhysicsBackend::ClaimJoint); one nobody claims by the
+        /// next Update is ended. A joint made straight through the backend (false) is never ended that way.
+        bool owned = false;
     };
 }

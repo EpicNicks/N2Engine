@@ -207,12 +207,18 @@ namespace N2Engine::Physics
         /// flag). In a snapshot (stage c): SaveState writes every joint (its description, its constraint's settings and
         /// accumulated state, and the order of Jolt's constraint list), RestoreState puts them back (a constraint whose
         /// settings differ is made again from the saved ones, the list is put back in the saved order) and HashState and
-        /// HashSimulatedState cover them. The joint SET must be the same at the restore as at the save (the same slots,
-        /// generations, types and bodies): a joint made or ended inside the window makes RestoreState return false.
+        /// HashSimulatedState cover them. RestoreState puts the joint SET back too (stage d): a joint that is not in the
+        /// snapshot is ended, one that is, but is not here (made again, ended or replaced inside the window), is made again
+        /// from the SAVED settings (the saved zero pose, limits and accumulated state, in the saved slot with the saved
+        /// generation), and the constraint list is put in the saved order. A joint made again for an owner
+        /// (JointDesc::owned) waits to be claimed (ClaimJoint) and is ended by the next Update if nobody does. Refused
+        /// (false, nothing changed) only when a saved joint's body is not the same live body any more.
         PhysicsJointHandle CreateJoint(const JointDesc &desc) override;
         void DestroyJoint(PhysicsJointHandle joint) override;
         bool ConfigureJoint(PhysicsJointHandle joint, const JointDesc &desc) override;
         [[nodiscard]] bool IsJointValid(PhysicsJointHandle joint) const override;
+        [[nodiscard]] bool JointHolds(PhysicsJointHandle joint, PhysicsBodyHandle bodyA, PhysicsBodyHandle bodyB) const override;
+        PhysicsJointHandle ClaimJoint(const JointDesc &desc) override;
 
         /// Scene queries (J5), through Jolt's NarrowPhaseQuery only, all following QueryRules (Raycast.hpp): hits are
         /// ordered by distance, body handle and collider order, never by Jolt's own order. The layer mask is tested
