@@ -523,6 +523,27 @@ TEST(NetworkPanelSettingsTest, AProjectAskingForABackendTheBuildLacksCannotChoos
     EXPECT_EQ(info.at("backend").at("selected"), "physx");
 }
 
+TEST(NetworkPanelSettingsTest, DeterministicIsDisabledWhenOnlyTheBuildProfileIsWrong)
+{
+    Panel::HostBuild host = FullBuild();
+    host.strictFp = false;
+    const json info = Panel::BuildSettingsInfo(
+        json{{"physics", {{"backend", "jolt"}, {"deterministic", true}}}}, host, {});
+    const json &deterministic = PresetEntry(info, "deterministic");
+    EXPECT_FALSE(deterministic.at("selectable"));
+    const std::string reason = deterministic.at("unavailableReason").get<std::string>();
+    EXPECT_NE(reason.find("Needs a different build"), std::string::npos) << reason;
+    EXPECT_NE(reason.find("N2ENGINE_STRICT_FP"), std::string::npos) << reason;
+}
+
+TEST(NetworkPanelSettingsTest, TheAuthoritativeSummaryStatesThePhysXLimit)
+{
+    const json info = Panel::BuildSettingsInfo(json::object(), FullBuild(), {});
+    const std::string summary = PresetEntry(info, "authoritative").at("summary").get<std::string>();
+    EXPECT_NE(summary.find("With PhysX"), std::string::npos) << summary;
+    EXPECT_NE(summary.find("no whole-world rewind"), std::string::npos) << summary;
+}
+
 // ==================== The nudge ====================
 
 TEST(NetworkPanelNudgeTest, AProjectThatLooksNetworkedButIsPresetNoneIsNudged)
