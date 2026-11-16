@@ -153,6 +153,11 @@ namespace N2Engine::Editor
                 options.readOnly = true;
                 continue;
             }
+            if (arg == "--networked")
+            {
+                options.projectNetworked = true;
+                continue;
+            }
             if (arg == "--editor-extensions")
             {
                 options.editorExtensions = true;
@@ -384,6 +389,10 @@ namespace N2Engine::Editor
             return std::unexpected("--editor-extensions-watch needs --editor-extensions: it only watches the files that "
                                    "flag loads");
         }
+        if (options.createPath.empty() && options.projectNetworked)
+        {
+            return std::unexpected("--networked only goes with --create");
+        }
         if (options.createPath.empty() && (givenName || givenId))
         {
             return std::unexpected(std::string(givenName ? "--name" : "--project-id") + " only goes with --create");
@@ -605,6 +614,8 @@ Options:
                             without starting the engine. Exit code 0: created; 2: the folder
                             already has a project.n2proj (nothing written); 1: any other error
   --name <name>             With --create: the project's name (default: the folder's name)
+  --networked               With --create: a project for a networked game; project.n2proj gets
+                            "build": {"strictFp": true} (the strict floating-point profile)
   --project-id <uuid>       With --create: the project's id, the namespace of its asset UUIDs
                             (default: a new random one); "from-path" keeps the UUIDs the folder's
                             assets had before projects had ids

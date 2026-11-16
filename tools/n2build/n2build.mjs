@@ -33,6 +33,7 @@ import { findAdb, parseDevices, pickDevice, runOnDevice, streamLines } from './l
 import { captureProcess, iosConfigureArgs, iosSettings, packageIos, runInSimulator } from './lib/apple.mjs';
 import { checkPushed, dispatchAndFollow, gitState, workflowInputs, workflowTemplate } from './lib/remote.mjs';
 import { cmakeInstallDir, gradleInvocation, packageAndroid, planAndroid, prepareGradleTree } from './lib/android.mjs';
+import { resolveStrictFp, scanProject, strictFpWarning } from '../../scripts/project-modules.mjs';
 import { PACK_EXTENSION, cookPack, findSevenZip } from './lib/cook.mjs';
 import { PACK_KINDS } from './lib/descriptors.mjs';
 import { findTarget, loadDescriptors, readUserSettings, userSettingsFile } from './lib/descriptors.mjs';
@@ -164,6 +165,22 @@ function doctorReport(descriptor, toolchains, platform, physicsProblem) {
   return { target: descriptor.name, displayName: descriptor.displayName, ok: checks.every((c) => c.ok || !c.required), checks };
 }
 
+/**
+ * The strict floating-point answer for a build (resolveStrictFp), and a warning when the project turned it off but has objects
+ * with a networking and a physics component. A project whose files cannot be scanned gets no opinion (null).
+ */
+function strictFpFor(projectDir, target, reporter) {
+  let scan;
+  try {
+    scan = scanProject(projectDir, target);
+  } catch {
+    return null;
+  }
+  const warning = strictFpWarning(scan);
+  if (warning) reporter.warning(warning);
+  return resolveStrictFp(scan);
+}
+
 async function build(descriptor, options, ctx, reporter) {
   const projectDir = path.resolve(options.project);
   const project = readProject(projectDir, descriptor.name);
@@ -203,7 +220,7 @@ async function build(descriptor, options, ctx, reporter) {
     engineRoot: ENGINE_ROOT, projectDir, descriptor, config: config, modules: project.modules,
     present: toolchains.present, toolchainFile: toolchains.toolchainFile ?? (options.dryRun ? '<Emscripten.cmake from emsdk>' : null),
     buildRoot: options.buildDir ? path.resolve(options.buildDir) : null, outDir: options.out,
-    jobs: options.jobs ?? os.availableParallelism(), gameName: project.name, packFormat,
+    jobs: options.jobs ?? os.availableParallelism(), gameName: project.name, packFormat, strictFp: strictFpFor(projectDir, descriptor.name, reporter),
   };
   let plan = planBuild(planOptions);
   if (descriptor.package.kind === 'ios') {
@@ -267,6 +284,8 @@ async function buildRemote({ descriptor, options, ctx, reporter, projectDir, pro
   const runGit = (args) => ctx.run('git', args, { env: ctx.env });
   const state = gitState(projectDir, runGit);
   const engineRef = engineRevision(ENGINE_ROOT);
+  // The runner's own n2build resolves build.strictFp from the pushed project; the warning is shown here too, before the wait
+  strictFpFor(projectDir, descriptor.name, reporter);
   const packageDir = options.out ? path.resolve(options.out) : path.join(projectDir, '.n2', 'out', `${descriptor.name}-${config}`, safeName(project.name));
   if (options.dryRun) {
     reporter.step('plan', `Plan for ${descriptor.name} (${config}) in GitHub Actions`);
@@ -306,7 +325,7 @@ async function buildAndroid({ descriptor, options, ctx, reporter, project, proje
   const plan = planAndroid({
     engineRoot: ENGINE_ROOT, projectDir, descriptor, config, modules: project.modules, settings: project.settings,
     info: toolchains.info, cmakeDir: cmakeInstallDir(cmake), buildRoot: options.buildDir ? path.resolve(options.buildDir) : null,
-    outDir: options.out, gameName: project.name, signingProfile: profileName,
+    outDir: options.out, gameName: project.name, signingProfile: profileName, strictFp: strictFpFor(projectDir, descriptor.name, reporter),
   });
   const gradle = toolchains.info.gradle ?? 'gradle';
   if (options.dryRun) {

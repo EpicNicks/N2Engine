@@ -156,8 +156,10 @@ export function privatePath(descriptor, relative) {
 }
 
 /** Every path and command of a build, decided before anything runs (printed by --dry-run) */
-export function planBuild({ engineRoot, projectDir, descriptor, config, modules, present, toolchainFile, buildRoot, outDir, jobs, gameName, packFormat, extraConfigureArgs = [] }) {
+export function planBuild({ engineRoot, projectDir, descriptor, config, modules, present, toolchainFile, buildRoot, outDir, jobs, gameName, packFormat, strictFp = null, extraConfigureArgs = [] }) {
   const options = resolveOptions(descriptor, config, present);
+  // The project's answer (scripts/project-modules.mjs resolveStrictFp) wins over the target's; null leaves the build's default
+  if (strictFp !== null) options.N2ENGINE_STRICT_FP = strictFp ? 'ON' : 'OFF';
   // The pack format is not part of the key: the web's pack path is a configure argument (a change reconfigures the tree)
   const key = buildKey({ projectDir, target: descriptor.name, config, modules, options });
   const treeDir = path.join(buildRoot ?? path.join(projectDir, '.n2', 'build'), key);
