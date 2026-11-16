@@ -46,12 +46,16 @@ namespace N2Engine::Physics
         RegisterMember(NAMEOF(_anchor), _anchor).Tooltip("The joint's point on this body, in its local space");
         RegisterMember(NAMEOF(_connectedAnchor), _connectedAnchor)
             .Tooltip("The same point on the connected body (local space); the world position without one");
-        RegisterMember(NAMEOF(_axis), _axis).Tooltip("Hinge axis or slider direction, in this body's local space");
+        RegisterMember(NAMEOF(_axis), _axis).Tooltip("Hinge axis or slider direction, in this body's local space (only Hinge and Slider use it)");
         RegisterMember(NAMEOF(_collideConnected), _collideConnected)
             .Tooltip("Whether the two joined bodies still collide with each other");
         RegisterMember(NAMEOF(_useLimits), _useLimits).Tooltip("Limit a hinge's angle, or a slider's or distance joint's length");
-        RegisterMember(NAMEOF(_limitMin), _limitMin).Tooltip("Lower limit: degrees for a hinge, metres otherwise");
-        RegisterMember(NAMEOF(_limitMax), _limitMax).Tooltip("Upper limit: degrees for a hinge, metres otherwise");
+        RegisterMember(NAMEOF(_limitMin), _limitMin)
+            .DisplayName("Lower Limit")
+            .Tooltip("Lower limit (only with Use Limits): degrees for a hinge, metres for a slider or distance joint. A hinge or slider range must contain 0, lower <= 0 <= upper; a hinge is within -180 to 180. Not used by Fixed or Ball.");
+        RegisterMember(NAMEOF(_limitMax), _limitMax)
+            .DisplayName("Upper Limit")
+            .Tooltip("Upper limit (only with Use Limits): degrees for a hinge, metres for a slider or distance joint. Must not be below the lower limit. Not used by Fixed or Ball.");
     }
 
     std::string Joint::GetTypeName() const
@@ -90,6 +94,64 @@ namespace N2Engine::Physics
     {
         Release();
         Refresh();
+    }
+
+    std::string Joint::DescribeLimitProblem(const JointType type, const bool useLimits, const float minimum, const float maximum)
+    {
+        if (!useLimits)
+        {
+            return {};
+        }
+        if (!std::isfinite(minimum) || !std::isfinite(maximum))
+        {
+            return "Joint limits must be finite numbers";
+        }
+        if (minimum > maximum)
+        {
+            return "Joint lower limit must not be above the upper limit";
+        }
+        switch (type)
+        {
+        case JointType::Hinge:
+            if (minimum < -180.0f || maximum > 180.0f)
+            {
+                return "A hinge's limits are degrees within -180 to 180";
+            }
+            if (minimum > 0.0f || maximum < 0.0f)
+            {
+                return "A hinge's limits must contain 0 (the angle it was made at): lower <= 0 <= upper";
+            }
+            break;
+        case JointType::Slider:
+            if (minimum > 0.0f || maximum < 0.0f)
+            {
+                return "A slider's limits must contain 0 (the position it was made at): lower <= 0 <= upper";
+            }
+            break;
+        case JointType::Distance:
+            if (minimum < 0.0f)
+            {
+                return "A distance joint's lower limit must not be negative";
+            }
+            break;
+        default:
+            break; // Fixed and Ball have no limits to hold
+        }
+        return {};
+    }
+
+    void Joint::SetEditorFields(const nlohmann::json &values, ReferenceResolver *resolver)
+    {
+        SerializableComponent::SetEditorFields(values, resolver);
+        if (values.is_object() && (values.contains(NAMEOF(_useLimits)) || values.contains(NAMEOF(_limitMin)) ||
+                                   values.contains(NAMEOF(_limitMax))))
+        {
+            const std::string problem = DescribeLimitProblem(_jointType, _useLimits, _limitMin, _limitMax);
+            if (!problem.empty())
+            {
+                throw std::invalid_argument(problem);
+            }
+        }
     }
 
     void Joint::SetJointType(const JointType type)
