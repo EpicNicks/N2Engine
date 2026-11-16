@@ -187,6 +187,7 @@
 <thead><tr><th>Option</th><th>Meaning</th></tr></thead>
 <tbody>
 <tr><td><code>--create &lt;folder&gt;</code></td><td>The folder to make a project. It is created (with its parents) if it doesn't exist; an existing folder is adopted (its files are kept).</td></tr>
+<tr><td><code>--networked</code></td><td>The project is for a networked game: <code>project.n2proj</code> gets <code>"build": {"strictFp": true}</code> (<a href="project-modules.html#strict-fp">strict floating point</a>). Without <code>--create</code>: "--networked only goes with --create", exit code 1.</td></tr>
 <tr><td><code>--name &lt;name&gt;</code></td><td>The project's name. Default: the folder's name (<code>Project</code> for a drive root). Spaces are fine (quote the argument).</td></tr>
 <tr><td><code>--project-id &lt;uuid&gt;</code></td><td>The project's id, any case, not all zeros. Default: a new random UUID.</td></tr>
 <tr><td><code>--project-id from-path</code></td><td>The id is the namespace the folder's assets had before projects had ids (<code>ResourceUUID::NamespaceForProjectDir(&lt;folder&gt;)</code>), so a folder an older host or <code>lua_project</code> opened keeps every asset UUID. See <a href="#design-adopt">adopting a folder</a>.</td></tr>

@@ -571,6 +571,10 @@ namespace N2Engine::IO
         project.engineVersion = options.engineVersion.empty() ? std::string(EngineVersion()) : options.engineVersion;
         project.startupScene = std::string(DefaultStartupScene);
         project.scenes = {project.startupScene};
+        if (options.networked)
+        {
+            project.unknownKeys["build"] = nlohmann::json{{"strictFp", true}};
+        }
 
         // Checked before anything is created, so bad options leave no folders behind
         if (auto valid = project.Validate(); !valid)
