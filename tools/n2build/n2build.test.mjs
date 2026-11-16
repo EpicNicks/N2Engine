@@ -806,6 +806,11 @@ test('the android plan: cook into the tree, Gradle properties from the project, 
   assert.ok(debug.gradleArgs.includes('-Pn2.appId=com.n2engine.trilike'));
   assert.ok(debug.gradleArgs.includes('-Pn2.orientation=fullUser'));
   assert.equal(debug.signed, true);
+  assert.ok(!debug.gradleArgs.some((a) => a.startsWith('-Pn2.strictFp')), 'no answer from the project: CMake reads build.strictFp itself');
+  const strict = planAndroid({ ...base, config: 'debug', settings: {}, strictFp: true });
+  assert.ok(strict.gradleArgs.includes('-Pn2.strictFp=ON'));
+  assert.ok(planAndroid({ ...base, config: 'debug', settings: {}, strictFp: false }).gradleArgs.includes('-Pn2.strictFp=OFF'));
+  assert.notEqual(strict.treeDir, debug.treeDir, 'strict floating point is part of the tree');
   assert.notEqual(debug.treeDir, release.treeDir);
   assert.notEqual(planAndroid({ ...base, config: 'debug', settings: { abis: ['x86_64'] } }).treeDir, debug.treeDir, 'the ABIs are part of the tree');
 

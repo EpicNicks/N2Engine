@@ -57,3 +57,18 @@ test('strictFpWarning fires only for strictFp false with networked physics objec
   const apart = { 'assets/a.scene': sceneWith('NetworkObject'), 'assets/b.scene': sceneWith('Rigidbody') };
   assert.equal(strictFpWarning(scanProject(makeProject({ name: 'G', build: { strictFp: false } }, apart))), null);
 });
+
+test('strictFpWarning sees components a Lua script adds, which no scene lists', () => {
+  const folder = makeProject({ name: 'G', build: { strictFp: false } });
+  fs.mkdirSync(path.join(folder, 'assets'), { recursive: true });
+  fs.writeFileSync(path.join(folder, 'assets', 'spawn.lua'), 'local o = GameObject.new("P")\no:AddComponent("NetworkObject")\no:AddComponent("Rigidbody")\n');
+  const scan = scanProject(folder);
+  assert.deepEqual(scan.luaNetworkedPhysics, ['assets/spawn.lua']);
+  assert.match(strictFpWarning(scan), /build\.strictFp is false, but assets\/spawn\.lua names both a networking component and a physics component/);
+  const unset = makeProject({ name: 'G' });
+  fs.mkdirSync(path.join(unset, 'assets'), { recursive: true });
+  fs.writeFileSync(path.join(unset, 'assets', 'spawn.lua'), 'o:AddComponent("NetworkObject")\no:AddComponent("Rigidbody")\n');
+  assert.equal(strictFpWarning(scanProject(unset)), null, 'unset: the build turns it on');
+  fs.writeFileSync(path.join(folder, 'assets', 'spawn.lua'), '-- o:AddComponent("NetworkObject")\no:AddComponent("Rigidbody")\n');
+  assert.equal(strictFpWarning(scanProject(folder)), null, 'a comment is not a use, and a physics component alone is no network game');
+});

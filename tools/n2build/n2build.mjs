@@ -284,6 +284,8 @@ async function buildRemote({ descriptor, options, ctx, reporter, projectDir, pro
   const runGit = (args) => ctx.run('git', args, { env: ctx.env });
   const state = gitState(projectDir, runGit);
   const engineRef = engineRevision(ENGINE_ROOT);
+  // The runner's own n2build resolves build.strictFp from the pushed project; the warning is shown here too, before the wait
+  strictFpFor(projectDir, descriptor.name, reporter);
   const packageDir = options.out ? path.resolve(options.out) : path.join(projectDir, '.n2', 'out', `${descriptor.name}-${config}`, safeName(project.name));
   if (options.dryRun) {
     reporter.step('plan', `Plan for ${descriptor.name} (${config}) in GitHub Actions`);
@@ -323,7 +325,7 @@ async function buildAndroid({ descriptor, options, ctx, reporter, project, proje
   const plan = planAndroid({
     engineRoot: ENGINE_ROOT, projectDir, descriptor, config, modules: project.modules, settings: project.settings,
     info: toolchains.info, cmakeDir: cmakeInstallDir(cmake), buildRoot: options.buildDir ? path.resolve(options.buildDir) : null,
-    outDir: options.out, gameName: project.name, signingProfile: profileName,
+    outDir: options.out, gameName: project.name, signingProfile: profileName, strictFp: strictFpFor(projectDir, descriptor.name, reporter),
   });
   const gradle = toolchains.info.gradle ?? 'gradle';
   if (options.dryRun) {

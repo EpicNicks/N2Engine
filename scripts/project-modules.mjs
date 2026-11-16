@@ -268,6 +268,7 @@ export function scanProject(folder, target) {
   const unresolved = [];
   const unreadable = [];
   const networkedPhysics = [];
+  const luaNetworkedPhysics = [];
 
   for (const file of [...filesUnder(path.join(folder, 'assets')), ...filesUnder(path.join(folder, 'scenes'))]) {
     const relative = path.relative(folder, file).split(path.sep).join('/');
@@ -277,6 +278,12 @@ export function scanProject(folder, target) {
       const result = scanLua(fs.readFileSync(file, 'utf8'));
       uses.push(...result.uses.map((use) => ({ ...use, file: relative })));
       unresolved.push(...result.unresolved.map((item) => ({ ...item, file: relative })));
+      // Components added from Lua are not in any scene: a file that names a networking and a physics component is the nearest
+      // the scan can get to an object that has both (it cannot tell whether one object gets both)
+      const named = new Set(result.uses.map((use) => use.what));
+      if (NETWORK_COMPONENTS.some((type) => named.has(type)) && PHYSICS_COMPONENTS.some((type) => named.has(type))) {
+        luaNetworkedPhysics.push(relative);
+      }
     } else if (SCENE_EXTENSIONS.has(extension)) {
       let document;
       try {
@@ -314,7 +321,7 @@ export function scanProject(folder, target) {
     uses.push({ module: 'network', what: `the network preset "${preset}"`, file: 'project.n2proj' });
   }
   const strictFp = readStrictFp(project);
-  return { name: project.name, list, uses, unresolved, unreadable, networkedPhysics, strictFp, needsJolt, needsPhysx, startsFromLua, renderer, target };
+  return { name: project.name, list, uses, unresolved, unreadable, networkedPhysics, luaNetworkedPhysics, strictFp, needsJolt, needsPhysx, startsFromLua, renderer, target };
 }
 
 /**
@@ -334,8 +341,12 @@ export function resolveStrictFp(scan) {
  * component: two peers can then step the same body to different floats. null when there is nothing to warn about.
  */
 export function strictFpWarning(scan) {
-  if (scan.strictFp !== false || scan.networkedPhysics.length === 0) {
+  const fromLua = scan.luaNetworkedPhysics ?? [];
+  if (scan.strictFp !== false || (scan.networkedPhysics.length === 0 && fromLua.length === 0)) {
     return null;
+  }
+  if (scan.networkedPhysics.length === 0) {
+    return `build.strictFp is false, but ${fromLua[0]}${fromLua.length > 1 ? ` (and ${fromLua.length - 1} more Lua file${fromLua.length === 2 ? '' : 's'})` : ''} names both a networking component and a physics component: if a script gives one object both, peers built without the strict floating-point profile can compute different physics results and desync. Set build.strictFp to true, or remove it to let the build turn it on`;
   }
   const objects = scan.networkedPhysics.reduce((sum, item) => sum + item.objects, 0);
   const first = scan.networkedPhysics[0].file;
