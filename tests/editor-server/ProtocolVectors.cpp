@@ -298,6 +298,10 @@ namespace ProtocolVectors
             {
                 return json{{"targets", SetBuildTargetsCmd::Deserialize(r).targets}};
             }},
+            {"SetBuildSettings", [](BufferReader &r)
+            {
+                return json{{"settings", SetBuildSettingsCmd::Deserialize(r).settings}};
+            }},
             {"InvokeMenuItem", [](BufferReader &r)
             {
                 const auto cmd = InvokeMenuItemCmd::Deserialize(r);
