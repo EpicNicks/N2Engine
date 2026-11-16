@@ -28,6 +28,19 @@ namespace N2Engine::Scripting
     
     namespace Bindings
     {
+        /// Marks the current thread as inside a simulation callback (OnFixedUpdate). In a network simulation mode
+        /// Time.time and Time.deltaTime then read the tick clock (tick * fixed step, the fixed step) instead of the frame
+        /// clock, which differs per peer. Nests; the destructor restores the state, so a Lua error cannot leave it set.
+        class SimCallbackScope
+        {
+        public:
+            SimCallbackScope() noexcept;
+            ~SimCallbackScope();
+            SimCallbackScope(const SimCallbackScope &) = delete;
+            SimCallbackScope &operator=(const SimCallbackScope &) = delete;
+            [[nodiscard]] static bool Active() noexcept;
+        };
+
         // Core systems
         void BindMath(LuaRuntime& runtime);
         void BindCore(LuaRuntime& runtime);

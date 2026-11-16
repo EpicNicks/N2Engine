@@ -9,6 +9,7 @@
 #include <math/UUID.hpp>
 #include <math/Vector3.hpp>
 
+#include "engine/Application.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/Time.hpp"
@@ -19,6 +20,7 @@
 #include "engine/scripting/LuaComponent.hpp"
 #include "engine/scripting/LuaHandles.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
+#include "engine/scripting/bindings/LuaBindings.hpp"
 
 using namespace N2Engine;
 using namespace N2Engine::Scripting;
@@ -202,6 +204,46 @@ TEST_F(LuaTest, TimeValuesAreNumbers)
     {
         EXPECT_EQ(Eval<std::string>(std::string("type(Time.") + field + ")"), "number") << field;
     }
+}
+
+TEST_F(LuaTest, TimeInASimCallbackOfANetworkModeIsTheTickClock)
+{
+    Application &app = Application::GetInstance();
+    const SimulationMode before = app.GetSimulationMode();
+    app.SetSimulationMode(SimulationMode::Deterministic);
+    for (int i = 0; i < 3; ++i)
+    {
+        app.GetSimulationClock().BeginTick();
+    }
+    const double expected = static_cast<double>(Time::GetTick()) * Time::GetFixedTimestep();
+
+    // Outside a sim callback: the frame clock, unchanged
+    EXPECT_FLOAT_EQ(Eval<float>("Time.time"), Time::GetTime());
+    EXPECT_FLOAT_EQ(Eval<float>("Time.deltaTime"), Time::GetDeltaTime());
+    {
+        const Scripting::Bindings::SimCallbackScope scope;
+        EXPECT_FLOAT_EQ(Eval<float>("Time.time"), static_cast<float>(expected));
+        EXPECT_FLOAT_EQ(Eval<float>("Time.deltaTime"), Time::GetFixedDeltaTime());
+        {
+            const Scripting::Bindings::SimCallbackScope nested;
+        }
+        EXPECT_TRUE(Scripting::Bindings::SimCallbackScope::Active()) << "scopes nest";
+    }
+    EXPECT_FALSE(Scripting::Bindings::SimCallbackScope::Active());
+    EXPECT_FLOAT_EQ(Eval<float>("Time.time"), Time::GetTime());
+
+    app.SetSimulationMode(before);
+}
+
+TEST_F(LuaTest, TimeInASimCallbackOfTheOfflineLoopIsUnchanged)
+{
+    Application &app = Application::GetInstance();
+    const SimulationMode before = app.GetSimulationMode();
+    app.SetSimulationMode(SimulationMode::None);
+    const Scripting::Bindings::SimCallbackScope scope;
+    EXPECT_FLOAT_EQ(Eval<float>("Time.time"), Time::GetTime());
+    EXPECT_FLOAT_EQ(Eval<float>("Time.deltaTime"), Time::GetDeltaTime());
+    app.SetSimulationMode(before);
 }
 
 TEST_F(LuaTest, TimeTickIsTheEnginesTickCounterAsAReadOnlyInteger)

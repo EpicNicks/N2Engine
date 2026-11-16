@@ -1273,6 +1273,7 @@ namespace N2Engine::Scripting
     {
         if (_hasOnFixedUpdate && !_hasMissingScript)
         {
+            const Bindings::SimCallbackScope simScope;
             CallLuaMethod("OnFixedUpdate");
         }
     }
