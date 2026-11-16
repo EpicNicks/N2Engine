@@ -16,6 +16,9 @@ namespace N2Engine::Scripting::Bindings
         struct LuaTime {};
 
         thread_local int simDepth = 0;
+        // One warning per session, not per process: SetSimulationMode resets it
+        bool unscaledWarned = false;
+        int unscaledWarnings = 0;
 
         // Inside a simulation callback of a network mode the frame clock is a per-peer value
         bool UseTickClock()
@@ -33,21 +36,23 @@ namespace N2Engine::Scripting::Bindings
             if (UseTickClock() &&
                 Application::GetInstance().GetSimulationMode() == SimulationMode::Deterministic)
             {
-                static bool warned = false;
-                if (!warned)
+                if (!unscaledWarned)
                 {
-                    warned = true;
+                    unscaledWarned = true;
+                    ++unscaledWarnings;
                     Logger::Warn("Time.unscaledTime was read in OnFixedUpdate of a Deterministic session: it is the frame "
                                  "clock and differs between peers. Use Time.time (tick clock there) or Time.tick");
                 }
             }
-            return UnscaledTimeForScripts();
+            return Time::GetUnscaledTime();
         }
     }
 
     SimCallbackScope::SimCallbackScope() noexcept { ++simDepth; }
     SimCallbackScope::~SimCallbackScope() { --simDepth; }
     bool SimCallbackScope::Active() noexcept { return simDepth > 0; }
+    void ResetSimTimeWarnings() noexcept { unscaledWarned = false; }
+    int SimTimeWarningCount() noexcept { return unscaledWarnings; }
 
     void BindTime(LuaRuntime& runtime)
     {
@@ -76,7 +81,7 @@ namespace N2Engine::Scripting::Bindings
             }),
 
             "unscaledTime", sol::property([](const LuaTime&) -> float {
-                return Time::GetUnscaledTime();
+                return UnscaledTimeForScripts();
             }),
 
             "fixedUnscaledDeltaTime", sol::property([](const LuaTime&) -> float {

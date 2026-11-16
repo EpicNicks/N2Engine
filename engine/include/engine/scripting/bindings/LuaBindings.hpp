@@ -41,6 +41,11 @@ namespace N2Engine::Scripting
             [[nodiscard]] static bool Active() noexcept;
         };
 
+        /// Forgets which Time warnings were given: a new simulation session (a simulation mode change) gets them again.
+        void ResetSimTimeWarnings() noexcept;
+        /// How many Time.unscaledTime warnings have been logged since the process started (tests)
+        [[nodiscard]] int SimTimeWarningCount() noexcept;
+
         // Core systems
         void BindMath(LuaRuntime& runtime);
         void BindCore(LuaRuntime& runtime);
