@@ -125,6 +125,8 @@ namespace N2Engine::Editor
         /// --create: make this folder a project (IO::CreateProject), print the created line, and exit; the engine
         /// isn't started. Empty: open --project (or none) as usual.
         std::string createPath;
+        /// --networked, with --create: the project is for a networked game, so its file gets build.strictFp true
+        bool projectNetworked = false;
         /// --name, with --create: the new project's name (empty: the folder's name)
         std::string projectName;
         /// --project-id <uuid>, with --create: the new project's id (nullopt: a random one, or see projectIdFromPath)

@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.29.0";
+        public const string ProtocolVersion = "1.30.0";
     }
 
     public enum CommandType : byte
@@ -69,6 +69,7 @@ namespace N2Engine.Editor.Protocol
         SetProjectSettings = 0x71,
         SetStartupScene = 0x72,
         SetBuildTargets = 0x73,
+        SetBuildSettings = 0x74,
         ListEditorExtensions = 0x80,
         GetEditorUi = 0x81,
         ReloadEditorExtensions = 0x84,
@@ -1330,6 +1331,12 @@ namespace N2Engine.Editor.Protocol
     {
         /// <summary>JSON text: any JSON value</summary>
         public string Targets;
+    }
+
+    public struct SetBuildSettingsRequest
+    {
+        /// <summary>JSON text: any JSON value</summary>
+        public string Settings;
     }
 
     public struct InvokeMenuItemRequest

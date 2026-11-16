@@ -121,6 +121,7 @@ namespace
             {"SetProjectSettings", CommandType::SetProjectSettings},
             {"SetStartupScene", CommandType::SetStartupScene},
             {"SetBuildTargets", CommandType::SetBuildTargets},
+            {"SetBuildSettings", CommandType::SetBuildSettings},
             {"ListEditorExtensions", CommandType::ListEditorExtensions},
             {"GetEditorUi", CommandType::GetEditorUi},
             {"InvokeMenuItem", CommandType::InvokeMenuItem},
@@ -262,6 +263,7 @@ namespace
             {"SetProjectSettings", [](BufferReader &r) { (void)SetProjectSettingsCmd::Deserialize(r); }},
             {"SetStartupScene", [](BufferReader &r) { (void)SetStartupSceneCmd::Deserialize(r); }},
             {"SetBuildTargets", [](BufferReader &r) { (void)SetBuildTargetsCmd::Deserialize(r); }},
+            {"SetBuildSettings", [](BufferReader &r) { (void)SetBuildSettingsCmd::Deserialize(r); }},
             {"BeginEditGroup", [](BufferReader &r) { (void)BeginEditGroupCmd::Deserialize(r); }},
             {"InvokeMenuItem", [](BufferReader &r) { (void)InvokeMenuItemCmd::Deserialize(r); }},
             {"InvokeInspectorAction", [](BufferReader &r) { (void)InvokeInspectorActionCmd::Deserialize(r); }},
@@ -682,6 +684,8 @@ TEST(ProtocolSpecTest, EveryCommandIsClassifiedForAPlayHost)
         {"SetNetworkSettings", true},
         // 1.29.0: SetBuildTargets saves project.n2proj
         {"SetBuildTargets", true},
+        // 1.30.0: SetBuildSettings saves project.n2proj too
+        {"SetBuildSettings", true},
         // Allowed: they read, or change only the running game, the in-memory scene store or the connection
         {"RenderFrame", false}, {"SetViewportSize", false}, {"GetAudio", false}, {"Hello", false},
         {"PollEvents", false}, {"RenderFrameIfChanged", false}, {"SetCameraPosition", false},

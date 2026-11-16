@@ -4,6 +4,7 @@ plugins {
     id 'com.android.application'
 }
 
+def strictFpArguments = { -> project.findProperty('n2.strictFp') ? ["-DN2ENGINE_STRICT_FP=${project.findProperty('n2.strictFp')}".toString()] : [] }
 def n2 = { String key, String fallback -> (project.findProperty("n2.${key}") ?: fallback).toString() }
 def engineRoot = file(n2('engineRoot', '../../..'))
 
@@ -28,13 +29,13 @@ android {
         externalNativeBuild {
             cmake {
                 targets 'n2game'
-                arguments '-DANDROID_STL=c++_shared',
+                arguments(*(['-DANDROID_STL=c++_shared',
                           "-DN2ENGINE_PROJECT=${n2('project', '')}",
                           '-DN2ENGINE_TARGET=android',
                           // build.targets.android.renderer "vulkan": the Vulkan renderer too (stage 12)
                           "-DN2ENGINE_ANDROID_VULKAN=${n2('vulkan', 'OFF')}",
                           '-DN2ENGINE_BUILD_TESTS=OFF',
-                          "-DCMAKE_BUILD_TYPE=${n2('cmakeBuildType', 'Release')}"
+                          "-DCMAKE_BUILD_TYPE=${n2('cmakeBuildType', 'Release')}".toString()] + strictFpArguments()))
             }
         }
     }

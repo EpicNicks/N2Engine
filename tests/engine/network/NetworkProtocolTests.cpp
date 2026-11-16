@@ -37,6 +37,8 @@ namespace
         fingerprint.scenePath = std::string(kMaxScenePathLength, 'p');
         fingerprint.sceneObjectCount = kMaxNetworkObjects;
         fingerprint.prefabCount = kMaxPrefabs;
+        fingerprint.buildProfile = 0xFFFFFFFFu;
+        fingerprint.buildProfileEnforced = true;
         return fingerprint;
     }
 
@@ -106,6 +108,8 @@ namespace
         writer.Bytes(pathBytes);
         writer.U32(objectCount);
         writer.U16(prefabCount);
+        writer.U32(0); // build profile
+        writer.U8(0);  // build profile enforced
         writer.U32(clientId);
         return std::vector<std::uint8_t>(buffer.data(), buffer.data() + writer.Size());
     }
@@ -196,7 +200,7 @@ TEST(NetworkProtocolTest, MessagesAreSmallAndTheLargestFitsTheCap)
     hello.fingerprint = LongestFingerprint();
     hello.clientId = 0xFFFFFFFFu;
     const std::vector<std::uint8_t> longest = Encode(hello);
-    EXPECT_EQ(longest.size(), 318u);
+    EXPECT_EQ(longest.size(), 323u);
     EXPECT_LE(longest.size(), kMaxMessageBytes);
     ASSERT_TRUE(DecodeServerMessage(longest).has_value());
 
@@ -204,6 +208,28 @@ TEST(NetworkProtocolTest, MessagesAreSmallAndTheLargestFitsTheCap)
     accept.fingerprint = LongestFingerprint();
     EXPECT_LE(Encode(accept).size(), kMaxMessageBytes);
     ASSERT_TRUE(DecodeClientMessage(Encode(accept)).has_value());
+}
+
+TEST(NetworkProtocolTest, TheBuildProfileRoundTripsAndABadEnforcedByteIsRefused)
+{
+    ServerHelloMessage hello = SampleHello();
+    hello.fingerprint.buildProfile = 0x00A31234u;
+    hello.fingerprint.buildProfileEnforced = true;
+    std::vector<std::uint8_t> bytes = Encode(hello);
+    const auto decoded = DecodeServerMessage(bytes);
+    ASSERT_TRUE(decoded.has_value());
+    const auto *body = std::get_if<ServerHelloMessage>(&*decoded);
+    ASSERT_NE(body, nullptr);
+    EXPECT_EQ(body->fingerprint.buildProfile, 0x00A31234u);
+    EXPECT_TRUE(body->fingerprint.buildProfileEnforced);
+
+    // the enforced byte is the last of the fingerprint, just before the u32 client id
+    bytes[bytes.size() - 5] = 2;
+    EXPECT_FALSE(DecodeServerMessage(bytes).has_value());
+
+    EXPECT_TRUE(DecodeClientMessage(Encode(ClientRejectMessage{JoinRefusal::BuildProfile})).has_value());
+    const std::vector<std::uint8_t> beyond = {static_cast<std::uint8_t>(MessageType::ClientReject), 7};
+    EXPECT_FALSE(DecodeClientMessage(beyond).has_value());
 }
 
 TEST(NetworkProtocolTest, EveryTruncationIsRejected)
@@ -294,7 +320,7 @@ TEST(NetworkProtocolTest, AWireVersionSevenPeerIsRefusedByBothEnds)
 {
     // Version 8 changed the replicated fields of a character (the ground it rides): version 7 hellos and accepts are
     // refused by version, never read as version 8 messages
-    ASSERT_EQ(kWireVersion, 8);
+    ASSERT_EQ(kWireVersion, 9);
     std::vector<std::uint8_t> hello = Encode(SampleHello());
     hello[1] = 7;
     hello[2] = 0;
@@ -305,9 +331,9 @@ TEST(NetworkProtocolTest, AWireVersionSevenPeerIsRefusedByBothEnds)
     accept[2] = 0;
     EXPECT_EQ(DecodeClientMessage(accept).error(), DecodeError::UnsupportedVersion);
     EXPECT_EQ(*PeekWireVersion(accept), 7);
-    // and the first two bytes of a version 8 hello say 8
+    // and the first two bytes of a version 9 hello say 9
     const std::vector<std::uint8_t> now = Encode(SampleHello());
-    EXPECT_EQ(now[1], 8);
+    EXPECT_EQ(now[1], 9);
     EXPECT_EQ(now[2], 0);
 }
 
@@ -323,8 +349,8 @@ TEST(NetworkProtocolTest, ADifferentWireVersionIsNamedNotParsed)
     EXPECT_EQ(*PeekWireVersion(hello), 77);
 
     // Even a hello whose body is garbage past the version says its version
-    const std::vector<std::uint8_t> bare = {static_cast<std::uint8_t>(MessageType::ServerHello), 9, 0};
-    EXPECT_EQ(*PeekWireVersion(bare), 9);
+    const std::vector<std::uint8_t> bare = {static_cast<std::uint8_t>(MessageType::ServerHello), 10, 0};
+    EXPECT_EQ(*PeekWireVersion(bare), 10);
     EXPECT_EQ(DecodeServerMessage(bare).error(), DecodeError::UnsupportedVersion);
 
     std::vector<std::uint8_t> accept = Encode(SampleAccept());
@@ -386,7 +412,7 @@ TEST(NetworkProtocolTest, ValuesOutOfRangeAreRejected)
     EXPECT_TRUE(DecodeServerMessage(Encode(WorldReadyMessage{kMaxNetworkObjects, kMaxNetworkObjects})).has_value());
 
     EXPECT_EQ(DecodeClientMessage(Encode(ClientRejectMessage{JoinRefusal::None})).error(), DecodeError::BadValue);
-    const std::vector<std::uint8_t> rejectSix = {static_cast<std::uint8_t>(MessageType::ClientReject), 6};
+    const std::vector<std::uint8_t> rejectSix = {static_cast<std::uint8_t>(MessageType::ClientReject), 7};
     const std::vector<std::uint8_t> reject255 = {static_cast<std::uint8_t>(MessageType::ClientReject), 255};
     EXPECT_EQ(DecodeClientMessage(rejectSix).error(), DecodeError::BadValue);
     EXPECT_EQ(DecodeClientMessage(reject255).error(), DecodeError::BadValue);

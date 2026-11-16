@@ -33,6 +33,7 @@
 #include "engine/softbody/SoftBodyBackendSelection.hpp"
 #ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#include "engine/scripting/bindings/LuaBindings.hpp"
 #endif
 #include "engine/ui/UISystem.hpp"
 
@@ -1234,7 +1235,15 @@ Physics::IPhysicsBackend* Application::Get3DPhysicsBackend() const
 
 void Application::SetSimulationMode(const SimulationMode mode)
 {
+    [[maybe_unused]] const bool modeChanged = _simulationClock.GetMode() != mode;
     _simulationClock.SetMode(mode);
+#ifdef N2ENGINE_SCRIPTING_ENABLED
+    if (modeChanged)
+    {
+        // A new simulation session gets the Time warnings again
+        Scripting::Bindings::ResetSimTimeWarnings();
+    }
+#endif
     // Global Time state follows the Application's mode, not any SimulationClock instance's
     Time::SetFixedIgnoresTimeScale(_simulationClock.IsNetworked());
 }
