@@ -14,6 +14,7 @@
 #include "engine/scripting/LuaComponent.hpp"
 #include "engine/network/StateHash.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
+#include "engine/sceneManagement/Scene.hpp"
 
 namespace N2Engine::Network
 {
@@ -28,6 +29,15 @@ namespace N2Engine::Network
         {
             Logger::Warn(std::format("network.deterministic.mode is rollback but the physics backend cannot snapshot its "
                                      "world: the session runs lockstep (rollback window {} ignored)",
+                                     _window));
+            _window = 0;
+        }
+
+        if (_window > 0 && _world.GetScene() != nullptr && _world.GetScene()->GetPhysics2DWorld() != nullptr)
+        {
+            // Box2D state is neither in a snapshot nor in the desync hash: a rollback would rewind everything but it
+            Logger::Warn(std::format("network.deterministic.mode is rollback but the scene has a 2D physics world, which a "
+                                     "snapshot does not hold: the session runs lockstep (rollback window {} ignored)",
                                      _window));
             _window = 0;
         }
