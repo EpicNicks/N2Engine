@@ -1,0 +1,9 @@
+{ "n2shader": 1, "name": "FloatArray" }
+#stage fragment
+// Probe row: a float array (Tint writes arrays in uniform memory as padded-element structs; an array inside the shader,
+// indexed dynamically, is the form v1 allows: arrays are not parameters)
+void main() {
+    float weights[4] = float[4](0.1, 0.2, 0.3, 0.4);
+    int index = clamp(int(n2_UV.x * 4.0), 0, 3);
+    n2_FragColor = vec4(vec3(weights[index]), 1.0);
+}

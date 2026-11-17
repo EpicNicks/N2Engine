@@ -1,0 +1,10 @@
+{ "n2shader": 1, "name": "NegativeUndefinedFunction" }
+#stage fragment
+// Error location: glslang must cite this file and this line (the #line mapping): the call below is on line 8
+void main() {
+    vec4 color = vec4(1.0);
+
+    color.rgb *= 0.5;
+    color = undefined_fn(color);
+    n2_FragColor = color;
+}

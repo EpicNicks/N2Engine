@@ -1,0 +1,16 @@
+{ "n2shader": 1, "name": "LitTint",
+  "params": [
+    { "name": "baseColor", "type": "color", "default": [1, 1, 1, 1] },
+    { "name": "baseColorTexture", "type": "texture", "default": "white" },
+    { "name": "u_Ambient", "type": "float", "default": 0.2, "min": 0, "max": 1 }
+  ],
+  "uses": ["lighting"]
+}
+#stage fragment
+// Opt-in lighting: the Lighting block and the prelude's light helpers (the lit shader's Blinn-Phong diffuse part)
+void main() {
+    vec4 albedo = baseColor * n2_texture(baseColorTexture, n2_UV) * n2_Color;
+    vec3 light = n2_LightDiffuse(normalize(n2_Normal), n2_WorldPos) + vec3(u_Ambient);
+    float view = dot(normalize(n2_CameraPos - n2_WorldPos), normalize(n2_Normal));
+    n2_FragColor = n2_EncodeOutput(vec4(albedo.rgb * light * (0.5 + 0.5 * view), albedo.a));
+}

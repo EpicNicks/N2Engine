@@ -1,0 +1,13 @@
+{ "n2shader": 1, "name": "WhileLoop" }
+#stage fragment
+// Probe row: a while loop (bounded by its own counter). Strict mode rejects while and do; this file is cooked --relaxed
+// (expect.json "relaxed": true), and the negative while-strict.n2shader is the same loop rejected in strict mode.
+void main() {
+    float sum = 0.0;
+    int i = 0;
+    while (i < 8) {
+        sum += 0.125 * float(i);
+        i++;
+    }
+    n2_FragColor = vec4(vec3(sum / 4.0), 1.0);
+}

@@ -1,0 +1,31 @@
+{ "n2shader": 1,
+  "name": "SpikeUserStyle",
+  "params": [
+    { "name": "u_Tint", "type": "color", "default": [1, 1, 1, 1], "label": "Tint" },
+    { "name": "u_Threshold", "type": "float", "default": 0.5, "min": 0, "max": 1, "label": "Threshold" },
+    { "name": "u_Steps", "type": "int", "default": 4, "min": 1, "max": 8 },
+    { "name": "u_Offset", "type": "vec3", "default": [0, 0, 0] },
+    { "name": "u_Invert", "type": "bool", "default": false },
+    { "name": "u_Mask", "type": "texture", "default": "white" }
+  ],
+  "state": { "blend": "alpha", "cull": "none", "depthWrite": false, "queue": "transparent" }
+}
+#stage fragment
+// The shader of the translation spike (proposal section 1.2): generated parameter block, a texture sample, discard after
+// the sample, a bounded loop. The sample comes first and the branch after it (the one authoring rule for uniformity).
+void main() {
+    vec4 mask = n2_texture(u_Mask, n2_UV);
+    vec4 color = u_Tint * n2_Color * mask;
+    float accumulated = 0.0;
+    for (int i = 0; i < u_Steps; i++) {
+        accumulated += 0.25 * float(i + 1) * u_Offset.x;
+    }
+    color.rgb += accumulated;
+    if (u_Invert != 0) {
+        color.rgb = 1.0 - color.rgb;
+    }
+    if (color.a < u_Threshold) {
+        discard;
+    }
+    n2_FragColor = color;
+}

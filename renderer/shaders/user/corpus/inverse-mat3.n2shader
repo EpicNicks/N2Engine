@@ -1,0 +1,8 @@
+{ "n2shader": 1, "name": "InverseMat3" }
+#stage fragment
+// Probe row: inverse(mat3) (webgpu-backend-design.md expected this to block the GLSL route; Tint translates it)
+void main() {
+    mat3 m = mat3(vec3(1.0 + n2_UV.x, 0.1, 0.0), vec3(0.0, 1.0 + n2_UV.y, 0.2), vec3(0.3, 0.0, 1.5));
+    mat3 inv = inverse(m);
+    n2_FragColor = vec4(inv[0] + inv[1] + inv[2], 1.0);
+}
