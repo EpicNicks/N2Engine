@@ -18,7 +18,7 @@ import { pathToFileURL } from 'node:url';
 /** What each module is, as far as a project can show it. Lua globals and handlers are matched as whole words. */
 export const MODULES = {
   physics3d: {
-    components: ['Rigidbody', 'BoxCollider', 'SphereCollider', 'CapsuleCollider', 'CharacterController'],
+    components: ['Rigidbody', 'BoxCollider', 'SphereCollider', 'CapsuleCollider', 'CharacterController', 'Joint'],
     luaPatterns: [/\bPhysics\.[A-Za-z]\w*/, /\bOn(Collision|Trigger)(Enter|Stay|Exit)\b/, /\bBodyType\./],
   },
   physics2d: {

@@ -729,7 +729,7 @@ TEST(ReflectionRegistryTest, TheSchemaIsCachedAndRegisteringAgainReplacesIt)
 TEST(ReflectionRegistryTest, EveryBuiltinTypeIsDescribableAndItsFieldsAreItsSavedKeys)
 {
     const std::vector<std::string> builtins = {
-        "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CharacterController", "Light", "AudioSource",
+        "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CharacterController", "Joint", "Light", "AudioSource",
         "AudioListener", "CubeRenderer", "SphereRenderer", "QuadRenderer", "MeshRenderer", "TextRenderer", "ParticleSystem", "SoftBody",
         "LuaComponent", "Canvas", "RectTransform", "Image", "UIText", "Button", "NetworkObject", "NetworkTransform"};
     auto &registry = ComponentRegistry::Instance();

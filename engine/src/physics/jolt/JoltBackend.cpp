@@ -15,6 +15,7 @@
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyFilter.h>
 #include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Body/BodyLockMulti.h>
 #include <Jolt/Physics/Body/MassProperties.h>
 #include <Jolt/Physics/Body/MotionProperties.h>
 #include <Jolt/Physics/Collision/CastResult.h>
@@ -27,6 +28,11 @@
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
+#include <Jolt/Physics/Constraints/DistanceConstraint.h>
+#include <Jolt/Physics/Constraints/FixedConstraint.h>
+#include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include <Jolt/Physics/Constraints/PointConstraint.h>
+#include <Jolt/Physics/Constraints/SliderConstraint.h>
 #include <Jolt/Physics/Collision/EstimateCollisionResponse.h>
 #include <Jolt/Physics/Collision/Shape/EmptyShape.h>
 #include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
@@ -1238,6 +1244,12 @@ namespace N2Engine::Physics
                 {
                     return false;
                 }
+                // Two bodies joined by a joint with collideConnected off (Jolt has no per-constraint flag)
+                if (!_impl.noCollide.empty() &&
+                    _impl.noCollide.contains(Impl::PairKey(body1.GetID(), body2.GetID())))
+                {
+                    return false;
+                }
                 if (!collider1->isTrigger && !collider2->isTrigger && !body1.IsDynamic() && !body2.IsDynamic())
                 {
                     return false;
@@ -1578,6 +1590,182 @@ namespace N2Engine::Physics
             Bodies().AddBody(data.id, motion == MotionKind::Static ? JPH::EActivation::DontActivate
                                                                      : JPH::EActivation::Activate);
             return handle;
+        }
+
+        // ===== Joints =====
+        // One Jolt TwoBodyConstraint each. The body ids are kept so a joint can end without looking its bodies up (a body
+        // may be gone already), and the constraint is in Jolt's system only while both bodies are in the simulation.
+        struct JointData
+        {
+            bool active = false;
+            std::uint32_t generation = 0;
+            JointDesc desc;
+            JPH::Ref<JPH::TwoBodyConstraint> constraint;
+            JPH::BodyID idA;
+            JPH::BodyID idB; // invalid: the world
+            bool added = false;
+            float restDistance = 0.0f; // Distance without limits: the distance it is held at
+        };
+
+        std::vector<JointData> joints;
+        // Body pairs (sorted ids) kept from colliding by a joint with collideConnected off, and how many joints say so.
+        // Read by the pair filter on worker threads, changed only between steps.
+        std::map<std::pair<std::uint32_t, std::uint32_t>, int> noCollide;
+
+        static std::pair<std::uint32_t, std::uint32_t> PairKey(const JPH::BodyID a, const JPH::BodyID b)
+        {
+            const std::uint32_t x = a.GetIndexAndSequenceNumber();
+            const std::uint32_t y = b.GetIndexAndSequenceNumber();
+            return x < y ? std::make_pair(x, y) : std::make_pair(y, x);
+        }
+
+        JointData *GetJoint(const PhysicsJointHandle handle)
+        {
+            if (!initialized || handle.index >= joints.size())
+            {
+                return nullptr;
+            }
+            JointData &joint = joints[handle.index];
+            return joint.active && joint.generation == handle.generation ? &joint : nullptr;
+        }
+
+        void SetNoCollide(const JointData &joint, const bool on)
+        {
+            if (joint.desc.collideConnected || joint.idB.IsInvalid())
+            {
+                return;
+            }
+            const auto key = PairKey(joint.idA, joint.idB);
+            if (on)
+            {
+                ++noCollide[key];
+            }
+            else if (const auto it = noCollide.find(key); it != noCollide.end() && --it->second <= 0)
+            {
+                noCollide.erase(it);
+            }
+        }
+
+        bool BodyInSimulation(const JPH::BodyID id) const
+        {
+            return id.IsInvalid() || (initialized && Bodies().IsAdded(id));
+        }
+
+        // Puts the constraint into Jolt's system while both its bodies are in the simulation, takes it out otherwise
+        void SyncJointAdded(JointData &joint)
+        {
+            const bool want = BodyInSimulation(joint.idA) && BodyInSimulation(joint.idB);
+            if (want && !joint.added)
+            {
+                system->AddConstraint(joint.constraint.GetPtr());
+                joint.added = true;
+                for (const JPH::BodyID id : {joint.idA, joint.idB})
+                {
+                    if (!id.IsInvalid() && Bodies().GetMotionType(id) != JPH::EMotionType::Static)
+                    {
+                        Bodies().ActivateBody(id);
+                    }
+                }
+            }
+            else if (!want && joint.added)
+            {
+                system->RemoveConstraint(joint.constraint.GetPtr());
+                joint.added = false;
+            }
+        }
+
+        void ReleaseJoint(JointData &joint)
+        {
+            if (joint.added)
+            {
+                system->RemoveConstraint(joint.constraint.GetPtr());
+                // A body the joint was holding may be asleep: without the joint it has to fall, swing or slide
+                for (const JPH::BodyID id : {joint.idA, joint.idB})
+                {
+                    if (!id.IsInvalid() && Bodies().IsAdded(id) && Bodies().GetMotionType(id) != JPH::EMotionType::Static)
+                    {
+                        Bodies().ActivateBody(id);
+                    }
+                }
+            }
+            SetNoCollide(joint, false);
+            const std::uint32_t nextGeneration = joint.generation + 1;
+            joint = JointData{};
+            joint.generation = nextGeneration; // a handle to this slot's old joint no longer matches
+        }
+
+        // Ends every joint that holds `handle`'s body: before the body leaves, or is destroyed
+        void ReleaseJointsOf(const PhysicsBodyHandle handle)
+        {
+            const BodyData *data = GetData(handle);
+            if (!data)
+            {
+                return;
+            }
+            for (JointData &joint : joints)
+            {
+                if (joint.active && (joint.idA == data->id || joint.idB == data->id))
+                {
+                    ReleaseJoint(joint);
+                }
+            }
+        }
+
+        // Suspends (the body is leaving the simulation) or resumes (it is back) the joints that hold the body
+        void SyncJointsOf(const PhysicsBodyHandle handle)
+        {
+            const BodyData *data = GetData(handle);
+            if (!data)
+            {
+                return;
+            }
+            for (JointData &joint : joints)
+            {
+                if (joint.active && (joint.idA == data->id || joint.idB == data->id))
+                {
+                    SyncJointAdded(joint);
+                }
+            }
+        }
+
+        // The limits of `desc` onto the constraint (the same for creation and ConfigureJoint)
+        void ApplyJointLimits(JointData &joint, const JointDesc &desc) const
+        {
+            JPH::TwoBodyConstraint *constraint = joint.constraint.GetPtr();
+            switch (desc.type)
+            {
+            case JointType::Hinge:
+            {
+                // Jolt's hinge range is within [-pi, pi] and holds the angle it was made at (0)
+                const float low = desc.useLimits ? std::clamp(desc.limitMin, -JPH::JPH_PI, 0.0f) : -JPH::JPH_PI;
+                const float high = desc.useLimits ? std::clamp(desc.limitMax, 0.0f, JPH::JPH_PI) : JPH::JPH_PI;
+                static_cast<JPH::HingeConstraint *>(constraint)->SetLimits(low, high);
+                break;
+            }
+            case JointType::Slider:
+            {
+                // The range holds the position it was made at (0)
+                const float low = desc.useLimits ? std::min(desc.limitMin, 0.0f) : -FLT_MAX;
+                const float high = desc.useLimits ? std::max(desc.limitMax, 0.0f) : FLT_MAX;
+                static_cast<JPH::SliderConstraint *>(constraint)->SetLimits(low, high);
+                break;
+            }
+            case JointType::Distance:
+            {
+                float low = joint.restDistance;
+                float high = joint.restDistance;
+                if (desc.useLimits)
+                {
+                    low = std::max(0.0f, desc.limitMin);
+                    high = std::max(low, desc.limitMax);
+                }
+                static_cast<JPH::DistanceConstraint *>(constraint)->SetDistance(low, high);
+                break;
+            }
+            case JointType::Fixed:
+            case JointType::Ball:
+                break;
+            }
         }
 
         void DestroyBodyData(BodyData &data)
@@ -3001,6 +3189,16 @@ namespace N2Engine::Physics
         Impl &s = *_impl;
         if (s.initialized)
         {
+            // Joints first: a constraint must be out of the system before its bodies go
+            for (Impl::JointData &joint : s.joints)
+            {
+                if (joint.active)
+                {
+                    s.ReleaseJoint(joint);
+                }
+            }
+            s.joints.clear();
+            s.noCollide.clear();
             // Bodies in handle order, out of the broad phase before they are destroyed
             for (Impl::BodyData &data : s.bodies)
             {
@@ -3145,6 +3343,7 @@ namespace N2Engine::Physics
         {
             return;
         }
+        s.ReleaseJointsOf(handle); // a joint cannot outlive either of its bodies
         s.DestroyBodyData(*data);
         // Both sides of its touches get their Exit (as in the PhysX backend: after the body is gone, before its handle
         // is freed, so the owner is still known)
@@ -3173,6 +3372,15 @@ namespace N2Engine::Physics
             }
             // Its touches end with an Exit for both sides: Jolt reports nothing for a body that leaves
             s.ForgetBody(handle, false);
+            // Its joints are suspended (out of Jolt's system) while it is out, and resume with it
+            for (Impl::JointData &joint : s.joints)
+            {
+                if (joint.active && joint.added && (joint.idA == data->id || joint.idB == data->id))
+                {
+                    s.system->RemoveConstraint(joint.constraint.GetPtr());
+                    joint.added = false;
+                }
+            }
             if (s.Bodies().IsAdded(data->id))
             {
                 s.Bodies().RemoveBody(data->id);
@@ -3193,6 +3401,7 @@ namespace N2Engine::Physics
         s.Bodies().AddBody(data->id, data->motion == MotionKind::Static ? JPH::EActivation::DontActivate
                                                                           : JPH::EActivation::Activate);
         data->enabled = true;
+        s.SyncJointsOf(handle);
     }
 
     void JoltBackend::RegisterCollider(const PhysicsBodyHandle handle, ICollider *collider)
@@ -3669,6 +3878,193 @@ namespace N2Engine::Physics
     Math::Vector3 JoltBackend::GetGravity() const
     {
         return _impl->currentGravity;
+    }
+
+    // ===== Joints =====
+
+    PhysicsJointHandle JoltBackend::CreateJoint(const JointDesc &desc)
+    {
+        Impl &s = *_impl;
+        if (!s.initialized)
+        {
+            Logger::Warn("Jolt: a joint was created before the backend was initialized; ignored");
+            return INVALID_PHYSICS_JOINT_HANDLE;
+        }
+        const Impl::BodyData *bodyA = s.GetData(desc.bodyA);
+        if (!bodyA)
+        {
+            Logger::Warn("Jolt: a joint needs a live body A; ignored");
+            return INVALID_PHYSICS_JOINT_HANDLE;
+        }
+        const Impl::BodyData *bodyB = nullptr;
+        if (desc.bodyB.IsValid())
+        {
+            bodyB = s.GetData(desc.bodyB);
+            if (!bodyB || desc.bodyB == desc.bodyA)
+            {
+                Logger::Warn("Jolt: a joint's body B must be a live body other than body A; ignored");
+                return INVALID_PHYSICS_JOINT_HANDLE;
+            }
+        }
+        if (!IsFinite(desc.anchorA) || !IsFinite(desc.anchorB) || !IsFinite(desc.axis) ||
+            !std::isfinite(desc.limitMin) || !std::isfinite(desc.limitMax))
+        {
+            Logger::Warn("Jolt: a joint has a non-finite anchor, axis or limit; ignored");
+            return INVALID_PHYSICS_JOINT_HANDLE;
+        }
+        const bool needsAxis = desc.type == JointType::Hinge || desc.type == JointType::Slider;
+        if (needsAxis && desc.axis.x * desc.axis.x + desc.axis.y * desc.axis.y + desc.axis.z * desc.axis.z < 1e-12f)
+        {
+            Logger::Warn("Jolt: a hinge or slider joint needs a non-zero axis; ignored");
+            return INVALID_PHYSICS_JOINT_HANDLE;
+        }
+
+        // Built in world space from the bodies' poses now (what they are then is the joint's zero)
+        const JPH::BodyID ids[2] = {bodyA->id, bodyB ? bodyB->id : JPH::BodyID()};
+        JPH::Ref<JPH::TwoBodyConstraint> constraint;
+        float restDistance = 0.0f;
+        {
+            JPH::BodyLockMultiWrite lock(s.system->GetBodyLockInterface(), ids, bodyB ? 2 : 1);
+            JPH::Body *body1 = lock.GetBody(0);
+            JPH::Body *body2 = bodyB ? lock.GetBody(1) : &JPH::Body::sFixedToWorld;
+            if (!body1 || !body2)
+            {
+                Logger::Warn("Jolt: a joint's body could not be locked; ignored");
+                return INVALID_PHYSICS_JOINT_HANDLE;
+            }
+            const JPH::RVec3 point1 = body1->GetWorldTransform() * ToJolt(desc.anchorA);
+            const JPH::RVec3 point2 = bodyB ? JPH::RVec3(body2->GetWorldTransform() * ToJolt(desc.anchorB))
+                                            : JPH::RVec3(desc.anchorB.x, desc.anchorB.y, desc.anchorB.z);
+            restDistance = static_cast<float>((point2 - point1).Length());
+            const JPH::Vec3 axis = needsAxis ? (body1->GetRotation() * ToJolt(desc.axis)).Normalized() : JPH::Vec3::sAxisX();
+            const JPH::Vec3 normal = axis.GetNormalizedPerpendicular();
+
+            switch (desc.type)
+            {
+            case JointType::Fixed:
+            {
+                JPH::FixedConstraintSettings settings;
+                settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+                settings.mAutoDetectPoint = false;
+                settings.mPoint1 = point1;
+                settings.mPoint2 = point2;
+                constraint = settings.Create(*body1, *body2);
+                break;
+            }
+            case JointType::Hinge:
+            {
+                JPH::HingeConstraintSettings settings;
+                settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+                settings.mPoint1 = point1;
+                settings.mPoint2 = point2;
+                settings.mHingeAxis1 = settings.mHingeAxis2 = axis;
+                settings.mNormalAxis1 = settings.mNormalAxis2 = normal;
+                constraint = settings.Create(*body1, *body2);
+                break;
+            }
+            case JointType::Ball:
+            {
+                JPH::PointConstraintSettings settings;
+                settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+                settings.mPoint1 = point1;
+                settings.mPoint2 = point2;
+                constraint = settings.Create(*body1, *body2);
+                break;
+            }
+            case JointType::Slider:
+            {
+                JPH::SliderConstraintSettings settings;
+                settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+                settings.mAutoDetectPoint = false;
+                settings.mPoint1 = point1;
+                settings.mPoint2 = point2;
+                settings.mSliderAxis1 = settings.mSliderAxis2 = axis;
+                settings.mNormalAxis1 = settings.mNormalAxis2 = normal;
+                constraint = settings.Create(*body1, *body2);
+                break;
+            }
+            case JointType::Distance:
+            {
+                JPH::DistanceConstraintSettings settings;
+                settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+                settings.mPoint1 = point1;
+                settings.mPoint2 = point2;
+                constraint = settings.Create(*body1, *body2);
+                break;
+            }
+            }
+        }
+        if (!constraint)
+        {
+            Logger::Warn("Jolt: a joint could not be created; ignored");
+            return INVALID_PHYSICS_JOINT_HANDLE;
+        }
+
+        // The lowest free slot, so the same creation order gives the same handles on every peer
+        std::uint32_t slot = 0;
+        while (slot < s.joints.size() && s.joints[slot].active)
+        {
+            ++slot;
+        }
+        if (slot == s.joints.size())
+        {
+            s.joints.emplace_back();
+        }
+        Impl::JointData &joint = s.joints[slot];
+        joint.active = true;
+        joint.desc = desc;
+        joint.constraint = constraint;
+        joint.idA = ids[0];
+        joint.idB = ids[1];
+        joint.added = false;
+        joint.restDistance = restDistance;
+        s.ApplyJointLimits(joint, desc);
+        s.SetNoCollide(joint, true);
+        s.SyncJointAdded(joint);
+
+        PhysicsJointHandle handle;
+        handle.index = slot;
+        handle.generation = joint.generation;
+        return handle;
+    }
+
+    void JoltBackend::DestroyJoint(const PhysicsJointHandle joint)
+    {
+        Impl &s = *_impl;
+        if (Impl::JointData *data = s.GetJoint(joint))
+        {
+            s.ReleaseJoint(*data);
+        }
+    }
+
+    bool JoltBackend::ConfigureJoint(const PhysicsJointHandle joint, const JointDesc &desc)
+    {
+        Impl &s = *_impl;
+        Impl::JointData *data = s.GetJoint(joint);
+        if (!data || desc.type != data->desc.type || !std::isfinite(desc.limitMin) || !std::isfinite(desc.limitMax))
+        {
+            return false;
+        }
+        s.SetNoCollide(*data, false);
+        data->desc.collideConnected = desc.collideConnected;
+        data->desc.useLimits = desc.useLimits;
+        data->desc.limitMin = desc.limitMin;
+        data->desc.limitMax = desc.limitMax;
+        s.SetNoCollide(*data, true);
+        s.ApplyJointLimits(*data, data->desc);
+        for (const JPH::BodyID id : {data->idA, data->idB})
+        {
+            if (!id.IsInvalid() && data->added && s.Bodies().GetMotionType(id) != JPH::EMotionType::Static)
+            {
+                s.Bodies().ActivateBody(id);
+            }
+        }
+        return true;
+    }
+
+    bool JoltBackend::IsJointValid(const PhysicsJointHandle joint) const
+    {
+        return const_cast<Impl &>(*_impl).GetJoint(joint) != nullptr;
     }
 
     // ===== Queries (J5) =====

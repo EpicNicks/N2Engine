@@ -16,10 +16,13 @@ namespace N2Engine::Physics
         Layers = 1u << 0,   // collider layers and the collision matrix (SetColliderLayer, RefreshCollisionMatrix)
         Triggers = 1u << 1, // trigger colliders (SetIsTrigger)
         Events = 1u << 2,   // contact and trigger events (ProcessCollisionCallbacks: Enter, Stay, Exit)
-        Queries = 1u << 3   // scene queries (Raycast, RaycastAll, SphereCast, CapsuleCast, Overlap)
+        Queries = 1u << 3,  // scene queries (Raycast, RaycastAll, SphereCast, CapsuleCast, Overlap)
+        /// Joints (CreateJoint, DestroyJoint, ConfigureJoint). Optional: it is not in kAllPhysicsFeatures, so a backend
+        /// without it is still complete for the Deterministic preset (which needs only the groups every game uses)
+        Joints = 1u << 4
     };
 
-    /// Every group, in the order the messages list them
+    /// Every group the Deterministic preset requires, in the order the messages list them (Joints is optional)
     inline constexpr std::array<PhysicsFeature, 4> kAllPhysicsFeatures = {
         PhysicsFeature::Layers, PhysicsFeature::Triggers, PhysicsFeature::Events, PhysicsFeature::Queries};
 
@@ -36,6 +39,8 @@ namespace N2Engine::Physics
             return "contact and trigger events";
         case PhysicsFeature::Queries:
             return "scene queries";
+        case PhysicsFeature::Joints:
+            return "joints";
         }
         return "unknown";
     }
@@ -48,7 +53,7 @@ namespace N2Engine::Physics
 
         /// No group (what a backend declares unless it says more)
         [[nodiscard]] static constexpr PhysicsFeatureSet None() { return {}; }
-        /// Every group
+        /// Every required group (kAllPhysicsFeatures; the optional Joints is not in it)
         [[nodiscard]] static constexpr PhysicsFeatureSet All()
         {
             PhysicsFeatureSet set;
@@ -70,8 +75,8 @@ namespace N2Engine::Physics
         {
             return (_bits & static_cast<std::uint8_t>(feature)) != 0u;
         }
-        /// Every group is in the set
-        [[nodiscard]] constexpr bool IsComplete() const { return _bits == All()._bits; }
+        /// Every required group is in the set (the optional Joints may or may not be)
+        [[nodiscard]] constexpr bool IsComplete() const { return (_bits & All()._bits) == All()._bits; }
         /// The groups that are not in the set, in kAllPhysicsFeatures order
         [[nodiscard]] std::vector<PhysicsFeature> Missing() const
         {

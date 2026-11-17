@@ -34,6 +34,7 @@
 #include "engine/physics/BoxCollider.hpp"
 #include "engine/physics/CapsuleCollider.hpp"
 #include "engine/physics/CharacterController.hpp"
+#include "engine/physics/Joint.hpp"
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/SoftBody.hpp"
 #include "engine/physics/SphereCollider.hpp"
@@ -115,6 +116,7 @@ namespace N2Engine::Scripting::Bindings
                 {"SphereCollider", MakeAccess<Physics::SphereCollider>()},
                 {"CapsuleCollider", MakeAccess<Physics::CapsuleCollider>()},
                 {"CharacterController", MakeAccess<Physics::CharacterController>()},
+                {"Joint", MakeAccess<Physics::Joint>()},
                 {"Rigidbody2D", MakeAccess<Physics2D::Rigidbody2D>()},
                 {"BoxCollider2D", MakeAccess<Physics2D::BoxCollider2D>()},
                 {"CircleCollider2D", MakeAccess<Physics2D::CircleCollider2D>()},

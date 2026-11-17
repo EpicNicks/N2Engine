@@ -57,6 +57,8 @@ namespace N2Engine::Physics
             return "events";
         case PhysicsFeature::Queries:
             return "queries";
+        case PhysicsFeature::Joints:
+            return "joints";
         }
         return "unknown";
     }
