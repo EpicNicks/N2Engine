@@ -408,6 +408,21 @@ TEST(ProtocolSpecTest, ProtocolVersionMatchesTheSpec)
     EXPECT_TRUE(ParseProtocolVersion(ProtocolVersion).has_value());
 }
 
+TEST(ProtocolSpecTest, TheProtocolIsAtLeast1_31_0AndFieldSchemaHasVisibleWhen)
+{
+    const auto version = ParseProtocolVersion(ProtocolVersion);
+    ASSERT_TRUE(version.has_value());
+    EXPECT_TRUE(version->majorVersion > 1 || (version->majorVersion == 1 && version->minorVersion >= 31)) << ProtocolVersion;
+
+    const spec_json spec = LoadSpec();
+    // Additive: an optional key of FieldSchema, so a client from before 1.31.0 (which ignores unknown JSON keys) still parses
+    const spec_json &fieldSchema = spec.at("jsonTypes").at("FieldSchema");
+    ASSERT_TRUE(fieldSchema.contains("visibleWhen?"));
+    EXPECT_EQ(fieldSchema.at("visibleWhen?").get<std::string>(), "FieldCondition[]");
+    EXPECT_EQ(spec.at("jsonTypes").at("FieldCondition").at("field").get<std::string>(), "string");
+    EXPECT_EQ(spec.at("jsonTypes").at("FieldCondition").at("equals").get<std::string>(), "json[]");
+}
+
 TEST(ProtocolSpecTest, EveryFieldTypeIsDocumentedInTheSpec)
 {
     const spec_json spec = LoadSpec();
