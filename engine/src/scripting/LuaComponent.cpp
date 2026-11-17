@@ -239,6 +239,9 @@ namespace N2Engine::Scripting
         if (_hasMissingScript || _faulted || !LuaRuntime::RunsScripts())
             return;
 
+        // Collision and trigger callbacks run inside the fixed step: Time is the tick clock in a network mode
+        const Bindings::SimCallbackScope simScope;
+
         // The object makeArgument returns is a registry reference made outside a protected call (sol::make_object):
         // free slots first (one is needed, a second is margin for a temporary), so it allocates nothing there (the
         // userdata it wraps still can fail: caught below)
@@ -657,6 +660,8 @@ namespace N2Engine::Scripting
             return false;
         }
         // The handler runs in the same budget scope as every other call into the script (CallLuaMethod)
+        // An RPC handler is a simulation callback of the network tick: Time is the tick clock in a network mode
+        const Bindings::SimCallbackScope simScope;
         CallLuaMethod(method, static_cast<std::uint32_t>(context.sender), sol::as_args(objects));
         return !_faulted;
     }
@@ -1273,6 +1278,7 @@ namespace N2Engine::Scripting
     {
         if (_hasOnFixedUpdate && !_hasMissingScript)
         {
+            const Bindings::SimCallbackScope simScope;
             CallLuaMethod("OnFixedUpdate");
         }
     }

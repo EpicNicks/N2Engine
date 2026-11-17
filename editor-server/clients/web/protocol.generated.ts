@@ -1,7 +1,7 @@
 // Auto-generated from protocol.json by generate_typescript.py - do not edit
 
 /** protocol.json's version (major.minor.patch); Hello sends it, and the server answers with its own */
-export const PROTOCOL_VERSION = "1.29.0";
+export const PROTOCOL_VERSION = "1.31.0";
 
 // ==================== Types ====================
 
@@ -231,6 +231,12 @@ export interface FieldSchema {
   max?: number;
   tooltip?: string;
   container?: string;
+  visibleWhen?: FieldCondition[];
+}
+
+export interface FieldCondition {
+  field: string;
+  equals: unknown[];
 }
 
 export interface ComponentSchema {
@@ -587,6 +593,7 @@ export const CommandType = {
   SetProjectSettings: 0x71,
   SetStartupScene: 0x72,
   SetBuildTargets: 0x73,
+  SetBuildSettings: 0x74,
   ListEditorExtensions: 0x80,
   GetEditorUi: 0x81,
   ReloadEditorExtensions: 0x84,
@@ -739,6 +746,7 @@ export const CommandResponse = {
   SetProjectSettings: "ProjectInfo",
   SetStartupScene: "ProjectInfo",
   SetBuildTargets: "ProjectInfo",
+  SetBuildSettings: "ProjectInfo",
   ListEditorExtensions: "EditorExtensions",
   GetEditorUi: "EditorUi",
   ReloadEditorExtensions: "EditorExtensions",
@@ -992,6 +1000,10 @@ export interface SetStartupSceneRequest {
 
 export interface SetBuildTargetsRequest {
   targets: unknown;
+}
+
+export interface SetBuildSettingsRequest {
+  settings: unknown;
 }
 
 export interface InvokeMenuItemRequest {
@@ -2318,6 +2330,20 @@ export function decodeSetBuildTargetsRequest(payload: Uint8Array): SetBuildTarge
   return { targets };
 }
 
+/** SetBuildSettings's request payload (without the frame header) */
+export function encodeSetBuildSettingsRequest(value: SetBuildSettingsRequest): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.json(value.settings);
+  return writer.finish();
+}
+
+/** Reads SetBuildSettings's request payload; bytes after the last field are ignored */
+export function decodeSetBuildSettingsRequest(payload: Uint8Array): SetBuildSettingsRequest {
+  const reader = new ProtocolReader(payload);
+  const settings = reader.json() as unknown;
+  return { settings };
+}
+
 /** InvokeMenuItem's request payload (without the frame header) */
 export function encodeInvokeMenuItemRequest(value: InvokeMenuItemRequest): Uint8Array {
   const writer = new ProtocolWriter();
@@ -3495,6 +3521,7 @@ export const RequestCodecs = {
   SetProjectSettings: { encode: encodeSetProjectSettingsRequest, decode: decodeSetProjectSettingsRequest },
   SetStartupScene: { encode: encodeSetStartupSceneRequest, decode: decodeSetStartupSceneRequest },
   SetBuildTargets: { encode: encodeSetBuildTargetsRequest, decode: decodeSetBuildTargetsRequest },
+  SetBuildSettings: { encode: encodeSetBuildSettingsRequest, decode: decodeSetBuildSettingsRequest },
   InvokeMenuItem: { encode: encodeInvokeMenuItemRequest, decode: decodeInvokeMenuItemRequest },
   InvokeInspectorAction: { encode: encodeInvokeInspectorActionRequest, decode: decodeInvokeInspectorActionRequest },
   BeginEditGroup: { encode: encodeBeginEditGroupRequest, decode: decodeBeginEditGroupRequest },

@@ -60,7 +60,7 @@ namespace N2Engine::Network
         _options.maxClients = std::clamp<std::uint32_t>(_options.maxClients, 1u, kHardMaxClients);
         _options.stateSendRateHz = std::min<std::uint32_t>(_options.stateSendRateHz, kMaxStateSendRateHz);
         _fingerprint = MakeFingerprint(_options.scenePath, _options.sceneHash, _world.SceneObjectCount(), _options.prefabs,
-                                       _options.inputLayout);
+                                       _options.inputLayout, _options.cosmeticRpcsOnly);
         _options.input = _options.input.Clamped();
         _options.rpc = _options.rpc.Clamped();
         _options.tickRate = std::clamp<std::uint32_t>(_options.tickRate, 1u, kMaxClockTickRate);

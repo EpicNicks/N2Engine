@@ -121,6 +121,7 @@ namespace
             {"SetProjectSettings", CommandType::SetProjectSettings},
             {"SetStartupScene", CommandType::SetStartupScene},
             {"SetBuildTargets", CommandType::SetBuildTargets},
+            {"SetBuildSettings", CommandType::SetBuildSettings},
             {"ListEditorExtensions", CommandType::ListEditorExtensions},
             {"GetEditorUi", CommandType::GetEditorUi},
             {"InvokeMenuItem", CommandType::InvokeMenuItem},
@@ -262,6 +263,7 @@ namespace
             {"SetProjectSettings", [](BufferReader &r) { (void)SetProjectSettingsCmd::Deserialize(r); }},
             {"SetStartupScene", [](BufferReader &r) { (void)SetStartupSceneCmd::Deserialize(r); }},
             {"SetBuildTargets", [](BufferReader &r) { (void)SetBuildTargetsCmd::Deserialize(r); }},
+            {"SetBuildSettings", [](BufferReader &r) { (void)SetBuildSettingsCmd::Deserialize(r); }},
             {"BeginEditGroup", [](BufferReader &r) { (void)BeginEditGroupCmd::Deserialize(r); }},
             {"InvokeMenuItem", [](BufferReader &r) { (void)InvokeMenuItemCmd::Deserialize(r); }},
             {"InvokeInspectorAction", [](BufferReader &r) { (void)InvokeInspectorActionCmd::Deserialize(r); }},
@@ -404,6 +406,21 @@ TEST(ProtocolSpecTest, ProtocolVersionMatchesTheSpec)
     const spec_json spec = LoadSpec();
     EXPECT_EQ(spec.at("version").get<std::string>(), ProtocolVersion);
     EXPECT_TRUE(ParseProtocolVersion(ProtocolVersion).has_value());
+}
+
+TEST(ProtocolSpecTest, TheProtocolIsAtLeast1_31_0AndFieldSchemaHasVisibleWhen)
+{
+    const auto version = ParseProtocolVersion(ProtocolVersion);
+    ASSERT_TRUE(version.has_value());
+    EXPECT_TRUE(version->majorVersion > 1 || (version->majorVersion == 1 && version->minorVersion >= 31)) << ProtocolVersion;
+
+    const spec_json spec = LoadSpec();
+    // Additive: an optional key of FieldSchema, so a client from before 1.31.0 (which ignores unknown JSON keys) still parses
+    const spec_json &fieldSchema = spec.at("jsonTypes").at("FieldSchema");
+    ASSERT_TRUE(fieldSchema.contains("visibleWhen?"));
+    EXPECT_EQ(fieldSchema.at("visibleWhen?").get<std::string>(), "FieldCondition[]");
+    EXPECT_EQ(spec.at("jsonTypes").at("FieldCondition").at("field").get<std::string>(), "string");
+    EXPECT_EQ(spec.at("jsonTypes").at("FieldCondition").at("equals").get<std::string>(), "json[]");
 }
 
 TEST(ProtocolSpecTest, EveryFieldTypeIsDocumentedInTheSpec)
@@ -682,6 +699,8 @@ TEST(ProtocolSpecTest, EveryCommandIsClassifiedForAPlayHost)
         {"SetNetworkSettings", true},
         // 1.29.0: SetBuildTargets saves project.n2proj
         {"SetBuildTargets", true},
+        // 1.30.0: SetBuildSettings saves project.n2proj too
+        {"SetBuildSettings", true},
         // Allowed: they read, or change only the running game, the in-memory scene store or the connection
         {"RenderFrame", false}, {"SetViewportSize", false}, {"GetAudio", false}, {"Hello", false},
         {"PollEvents", false}, {"RenderFrameIfChanged", false}, {"SetCameraPosition", false},

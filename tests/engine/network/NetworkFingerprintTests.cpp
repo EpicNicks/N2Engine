@@ -166,10 +166,55 @@ TEST(NetworkFingerprintTest, EveryRefusalIsDescribedInWords)
 
     EXPECT_FALSE(DescribeRefusal(JoinRefusal::WireVersion, server, client).empty());
     for (const JoinRefusal refusal : {JoinRefusal::None, JoinRefusal::WireVersion, JoinRefusal::EngineVersion,
-                                      JoinRefusal::SceneContent, JoinRefusal::Registry, JoinRefusal::ObjectCount})
+                                      JoinRefusal::SceneContent, JoinRefusal::Registry, JoinRefusal::ObjectCount,
+                                      JoinRefusal::BuildProfile})
     {
         EXPECT_NE(ToString(refusal), "unknown");
     }
+}
+
+TEST(NetworkFingerprintTest, TheBuildProfileIsComparedOnlyWhenTheServerEnforcesIt)
+{
+    Fingerprint server = SameFingerprint();
+    server.buildProfile = CurrentBuildProfile();
+    Fingerprint client = server;
+    client.buildProfile ^= (1u << 16); // strict FP differs
+
+    EXPECT_EQ(CompareFingerprints(server, client), JoinRefusal::None) << "Authoritative: mixed builds are fine";
+    server.buildProfileEnforced = true;
+    EXPECT_EQ(CompareFingerprints(server, client), JoinRefusal::BuildProfile);
+    EXPECT_EQ(CompareFingerprints(server, server), JoinRefusal::None);
+
+    // Every other difference still wins first
+    client.sceneObjectCount = 99;
+    EXPECT_EQ(CompareFingerprints(server, client), JoinRefusal::ObjectCount);
+
+    EXPECT_EQ(MakeFingerprint("a", 1, 1, PrefabTable(), InputLayout(), true).buildProfile, CurrentBuildProfile());
+    EXPECT_TRUE(MakeFingerprint("a", 1, 1, PrefabTable(), InputLayout(), true).buildProfileEnforced);
+    EXPECT_FALSE(MakeFingerprint("a", 1, 1, PrefabTable()).buildProfileEnforced);
+}
+
+TEST(NetworkFingerprintTest, TheBuildProfileNamesTheDifferingAxis)
+{
+    const BuildProfileBits base = CurrentBuildProfile();
+    EXPECT_EQ(BuildProfileDifference(base, base), "");
+    EXPECT_EQ(BuildProfileDifference(base, base ^ 0x1u), "compiler");
+    EXPECT_EQ(BuildProfileDifference(base, base ^ (1u << 8)), "compiler version");
+    EXPECT_EQ(BuildProfileDifference(base, base ^ (1u << 16)), "strict floating point");
+    EXPECT_EQ(BuildProfileDifference(base, base ^ (1u << 17)), "floating-point contraction");
+    EXPECT_EQ(BuildProfileDifference(base, base ^ (1u << 18)), "Debug/Release");
+    EXPECT_EQ(BuildProfileDifference(base, base ^ (1u << 19)), "pointer width");
+    EXPECT_EQ(BuildProfileDifference(base, base ^ (1u << 20)), "architecture");
+
+    Fingerprint server = SameFingerprint();
+    server.buildProfile = base;
+    server.buildProfileEnforced = true;
+    Fingerprint client = server;
+    client.buildProfile = base ^ (1u << 18);
+    const std::string text = DescribeRefusal(JoinRefusal::BuildProfile, server, client);
+    EXPECT_NE(text.find("Debug/Release"), std::string::npos);
+    EXPECT_NE(text.find("debug"), std::string::npos);
+    EXPECT_NE(text.find("release"), std::string::npos);
 }
 
 TEST(PrefabTableTest, IsSortedByNameWithoutDuplicates)

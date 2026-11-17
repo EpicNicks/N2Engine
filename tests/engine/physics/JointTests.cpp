@@ -167,7 +167,9 @@ TEST(JointFeatureTest, PhysXReportsNoJointsYetAndStaysCompleteForThePreset)
 
 #ifdef N2ENGINE_JOLT_ENABLED
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 
 namespace N2PhysicsTests
 {
@@ -578,6 +580,7 @@ namespace N2PhysicsTests
         (void)before;
     }
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
     // ===== Lua =====
 
     class LuaJointTest : public JointTest
@@ -676,6 +679,7 @@ namespace N2PhysicsTests
         }
         EXPECT_EQ(Eval<int>("joint:GetJointType()"), static_cast<int>(JointType::Fixed)) << "nothing changed";
     }
+#endif // N2ENGINE_SCRIPTING_ENABLED
 }
 
 #endif // N2ENGINE_JOLT_ENABLED

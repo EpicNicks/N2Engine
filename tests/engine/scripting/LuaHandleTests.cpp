@@ -9,7 +9,9 @@
 
 #include <math/Vector3.hpp>
 
+#include "engine/Application.hpp"
 #include "engine/GameObjectScene.hpp"
+#include "engine/Time.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/example/renderers/SphereRenderer.hpp"
 #include "engine/io/ResourceLoader.hpp"
@@ -21,6 +23,7 @@
 #include "engine/scripting/LuaComponent.hpp"
 #include "engine/scripting/LuaHandles.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
+#include "engine/scripting/bindings/LuaBindings.hpp"
 
 using namespace N2Engine;
 using namespace N2Engine::Scripting;
@@ -67,6 +70,28 @@ protected:
             end
 
             return Collector
+        )");
+
+        // Reads Time in the callbacks of a physics step
+        WriteAsset("handles/TimeProbe.lua", R"(
+            local Probe = {}
+            Probe.__index = Probe
+
+            function Probe:OnCollisionEnter(collision)
+                probe_collision_time = Time.time
+                probe_collision_delta = Time.deltaTime
+            end
+
+            function Probe:OnTriggerEnter(trigger)
+                probe_trigger_time = Time.time
+                local ignored = Time.unscaledTime
+            end
+
+            function Probe:OnMouseEnter()
+                probe_mouse_time = Time.time
+            end
+
+            return Probe
         )");
 
         // Reads its own object, position and a sibling component during teardown, like a script spawning
@@ -307,6 +332,57 @@ TEST_F(LuaHandleTest, CachedHandlesErrorAfterSceneSwitch)
     EXPECT_FALSE(Eval<bool>("handle_renderer:IsValid()"));
     const std::string error = RunExpectingError("handle_renderer:SetRadius(2)");
     EXPECT_TRUE(Contains(error, "attempt to use a destroyed SphereRenderer")) << error;
+}
+
+TEST_F(LuaHandleTest, CollisionAndTriggerCallbacksReadTheTickClockInANetworkMode)
+{
+    Application &app = Application::GetInstance();
+    const SimulationMode before = app.GetSimulationMode();
+    app.SetSimulationMode(SimulationMode::Deterministic);
+    for (int i = 0; i < 4; ++i)
+    {
+        app.GetSimulationClock().BeginTick();
+    }
+    const float tickTime = static_cast<float>(static_cast<double>(Time::GetTick()) * Time::GetFixedTimestep());
+
+    const auto receiver = GameObject::Create("Receiver");
+    auto *probe = receiver->AddComponent<LuaComponent>();
+    probe->SetScript(IO::ResourcePath("res://handles/TimeProbe.lua"));
+    ASSERT_FALSE(probe->HasMissingScript());
+    _scene->AddRootGameObject(receiver);
+    auto hit = GameObject::Create("Hit");
+    auto *hitBody = hit->AddComponent<Physics::Rigidbody>();
+    _scene->AddRootGameObject(hit);
+
+    Physics::Collision collision;
+    collision.gameObject = receiver.get();
+    collision.otherGameObject = hit.get();
+    collision.otherRigidbody = hitBody;
+    Physics::Trigger trigger;
+    trigger.gameObject = receiver.get();
+    trigger.otherGameObject = hit.get();
+    trigger.otherRigidbody = hitBody;
+
+    const int warningsBefore = Scripting::Bindings::SimTimeWarningCount();
+    probe->OnCollisionEnter(collision);
+    probe->OnTriggerEnter(trigger);
+    probe->OnMouseEnter();
+    EXPECT_FLOAT_EQ(Eval<float>("probe_collision_time"), tickTime);
+    EXPECT_FLOAT_EQ(Eval<float>("probe_collision_delta"), Time::GetFixedDeltaTime());
+    EXPECT_FLOAT_EQ(Eval<float>("probe_trigger_time"), tickTime);
+    EXPECT_FLOAT_EQ(Eval<float>("probe_mouse_time"), Time::GetTime()) << "a frame callback keeps the frame clock";
+    EXPECT_FALSE(Scripting::Bindings::SimCallbackScope::Active()) << "the scope ends with the callback";
+
+    // The unscaledTime warning is once per session: the trigger read it, a second read is silent, a new session warns again
+    EXPECT_EQ(Scripting::Bindings::SimTimeWarningCount(), warningsBefore + 1);
+    probe->OnTriggerEnter(trigger);
+    EXPECT_EQ(Scripting::Bindings::SimTimeWarningCount(), warningsBefore + 1);
+    app.SetSimulationMode(SimulationMode::None);
+    app.SetSimulationMode(SimulationMode::Deterministic);
+    probe->OnTriggerEnter(trigger);
+    EXPECT_EQ(Scripting::Bindings::SimTimeWarningCount(), warningsBefore + 2);
+
+    app.SetSimulationMode(before);
 }
 
 TEST_F(LuaHandleTest, StoredCollisionOutlivesItsObjects)

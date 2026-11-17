@@ -32,9 +32,12 @@ namespace N2Engine::Network
         Registry = 4,
         /// The scenes have a different number of NetworkObjects
         ObjectCount = 5,
+        /// A Deterministic server and a client built differently: compiler, strict floating point, contraction, Debug
+        /// or Release, or architecture (BuildProfile). Never refused for the other presets.
+        BuildProfile = 6,
     };
 
-    /// "none", "wire-version", "engine-version", "scene-content", "registry" or "object-count"
+    /// "none", "wire-version", "engine-version", "scene-content", "registry", "object-count" or "build-profile"
     [[nodiscard]] std::string_view ToString(JoinRefusal refusal) noexcept;
 
     /**
@@ -52,6 +55,24 @@ namespace N2Engine::Network
      * assets or the values of component fields: two peers whose scripts differ will agree here and still disagree
      * later. The wire version is a separate field of the hello message (see NetworkProtocol.hpp).
      */
+    /// The build facts that decide whether two peers compute the same floating-point results, packed in a u32 (the
+    /// wire's): bits 0-7 compiler id (BuildCompiler), 8-15 the compiler's major version, 16 strict-FP build, 17 engine
+    /// trig contraction-free, 18 Debug build (no NDEBUG), 19 64-bit pointers, 20-23 architecture (BuildArch).
+    using BuildProfileBits = std::uint32_t;
+
+    enum class BuildCompiler : std::uint8_t { Unknown = 0, Msvc = 1, Clang = 2, Gcc = 3, Emscripten = 4 };
+    enum class BuildArch : std::uint8_t { Unknown = 0, X86_64 = 1, X86 = 2, Arm64 = 3, Arm = 4, Wasm = 5 };
+
+    /// The profile of this build
+    [[nodiscard]] BuildProfileBits CurrentBuildProfile() noexcept;
+
+    /// Text of a profile ("msvc 19 strict-fp contraction-free release x86_64 64-bit"), for errors
+    [[nodiscard]] std::string DescribeBuildProfile(BuildProfileBits profile);
+
+    /// The first axis on which two profiles differ ("compiler", "compiler version", "strict floating point",
+    /// "floating-point contraction", "Debug/Release", "pointer width", "architecture"); empty when equal
+    [[nodiscard]] std::string BuildProfileDifference(BuildProfileBits a, BuildProfileBits b);
+
     struct Fingerprint
     {
         std::string engineVersion;
@@ -61,6 +82,11 @@ namespace N2Engine::Network
         std::string scenePath;
         std::uint32_t sceneObjectCount = 0;
         std::uint16_t prefabCount = 0;
+        /// CurrentBuildProfile() of the peer
+        BuildProfileBits buildProfile = 0;
+        /// Set by a Deterministic server (and meaningful only in its hello): the build profiles must match. A client
+        /// compares only when the server's fingerprint says so; Authoritative sessions tolerate mixed builds.
+        bool buildProfileEnforced = false;
     };
 
     /// FNV-1a over the compact text of `scene` (nlohmann keeps object keys sorted, so the same data hashes the same
@@ -82,10 +108,11 @@ namespace N2Engine::Network
     /// `sceneHash` and which holds `sceneObjectCount` NetworkObjects, with the prefab table `prefabs`
     [[nodiscard]] Fingerprint MakeFingerprint(std::string_view scenePath, std::uint64_t sceneHash,
                                               std::uint32_t sceneObjectCount, const PrefabTable &prefabs,
-                                              const InputLayout &inputLayout = InputLayout());
+                                              const InputLayout &inputLayout = InputLayout(),
+                                              bool enforceBuildProfile = false);
 
     /// What differs between the server's fingerprint and the client's, the first of: the engine version, the scene
-    /// content, the registry, the object count. None when they agree.
+    /// content, the registry, the object count, and, when the server enforces it, the build profile. None when they agree.
     [[nodiscard]] JoinRefusal CompareFingerprints(const Fingerprint &server, const Fingerprint &client) noexcept;
 
     /// One sentence saying what differs, for the client's error and the logs

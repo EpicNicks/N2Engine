@@ -1,0 +1,7 @@
+{ "n2shader": 1, "name": "NegativeGlPosition" }
+#stage fragment
+// Lint: gl_Position is not available (the engine supplies the vertex stage in v1)
+void main() {
+    gl_Position = vec4(0.0);
+    n2_FragColor = vec4(1.0);
+}

@@ -391,6 +391,20 @@ TEST_F(ProjectFileTest, CreateProjectTakesANameAndAnId)
     EXPECT_EQ(created->projectId, id);
 }
 
+TEST_F(ProjectFileTest, ANetworkedProjectIsCreatedWithStrictFpOnAndAPlainOneWithoutTheKey)
+{
+    const auto plain = IO::CreateProject(_root / "plain");
+    ASSERT_TRUE(plain) << plain.error().message;
+    EXPECT_FALSE(plain->unknownKeys.contains("build"));
+
+    const auto net = IO::CreateProject(_root / "net", {.networked = true});
+    ASSERT_TRUE(net) << net.error().message;
+    const auto reloaded = IO::ProjectFile::Load(_root / "net");
+    ASSERT_TRUE(reloaded) << reloaded.error();
+    ASSERT_TRUE(reloaded->unknownKeys.contains("build"));
+    EXPECT_EQ(reloaded->unknownKeys.at("build").at("strictFp"), true);
+}
+
 TEST_F(ProjectFileTest, TwoNewProjectsGetDifferentIds)
 {
     const auto first = IO::CreateProject(_root / "a");

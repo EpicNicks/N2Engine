@@ -1,5 +1,5 @@
 {
-  "version": "1.29.0",
+  "version": "1.31.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -733,6 +733,21 @@
         }
       }
     },
+    "SetBuildSettings": {
+      "id": "0x74",
+      "description": "Since 1.30.0. Write command (a viewer is refused with forbidden, a --read-only host with readOnly; a play host refuses it, as it refuses every command that writes the project file; not offered to Lua editor extensions). Changes the project's build-wide settings in project.n2proj's build block (beside build.modules and build.targets, which it leaves as they are) with a JSON merge patch (RFC 7386), and saves the project file. settings must be an object whose only allowed key is strictFp: true or false sets build.strictFp (the strict floating-point profile, N2ENGINE_STRICT_FP, for the game's builds), null removes it (automatic: n2build turns it on for a game that uses networking). Any other key, or another value type, is refused with an Error that names the key, never the value; nothing is saved. Nothing to change: no save. Answers ProjectInfo.",
+      "request": {
+        "settings": "json"
+      },
+      "response": {
+        "type": "ProjectInfo",
+        "fields": {
+          "rootPath": "string",
+          "userDataPath": "string",
+          "project": "json:ProjectFile"
+        }
+      }
+    },
     "ListEditorExtensions": {
       "id": "0x80",
       "description": "The Lua editor extensions of the host (since 1.14.0): info is {enabled, uiRevision, extensions}. enabled is whether the host was started with --editor-extensions; a host without it answers enabled false, uiRevision 0 and no extensions (not an Error), so a client can ask any host. uiRevision starts at 1 when the host loads its extensions and moves on at every ReloadEditorExtensions and whenever an extension becomes faulted; a client that sees it change (the extensionsChanged event carries it) fetches GetEditorUi again. extensions has one entry per extension file, in id order: the files of the project's editor/ folder (editor/**/*.lua, outside assets/, so no protocol write, require or play host can reach them; at most 64 files, each at most 1 MiB; links are skipped). id is the file's path inside editor/ with '/' separators. name is the name the file declared (the id when it did not get far enough to declare one). sha256 is the SHA-256 of the file's bytes as 64 lowercase hex digits (empty when the file was not read). apiVersion is the declared version (0 when unknown); the host speaks 1. state is loaded, failed (the file could not be read, is too large, raised an error, ran out of its time or instruction or memory budget, or declared a bad shape or an unsupported apiVersion) or faulted (loaded, then failed too often in a short time: disabled until the next reload). error is the reason for a failed or faulted extension, with no host path in it (absent otherwise). capabilities are the ones the extension declared and the host granted: scene.read, scene.write, assets.read, assets.write. itemCount is the number of its menu items. A Read command: it answers from what the host captured when it loaded the files and runs no Lua, so a viewer may call it. An extension that failed to load never stops the others from loading.",
@@ -1388,7 +1403,12 @@
       "min?": "number",
       "max?": "number",
       "tooltip?": "string",
-      "container?": "string"
+      "container?": "string",
+      "visibleWhen?": "FieldCondition[]"
+    },
+    "FieldCondition": {
+      "field": "string",
+      "equals": "json[]"
     },
     "ComponentSchema": {
       "typeName": "string",

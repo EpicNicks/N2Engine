@@ -1,0 +1,9 @@
+{ "n2shader": 1, "name": "FragCoord" }
+#stage fragment
+// Probe row: the framebuffer position, through n2_FragCoord() (top-left origin on every target; raw gl_FragCoord is a lint error)
+void main() {
+    vec2 pixel = n2_FragCoord().xy;
+    vec2 centre = n2_TintCircle.xy;
+    float inside = step(distance(pixel, centre), n2_TintCircle.z);
+    n2_FragColor = vec4(fract(pixel / 16.0), inside, 1.0);
+}

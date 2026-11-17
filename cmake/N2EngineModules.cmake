@@ -25,6 +25,9 @@
 # With -DN2ENGINE_TARGET=<name> (n2build sets it; build targets stage 3, docs/build-targets.html#settings), the target's own
 # "build.targets.<name>.modules" is read first, key by key, and "build.modules" fills in the keys it does not name.
 #
+# "build.strictFp": true | false (beside "modules") sets N2ENGINE_STRICT_FP for this tree, the strict floating-point profile that peers of
+# a network game need. Absent keeps the option's own default; n2build turns it on for a game that uses networking (scripts/project-modules.mjs).
+#
 # Normal variables, which win over option() (policy CMP0077) and over a cached value from an earlier configure, so the list is
 # the one thing that decides. scripts/project-modules.mjs checks the list against what the project uses.
 
@@ -75,6 +78,20 @@ if(N2ENGINE_PROJECT)
         message(FATAL_ERROR "N2ENGINE_PROJECT (${N2ENGINE_PROJECT}) has no project.n2proj")
     endif()
     file(READ "${N2ENGINE_PROJECT}/project.n2proj" _n2_project_json)
+
+    string(JSON _n2_strict_type ERROR_VARIABLE _n2_json_error TYPE "${_n2_project_json}" build strictFp)
+    if(NOT _n2_json_error)
+        if(NOT _n2_strict_type STREQUAL "BOOLEAN")
+            message(FATAL_ERROR "build.strictFp in ${N2ENGINE_PROJECT}/project.n2proj must be true or false")
+        endif()
+        string(JSON _n2_strict_value GET "${_n2_project_json}" build strictFp)
+        if(_n2_strict_value)
+            set(N2ENGINE_STRICT_FP ON)
+        else()
+            set(N2ENGINE_STRICT_FP OFF)
+        endif()
+        message(STATUS "Engine modules: strictFp ${_n2_strict_value}, from build.strictFp in ${N2ENGINE_PROJECT}")
+    endif()
 
     # Where each key is read from: the target's list first, then build.modules (a missing list is no error: it names nothing)
     set(_n2_lists "")
