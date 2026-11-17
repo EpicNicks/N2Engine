@@ -1,4 +1,4 @@
 # The n2-mcp bridge the smoke test (editor_host_smoke.py --scenario mcp) builds: the frontend repository and the
 # full sha of the commit to build. To bump it see docs/mcp.html (Verified in CI).
 repo=https://github.com/EpicNicks/N2Engine-Electron-Frontend.git
-commit=834f47e88552ee1371a458e1962026076e5a2bdf
+commit=4c91961892846a74b35bf5af1cacaecaa471e9aa
