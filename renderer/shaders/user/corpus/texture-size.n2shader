@@ -1,0 +1,11 @@
+{ "n2shader": 1, "name": "TextureSize",
+  "params": [ { "name": "baseColorTexture", "type": "texture", "default": "white" }, { "name": "u_Detail", "type": "texture", "default": "normal" } ]
+}
+#stage fragment
+// Probe row: textureSize, and two texture slots (the reserved baseColorTexture takes slot 0, u_Detail slot 1)
+void main() {
+    vec2 size = vec2(n2_textureSize(u_Detail, 0));
+    vec4 base = n2_texture(baseColorTexture, n2_UV);
+    vec4 detail = n2_texture(u_Detail, n2_UV * (size / 64.0));
+    n2_FragColor = base * detail;
+}
