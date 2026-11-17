@@ -801,6 +801,59 @@ TEST_F(EditorProjectTest, SetBuildTargetsWithNothingToChangeSavesNothing)
     EXPECT_EQ(std::filesystem::last_write_time(IO::ProjectFile::PathIn(_root)), before);
 }
 
+// ==================== Build settings (1.30.0) ====================
+
+TEST_F(EditorProjectTest, SetBuildSettingsWritesAndClearsStrictFpAndKeepsTheRestOfBuild)
+{
+    {
+        auto file = IO::ProjectFile::Load(_root);
+        ASSERT_TRUE(file) << file.error();
+        file->unknownKeys["build"] = {{"modules", {{"physics3d", "none"}}}};
+        ASSERT_TRUE(file->Save(_root));
+        server.SetProject(_root, *file);
+    }
+
+    const ProjectInfo on = DecodeProjectInfo(Execute(server, CommandType::SetBuildSettings,
+                                                     JsonPayload(json{{"strictFp", true}})));
+    EXPECT_EQ(on.project.at("build").at("strictFp"), true);
+    EXPECT_EQ(on.project.at("build").at("modules").at("physics3d"), "none");
+    EXPECT_EQ(IO::ProjectFile::Load(_root)->unknownKeys.at("build").at("strictFp"), true);
+
+    const ProjectInfo off = DecodeProjectInfo(Execute(server, CommandType::SetBuildSettings,
+                                                      JsonPayload(json{{"strictFp", false}})));
+    EXPECT_EQ(off.project.at("build").at("strictFp"), false);
+
+    const ProjectInfo automatic = DecodeProjectInfo(Execute(server, CommandType::SetBuildSettings,
+                                                            JsonPayload(json{{"strictFp", nullptr}})));
+    EXPECT_FALSE(automatic.project.at("build").contains("strictFp"));
+    EXPECT_EQ(automatic.project.at("build").at("modules").at("physics3d"), "none");
+}
+
+TEST_F(EditorProjectTest, SetBuildSettingsRefusesWhatIsNotStrictFpAndSavesNothing)
+{
+    const std::string before = IO::ProjectFile::Load(_root)->ToText();
+    for (const auto &[patch, expected] : std::vector<std::pair<json, std::string>>{
+             {json{{"strictFp", "yes"}}, "strictFp must be true, false or null"},
+             {json{{"strictFp", 1}}, "strictFp must be true, false or null"},
+             {json{{"targets", json::object()}}, "unknown setting targets"},
+             {json::array(), "must be a JSON object"},
+         })
+    {
+        const Frame refused = Execute(server, CommandType::SetBuildSettings, JsonPayload(patch));
+        ASSERT_EQ(refused.type, ErrorType) << patch.dump();
+        EXPECT_NE(refused.Text().find(expected), std::string::npos) << refused.Text();
+    }
+    EXPECT_EQ(IO::ProjectFile::Load(_root)->ToText(), before) << "nothing was saved";
+}
+
+TEST_F(EditorProjectTest, SetBuildSettingsWithNothingToChangeSavesNothing)
+{
+    const auto before = std::filesystem::last_write_time(IO::ProjectFile::PathIn(_root));
+    const ProjectInfo info = DecodeProjectInfo(Execute(server, CommandType::SetBuildSettings, JsonPayload(json::object())));
+    EXPECT_FALSE(info.project.contains("build"));
+    EXPECT_EQ(std::filesystem::last_write_time(IO::ProjectFile::PathIn(_root)), before);
+}
+
 // ==================== Without a project ====================
 
 TEST(EditorNoProjectTest, ProjectAndSceneFileCommandsNeedAProject)

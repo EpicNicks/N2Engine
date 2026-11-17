@@ -27,6 +27,7 @@
 #include "engine/network/LockstepRuntime.hpp"
 #include "engine/network/NetworkSettings.hpp"
 #include "engine/network/RollbackRuntime.hpp"
+#include "engine/physics2d/Rigidbody2D.hpp"
 #include "engine/network/n2net/SimTransport.hpp"
 #include "engine/network/n2net/UdpTransport.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
@@ -1512,6 +1513,88 @@ TEST(RollbackRuntimeApplicationTest, TheRuntimeDrivesApplicationsFixedLoopAndIts
         }
     }
     EXPECT_GE(compared, 10u);
+    app.SetSimulationMode(SimulationMode::None);
+    RestFrame();
+}
+
+TEST(RollbackRuntimeApplicationTest, A2DWorldCreatedAfterTheSessionStartedStopsTheRollbackSession)
+{
+    ShotPrefab prefab;
+    Application &app = Application::GetInstance();
+    app.Set3DPhysicsBackend(nullptr);
+    const InputLayout layout = MakeLayout();
+
+    SimNetwork network(43);
+    SimTransport &relayTransport = network.AddEndpoint();
+    SimTransport &transportA = network.AddEndpoint();
+    SimTransport &transportB = network.AddEndpoint();
+    SimLinkConfig link;
+    link.latencyMicros = 25'000;
+    ASSERT_TRUE(network.Link(relayTransport.Id(), transportA.Id(), link));
+    ASSERT_TRUE(network.Link(relayTransport.Id(), transportB.Id(), link));
+    LockstepRelayOptions relayOptions;
+    relayOptions.protocolId = 0x6262;
+    relayOptions.slotCount = 2;
+    relayOptions.layout = layout;
+    relayOptions.tickRate = 60;
+    relayOptions.hashInterval = 10;
+    LockstepRelay relay(relayTransport, relayOptions);
+
+    {
+        CurrentSceneGame game;
+        NetworkSettings settings;
+        settings.preset = NetworkPreset::Deterministic;
+        settings.deterministic.mode = DeterministicMode::Rollback;
+        settings.deterministic.rollbackWindow = 8;
+
+        RollbackWorld *rollbackWorld = nullptr;
+        RollbackRuntimeOptions options;
+        options.session.protocolId = 0x6262;
+        options.session.layout = layout;
+        options.session.historyDepth = 64;
+        options.session.sampleInput = [](const std::uint32_t tick) { return ScriptedValues(0, tick); };
+        options.session.applyTick = [&](const TickInputs &inputs, std::uint32_t)
+        { return CurrentSceneGame::Logic(game.world, *rollbackWorld, layout, inputs); };
+        options.clock = [&network] { return network.NowMicros(); };
+        RollbackRuntime runtime(transportA, game.world, nullptr, settings, std::move(options));
+        rollbackWorld = &runtime.World();
+        ASSERT_EQ(runtime.RollbackWindow(), 8u) << "no 2D world yet: rollback";
+
+        LockstepRuntimeOptions other;
+        other.protocolId = 0x6262;
+        other.layout = layout;
+        other.sampleInput = [](const std::uint32_t) { return std::vector<float>{0.0f, 0.0f, 0.0f}; };
+        other.applyTick = [](const TickInputs &, std::uint32_t) { return true; };
+        LockstepRuntime peerB(transportB, std::move(other));
+
+        constexpr double kFrame = 1.0 / 60.0;
+        const auto frame = [&]
+        {
+            network.Advance(16'667);
+            relay.Update(network.NowMicros());
+            TickOptions tick;
+            tick.pollEvents = false;
+            tick.render = false;
+            tick.deltaSeconds = kFrame;
+            app.Tick(tick);
+            peerB.Update(network.NowMicros(), kFrame);
+        };
+        for (int i = 0; i < 4000 && runtime.Session().ConfirmedTick() < 30; ++i)
+        {
+            frame();
+        }
+        ASSERT_EQ(runtime.Session().State(), LockstepState::Running) << runtime.Session().Error();
+
+        // A 2D body appears mid-session
+        const GameObject::Ptr body = GameObject::Create("LateBody2D");
+        body->AddComponent<Physics2D::Rigidbody2D>();
+        SceneManager::GetCurSceneRef().AddRootGameObject(body);
+        for (int i = 0; i < 20 && runtime.Session().State() == LockstepState::Running; ++i)
+        {
+            frame();
+        }
+        EXPECT_NE(runtime.Session().State(), LockstepState::Running) << "the session stops rather than rolling back around Box2D";
+    }
     app.SetSimulationMode(SimulationMode::None);
     RestFrame();
 }

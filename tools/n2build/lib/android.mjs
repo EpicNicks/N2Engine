@@ -81,11 +81,11 @@ export function propertiesPath(file) {
  * Every path and argument of an Android build. info is checkToolchains' (androidSdk, androidNdk, gradle); cmakeDir is
  * the folder holding bin/cmake of a CMake 3.25 or newer (the SDK's own CMake 3.22 is too old for the engine).
  */
-export function planAndroid({ engineRoot, projectDir, descriptor, config, modules, settings, info, cmakeDir, buildRoot, outDir, gameName, signingProfile = null }) {
+export function planAndroid({ engineRoot, projectDir, descriptor, config, modules, settings, info, cmakeDir, buildRoot, outDir, gameName, signingProfile = null, strictFp = null }) {
   if (!['debug', 'release'].includes(config)) throw new BuildError(`The android target builds debug or release, not '${config}'`);
   const android = androidSettings(settings ?? {}, gameName);
   const options = { ...descriptor.cmake.options, ...descriptor.cmake.configs[config] };
-  const key = buildKey({ projectDir, target: descriptor.name, config, modules, options: { ...options, abis: android.abis, vulkan: android.vulkan } });
+  const key = buildKey({ projectDir, target: descriptor.name, config, modules, options: { ...options, abis: android.abis, vulkan: android.vulkan, strictFp } });
   const treeDir = path.join(buildRoot ?? path.join(projectDir, '.n2', 'build'), key);
   const gradleDir = path.join(treeDir, 'gradle');
   const assetsDir = path.join(treeDir, 'assets');
@@ -105,6 +105,8 @@ export function planAndroid({ engineRoot, projectDir, descriptor, config, module
     ndkVersion: info?.androidNdk ?? descriptor.pins?.['android-ndk'] ?? '',
     cmakeBuildType: options.CMAKE_BUILD_TYPE ?? (config === 'debug' ? 'Debug' : 'Release'),
     vulkan: android.vulkan ? 'ON' : 'OFF',
+    // The project's answer (resolveStrictFp); left out when null so an explicit build.strictFp, which CMake reads itself, stands
+    ...(strictFp === null ? {} : { strictFp: strictFp ? 'ON' : 'OFF' }),
   };
   for (const [name, value] of Object.entries(properties)) checkPropertyValue(`n2.${name}`, value);
   // A release build signed with a profile is the one to publish: Gradle builds the AAB too

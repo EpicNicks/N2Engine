@@ -118,6 +118,7 @@ namespace N2Engine::Editor
         // reaches stdout or stderr
         IO::CreateProjectOptions create;
         create.name = options.projectName;
+        create.networked = options.projectNetworked;
         create.projectId = options.projectIdFromPath
                                ? std::optional<Math::UUID>(IO::ResourceUUID::NamespaceForProjectDir(options.createPath))
                                : options.projectId;

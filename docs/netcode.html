@@ -836,6 +836,7 @@ WantedBy=multi-user.target</code></pre>
 <tr><td><code>sceneHash</code></td><td><code>HashSceneJson</code> of the scene file's parsed JSON: FNV-1a 64 over the compact text, written without recursion (<code>JsonLimits::IterativeDump</code>) with a string that is not UTF-8 replaced, never an exception. Object keys are sorted by nlohmann, so key order, whitespace and line endings of the file do not matter; the content and the order of arrays do. The component UUIDs are part of the content.</td><td>2nd: <code>scene-content</code></td></tr>
 <tr><td><code>registryHash</code> and <code>prefabCount</code></td><td><code>HashRegistry</code>: FNV-1a over the sorted names of every registered component type, for each the replicated fields of its schema with everything that decides their bytes on the wire (name, kind, step, range, enum options) <span class="badge">PR #226</span>, and the prefab table's hash, and (<span class="badge">PR #TBD</span>) the hash of the <a href="#input-layout">networked input layout</a></td><td>3rd: <code>registry</code></td></tr>
 <tr><td><code>sceneObjectCount</code></td><td>How many <code>NetworkObject</code>s the scene has</td><td>4th: <code>object-count</code></td></tr>
+<tr><td><code>buildProfile</code></td><td>Compiler and major version, strict FP, engine-trig contraction-free, Debug or Release, pointer width, architecture. Compared only when the server is Deterministic (it sets <code>buildProfileEnforced</code>); the other presets accept mixed builds</td><td>5th: <code>build-profile</code> (the refusal names the differing axis)</td></tr>
 <tr><td><code>scenePath</code></td><td>The scene's resource path, for messages and logs; at most 255 printable bytes</td><td>never: a path says nothing about content</td></tr>
 </tbody>
 </table>
@@ -858,11 +859,11 @@ WantedBy=multi-user.target</code></pre>
 <tr><td><code>0x03</code></td><td>Despawn</td><td>server</td><td>u32 net id (not 0)</td></tr>
 <tr><td><code>0x04</code></td><td>WorldReady</td><td>server</td><td>u32 spawned objects sent in the join state, u32 destroyed scene objects sent (each at most 4096)</td></tr>
 <tr><td><code>0x81</code></td><td>ClientAccept</td><td>client</td><td>u16 wire version, fingerprint</td></tr>
-<tr><td><code>0x82</code></td><td>ClientReject</td><td>client</td><td>u8 reason, 1 to 5 (<code>JoinRefusal</code>: wire-version, engine-version, scene-content, registry, object-count)</td></tr>
+<tr><td><code>0x82</code></td><td>ClientReject</td><td>client</td><td>u8 reason, 1 to 6 (<code>JoinRefusal</code>: wire-version, engine-version, scene-content, registry, object-count, build-profile)</td></tr>
 </tbody>
 </table>
 </div>
-<p>A fingerprint on the wire is: u8 length and the engine version, u64 scene hash, u64 registry hash, u8 length and the scene path, u32 scene object count (at most 4096), u16 prefab count (at most 1024). The largest message is a hello with the longest fingerprint, 318 bytes; no message is over <code>kMaxMessageBytes</code>, 512, and both ends set their Connection's <code>maxMessageSize</code> to it, so a peer that sends more fails its own connection (<code>MessageTooLarge</code>).</p>
+<p>A fingerprint on the wire is: u8 length and the engine version, u64 scene hash, u64 registry hash, u8 length and the scene path, u32 scene object count (at most 4096), u16 prefab count (at most 1024), u32 build profile, u8 build-profile-enforced (0 or 1). The largest message is a hello with the longest fingerprint, 323 bytes; no message is over <code>kMaxMessageBytes</code>, 512, and both ends set their Connection's <code>maxMessageSize</code> to it, so a peer that sends more fails its own connection (<code>MessageTooLarge</code>).</p>
 <div class="callout guarantee" id="world-codec">
 <p class="callout-title">Guarantee: the decoder reads only what it is given and allocates nothing a peer asks for</p>
 <p>Every length is checked against the bytes that remain and against its cap before anything is taken. The only allocations are the two texts of a fingerprint, at most 32 and 255 bytes; every count is a plain integer, checked against its cap and never used to size anything. A text must be printable ASCII (0x20 to 0x7E), so it can go into a log line or an error as it is. Bytes after the end of the message, an unknown type, a type of the other direction, a wire version that is not this one, an id or client id of 0 and a count over its cap are each rejected with a reason (<code>DecodeError</code>) and have no effect. What decodes re-encodes to the same bytes.</p>
@@ -892,7 +893,7 @@ WantedBy=multi-user.target</code></pre>
 <table>
 <thead><tr><th>A client &hellip;</th><th>Counter</th></tr></thead>
 <tbody>
-<tr><td>sends an undecodable message (including a wire version that is not 8, and a state acknowledgement that is truncated or has a zero sequence)</td><td><code>droppedMalformed</code></td></tr>
+<tr><td>sends an undecodable message (including a wire version that is not 9, and a state acknowledgement that is truncated or has a zero sequence)</td><td><code>droppedMalformed</code></td></tr>
 <tr><td>sends a server message</td><td><code>droppedUnauthorized</code></td></tr>
 <tr><td>sends a second accept; sends on the unreliable channel anything but a state acknowledgement or, <span class="badge">PR #TBD</span>, input frames (a state update included: state only ever travels from the server; <a href="#input-authority">the input offences</a>); acknowledges state before it joined, or a state update the server never sent <span class="badge">PR #226</span></td><td><code>droppedProtocol</code></td></tr>
 <tr><td>sends more than <code>maxClientMessagesPerSecond</code> (32) in a second (reliable messages), or more than <code>maxClientAcksPerSecond</code> (1024) state acknowledgements in a second <span class="badge">PR #226</span>; the check comes before the decode</td><td><code>droppedRateLimited</code></td></tr>

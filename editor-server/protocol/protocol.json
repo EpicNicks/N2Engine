@@ -1,5 +1,5 @@
 {
-  "version": "1.29.0",
+  "version": "1.30.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -723,6 +723,21 @@
       "description": "Since 1.29.0. Write command (a viewer is refused with forbidden, a --read-only host with readOnly; a play host refuses it, as it refuses every command that writes the project file; not offered to Lua editor extensions). Changes the project's per-target build settings, project.n2proj's build.targets (beside build.modules, which it leaves as it is), with a JSON merge patch (RFC 7386: a target or a key set to null is removed, objects merge, anything else replaces), and saves the project file. targets must be an object. build.targets is an object keyed by target name (a lowercase letter, then lowercase letters, digits and '-', at most 32 characters; at most 32 targets and 64 KiB in all), each an object of that target's settings: enabled (bool), displayName (1 to 64 characters, no control characters), appId (a reverse-domain id: two or more segments of letters, digits and '_', each starting with a letter, at most 150 characters), version (\"major.minor.patch\", each part 1 to 5 digits), buildNumber (a whole number from 1 to 2100000000), orientation (any, landscape or portrait), renderer (auto, software, opengl, vulkan or webgpu), config (debug or release), icon (a res:// path to a .png inside the assets folder), modules (the same keys and values as build.modules, for that target) and signing ({\"profile\": name}: the name of a signing profile kept in the user's own n2build settings, 1 to 64 letters, digits, '.', '_' or '-'; signing may hold nothing else). Keys this version does not know are kept, but no key at any depth of a target may look like a secret (its name containing password, passwd, passphrase, secret, token, privatekey, credential, apikey, storepass, keypass or certificatedata, ignoring case, '_', '-', '.' and spaces) and no string may hold a PEM block (-----BEGIN): project files are committed and shared, so signing material is only ever named, never stored. The whole block after the patch is checked; an Error names the first key at fault (never a value) and nothing is saved. A patch that changes nothing saves nothing and sends no projectChanged. Answers the project as saved (ProjectInfo, as GetProjectInfo). Error without a project. A project whose build.targets was edited by hand into something these rules refuse still opens (the host logs a warning); SetBuildTargets then refuses to save until the patch fixes it.",
       "request": {
         "targets": "json"
+      },
+      "response": {
+        "type": "ProjectInfo",
+        "fields": {
+          "rootPath": "string",
+          "userDataPath": "string",
+          "project": "json:ProjectFile"
+        }
+      }
+    },
+    "SetBuildSettings": {
+      "id": "0x74",
+      "description": "Since 1.30.0. Write command (a viewer is refused with forbidden, a --read-only host with readOnly; a play host refuses it, as it refuses every command that writes the project file; not offered to Lua editor extensions). Changes the project's build-wide settings in project.n2proj's build block (beside build.modules and build.targets, which it leaves as they are) with a JSON merge patch (RFC 7386), and saves the project file. settings must be an object whose only allowed key is strictFp: true or false sets build.strictFp (the strict floating-point profile, N2ENGINE_STRICT_FP, for the game's builds), null removes it (automatic: n2build turns it on for a game that uses networking). Any other key, or another value type, is refused with an Error that names the key, never the value; nothing is saved. Nothing to change: no save. Answers ProjectInfo.",
+      "request": {
+        "settings": "json"
       },
       "response": {
         "type": "ProjectInfo",
