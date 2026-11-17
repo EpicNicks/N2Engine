@@ -2,14 +2,9 @@
 
 This folder is a static HTML site that documents how the engine **behaves**: guarantees, ordering, lifetimes, edge cases and error handling. Start at [`index.html`](index.html).
 
-<<<<<<< HEAD
 - No build step, no external fonts or scripts. Everything is plain HTML plus `assets/style.css` and two small scripts: `assets/highlight.js` colours the code blocks (`<pre class="lang-*">`) and `assets/search.js` adds the search box (see [Search](#search)). The pages read fine without either.
-- Works opened straight from disk (`file://`) and on GitHub Pages (serve the `docs/` folder from the default branch). All links are relative.
-=======
-- No build step, no external fonts or scripts. Everything is plain HTML plus `assets/style.css` and one small script, `assets/highlight.js`, that colours the code blocks (`<pre class="lang-*">`); the pages read fine without it.
 - Works opened straight from disk (`file://`) and from any static host. All links are relative.
 - Published at https://n2engine-docs.vercel.app by `.github/workflows/docs-deploy.yml` (the `docs (Vercel)` job): a push to `master` that touches `docs/` deploys to production, and a pull request that touches `docs/` gets a preview deployment.
->>>>>>> origin/master
 - Light and dark themes follow the reader's system setting (`prefers-color-scheme`).
 
 ## Search
@@ -38,6 +33,7 @@ The pages describe `master`. `PR #nn` badges stay as history, pointing readers a
 | File | Covers |
 |---|---|
 | `index.html` | Overview, module list, architecture map, ownership, frame summary, cross-cutting rules |
+| `design-decisions.html` | Why the engine is built the way it is: the architecture, backend, determinism, netcode, scripting, editor, security, build and CI decisions, each with its reasoning, alternatives and sources; stated and inferred rationales are labelled |
 | `application.html` | Init/Run/Shutdown, frame order, fixed step, Quit, health, headless mode, renderer resources, the software renderer's headless mode |
 | `gameobjects-components.html` | GameObject/Component lifecycle, hierarchy, destroy, component lookup and removal |
 | `transforms.html` | `Positionable` local/world transforms, dirty propagation, physics notification |
