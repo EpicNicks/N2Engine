@@ -121,7 +121,9 @@ namespace
 
         json Field(const std::string &name)
         {
-            for (const json &field : Schema().at("fields"))
+            // Kept in a local: a range-for over Schema().at(...) would loop over a destroyed temporary (before C++23)
+            const json schema = Schema();
+            for (const json &field : schema.at("fields"))
             {
                 if (field.at("name") == name)
                     return field;
