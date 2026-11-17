@@ -137,5 +137,11 @@ links Dawn's own dependencies (for example SPIRV-Tools and Abseil, under their o
 SHA-256 is pinned, with `cargo install --locked`; MIT or Apache-2.0 (the `license` field of its `Cargo.toml`), and its dependencies
 come from the package's own `Cargo.lock`.
 
+The user-shader cook tool (`tools/n2shader`) runs glslang (`glslang-tools`), SPIRV-Tools (`spirv-tools`: `spirv-val`,
+`spirv-dis`) and SPIRV-Cross (`spirv-cross`, `--reflect`) as separate processes, from the Vulkan SDK or the Ubuntu packages the
+same CI job installs with apt. They are tools of the developer machine and of CI: nothing of them is vendored, linked into or
+shipped with the engine or a game (their licences are those of their upstream projects: glslang BSD-3-Clause with notices,
+SPIRV-Tools and SPIRV-Cross Apache-2.0; not verified one by one).
+
 Copying this file and the licence texts into the Docker image and release archives is a separate
 follow-up; the image does not currently include them.

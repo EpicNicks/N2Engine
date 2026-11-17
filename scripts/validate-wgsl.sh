@@ -53,6 +53,27 @@ run() {
   echo "  ok: $label"
 }
 
+# ---- User shaders, stage 0 (orchestrator/proposals/user-shaders.md, section 10): does this platform's Tint have a SPIR-V reader?
+# The cook tool (tools/n2shader) translates glslang's SPIR-V to WGSL with `tint`; a Dawn release build could be made without the
+# reader. One SPIR-V module built by glslang goes through `tint --format wgsl`: the build has the reader or this fails, with
+# the stage-1 fallback named (pin another Dawn build, or the Windows/macOS archives, for the cook).
+glslang="${GLSLANG:-glslangValidator}"
+if ! command -v "$glslang" > /dev/null 2>&1; then
+  echo "::error::glslangValidator not found: $glslang (apt install glslang-tools)"
+  exit 2
+fi
+echo "glslang: $(command -v "$glslang")"
+echo "== user shaders, stage 0: this tint has a SPIR-V reader"
+if run "glslang scripts/spirv-probe/probe.frag -> SPIR-V" "$glslang" -V --target-env vulkan1.1 -S frag -o "$out/probe.spv" "$root/scripts/spirv-probe/probe.frag"; then
+  if run "tint SPIR-V reader: probe.spv -> WGSL" "$tint" --format wgsl -o "$out/probe.wgsl" "$out/probe.spv" \
+     && [ -s "$out/probe.wgsl" ] && grep -q '@fragment' "$out/probe.wgsl"; then
+    echo "  ok: the Linux tint ($(uname -sm)) reads SPIR-V and wrote $(wc -l < "$out/probe.wgsl") lines of WGSL"
+  else
+    echo "::error::STAGE 0 FAILED: this Dawn tint has no usable SPIR-V reader on this platform. The user-shader cook (tools/n2shader) cannot use it here: pin a Dawn build that has the reader, or run the cook's Tint stage from the Windows/macOS Dawn archives (proposal section 10, stage 1 risk row)"
+    failures=$((failures + 1))
+  fi
+fi
+
 shopt -s nullglob
 shaders=("$root"/renderer/shaders/webgpu/*.wgsl)
 if [ "${#shaders[@]}" -ne 3 ]; then
@@ -131,6 +152,24 @@ negative="$root/scripts/wgsl-negative"
 reject "tint (type error)" "error" "$tint" --format spvasm --validate --ep fs_main -o "$out/negative.spvasm" "$negative/type-error.wgsl"
 reject "naga (type error)" "error" "$naga" "$negative/type-error.wgsl"
 reject "tint (non-uniform sample)" "uniform" "$tint" --format spvasm --validate --ep fs_main -o "$out/negative.spvasm" "$negative/non-uniform-sample.wgsl"
+
+# The user-shader conformance corpus (renderer/shaders/user/corpus, tools/n2shader): every positive file through glslang ->
+# spirv-val -> the reflection self-check -> Tint -> naga, and every negative rejected at the stage and for the reason in its
+# expect.json entry (--require-tools: a missing tool fails here instead of skipping a stage)
+echo "== user shaders: the conformance corpus"
+if ! command -v node > /dev/null 2>&1; then
+  echo "::error::node is needed to run the user-shader cook (tools/n2shader)"
+  failures=$((failures + 1))
+else
+  corpus_log="$out/corpus.log"
+  if TINT="$tint" NAGA="$naga" GLSLANG="$glslang" node "$root/tools/n2shader/n2shader.mjs" corpus "$root/renderer/shaders/user/corpus" --require-tools > "$corpus_log" 2>&1; then
+    sed 's/^/    /' "$corpus_log"
+  else
+    sed 's/^/    /' "$corpus_log"
+    echo "::error::the user-shader corpus failed"
+    failures=$((failures + 1))
+  fi
+fi
 
 if [ "$failures" -ne 0 ]; then
   echo "::error::$failures WGSL validation step(s) failed"
