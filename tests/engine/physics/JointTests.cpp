@@ -322,7 +322,7 @@ namespace N2PhysicsTests
         // A 1x1x1 dynamic box with gravity
         GameObject::Ptr SpawnBox(const std::string &name, const Vector3 &position, const bool gravity = true)
         {
-            const auto go = Spawn(name, position);
+            const GameObject::Ptr go = Spawn(name, position);
             go->AddComponent<BoxCollider>()->SetSize(Vector3(1.0f, 1.0f, 1.0f));
             auto *body = go->AddComponent<Rigidbody>();
             body->SetBodyType(BodyType::Dynamic);
@@ -333,7 +333,7 @@ namespace N2PhysicsTests
         // A static 1x1x1 box
         GameObject::Ptr SpawnAnchor(const std::string &name, const Vector3 &position)
         {
-            const auto go = Spawn(name, position);
+            const GameObject::Ptr go = Spawn(name, position);
             go->AddComponent<BoxCollider>()->SetSize(Vector3(1.0f, 1.0f, 1.0f));
             return go;
         }
@@ -343,19 +343,19 @@ namespace N2PhysicsTests
 
     TYPED_TEST(JointTest, AFixedJointHoldsABodyToAnotherAndToTheWorld)
     {
-        const auto anchor = this->SpawnAnchor("Anchor", Vector3(0, 8, 0));
-        const auto hanging = this->SpawnBox("Hanging", Vector3(0, 5, 0));
+        const GameObject::Ptr anchor = this->SpawnAnchor("Anchor", Vector3(0, 8, 0));
+        const GameObject::Ptr hanging = this->SpawnBox("Hanging", Vector3(0, 5, 0));
         auto *toBody = hanging->AddComponent<Joint>();
         toBody->SetJointType(JointType::Fixed);
         toBody->SetConnectedBody(anchor.get());
         toBody->SetConnectedAnchor(Vector3(0, -3, 0)); // the point of the anchor where the hanging box is
 
-        const auto pinned = this->SpawnBox("Pinned", Vector3(10, 5, 0));
+        const GameObject::Ptr pinned = this->SpawnBox("Pinned", Vector3(10, 5, 0));
         auto *toWorld = pinned->AddComponent<Joint>();
         toWorld->SetJointType(JointType::Fixed);
         toWorld->SetConnectedAnchor(Vector3(10, 5, 0)); // no connected body: a world position
 
-        const auto free = this->SpawnBox("Free", Vector3(20, 5, 0));
+        const GameObject::Ptr free = this->SpawnBox("Free", Vector3(20, 5, 0));
 
         this->Step(120);
         EXPECT_TRUE(toBody->GetHandle().IsValid());
@@ -367,8 +367,8 @@ namespace N2PhysicsTests
 
     TYPED_TEST(JointTest, AFixedJointWithAnOffCentreAnchorKeepsTheRelativePoseItWasMadeWith)
     {
-        const auto anchor = this->SpawnAnchor("Anchor", Vector3(0, 8, 0));
-        const auto arm = this->SpawnBox("Arm", Vector3(2, 8, 0));
+        const GameObject::Ptr anchor = this->SpawnAnchor("Anchor", Vector3(0, 8, 0));
+        const GameObject::Ptr arm = this->SpawnBox("Arm", Vector3(2, 8, 0));
         auto *joint = arm->AddComponent<Joint>();
         joint->SetConnectedBody(anchor.get());
         joint->SetAnchor(Vector3(-2, 0, 0)); // the anchor's origin, seen from the arm
@@ -384,14 +384,14 @@ namespace N2PhysicsTests
     TYPED_TEST(JointTest, AHingeSwingsAboutItsAxisOnlyAndLimitsStopIt)
     {
         // Two arms from a pivot at (0,5,0) and (20,5,0), swinging down in the XY plane about Z
-        const auto free = this->SpawnBox("FreeArm", Vector3(1, 5, 0));
+        const GameObject::Ptr free = this->SpawnBox("FreeArm", Vector3(1, 5, 0));
         auto *freeHinge = free->AddComponent<Joint>();
         freeHinge->SetJointType(JointType::Hinge);
         freeHinge->SetAnchor(Vector3(-1, 0, 0));
         freeHinge->SetConnectedAnchor(Vector3(0, 5, 0));
         freeHinge->SetAxis(Vector3(0, 0, 1));
 
-        const auto limited = this->SpawnBox("LimitedArm", Vector3(21, 5, 0));
+        const GameObject::Ptr limited = this->SpawnBox("LimitedArm", Vector3(21, 5, 0));
         auto *limitedHinge = limited->AddComponent<Joint>();
         limitedHinge->SetJointType(JointType::Hinge);
         limitedHinge->SetAnchor(Vector3(-1, 0, 0));
@@ -424,7 +424,7 @@ namespace N2PhysicsTests
 
     TYPED_TEST(JointTest, ABallJointKeepsItsPointButRotatesAndSwingsFreely)
     {
-        const auto ball = this->SpawnBox("Ball", Vector3(1, 5, 0));
+        const GameObject::Ptr ball = this->SpawnBox("Ball", Vector3(1, 5, 0));
         auto *joint = ball->AddComponent<Joint>();
         joint->SetJointType(JointType::Ball);
         joint->SetAnchor(Vector3(-1, 0, 0));
@@ -447,13 +447,13 @@ namespace N2PhysicsTests
 
     TYPED_TEST(JointTest, ASliderMovesAlongItsAxisOnlyAndLimitsStopIt)
     {
-        const auto free = this->SpawnBox("FreeSlider", Vector3(0, 5, 0));
+        const GameObject::Ptr free = this->SpawnBox("FreeSlider", Vector3(0, 5, 0));
         auto *freeSlider = free->AddComponent<Joint>();
         freeSlider->SetJointType(JointType::Slider);
         freeSlider->SetConnectedAnchor(Vector3(0, 5, 0));
         freeSlider->SetAxis(Vector3(1, 0, 0));
 
-        const auto limited = this->SpawnBox("LimitedSlider", Vector3(20, 5, 0));
+        const GameObject::Ptr limited = this->SpawnBox("LimitedSlider", Vector3(20, 5, 0));
         auto *limitedSlider = limited->AddComponent<Joint>();
         limitedSlider->SetJointType(JointType::Slider);
         limitedSlider->SetConnectedAnchor(Vector3(20, 5, 0));
@@ -479,14 +479,14 @@ namespace N2PhysicsTests
 
     TYPED_TEST(JointTest, ADistanceJointIsARodWithoutLimitsAndARopeWithThem)
     {
-        const auto anchor = this->SpawnAnchor("Anchor", Vector3(0, 8, 0));
-        const auto rod = this->SpawnBox("Rod", Vector3(3, 8, 0));
+        const GameObject::Ptr anchor = this->SpawnAnchor("Anchor", Vector3(0, 8, 0));
+        const GameObject::Ptr rod = this->SpawnBox("Rod", Vector3(3, 8, 0));
         auto *rodJoint = rod->AddComponent<Joint>();
         rodJoint->SetJointType(JointType::Distance);
         rodJoint->SetConnectedBody(anchor.get());
 
-        const auto ropeAnchor = this->SpawnAnchor("RopeAnchor", Vector3(20, 8, 0));
-        const auto rope = this->SpawnBox("Rope", Vector3(20, 7, 0));
+        const GameObject::Ptr ropeAnchor = this->SpawnAnchor("RopeAnchor", Vector3(20, 8, 0));
+        const GameObject::Ptr rope = this->SpawnBox("Rope", Vector3(20, 7, 0));
         auto *ropeJoint = rope->AddComponent<Joint>();
         ropeJoint->SetJointType(JointType::Distance);
         ropeJoint->SetConnectedBody(ropeAnchor.get());
@@ -513,16 +513,16 @@ namespace N2PhysicsTests
     TYPED_TEST(JointTest, JoinedBodiesCollideOnlyWhenCollideConnectedIsOn)
     {
         // Two boxes overlapping by half their width, weightless: free bodies push each other apart, joined ones do not
-        const auto joinedA = this->SpawnBox("JoinedA", Vector3(0, 5, 0), false);
-        const auto joinedB = this->SpawnBox("JoinedB", Vector3(0.5f, 5, 0), false);
+        const GameObject::Ptr joinedA = this->SpawnBox("JoinedA", Vector3(0, 5, 0), false);
+        const GameObject::Ptr joinedB = this->SpawnBox("JoinedB", Vector3(0.5f, 5, 0), false);
         auto *joint = joinedB->AddComponent<Joint>();
         joint->SetJointType(JointType::Fixed);
         joint->SetConnectedBody(joinedA.get());
         joint->SetConnectedAnchor(Vector3(0.5f, 0, 0));
         ASSERT_FALSE(joint->GetCollideConnected()) << "off by default";
 
-        const auto looseA = this->SpawnBox("LooseA", Vector3(20, 5, 0), false);
-        const auto looseB = this->SpawnBox("LooseB", Vector3(20.5f, 5, 0), false);
+        const GameObject::Ptr looseA = this->SpawnBox("LooseA", Vector3(20, 5, 0), false);
+        const GameObject::Ptr looseB = this->SpawnBox("LooseB", Vector3(20.5f, 5, 0), false);
 
         this->Step(60);
         EXPECT_NEAR(Distance(PositionOf(joinedA), PositionOf(joinedB)), 0.5f, 0.02f) << "no push between joined bodies";
@@ -531,7 +531,7 @@ namespace N2PhysicsTests
 
     TYPED_TEST(JointTest, RemovingTheComponentEndsTheJoint)
     {
-        const auto pinned = this->SpawnBox("Pinned", Vector3(0, 5, 0));
+        const GameObject::Ptr pinned = this->SpawnBox("Pinned", Vector3(0, 5, 0));
         auto *joint = pinned->AddComponent<Joint>();
         joint->SetConnectedAnchor(Vector3(0, 5, 0));
         this->Step(30);
@@ -548,7 +548,7 @@ namespace N2PhysicsTests
 
     TYPED_TEST(JointTest, ADeactivatedObjectLosesItsJointAndGetsItBackWhenActivated)
     {
-        const auto pinned = this->SpawnBox("Pinned", Vector3(0, 5, 0));
+        const GameObject::Ptr pinned = this->SpawnBox("Pinned", Vector3(0, 5, 0));
         auto *joint = pinned->AddComponent<Joint>();
         joint->SetConnectedAnchor(Vector3(0, 5, 0));
         this->Step(10);
@@ -567,8 +567,8 @@ namespace N2PhysicsTests
     {
         // The connected object has no body when the joint's first step runs: the joint waits (it does not fall back to
         // the world), and is made once the body exists
-        const auto anchor = this->Spawn("LateAnchor", Vector3(0, 8, 0));
-        const auto hanging = this->SpawnBox("Hanging", Vector3(0, 5, 0));
+        const GameObject::Ptr anchor = this->Spawn("LateAnchor", Vector3(0, 8, 0));
+        const GameObject::Ptr hanging = this->SpawnBox("Hanging", Vector3(0, 5, 0));
         auto *joint = hanging->AddComponent<Joint>();
         joint->SetConnectedBody(anchor.get());
         joint->SetConnectedAnchor(Vector3(0, -3, 0));
