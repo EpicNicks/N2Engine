@@ -725,6 +725,11 @@ jobs:
       - name: n2build unit tests
         run: node --test tools/n2build/n2build.test.mjs
 
+      # The user-shader cook tool (stage 1 of orchestrator/proposals/user-shaders.md): no glslang, Tint or naga on this leg, so
+      # the stages that need them are skipped; the "wgsl (Tint, naga)" job runs them all
+      - name: n2shader unit tests (no external tools)
+        run: node --test tools/n2shader/n2shader.test.mjs
+
       - name: Cache PhysX binaries
         uses: actions/cache@v6
         with:
@@ -2318,6 +2323,10 @@ jobs:
   # (Tint: Dawn's prebuilt release binary, SHA-256 checked; naga-cli: its crates.io source package, SHA-256 checked, built with
   # --locked). Not a required check, and it follows the docs-only skip like the jobs above. No build of the engine: a few
   # minutes (the Tint download is seconds; a cold cache also installs the pinned Rust toolchain and builds naga, a few minutes, cached keyed on the install script).
+  # User shaders, stages 0 and 1 (orchestrator/proposals/user-shaders.md): the same job also proves the Linux Tint has a SPIR-V
+  # reader (one glslang-built module through `tint --format wgsl`), runs the unit tests of the cook tool (tools/n2shader) with
+  # every tool present, and runs the conformance corpus (renderer/shaders/user/corpus) through glslang, spirv-val, the
+  # reflection self-check, Tint and naga. glslang-tools, spirv-tools and spirv-cross come from apt.
   wgsl:
     name: wgsl (Tint, naga)
     needs: changes
@@ -2326,6 +2335,17 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install glslang, spirv-tools and spirv-cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends glslang-tools spirv-tools spirv-cross
+          glslangValidator --version | head -n 3
+          spirv-val --version | head -n 1
 
       - name: Restore the validators
         uses: actions/cache@v6
@@ -2336,11 +2356,18 @@ jobs:
       - name: Install Tint and naga (pinned, hash-checked)
         run: bash scripts/install-wgsl-validators.sh "$HOME/wgsl-validators"
 
-      - name: Validate the WGSL shaders
+      - name: Validate the WGSL shaders and the user-shader corpus
         run: |
           set -e
           export TINT="$HOME/wgsl-validators/tint/bin/tint" NAGA="$HOME/wgsl-validators/naga/bin/naga"
           bash scripts/validate-wgsl.sh
+
+      # After the corpus, so a stage 0 failure shows first; with the tools on PATH the cases that need them run instead of skipping
+      - name: n2shader unit tests
+        run: |
+          set -e
+          export TINT="$HOME/wgsl-validators/tint/bin/tint" NAGA="$HOME/wgsl-validators/naga/bin/naga"
+          node --test tools/n2shader/n2shader.test.mjs
 
   # WebGPU backend, stage G2 (#155): the native test harness. The WebGPU renderer (renderer/src/webgpu/, built only with
   # N2ENGINE_RENDERER_WEBGPU=ON, never selectable at run time) runs on the pinned prebuilt Dawn (cmake/DawnPrebuilt.cmake, the

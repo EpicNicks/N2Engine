@@ -1,0 +1,41 @@
+{
+  "positive": [
+    { "file": "spike-user-style.n2shader" },
+    { "file": "inverse-mat3.n2shader" },
+    { "file": "inverse-mat4.n2shader" },
+    { "file": "float-array.n2shader" },
+    { "file": "derivatives.n2shader" },
+    { "file": "texel-fetch-lod.n2shader" },
+    { "file": "texture-size.n2shader" },
+    { "file": "switch.n2shader" },
+    { "file": "frag-coord.n2shader" },
+    { "file": "uint-hash.n2shader" },
+    { "file": "while-loop.n2shader", "relaxed": true },
+    { "file": "lighting.n2shader" }
+  ],
+  "negative": [
+    { "file": "negative-isnan.n2shader", "expect": [
+      { "options": {}, "stage": "lint", "match": "isnan" },
+      { "options": { "lint": false }, "stage": "tint", "match": "IsNan|NaN" }
+    ] },
+    { "file": "negative-non-uniform-sample.n2shader", "expect": [
+      { "options": {}, "stage": "tint", "match": "uniform" }
+    ] },
+    { "file": "negative-combined-sampler.n2shader", "expect": [
+      { "options": {}, "stage": "lint", "match": "uniform|layout" },
+      { "options": { "lint": false }, "stage": "reflect", "match": "unexpected sampler" }
+    ] },
+    { "file": "negative-gl-position.n2shader", "expect": [
+      { "options": {}, "stage": "lint", "match": "gl_Position" }
+    ] },
+    { "file": "negative-raw-frag-coord.n2shader", "expect": [
+      { "options": {}, "stage": "lint", "match": "n2_FragCoord" }
+    ] },
+    { "file": "negative-while-strict.n2shader", "expect": [
+      { "options": {}, "stage": "lint", "match": "while" }
+    ] },
+    { "file": "negative-undefined-function.n2shader", "expect": [
+      { "options": {}, "stage": "glslang", "match": "negative-undefined-function\\.n2shader:8 .*undefined_fn" }
+    ] }
+  ]
+}

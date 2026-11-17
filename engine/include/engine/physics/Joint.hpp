@@ -25,7 +25,10 @@ namespace N2Engine::Physics
      * either body is disabled. Joints are made in component update order, so the same scene gives the same joints in
      * the same order on every peer.
      *
-     * Not in a rollback snapshot yet: the backend's SaveState and HashState do not cover joints.
+     * In a rollback snapshot (Jolt): SaveState, RestoreState and HashState cover the backend's joints, so a joint that
+     * lives through the whole rollback window rolls back exactly. A joint made or ended inside the window (this
+     * component created, destroyed, disabled or re-enabled, or either body replaced, parked or unparked) makes
+     * RestoreState refuse, because a joint made again takes its zero from the bodies' poses at that moment.
      */
     class Joint final : public SerializableComponent
     {
@@ -42,6 +45,10 @@ namespace N2Engine::Physics
         void OnFixedUpdate() override;
         /// The editor changed fields: the joint is made again from them
         void OnEditorFieldsChanged(std::span<const std::string> changed) override;
+        /// The editor's field edit, with the limits checked as a whole (see ValidateLimits): a request that touches useLimits,
+        /// limitMin or limitMax and leaves them inconsistent throws std::invalid_argument, which the editor shows and
+        /// does not apply. A request that only changes the type or other fields is never refused for old limits.
+        void SetEditorFields(const nlohmann::json &values, ReferenceResolver *resolver) override;
 
         /// What the joint is made of: changing one makes the joint again (from the bodies' poses then)
         void SetJointType(JointType type);
@@ -67,6 +74,10 @@ namespace N2Engine::Physics
         [[nodiscard]] bool GetUseLimits() const { return _useLimits; }
         [[nodiscard]] float GetLimitMin() const { return _limitMin; }
         [[nodiscard]] float GetLimitMax() const { return _limitMax; }
+
+        /// Why the limits cannot be used, or an empty string: with limits on, both finite, lower <= upper, a hinge's
+        /// within [-180, 180] degrees and holding 0, a slider's holding 0, a distance joint's lower >= 0
+        [[nodiscard]] static std::string DescribeLimitProblem(JointType type, bool useLimits, float minimum, float maximum);
 
         /// The backend's joint, invalid while there is none (a body is missing, the backend has no joints)
         [[nodiscard]] PhysicsJointHandle GetHandle() const { return _handle; }

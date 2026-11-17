@@ -1,0 +1,8 @@
+{ "n2shader": 1, "name": "Derivatives" }
+#stage fragment
+// Probe row: fwidth, dFdx, dFdy (in uniform control flow)
+void main() {
+    float width = fwidth(n2_UV.x);
+    vec2 slope = vec2(dFdx(n2_UV.x), dFdy(n2_UV.y));
+    n2_FragColor = vec4(width * 100.0, slope * 100.0, 1.0);
+}

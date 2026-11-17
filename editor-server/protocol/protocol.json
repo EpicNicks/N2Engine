@@ -1,5 +1,5 @@
 {
-  "version": "1.30.0",
+  "version": "1.31.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -1403,7 +1403,12 @@
       "min?": "number",
       "max?": "number",
       "tooltip?": "string",
-      "container?": "string"
+      "container?": "string",
+      "visibleWhen?": "FieldCondition[]"
+    },
+    "FieldCondition": {
+      "field": "string",
+      "equals": "json[]"
     },
     "ComponentSchema": {
       "typeName": "string",

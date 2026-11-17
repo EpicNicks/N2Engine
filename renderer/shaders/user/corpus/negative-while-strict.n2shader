@@ -1,0 +1,12 @@
+{ "n2shader": 1, "name": "NegativeWhileStrict" }
+#stage fragment
+// Lint: while is rejected in strict mode (relaxed mode accepts it: while-loop.n2shader)
+void main() {
+    float sum = 0.0;
+    int i = 0;
+    while (i < 8) {
+        sum += 0.125;
+        i++;
+    }
+    n2_FragColor = vec4(vec3(sum), 1.0);
+}

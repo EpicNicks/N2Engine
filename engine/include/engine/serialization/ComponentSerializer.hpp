@@ -111,6 +111,15 @@ namespace N2Engine
             return *this;
         }
 
+        /// Shown only while the sibling field `field` (its JSON key) holds one of `values` (enum names as strings, bools,
+        /// numbers). Chain it to add conditions, which all have to hold. The editor protocol sends it as
+        /// FieldSchema.visibleWhen (1.31.0); nothing is hidden or refused by the engine, it is only a hint.
+        FieldBuilder &VisibleWhen(std::string field, std::vector<nlohmann::json> values)
+        {
+            Info().visibleWhen.push_back(FieldCondition{std::move(field), std::move(values)});
+            return *this;
+        }
+
         /// Shown, but the editor protocol refuses to set it
         FieldBuilder &ReadOnly()
         {

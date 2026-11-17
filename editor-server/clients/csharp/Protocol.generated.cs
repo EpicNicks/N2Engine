@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.30.0";
+        public const string ProtocolVersion = "1.31.0";
     }
 
     public enum CommandType : byte
@@ -544,6 +544,16 @@ namespace N2Engine.Editor.Protocol
         public string? Tooltip { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("container")]
         public string? Container { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("visibleWhen")]
+        public FieldCondition[]? VisibleWhen { get; set; }
+    }
+
+    public class FieldCondition
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("field")]
+        public string Field { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("equals")]
+        public System.Text.Json.JsonElement[] Equals { get; set; }
     }
 
     public class ComponentSchema

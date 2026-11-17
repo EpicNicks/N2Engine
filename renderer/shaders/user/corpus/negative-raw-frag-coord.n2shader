@@ -1,0 +1,6 @@
+{ "n2shader": 1, "name": "NegativeRawFragCoord" }
+#stage fragment
+// Lint: raw gl_FragCoord has a different origin on OpenGL than on Vulkan and WebGPU; n2_FragCoord() is the portable form
+void main() {
+    n2_FragColor = vec4(fract(gl_FragCoord.xy / 16.0), 0.0, 1.0);
+}

@@ -1,0 +1,12 @@
+{ "n2shader": 1, "name": "TexelFetchLod",
+  "params": [ { "name": "u_Image", "type": "texture", "default": "white" } ]
+}
+#stage fragment
+// Probe row: texelFetch and textureLod (no implicit derivative, so they may follow a branch)
+void main() {
+    ivec2 size = n2_textureSize(u_Image, 0);
+    ivec2 texel = ivec2(n2_FragCoord().xy) % max(size, ivec2(1));
+    vec4 exact = n2_texelFetch(u_Image, texel, 0);
+    vec4 blurred = n2_textureLod(u_Image, n2_UV, 2.0);
+    n2_FragColor = mix(exact, blurred, 0.5);
+}

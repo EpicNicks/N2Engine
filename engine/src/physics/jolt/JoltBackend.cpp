@@ -409,12 +409,21 @@ namespace N2Engine::Physics
         //   u32 slot count, then per body slot: bool active, u32 generation and, for an active slot, the body (see
         //     Impl::WriteSnapshot)
         //   the layer matrix, gravity, the contact map, the tracker's touches and undelivered events
-        //   u64 size of Jolt's own state, then those bytes (PhysicsSystem::SaveState, everything)
+        //   the joint table (version 2): per joint slot its description, whether it is in Jolt's system, its constraint's
+        //     settings and its accumulated state (Constraint::SaveState: enabled flag, warm-start impulses, motor state),
+        //     then the order of Jolt's constraint list (the solver runs constraints in that order)
+        //   u64 size of Jolt's own state, then those bytes (PhysicsSystem::SaveState: global, bodies and contacts; the
+        //     constraints are the joint table's, so a restore does not depend on the position of a constraint in Jolt's
+        //     list)
         //   u64 FNV-1a checksum of all the bytes before it
         // A collider is written as its index in the owning body's registered colliders (never as a pointer, so the bytes
         // do not depend on addresses), kNoCollider for none.
         constexpr std::uint32_t kSnapshotMagic = 0x4A53324Eu; // "N2SJ"
-        constexpr std::uint32_t kSnapshotVersion = 1;
+        constexpr std::uint32_t kSnapshotVersion = 2;
+        constexpr JPH::EStateRecorderState kJoltSnapshotState = static_cast<JPH::EStateRecorderState>(
+            static_cast<std::uint8_t>(JPH::EStateRecorderState::Global) |
+            static_cast<std::uint8_t>(JPH::EStateRecorderState::Bodies) |
+            static_cast<std::uint8_t>(JPH::EStateRecorderState::Contacts));
         constexpr std::uint32_t kNoCollider = UINT32_MAX;
         constexpr std::uint64_t kFnvOffset = 14695981039346656037ULL;
         constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
@@ -651,6 +660,40 @@ namespace N2Engine::Physics
             bool _failed = false;
         };
 
+        // A StreamIn over a byte view with the end-of-file rule of std::istream (end is reached by reading past it, not
+        // by reading the last byte), which Jolt's RestoreObject relies on
+        class SettingsReader final : public JPH::StreamIn
+        {
+        public:
+            explicit SettingsReader(const std::span<const std::byte> in) : _in(in) {}
+
+            void ReadBytes(void *data, const std::size_t count) override
+            {
+                if (_failed || count > _in.size() - _position)
+                {
+                    _failed = true;
+                    if (count > 0)
+                    {
+                        std::memset(data, 0, count);
+                    }
+                    return;
+                }
+                if (count > 0)
+                {
+                    std::memcpy(data, _in.data() + _position, count);
+                }
+                _position += count;
+            }
+
+            bool IsEOF() const override { return _failed; }
+            bool IsFailed() const override { return _failed; }
+
+        private:
+            std::span<const std::byte> _in;
+            std::size_t _position = 0;
+            bool _failed = false;
+        };
+
         // What a snapshot holds of the backend's own state, parsed (no live pointer in it)
         struct SnapSpec
         {
@@ -728,9 +771,22 @@ namespace N2Engine::Physics
             std::uint32_t colliderB = kNoCollider;
         };
 
+        struct SnapJoint
+        {
+            bool active = false;
+            std::uint32_t generation = 0;
+            JointDesc desc;
+            float restDistance = 0.0f;
+            bool added = false;
+            std::span<const std::byte> settings; // the constraint's settings (ConstraintSettings::SaveBinaryState)
+            std::span<const std::byte> state;    // the constraint's state (Constraint::SaveState)
+        };
+
         struct Snapshot
         {
             std::vector<SnapBody> bodies; // by handle index
+            std::vector<SnapJoint> joints; // by joint slot
+            std::vector<std::uint32_t> constraintOrder; // the joint slots in the order of Jolt's constraint list
             std::array<std::uint32_t, static_cast<std::size_t>(Layers::Count)> matrixRows{};
             Math::Vector3 gravity = Math::Vector3::Zero;
             bool hasPendingGravity = false;
@@ -1005,6 +1061,69 @@ namespace N2Engine::Physics
                 !ReadTriggerEvents(reader, snap, snap.forgottenTriggers))
             {
                 why = "the touch and event tables are damaged";
+                return false;
+            }
+
+            const std::uint32_t jointSlots = reader.U32();
+            if (!reader.Ok() || jointSlots > reader.Remaining())
+            {
+                why = "the joint table is cut short";
+                return false;
+            }
+            snap.joints.resize(jointSlots);
+            for (std::uint32_t i = 0; i < jointSlots; ++i)
+            {
+                SnapJoint &joint = snap.joints[i];
+                joint.active = reader.Bool();
+                joint.generation = reader.U32();
+                if (!joint.active)
+                {
+                    continue;
+                }
+                const std::uint8_t type = reader.U8();
+                joint.desc.bodyA = reader.Handle();
+                joint.desc.bodyB = reader.Handle();
+                joint.desc.anchorA = reader.Vec3();
+                joint.desc.anchorB = reader.Vec3();
+                joint.desc.axis = reader.Vec3();
+                joint.desc.collideConnected = reader.Bool();
+                joint.desc.useLimits = reader.Bool();
+                joint.desc.limitMin = reader.F32();
+                joint.desc.limitMax = reader.F32();
+                joint.restDistance = reader.F32();
+                joint.added = reader.Bool();
+                const std::uint32_t settingsSize = reader.U32();
+                joint.settings = reader.Take(settingsSize);
+                const std::uint32_t stateSize = reader.U32();
+                joint.state = reader.Take(stateSize);
+                if (!reader.Ok() || type > static_cast<std::uint8_t>(JointType::Distance))
+                {
+                    why = "the joint table is damaged";
+                    return false;
+                }
+                joint.desc.type = static_cast<JointType>(type);
+            }
+            const std::uint32_t orderCount = reader.U32();
+            if (!reader.Ok() || orderCount > reader.Remaining())
+            {
+                why = "the joint order is cut short";
+                return false;
+            }
+            for (std::uint32_t i = 0; i < orderCount; ++i)
+            {
+                const std::uint32_t slot = reader.U32();
+                if (!reader.Ok() || slot >= snap.joints.size() || !snap.joints[slot].active || !snap.joints[slot].added ||
+                    std::ranges::count(snap.constraintOrder, slot) != 0)
+                {
+                    why = "the joint order is damaged";
+                    return false;
+                }
+                snap.constraintOrder.push_back(slot);
+            }
+            if (static_cast<std::size_t>(std::ranges::count_if(
+                    snap.joints, [](const SnapJoint &j) { return j.active && j.added; })) != snap.constraintOrder.size())
+            {
+                why = "the joint order does not name every joint in the simulation";
                 return false;
             }
 
@@ -2744,6 +2863,129 @@ namespace N2Engine::Physics
             }
         }
 
+        // The slots of Jolt's constraint list, in its order (what the solver runs in); every constraint is a joint's
+        std::vector<std::uint32_t> ConstraintOrder() const
+        {
+            std::vector<std::uint32_t> order;
+            for (const JPH::Ref<JPH::Constraint> &constraint : system->GetConstraints())
+            {
+                for (std::uint32_t slot = 0; slot < joints.size(); ++slot)
+                {
+                    if (joints[slot].active && joints[slot].constraint.GetPtr() == constraint.GetPtr())
+                    {
+                        order.push_back(slot);
+                        break;
+                    }
+                }
+            }
+            return order;
+        }
+
+        static std::vector<std::byte> ConstraintSettingsBytes(const JPH::Constraint &constraint)
+        {
+            std::vector<std::byte> bytes;
+            ByteRecorder recorder(bytes);
+            constraint.GetConstraintSettings()->SaveBinaryState(recorder);
+            return bytes;
+        }
+
+        static std::vector<std::byte> ConstraintStateBytes(const JPH::Constraint &constraint)
+        {
+            std::vector<std::byte> bytes;
+            ByteRecorder recorder(bytes);
+            constraint.SaveState(recorder);
+            return bytes;
+        }
+
+        // What a joint is, for a state hash: its description, the constraint's settings (limits and the frames the joint
+        // was made with) and its state (enabled flag, accumulated impulses, motor state), the raw bytes of both
+        void HashJointInto(StateHasher &hasher, const JointData &joint) const
+        {
+            hasher.Word(static_cast<std::uint32_t>(joint.desc.type));
+            hasher.Word(joint.added ? 1u : 0u);
+            hasher.Word(joint.desc.collideConnected ? 1u : 0u);
+            hasher.Word(joint.desc.useLimits ? 1u : 0u);
+            hasher.Float(joint.desc.limitMin);
+            hasher.Float(joint.desc.limitMax);
+            hasher.Float(joint.restDistance);
+            for (const std::vector<std::byte> &bytes :
+                 {ConstraintSettingsBytes(*joint.constraint), ConstraintStateBytes(*joint.constraint)})
+            {
+                const std::uint64_t part = Fnv1a(bytes);
+                hasher.Word(static_cast<std::uint32_t>(bytes.size()));
+                hasher.Word(static_cast<std::uint32_t>(part & 0xFFFFFFFFu));
+                hasher.Word(static_cast<std::uint32_t>(part >> 32));
+            }
+        }
+
+        // One body in the simulation as HashSimulatedState sees it (no slot, no generation)
+        std::uint64_t SimulatedBodyHash(const BodyData &data) const
+        {
+            StateHasher hasher;
+            hasher.Word(static_cast<std::uint32_t>(data.motion));
+            JPH::RVec3 position;
+            JPH::Quat rotation;
+            Bodies().GetPositionAndRotation(data.id, position, rotation);
+            hasher.Float(static_cast<float>(position.GetX()));
+            hasher.Float(static_cast<float>(position.GetY()));
+            hasher.Float(static_cast<float>(position.GetZ()));
+            hasher.Float(rotation.GetX());
+            hasher.Float(rotation.GetY());
+            hasher.Float(rotation.GetZ());
+            hasher.Float(rotation.GetW());
+            if (data.motion != MotionKind::Static)
+            {
+                const JPH::Vec3 linear = Bodies().GetLinearVelocity(data.id);
+                const JPH::Vec3 angular = Bodies().GetAngularVelocity(data.id);
+                hasher.Float(linear.GetX());
+                hasher.Float(linear.GetY());
+                hasher.Float(linear.GetZ());
+                hasher.Float(angular.GetX());
+                hasher.Float(angular.GetY());
+                hasher.Float(angular.GetZ());
+                hasher.Word(Bodies().IsActive(data.id) ? 1u : 0u);
+            }
+            return hasher.Value();
+        }
+
+        void WriteJoints(SnapshotWriter &writer) const
+        {
+            writer.U32(static_cast<std::uint32_t>(joints.size()));
+            for (const JointData &joint : joints)
+            {
+                writer.Bool(joint.active);
+                writer.U32(joint.generation);
+                if (!joint.active)
+                {
+                    continue;
+                }
+                writer.U8(static_cast<std::uint8_t>(joint.desc.type));
+                writer.Handle(joint.desc.bodyA);
+                writer.Handle(joint.desc.bodyB);
+                writer.Vec3(joint.desc.anchorA);
+                writer.Vec3(joint.desc.anchorB);
+                writer.Vec3(joint.desc.axis);
+                writer.Bool(joint.desc.collideConnected);
+                writer.Bool(joint.desc.useLimits);
+                writer.F32(joint.desc.limitMin);
+                writer.F32(joint.desc.limitMax);
+                writer.F32(joint.restDistance);
+                writer.Bool(joint.added);
+                const std::vector<std::byte> settings = ConstraintSettingsBytes(*joint.constraint);
+                writer.U32(static_cast<std::uint32_t>(settings.size()));
+                writer.Bytes(settings.data(), settings.size());
+                const std::vector<std::byte> state = ConstraintStateBytes(*joint.constraint);
+                writer.U32(static_cast<std::uint32_t>(state.size()));
+                writer.Bytes(state.data(), state.size());
+            }
+            const std::vector<std::uint32_t> order = ConstraintOrder();
+            writer.U32(static_cast<std::uint32_t>(order.size()));
+            for (const std::uint32_t slot : order)
+            {
+                writer.U32(slot);
+            }
+        }
+
         // Writes the whole snapshot into `out` (replacing what it held, keeping its capacity). `strict` refuses a state
         // that holds an Exit the bytes cannot carry; nothing is written then. False with the reason in `why`.
         bool WriteSnapshot(std::vector<std::byte> &out, const bool strict, std::string &why) const
@@ -2846,12 +3088,14 @@ namespace N2Engine::Physics
             WriteTriggerEvents(writer, tracker.endedTriggers);
             WriteTriggerEvents(writer, tracker.forgottenTriggers);
 
+            WriteJoints(writer);
+
             // Jolt's own state, straight into the same buffer behind its size
             const std::size_t sizeAt = out.size();
             writer.U64(0);
             const std::size_t joltStart = out.size();
             ByteRecorder recorder(out);
-            system->SaveState(recorder, JPH::EStateRecorderState::All);
+            system->SaveState(recorder, kJoltSnapshotState);
             if (recorder.IsFailed())
             {
                 out.clear();
@@ -2902,6 +3146,132 @@ namespace N2Engine::Physics
                 {
                     why = std::format("body slot {} has {} registered colliders and had {} when the state was saved", i,
                                       live->colliders.size(), was->colliderCount);
+                    return false;
+                }
+            }
+            return CheckJoints(snap, why);
+        }
+
+        // The joints must be the same ones as when the state was saved: a joint is made from the bodies' poses at that
+        // moment (its zero), so one made again is another joint, and a constraint cannot be put back into a world that
+        // lacks it. The same slot, generation, type and bodies; limits, collideConnected and the rest are put back.
+        bool CheckJoints(const Snapshot &snap, std::string &why) const
+        {
+            const std::size_t slots = std::max(snap.joints.size(), joints.size());
+            for (std::size_t i = 0; i < slots; ++i)
+            {
+                const JointData *live = i < joints.size() && joints[i].active ? &joints[i] : nullptr;
+                const SnapJoint *was = i < snap.joints.size() && snap.joints[i].active ? &snap.joints[i] : nullptr;
+                if (!live && !was)
+                {
+                    continue;
+                }
+                if (!live || !was || live->generation != was->generation || live->desc.type != was->desc.type ||
+                    !(live->desc.bodyA == was->desc.bodyA) || !(live->desc.bodyB == was->desc.bodyB))
+                {
+                    why = std::format("the joints differ: joint slot {} is {} now and was {} when the state was saved "
+                                      "(a joint made or ended inside the window cannot be rolled back; keep a joint for "
+                                      "the whole window)",
+                                      i, live ? "a joint" : "empty", was ? "a joint" : "empty");
+                    return false;
+                }
+                if (live->added != was->added)
+                {
+                    why = std::format("joint slot {} is {} the simulation now and was {} it when the state was saved", i,
+                                      live->added ? "in" : "out of", was->added ? "in" : "out of");
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // Rebuilds the constraint of `joint` from saved settings, with the bodies it holds
+        bool RebuildConstraint(JointData &joint, const std::span<const std::byte> settingsBytes)
+        {
+            SettingsReader in(settingsBytes);
+            JPH::ConstraintSettings::ConstraintResult result = JPH::ConstraintSettings::sRestoreFromBinaryState(in);
+            if (result.HasError() || in.IsFailed())
+            {
+                return false;
+            }
+            auto *settings = static_cast<JPH::TwoBodyConstraintSettings *>(result.Get().GetPtr());
+            const bool world = joint.idB.IsInvalid();
+            const JPH::BodyID ids[2] = {joint.idA, joint.idB};
+            JPH::BodyLockMultiWrite lock(system->GetBodyLockInterface(), ids, world ? 1 : 2);
+            JPH::Body *body1 = lock.GetBody(0);
+            JPH::Body *body2 = world ? &JPH::Body::sFixedToWorld : lock.GetBody(1);
+            if (!body1 || !body2)
+            {
+                return false;
+            }
+            JPH::Ref<JPH::TwoBodyConstraint> rebuilt = settings->Create(*body1, *body2);
+            if (!rebuilt)
+            {
+                return false;
+            }
+            joint.constraint = rebuilt;
+            return true;
+        }
+
+        // Puts the joints back (before Jolt restores the bodies): their descriptions, the constraints themselves when a
+        // setting differs (limits changed inside the window, or a world that made the joint from other poses), and the
+        // order of Jolt's constraint list
+        bool ApplyJoints(const Snapshot &snap)
+        {
+            std::vector<bool> rebuild(snap.joints.size(), false);
+            bool any = false;
+            for (std::size_t i = 0; i < snap.joints.size(); ++i)
+            {
+                const SnapJoint &was = snap.joints[i];
+                if (!was.active)
+                {
+                    continue;
+                }
+                JointData &live = joints[i];
+                SetNoCollide(live, false);
+                live.desc = was.desc;
+                live.restDistance = was.restDistance;
+                SetNoCollide(live, true);
+                const std::vector<std::byte> liveSettings = ConstraintSettingsBytes(*live.constraint);
+                rebuild[i] = !std::equal(liveSettings.begin(), liveSettings.end(), was.settings.begin(), was.settings.end());
+                any = any || rebuild[i];
+            }
+
+            if (any || ConstraintOrder() != snap.constraintOrder)
+            {
+                // Out and in again in the saved order; the bodies are not touched (Jolt restores them next)
+                for (const std::uint32_t slot : ConstraintOrder())
+                {
+                    system->RemoveConstraint(joints[slot].constraint.GetPtr());
+                }
+                for (std::size_t i = 0; i < snap.joints.size(); ++i)
+                {
+                    if (rebuild[i] && !RebuildConstraint(joints[i], snap.joints[i].settings))
+                    {
+                        return false;
+                    }
+                }
+                for (const std::uint32_t slot : snap.constraintOrder)
+                {
+                    system->AddConstraint(joints[slot].constraint.GetPtr());
+                }
+            }
+            return true;
+        }
+
+        // The accumulated impulses of every joint, after Jolt has put the bodies back
+        bool RestoreJointStates(const Snapshot &snap)
+        {
+            for (std::size_t i = 0; i < snap.joints.size(); ++i)
+            {
+                if (!snap.joints[i].active)
+                {
+                    continue;
+                }
+                ByteRecorder recorder(snap.joints[i].state);
+                joints[i].constraint->RestoreState(recorder);
+                if (recorder.IsFailed())
+                {
                     return false;
                 }
             }
@@ -3041,8 +3411,12 @@ namespace N2Engine::Physics
                 pendingGravity.reset();
             }
 
+            if (!ApplyJoints(snap))
+            {
+                return false;
+            }
             ByteRecorder recorder(snap.jolt);
-            if (!system->RestoreState(recorder) || recorder.IsFailed())
+            if (!system->RestoreState(recorder) || recorder.IsFailed() || !RestoreJointStates(snap))
             {
                 return false;
             }
@@ -4288,6 +4662,23 @@ namespace N2Engine::Physics
                 hasher.Word(s.Bodies().IsActive(data.id) ? 1u : 0u);
             }
         }
+        // Joints by slot, only when there are any (a scene without them hashes as before)
+        for (std::size_t i = 0; i < s.joints.size(); ++i)
+        {
+            const Impl::JointData &joint = s.joints[i];
+            if (!joint.active)
+            {
+                continue;
+            }
+            hasher.Word(0x4A4F494Eu); // "JOIN"
+            hasher.Word(static_cast<std::uint32_t>(i));
+            hasher.Word(joint.generation);
+            hasher.Word(joint.desc.bodyA.index);
+            hasher.Word(joint.desc.bodyA.generation);
+            hasher.Word(joint.desc.bodyB.index);
+            hasher.Word(joint.desc.bodyB.generation);
+            s.HashJointInto(hasher, joint);
+        }
         return hasher.Value();
     }
 
@@ -4308,37 +4699,44 @@ namespace N2Engine::Physics
             {
                 continue;
             }
-            StateHasher hasher;
-            hasher.Word(static_cast<std::uint32_t>(data.motion));
-            JPH::RVec3 position;
-            JPH::Quat rotation;
-            s.Bodies().GetPositionAndRotation(data.id, position, rotation);
-            hasher.Float(static_cast<float>(position.GetX()));
-            hasher.Float(static_cast<float>(position.GetY()));
-            hasher.Float(static_cast<float>(position.GetZ()));
-            hasher.Float(rotation.GetX());
-            hasher.Float(rotation.GetY());
-            hasher.Float(rotation.GetZ());
-            hasher.Float(rotation.GetW());
-            if (data.motion != MotionKind::Static)
-            {
-                const JPH::Vec3 linear = s.Bodies().GetLinearVelocity(data.id);
-                const JPH::Vec3 angular = s.Bodies().GetAngularVelocity(data.id);
-                hasher.Float(linear.GetX());
-                hasher.Float(linear.GetY());
-                hasher.Float(linear.GetZ());
-                hasher.Float(angular.GetX());
-                hasher.Float(angular.GetY());
-                hasher.Float(angular.GetZ());
-                hasher.Word(s.Bodies().IsActive(data.id) ? 1u : 0u);
-            }
-            sum += hasher.Value();
+            sum += s.SimulatedBodyHash(data);
             ++count;
         }
         StateHasher total;
         total.Word(count);
         total.Word(static_cast<std::uint32_t>(sum & 0xFFFFFFFFu));
         total.Word(static_cast<std::uint32_t>(sum >> 32));
+
+        // The joints in the simulation, each on its own like the bodies (its two bodies' states stand for their
+        // identity, the world for none) and summed in no particular order. Nothing is added without joints, so the
+        // hash of a scene without them is what it was before joints existed.
+        std::uint64_t jointSum = 0;
+        std::uint32_t jointCount = 0;
+        for (const Impl::JointData &joint : s.joints)
+        {
+            if (!joint.active || !joint.added)
+            {
+                continue;
+            }
+            StateHasher hasher;
+            s.HashJointInto(hasher, joint);
+            for (const PhysicsBodyHandle handle : {joint.desc.bodyA, joint.desc.bodyB})
+            {
+                const Impl::BodyData *body = s.GetData(handle);
+                const std::uint64_t bodyHash = body ? s.SimulatedBodyHash(*body) : 0;
+                hasher.Word(body ? 1u : 0u);
+                hasher.Word(static_cast<std::uint32_t>(bodyHash & 0xFFFFFFFFu));
+                hasher.Word(static_cast<std::uint32_t>(bodyHash >> 32));
+            }
+            jointSum += hasher.Value();
+            ++jointCount;
+        }
+        if (jointCount > 0)
+        {
+            total.Word(jointCount);
+            total.Word(static_cast<std::uint32_t>(jointSum & 0xFFFFFFFFu));
+            total.Word(static_cast<std::uint32_t>(jointSum >> 32));
+        }
         return total.Value();
     }
 

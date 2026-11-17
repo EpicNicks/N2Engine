@@ -31,8 +31,8 @@ namespace N2Engine::Physics
      * through the ContactTracker that the PhysX backend uses too, and the scene queries (raycast, raycast-all, sphere
      * and capsule casts, overlaps), and SaveState, RestoreState and HashState (what rollback needs).
      *
-     * Snapshots (J6). SaveState writes Jolt's own state (PhysicsSystem::SaveState, everything: global, bodies,
-     * contacts, constraints) plus what the backend keeps that changes future results or events: gravity, the layer
+     * Snapshots (J6). SaveState writes Jolt's own state (PhysicsSystem::SaveState: global, bodies, contacts) and every
+     * joint's constraint (the joint table), plus what the backend keeps that changes future results or events: gravity, the layer
      * matrix, every body's collider specs, mass, gravity flag and kinematic target, the contact map and the
      * ContactTracker's touches and undelivered events. RestoreState validates first and changes nothing when it
      * refuses. THE PARKED-BODY CONTRACT: the bodies in the simulation (enabled) must be the same ones, with the same
@@ -204,8 +204,11 @@ namespace N2Engine::Physics
         /// and Distance, each a Jolt TwoBodyConstraint made in world space from the bodies' poses at creation. Destroying
         /// a body destroys its joints; disabling a body takes its joints out of the simulation until it is enabled again.
         /// A pair with collideConnected off is kept from colliding by the backend's own pair filter (Jolt has no such
-        /// flag). NOT YET in a snapshot: SaveState and RestoreState neither write nor restore joints and HashState does
-        /// not cover them (stage c), so a rollback session must not use joints yet.
+        /// flag). In a snapshot (stage c): SaveState writes every joint (its description, its constraint's settings and
+        /// accumulated state, and the order of Jolt's constraint list), RestoreState puts them back (a constraint whose
+        /// settings differ is made again from the saved ones, the list is put back in the saved order) and HashState and
+        /// HashSimulatedState cover them. The joint SET must be the same at the restore as at the save (the same slots,
+        /// generations, types and bodies): a joint made or ended inside the window makes RestoreState return false.
         PhysicsJointHandle CreateJoint(const JointDesc &desc) override;
         void DestroyJoint(PhysicsJointHandle joint) override;
         bool ConfigureJoint(PhysicsJointHandle joint, const JointDesc &desc) override;
