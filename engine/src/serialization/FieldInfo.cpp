@@ -164,6 +164,15 @@ namespace N2Engine
         {
             j["container"] = container;
         }
+        if (!visibleWhen.empty())
+        {
+            json conditions = json::array();
+            for (const FieldCondition &condition : visibleWhen)
+            {
+                conditions.push_back({{"field", condition.field}, {"equals", condition.equals}});
+            }
+            j["visibleWhen"] = std::move(conditions);
+        }
         return j;
     }
 

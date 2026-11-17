@@ -88,6 +88,13 @@ namespace N2Engine
         }
     }
 
+    /// One visibleWhen condition: the sibling field `field` (its JSON key) must currently equal one of `equals`
+    struct FieldCondition
+    {
+        std::string field;
+        std::vector<nlohmann::json> equals;
+    };
+
     /**
      * Everything an editor needs to show and edit one serialized member. Built at the RegisterMember call from the
      * member's C++ type (FieldTraits), then refined by the opt-in FieldBuilder calls.
@@ -122,6 +129,10 @@ namespace N2Engine
         std::string container;
         bool hidden = false;
         bool readOnly = false;
+        /// Conditional visibility (protocol 1.31.0): the field is shown only while EVERY condition holds, i.e. each named
+        /// sibling field's current value is one of the condition's values. Empty: always shown. A hint for the inspector:
+        /// a hidden-by-condition field is still saved, read and settable. Part of FieldSchema as `visibleWhen`.
+        std::vector<FieldCondition> visibleWhen;
         /// Netcode stage B2: the server sends this field's value to every client (FieldBuilder::Replicated, or
         /// `replicated = true` in a Lua field declaration). Only a kind IsReplicableKind accepts is ever set. Not part of
         /// the editor protocol's FieldSchema (ToJson does not write it); it is part of the network registry fingerprint.

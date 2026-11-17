@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <initializer_list>
@@ -19,8 +20,8 @@ using nlohmann::json;
 
 // The Joint component through the editor server (#381 item 6, stage d): what GetComponentTypes tells an inspector about it
 // (an enum dropdown, a GameObject picker, units in the tooltips), edits through SetComponentFields (the limits checked as
-// a whole, and a refused edit leaving the joint as it was) and undo/redo of those edits. The inspector has no conditional
-// visibility or per-component warnings, so every field is listed whatever the joint's type is.
+// a whole, and a refused edit leaving the joint as it was) and undo/redo of those edits. The fields that depend on the type
+// or on useLimits carry FieldSchema.visibleWhen (protocol 1.31.0); the inspector has no per-component warnings.
 namespace
 {
     constexpr uint8_t ErrorType = static_cast<uint8_t>(ResponseType::Error);
@@ -164,6 +165,68 @@ TEST_F(EditorJointInspectorTest, TheSchemaGivesTheInspectorADropdownAPickerAndUn
     }
     EXPECT_EQ(Field("_limitMin").at("displayName"), "Lower Limit");
     EXPECT_EQ(Field("_limitMax").at("displayName"), "Upper Limit");
+}
+
+namespace
+{
+    // The conditions as {field -> values}, so a test reads them without caring about their order
+    json Conditions(const json &field)
+    {
+        json out = json::object();
+        if (!field.contains("visibleWhen"))
+            return out;
+        for (const json &condition : field.at("visibleWhen"))
+            out[condition.at("field").get<std::string>()] = condition.at("equals");
+        return out;
+    }
+}
+
+TEST_F(EditorJointInspectorTest, FieldsThatDependOnTheTypeOrOnUseLimitsCarryVisibleWhen)
+{
+    // Always shown: they have no condition (and the key is left out, as an optional key is)
+    for (const char *name : {"_jointType", "_connectedBody", "_anchor", "_connectedAnchor", "_collideConnected"})
+        EXPECT_FALSE(Field(name).contains("visibleWhen")) << name;
+
+    EXPECT_EQ(Conditions(Field("_axis")), json({{"_jointType", json::array({"Hinge", "Slider"})}}));
+    EXPECT_EQ(Conditions(Field("_useLimits")), json({{"_jointType", json::array({"Hinge", "Slider", "Distance"})}}));
+    for (const char *name : {"_limitMin", "_limitMax"})
+    {
+        EXPECT_EQ(Conditions(Field(name)), json({{"_jointType", json::array({"Hinge", "Slider", "Distance"})},
+                                                 {"_useLimits", json::array({true})}}))
+            << name;
+        EXPECT_EQ(Field(name).at("visibleWhen").size(), 2u) << name;
+    }
+
+    // Every condition names a real sibling field, and its values are ones that field can hold
+    const json schema = Schema();
+    const json options = Field("_jointType").at("enumOptions");
+    for (const json &field : schema.at("fields"))
+    {
+        if (!field.contains("visibleWhen"))
+            continue;
+        for (const json &condition : field.at("visibleWhen"))
+        {
+            const std::string target = condition.at("field");
+            const json named = Field(target);
+            ASSERT_TRUE(named.contains("kind")) << target;
+            EXPECT_FALSE(condition.at("equals").empty());
+            for (const json &value : condition.at("equals"))
+            {
+                if (named.at("kind") == "Enum")
+                    EXPECT_NE(std::find(options.begin(), options.end(), value), options.end()) << value;
+                else
+                    EXPECT_TRUE(value.is_boolean()) << value;
+            }
+        }
+    }
+}
+
+TEST_F(EditorJointInspectorTest, AHiddenFieldIsStillReadAndSet)
+{
+    // visibleWhen is a hint: a Fixed joint's limits are saved and settable, only not shown
+    EXPECT_EQ(Get().at("_jointType"), "Fixed");
+    EXPECT_NE(SetFields({{"_limitMax", 5.0}}).type, ErrorType);
+    EXPECT_EQ(Get().at("_limitMax"), 5.0);
 }
 
 TEST_F(EditorJointInspectorTest, EveryFieldRoundTripsThroughSetComponentFields)

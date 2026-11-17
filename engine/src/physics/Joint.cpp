@@ -47,16 +47,24 @@ namespace N2Engine::Physics
         RegisterMember(NAMEOF(_anchor), _anchor).Tooltip("The joint's point on this body, in its local space");
         RegisterMember(NAMEOF(_connectedAnchor), _connectedAnchor)
             .Tooltip("The same point on the connected body (local space); the world position without one");
-        RegisterMember(NAMEOF(_axis), _axis).Tooltip("Hinge axis or slider direction, in this body's local space (only Hinge and Slider use it)");
+        RegisterMember(NAMEOF(_axis), _axis)
+            .Tooltip("Hinge axis or slider direction, in this body's local space (only Hinge and Slider use it)")
+            .VisibleWhen(NAMEOF(_jointType), {"Hinge", "Slider"});
         RegisterMember(NAMEOF(_collideConnected), _collideConnected)
             .Tooltip("Whether the two joined bodies still collide with each other");
-        RegisterMember(NAMEOF(_useLimits), _useLimits).Tooltip("Limit a hinge's angle, or a slider's or distance joint's length");
+        RegisterMember(NAMEOF(_useLimits), _useLimits)
+            .Tooltip("Limit a hinge's angle, or a slider's or distance joint's length")
+            .VisibleWhen(NAMEOF(_jointType), {"Hinge", "Slider", "Distance"});
         RegisterMember(NAMEOF(_limitMin), _limitMin)
             .DisplayName("Lower Limit")
-            .Tooltip("Lower limit (only with Use Limits): degrees for a hinge, metres for a slider or distance joint. A hinge or slider range must contain 0, lower <= 0 <= upper; a hinge is within -180 to 180. Not used by Fixed or Ball.");
+            .Tooltip("Lower limit (only with Use Limits): degrees for a hinge, metres for a slider or distance joint. A hinge or slider range must contain 0, lower <= 0 <= upper; a hinge is within -180 to 180. Not used by Fixed or Ball.")
+            .VisibleWhen(NAMEOF(_jointType), {"Hinge", "Slider", "Distance"})
+            .VisibleWhen(NAMEOF(_useLimits), {true});
         RegisterMember(NAMEOF(_limitMax), _limitMax)
             .DisplayName("Upper Limit")
-            .Tooltip("Upper limit (only with Use Limits): degrees for a hinge, metres for a slider or distance joint. Must not be below the lower limit. Not used by Fixed or Ball.");
+            .Tooltip("Upper limit (only with Use Limits): degrees for a hinge, metres for a slider or distance joint. Must not be below the lower limit. Not used by Fixed or Ball.")
+            .VisibleWhen(NAMEOF(_jointType), {"Hinge", "Slider", "Distance"})
+            .VisibleWhen(NAMEOF(_useLimits), {true});
     }
 
     std::string Joint::GetTypeName() const
