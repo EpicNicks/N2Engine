@@ -739,8 +739,8 @@ def docs_tool_lists():
         for cell in re.findall(r"<tr><td>(.*?)</td>", section, re.S):
             names += re.findall(r"<code>(n2_[a-z_]+)</code>", cell)
         lists[key] = names
-    check(len(lists["read-tools"]) == 11 and len(lists["write-tools"]) == 24 and len(lists["play-tools"]) == 6,
-          "docs/mcp.html lists %d read, %d write, %d play tools, expected 11, 24 and 6" % (
+    check(len(lists["read-tools"]) == 11 and len(lists["write-tools"]) == 24 and len(lists["play-tools"]) == 7,
+          "docs/mcp.html lists %d read, %d write, %d play tools, expected 11, 24 and 7" % (
               len(lists["read-tools"]), len(lists["write-tools"]), len(lists["play-tools"])))
     return lists
 

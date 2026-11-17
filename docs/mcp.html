@@ -241,7 +241,7 @@ node dist/n2-mcp.mjs --connect &lt;host:port&gt; --fingerprint &lt;sha256&gt; (-
 </div>
 <p>Every write tool except <code>n2_begin_session</code> takes an optional <code>sessionId</code>; without one the call is journaled in an implicit session. The annotations (<code>readOnlyHint</code>, <code>destructiveHint</code>, <code>idempotentHint</code>, <code>openWorldHint</code>) are hints that clients treat as untrusted; the safety above does not rely on them.</p>
 
-<h3 id="play-tools">Play tools (6, <code>--launch</code> only)</h3>
+<h3 id="play-tools">Play tools (7, <code>--launch</code> only)</h3>
 <p>A <code>--connect</code> bridge has no play tools at all: they are not registered, listed or callable. A <code>--launch</code> bridge lists them with the write tools (the same conditions). The game is a <em>second</em> <code>N2EditorHost</code> that the bridge starts with <code>--play &lt;snapshot&gt;</code>, the same project and renderer, and a fresh token in that child's environment only; the edit host writes a snapshot of the open scene as it is in memory (unsaved edits included, nothing saved), so nothing done in the game changes the scene or the project.</p>
 <div class="table-wrap">
 <table>
@@ -249,6 +249,7 @@ node dist/n2-mcp.mjs --connect &lt;host:port&gt; --fingerprint &lt;sha256&gt; (-
 <tbody>
 <tr><td><code>n2_play_start</code></td><td>Starts the game from the open scene and answers its state. A second call answers the running game.</td></tr>
 <tr><td><code>n2_play_stop</code></td><td>Ends the game (Shutdown, then a kill after a grace period). Not an error when none runs.</td></tr>
+<tr><td><code>n2_create_project</code></td><td>Makes a new project folder with the host's <code>--create</code> flow (<code>networked: true</code> for a networked game) and asks the person to confirm; it does not open it.</td></tr>
 <tr><td><code>n2_play_control</code></td><td><code>pause</code>, <code>resume</code>, or <code>step</code> 1 to 600 frames of a paused game (fixed timestep, so a test repeats), in chunks of 100 frames with progress and a cancellation check between them.</td></tr>
 <tr><td><code>n2_play_input</code></td><td>Up to 256 input events (key, mouse button, pointer, scroll, release all), applied all or none.</td></tr>
 <tr><td><code>n2_play_observe</code></td><td>The game's state, its log lines since the previous observe, up to 8 live entities by id, and optionally a PNG of the main camera.</td></tr>
@@ -350,7 +351,7 @@ node dist/n2-mcp.mjs --connect &lt;host:port&gt; --fingerprint &lt;sha256&gt; (-
 <p>What it asserts, each against the real host:</p>
 <ul>
 <li><strong>Refusals.</strong> A wrong token gives <code>auth_failed</code>; an absent token variable stops the bridge at start (exit code 2); a wrong certificate fingerprint gives <code>fingerprint_mismatch</code>.</li>
-<li><strong>Tool lists.</strong> A viewer's <code>tools/list</code> is exactly the eleven read tools of the <a href="#read-tools">table above</a>; an editor's over <code>--connect</code> is those plus the twenty-four <a href="#write-tools">write tools</a> and none of the <a href="#play-tools">play tools</a>; <code>--launch</code> lists all forty-one. The expected names are read from this page's own tables (the first cell of each row), so a tool added to or removed from the bridge without this page fails the step when the pin is bumped.</li>
+<li><strong>Tool lists.</strong> A viewer's <code>tools/list</code> is exactly the eleven read tools of the <a href="#read-tools">table above</a>; an editor's over <code>--connect</code> is those plus the twenty-four <a href="#write-tools">write tools</a> and none of the <a href="#play-tools">play tools</a>; <code>--launch</code> lists all forty-two. The expected names are read from this page's own tables (the first cell of each row), so a tool added to or removed from the bridge without this page fails the step when the pin is bumped.</li>
 <li><strong>Read flow.</strong> <code>n2_status</code> (role, project name, open scene), <code>n2_get_hierarchy</code>, <code>n2_get_project_info</code> and <code>n2_get_entity</code>.</li>
 <li><strong>Write flow with undo.</strong> <code>n2_create_entity</code> (a cube), <code>n2_set_properties</code> (a rename), the hierarchy and <code>n2_status</code> (dirty) after the edits, then <code>n2_undo</code> twice: the name comes back, then the entity is gone, the scene is clean again, and the scene file on disk never held the entity.</li>
 <li><strong>Move flow.</strong> <code>n2_create_script</code> twice, then <code>n2_move_asset</code> moves one script into another folder under a new name: the answer carries the script's UUID, <code>n2_get_asset_info</code> by that UUID names the new path, and the file is at its new place on disk and gone from the old one. A second move onto the same name in another letter case is refused by the host (the collision check ignores ASCII case on every platform) and the file stays where it was, and a path with <code>..</code> into <code>editor/</code> is refused by the bridge with <code>path_refused</code>.</li>
