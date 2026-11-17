@@ -4,6 +4,7 @@
 
 #include "engine/Application.hpp"
 #include "engine/GameObject.hpp"
+#include "engine/GameObjectScene.hpp"
 #include "engine/Logger.hpp"
 #include "engine/common/ScriptUtils.hpp"
 #include "engine/physics/ICollider.hpp"

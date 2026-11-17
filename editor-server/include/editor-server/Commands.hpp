@@ -563,6 +563,17 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    struct SetBuildSettingsCmd
+    {
+        /// A JSON merge patch (RFC 7386) for the project's build-wide settings; only strictFp (bool, or null for auto) (since 1.30.0)
+        nlohmann::json settings;
+
+        static SetBuildSettingsCmd Deserialize(BufferReader &r)
+        {
+            return {ReadBoundedJson(r)};
+        }
+    };
+
     struct SetStartupSceneCmd
     {
         /// A res:// path to an existing .scene file, or empty for none

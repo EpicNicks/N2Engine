@@ -158,7 +158,9 @@ TEST(JointComponentTest, ItIsRegisteredAndSavesItsFields)
 
 #ifdef N2_PHYSICS_TEST_BACKENDS
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
 #include "engine/scripting/LuaRuntime.hpp"
+#endif
 
 namespace N2PhysicsTests
 {
@@ -589,6 +591,7 @@ namespace N2PhysicsTests
         (void)before;
     }
 
+#ifdef N2ENGINE_SCRIPTING_ENABLED
     // ===== Lua =====
 
 #ifdef N2ENGINE_JOLT_ENABLED
@@ -693,6 +696,7 @@ namespace N2PhysicsTests
         }
         EXPECT_EQ(Eval<int>("joint:GetJointType()"), static_cast<int>(JointType::Fixed)) << "nothing changed";
     }
+#endif // N2ENGINE_SCRIPTING_ENABLED
 }
 
 #endif // a physics backend is in this build

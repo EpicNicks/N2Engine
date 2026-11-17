@@ -126,6 +126,9 @@ namespace N2Engine::IO
         std::optional<Math::UUID> projectId;
         /// The engine version the file records; empty: EngineVersion()
         std::string engineVersion;
+        /// A project for a networked game: the file gets "build": {"strictFp": true}, so its builds use the strict
+        /// floating-point profile that peers need (docs/project-modules.html#strict-fp)
+        bool networked = false;
     };
 
     /// The res:// path CreateProject's first scene has, and the project's startup scene

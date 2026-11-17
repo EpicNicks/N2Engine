@@ -2889,7 +2889,7 @@ namespace N2Engine::Editor
     std::vector<std::string> EditorServer::Capabilities()
     {
         return {"editorExtensions","editorTooling","luaSyntax","assetPreviews","entityClipboard","prefabAssets","physicsBackends","networkPanel","prefabFields",
-                "prefabStage","prefabStageContext","engineStats","buildTargets"};
+                "prefabStage","prefabStageContext","engineStats","buildTargets","buildSettings"};
     }
 
     bool EditorServer::EnableEditorExtensions(std::filesystem::path projectRoot)
@@ -4391,6 +4391,7 @@ namespace N2Engine::Editor
         {CommandType::SetProjectSettings, "SetProjectSettings", EditorServer::CommandClass::Write},
         {CommandType::SetStartupScene, "SetStartupScene", EditorServer::CommandClass::Write},
         {CommandType::SetBuildTargets, "SetBuildTargets", EditorServer::CommandClass::Write},
+        {CommandType::SetBuildSettings, "SetBuildSettings", EditorServer::CommandClass::Write},
         {CommandType::Undo, "Undo", EditorServer::CommandClass::Write},
         {CommandType::Redo, "Redo", EditorServer::CommandClass::Write},
         {CommandType::BeginEditGroup, "BeginEditGroup", EditorServer::CommandClass::Write},
@@ -4697,6 +4698,9 @@ namespace N2Engine::Editor
             break;
         case CommandType::SetBuildTargets:
             HandleSetBuildTargets(clientSocket, payload);
+            break;
+        case CommandType::SetBuildSettings:
+            HandleSetBuildSettings(clientSocket, payload);
             break;
         case CommandType::CreateEntity:
             HandleCreateEntity(clientSocket, payload);
@@ -6169,6 +6173,7 @@ namespace N2Engine::Editor
         case CommandType::SetStartupScene:
         // 1.29.0's: it saves project.n2proj too
         case CommandType::SetBuildTargets:
+        case CommandType::SetBuildSettings:
         case CommandType::RestoreAutosave:
         case CommandType::DiscardAutosave:
         case CommandType::LoadScene:
@@ -11638,6 +11643,81 @@ namespace N2Engine::Editor
                 return;
             }
             ServerLog::Info(std::format("Build targets saved ({} target{})", changed->size(), changed->size() == 1 ? "" : "s"));
+        }
+        SendProjectInfo(clientSocket);
+    }
+
+    void EditorServer::HandleSetBuildSettings(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const SetBuildSettingsCmd cmd = SetBuildSettingsCmd::Deserialize(reader);
+        if (!_project)
+        {
+            SendNoProject(clientSocket);
+            return;
+        }
+
+        const auto refuse = [&](const std::string &message)
+        {
+            BufferWriter response;
+            WriteError(response, message);
+            SendResponse(clientSocket, response.Release());
+        };
+        if (!cmd.settings.is_object())
+        {
+            refuse("SetBuildSettings: settings must be a JSON object");
+            return;
+        }
+        // Only strictFp is a build-wide setting an editor writes; modules and targets have their own commands. The
+        // message names keys, never values.
+        for (const auto &[key, value] : cmd.settings.items())
+        {
+            if (key != "strictFp")
+            {
+                refuse(std::format("SetBuildSettings: unknown setting {} (only strictFp)", SanitizeForLog(key)));
+                return;
+            }
+            if (!value.is_null() && !value.is_boolean())
+            {
+                refuse("SetBuildSettings: strictFp must be true, false or null (null: automatic, on for a game that uses networking)");
+                return;
+            }
+        }
+
+        IO::ProjectFile file = _project->file;
+        nlohmann::json &keys = file.unknownKeys;
+        if (cmd.settings.contains("strictFp"))
+        {
+            const nlohmann::json &value = cmd.settings.at("strictFp");
+            if (value.is_null())
+            {
+                if (const auto build = keys.find("build"); build != keys.end() && build->is_object())
+                {
+                    build->erase("strictFp");
+                    if (build->empty())
+                    {
+                        keys.erase("build");
+                    }
+                }
+            }
+            else
+            {
+                if (!keys.contains("build") || !keys["build"].is_object())
+                {
+                    keys["build"] = nlohmann::json::object();
+                }
+                keys["build"]["strictFp"] = value;
+            }
+        }
+        // Nothing to change: no save, no projectChanged
+        if (file.unknownKeys != _project->file.unknownKeys)
+        {
+            if (auto saved = SaveProject(std::move(file)); !saved)
+            {
+                refuse(saved.error());
+                return;
+            }
+            ServerLog::Info("Build settings saved");
         }
         SendProjectInfo(clientSocket);
     }

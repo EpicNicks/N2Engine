@@ -20,7 +20,7 @@ namespace N2Engine::Network
         constexpr auto kTypeClientAccept = static_cast<std::uint8_t>(MessageType::ClientAccept);
         constexpr auto kTypeClientReject = static_cast<std::uint8_t>(MessageType::ClientReject);
 
-        constexpr std::uint8_t kLastRefusal = static_cast<std::uint8_t>(JoinRefusal::ObjectCount);
+        constexpr std::uint8_t kLastRefusal = static_cast<std::uint8_t>(JoinRefusal::BuildProfile);
 
         void WriteU64(ByteWriter &writer, const std::uint64_t value)
         {
@@ -87,6 +87,8 @@ namespace N2Engine::Network
             WriteText(writer, fingerprint.scenePath, kMaxScenePathLength);
             writer.U32(fingerprint.sceneObjectCount);
             writer.U16(fingerprint.prefabCount);
+            writer.U32(fingerprint.buildProfile);
+            writer.U8(fingerprint.buildProfileEnforced ? 1 : 0);
         }
 
         std::optional<DecodeError> ReadFingerprint(ByteReader &reader, Fingerprint &fingerprint)
@@ -103,10 +105,17 @@ namespace N2Engine::Network
             }
             fingerprint.sceneObjectCount = reader.U32();
             fingerprint.prefabCount = reader.U16();
+            fingerprint.buildProfile = reader.U32();
+            const std::uint8_t enforced = reader.U8();
             if (reader.Failed())
             {
                 return DecodeError::Truncated;
             }
+            if (enforced > 1)
+            {
+                return DecodeError::BadValue;
+            }
+            fingerprint.buildProfileEnforced = enforced == 1;
             if (fingerprint.sceneObjectCount > kMaxNetworkObjects || fingerprint.prefabCount > kMaxPrefabs)
             {
                 return DecodeError::BadValue;

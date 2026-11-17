@@ -25,10 +25,11 @@ namespace N2Engine::Network
     //     0x04 WorldReady    u32 spawned objects sent in the join state, u32 destroyed scene objects sent
     //   client to server (0x81 to 0xFF)
     //     0x81 ClientAccept  u16 wire version, fingerprint
-    //     0x82 ClientReject  u8 reason (1 to 5, JoinRefusal)
+    //     0x82 ClientReject  u8 reason (1 to 6, JoinRefusal)
     //
     //   fingerprint: u8 length + engine version text (at most 32 bytes), u64 scene hash, u64 registry hash,
-    //                u8 length + scene path text (at most 255 bytes), u32 scene object count, u16 prefab count
+    //                u8 length + scene path text (at most 255 bytes), u32 scene object count, u16 prefab count,
+    //                u32 build profile, u8 build profile enforced (0 or 1)
     //   text: printable ASCII only (0x20 to 0x7E), so it can go into a log line as it is
     //
     // State replication (netcode stage B2) rides the UNRELIABLE channel, one message per datagram, and is decoded apart from
@@ -68,11 +69,11 @@ namespace N2Engine::Network
 
     /// The version of the world messages above (the RPC messages, 0x06, 0x14, 0x86 and 0x87, are in NetworkRpc.hpp). A change to any message layout, or a new message, bumps it (2: state
     /// replication, netcode stage B2; 3: relevance visibility, stage B9; 4: player input, netcode stage B4; 5: clock sync and the server tick
-    /// in every StateUpdate, netcode stage B3; 6: RPCs, netcode stage B7; 7: the input tick the server applied last, in every StateUpdate, netcode stage B6; 8: the ground a character rides and its offset on it, replicated beside the character's state, netcode stage B6 riding).
-    inline constexpr std::uint16_t kWireVersion = 8;
+    /// in every StateUpdate, netcode stage B3; 6: RPCs, netcode stage B7; 7: the input tick the server applied last, in every StateUpdate, netcode stage B6; 8: the ground a character rides and its offset on it, replicated beside the character's state, netcode stage B6 riding; 9: the build profile in the fingerprint).
+    inline constexpr std::uint16_t kWireVersion = 9;
 
     /// The largest world message either side sends or accepts (a ServerHello with the longest fingerprint is the
-    /// largest: 1 type + 2 version + 311 fingerprint + 4 client id = 318 bytes). The Connection's reliable message size
+    /// largest: 1 type + 2 version + 316 fingerprint + 4 client id = 323 bytes). The Connection's reliable message size
     /// is set to it, so a peer that sends more fails its own connection.
     inline constexpr std::size_t kMaxMessageBytes = 512;
 
