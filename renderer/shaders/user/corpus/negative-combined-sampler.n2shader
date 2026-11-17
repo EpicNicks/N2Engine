@@ -1,0 +1,9 @@
+{ "n2shader": 1, "name": "NegativeCombinedSampler" }
+#stage fragment
+// Known failure 3: a user-declared combined sampler2D (naga's SPIR-V reader rejects it, Tint invents bindings for it). The
+// lint rejects the declaration; with the lint off the reflection self-check rejects the binding that is not in the contract.
+layout(set = 1, binding = 7) uniform sampler2D u_Own;
+
+void main() {
+    n2_FragColor = texture(u_Own, n2_UV);
+}

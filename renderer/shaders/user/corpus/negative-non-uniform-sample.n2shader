@@ -1,0 +1,14 @@
+{ "n2shader": 1, "name": "NegativeNonUniformSample",
+  "params": [ { "name": "u_Mask", "type": "texture", "default": "white" } ]
+}
+#stage fragment
+// Known failure 2: a texture sample (an implicit-derivative lookup) in non-uniform control flow is a Tint error, as in the
+// built-in lit.frag. The lint cannot see it; Tint rejects it, and naga's analysis lets it through. The rule: sample first,
+// branch after (or use n2_textureLod / n2_texelFetch).
+void main() {
+    vec4 color = vec4(1.0);
+    if (n2_UV.x > 0.5) {
+        color = n2_texture(u_Mask, n2_UV);
+    }
+    n2_FragColor = color;
+}
