@@ -279,6 +279,15 @@ namespace N2Engine::Physics
         virtual bool ConfigureJoint(PhysicsJointHandle /*joint*/, const JointDesc & /*desc*/) { return false; }
         /// Whether `joint` is a live joint of this backend
         [[nodiscard]] virtual bool IsJointValid(PhysicsJointHandle /*joint*/) const { return false; }
+        /// Whether `joint` is live and holds exactly these two bodies (an invalid `bodyB` is the world). A component
+        /// uses it to tell its own joint from a stale handle that a restore made point at another joint.
+        [[nodiscard]] virtual bool JointHolds(PhysicsJointHandle /*joint*/, PhysicsBodyHandle /*bodyA*/,
+                                              PhysicsBodyHandle /*bodyB*/) const { return false; }
+        /// After a rollback restore re-made an owned joint (JointDesc::owned) that no one holds a handle to, the
+        /// owner takes it back with this instead of making a new one: the joint with the same type, bodies, anchors and
+        /// axis that no one has claimed yet (lowest slot first). Its saved zero, limits and accumulated state stay; the
+        /// owner's later ConfigureJoint changes them. Invalid when there is none.
+        virtual PhysicsJointHandle ClaimJoint(const JointDesc & /*desc*/) { return INVALID_PHYSICS_JOINT_HANDLE; }
 
         // Queries: layerMask selects the layers hit (see Layers); 0 hits nothing. Raycast's wrappers default
         // it to Layers::DefaultRaycastMask. `triggers` (QueryTriggers::Ignore) skips trigger colliders; the

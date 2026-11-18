@@ -25,10 +25,16 @@ namespace N2Engine::Physics
      * either body is disabled. Joints are made in component update order, so the same scene gives the same joints in
      * the same order on every peer.
      *
-     * In a rollback snapshot (Jolt): SaveState, RestoreState and HashState cover the backend's joints, so a joint that
-     * lives through the whole rollback window rolls back exactly. A joint made or ended inside the window (this
-     * component created, destroyed, disabled or re-enabled, or either body replaced, parked or unparked) makes
-     * RestoreState refuse, because a joint made again takes its zero from the bodies' poses at that moment.
+     * Rollback (Jolt): SaveState, RestoreState and HashState cover the backend's joints, and RestoreState puts the joint
+     * SET back: a joint made, ended or replaced inside the window (this component created, destroyed, disabled or
+     * re-enabled, a jointed object spawned or despawned) is ended or made again from the SAVED settings, so its zero pose
+     * is the saved one, not the bodies' poses at the restore. The joints this component makes are "owned": a joint the
+     * restore made again waits for the component to take it back (in its next FixedUpdate), and is ended by the next
+     * physics Update if no component does. The component set and each component's enabled flag are game state, not
+     * rolled back by the engine: after a Restore the game's logic must bring the Joint components to what they were at the
+     * restored tick (add or remove them, enable or disable them) before the next FixedUpdate, as it does for any
+     * component state outside the replicated fields. A body replaced inside the window cannot come back (RestoreState
+     * refuses, the only case).
      */
     class Joint final : public SerializableComponent
     {
@@ -41,6 +47,9 @@ namespace N2Engine::Physics
         void OnDestroy() override;
         void OnEnable() override;
         void OnDisable() override;
+        /// This component's own flag changed (SetActive): the joint ends when it is switched off, and is made again by the
+        /// first FixedUpdate after it is switched on
+        void OnActiveFlagChanged() override;
         /// Makes the joint when both bodies exist, and again after either was replaced
         void OnFixedUpdate() override;
         /// The editor changed fields: the joint is made again from them

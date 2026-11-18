@@ -537,46 +537,99 @@ namespace N2PhysicsTests
         EXPECT_EQ(FirstMismatch(Record(rolled, kLastTick + 1, kLastTick + 40, 0), Record(straight, kLastTick + 1, kLastTick + 40, 0)), -1);
     }
 
-    // ===== the refusals (the documented limit) =====
+    // ===== the joint set changes inside the window (stage d) =====
 
-    TEST(JoltJointSnapshotTest, AJointMadeOrEndedInsideTheWindowRefusesTheRestoreAndChangesNothing)
+    TEST(JoltJointSnapshotTest, AJointEndedInsideTheWindowIsMadeAgainFromTheSavedStateUnderItsOldHandle)
+    {
+        Scene straight;
+        RunRange(straight, 1, kSaveTick, 0);
+        const std::vector<Hashes> straightHashes = Record(straight, kSaveTick + 1, kLastTick, 0);
+        const std::vector<std::byte> straightFinal = Snapshot(straight.backend);
+
+        Scene scene;
+        RunRange(scene, 1, kSaveTick, 0);
+        const std::vector<std::byte> saved = Snapshot(scene.backend);
+        scene.backend.DestroyJoint(scene.joints[5]);
+        RunRange(scene, kSaveTick + 1, kSaveTick + 5, 0);
+        ASSERT_FALSE(scene.backend.IsJointValid(scene.joints[5]));
+        ASSERT_TRUE(scene.backend.RestoreState(saved));
+        EXPECT_TRUE(scene.backend.IsJointValid(scene.joints[5])) << "the joint is back in its slot, with its generation";
+        EXPECT_EQ(FirstMismatch(Record(scene, kSaveTick + 1, kLastTick, 0), straightHashes), -1);
+        EXPECT_EQ(Snapshot(scene.backend), straightFinal);
+    }
+
+    TEST(JoltJointSnapshotTest, AJointMadeOrReplacedInsideTheWindowIsEndedByTheRestore)
+    {
+        Scene straight;
+        RunRange(straight, 1, kSaveTick, 0);
+        const std::vector<Hashes> straightHashes = Record(straight, kSaveTick + 1, kLastTick, 0);
+        const std::vector<std::byte> straightFinal = Snapshot(straight.backend);
+
+        Scene scene;
+        RunRange(scene, 1, kSaveTick, 0);
+        const std::vector<std::byte> saved = Snapshot(scene.backend);
+        JointDesc desc;
+        desc.type = JointType::Ball;
+        desc.bodyA = scene.ragdolls[0].bodies[0];
+        desc.bodyB = scene.ragdolls[1].bodies[0];
+        const PhysicsJointHandle added = scene.backend.CreateJoint(desc);
+        ASSERT_TRUE(added.IsValid());
+        // and joint 5 replaced by another joint, which takes its slot with the next generation
+        scene.backend.DestroyJoint(scene.joints[5]);
+        JointDesc other = desc;
+        other.bodyA = scene.ragdolls[2].bodies[0];
+        other.bodyB = scene.ragdolls[2].bodies[1];
+        const PhysicsJointHandle replacement = scene.backend.CreateJoint(other);
+        ASSERT_TRUE(replacement.IsValid());
+        RunRange(scene, kSaveTick + 1, kSaveTick + 6, 0);
+        ASSERT_TRUE(scene.backend.RestoreState(saved));
+        EXPECT_FALSE(scene.backend.IsJointValid(added));
+        EXPECT_FALSE(scene.backend.IsJointValid(replacement));
+        EXPECT_TRUE(scene.backend.IsJointValid(scene.joints[5]));
+        EXPECT_EQ(FirstMismatch(Record(scene, kSaveTick + 1, kLastTick, 0), straightHashes), -1);
+        EXPECT_EQ(Snapshot(scene.backend), straightFinal);
+    }
+
+    TEST(JoltJointSnapshotTest, AnOwnedJointTheRestoreMadeAgainIsEndedAtTheNextStepWhenNobodyClaimsIt)
     {
         ErrorCapture errors;
-        {
-            Scene scene;
-            RunRange(scene, 1, kSaveTick, 0);
-            const std::vector<std::byte> saved = Snapshot(scene.backend);
-            scene.backend.DestroyJoint(scene.joints[5]);
-            RunRange(scene, kSaveTick + 1, kSaveTick + 5, 0);
-            const Hashes before = HashOf(scene.backend);
-            const std::vector<std::byte> beforeBytes = Snapshot(scene.backend);
-            EXPECT_FALSE(scene.backend.RestoreState(saved));
-            EXPECT_EQ(HashOf(scene.backend), before);
-            EXPECT_EQ(Snapshot(scene.backend), beforeBytes) << "a refused restore changed the world";
-        }
-        {
-            Scene scene;
-            RunRange(scene, 1, kSaveTick, 0);
-            const std::vector<std::byte> saved = Snapshot(scene.backend);
-            JointDesc desc;
-            desc.type = JointType::Ball;
-            desc.bodyA = scene.ragdolls[0].bodies[0];
-            desc.bodyB = scene.ragdolls[1].bodies[0];
-            ASSERT_TRUE(scene.backend.CreateJoint(desc).IsValid());
-            const Hashes before = HashOf(scene.backend);
-            EXPECT_FALSE(scene.backend.RestoreState(saved));
-            EXPECT_EQ(HashOf(scene.backend), before);
-        }
-        {
-            // A world without the joints cannot take a snapshot that has them
-            Scene scene;
-            RunRange(scene, 1, kSaveTick, 0);
-            const std::vector<std::byte> saved = Snapshot(scene.backend);
-            JoltBackend bare;
-            ASSERT_TRUE(bare.Initialize());
-            EXPECT_FALSE(bare.RestoreState(saved));
-        }
-        EXPECT_GE(errors.errors.size(), 3u);
+        Scene scene;
+        JointDesc desc;
+        desc.type = JointType::Ball;
+        desc.bodyA = scene.ragdolls[0].bodies[0];
+        desc.bodyB = scene.ragdolls[1].bodies[0];
+        desc.owned = true;
+        const PhysicsJointHandle owned = scene.backend.CreateJoint(desc);
+        ASSERT_TRUE(owned.IsValid());
+        const std::vector<std::byte> saved = Snapshot(scene.backend);
+        scene.backend.DestroyJoint(owned);
+        ASSERT_TRUE(scene.backend.RestoreState(saved));
+        ASSERT_TRUE(scene.backend.IsJointValid(owned));
+        const PhysicsJointHandle claimed = scene.backend.ClaimJoint(desc);
+        EXPECT_EQ(claimed, owned);
+        EXPECT_FALSE(scene.backend.ClaimJoint(desc).IsValid()) << "a claimed joint cannot be claimed twice";
+        RunRange(scene, 1, 3, 0);
+        EXPECT_TRUE(scene.backend.IsJointValid(owned));
+
+        scene.backend.DestroyJoint(owned);
+        ASSERT_TRUE(scene.backend.RestoreState(saved));
+        RunRange(scene, 3, 5, 0); // nobody claims it
+        EXPECT_FALSE(scene.backend.IsJointValid(owned));
+    }
+
+    // ===== the refusal (the one impossible case) =====
+
+    TEST(JoltJointSnapshotTest, ASnapshotWhoseJointsBodiesAreNotThereIsRefusedAndChangesNothing)
+    {
+        ErrorCapture errors;
+        Scene scene;
+        RunRange(scene, 1, kSaveTick, 0);
+        const std::vector<std::byte> saved = Snapshot(scene.backend);
+        // A world without the bodies cannot take a snapshot that has them (and so not their joints)
+        JoltBackend bare;
+        ASSERT_TRUE(bare.Initialize());
+        EXPECT_FALSE(bare.RestoreState(saved));
+        EXPECT_GE(errors.errors.size(), 1u);
     }
 
     TEST(JoltJointSnapshotTest, ADamagedJointTableIsRefused)

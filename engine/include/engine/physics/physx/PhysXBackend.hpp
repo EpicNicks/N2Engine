@@ -305,6 +305,8 @@ namespace N2Engine::Physics
         void DestroyJoint(PhysicsJointHandle joint) override;
         bool ConfigureJoint(PhysicsJointHandle joint, const JointDesc& desc) override;
         [[nodiscard]] bool IsJointValid(PhysicsJointHandle joint) const override;
+        [[nodiscard]] bool JointHolds(PhysicsJointHandle joint, PhysicsBodyHandle bodyA,
+                                      PhysicsBodyHandle bodyB) const override;
 
     private:
         // Outside the PhysX guard so the inline GetGpuStatus compiles without PhysX too

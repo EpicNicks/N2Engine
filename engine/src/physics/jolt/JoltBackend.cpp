@@ -409,7 +409,7 @@ namespace N2Engine::Physics
         //   u32 slot count, then per body slot: bool active, u32 generation and, for an active slot, the body (see
         //     Impl::WriteSnapshot)
         //   the layer matrix, gravity, the contact map, the tracker's touches and undelivered events
-        //   the joint table (version 2): per joint slot its description, whether it is in Jolt's system, its constraint's
+        //   the joint table (version 2, owned flag in 3): per joint slot its description, whether it is in Jolt's system, its constraint's
         //     settings and its accumulated state (Constraint::SaveState: enabled flag, warm-start impulses, motor state),
         //     then the order of Jolt's constraint list (the solver runs constraints in that order)
         //   u64 size of Jolt's own state, then those bytes (PhysicsSystem::SaveState: global, bodies and contacts; the
@@ -419,7 +419,7 @@ namespace N2Engine::Physics
         // A collider is written as its index in the owning body's registered colliders (never as a pointer, so the bytes
         // do not depend on addresses), kNoCollider for none.
         constexpr std::uint32_t kSnapshotMagic = 0x4A53324Eu; // "N2SJ"
-        constexpr std::uint32_t kSnapshotVersion = 2;
+        constexpr std::uint32_t kSnapshotVersion = 3;
         constexpr JPH::EStateRecorderState kJoltSnapshotState = static_cast<JPH::EStateRecorderState>(
             static_cast<std::uint8_t>(JPH::EStateRecorderState::Global) |
             static_cast<std::uint8_t>(JPH::EStateRecorderState::Bodies) |
@@ -1090,6 +1090,7 @@ namespace N2Engine::Physics
                 joint.desc.useLimits = reader.Bool();
                 joint.desc.limitMin = reader.F32();
                 joint.desc.limitMax = reader.F32();
+                joint.desc.owned = reader.Bool();
                 joint.restDistance = reader.F32();
                 joint.added = reader.Bool();
                 const std::uint32_t settingsSize = reader.U32();
@@ -1724,6 +1725,9 @@ namespace N2Engine::Physics
             JPH::BodyID idB; // invalid: the world
             bool added = false;
             float restDistance = 0.0f; // Distance without limits: the distance it is held at
+            /// False for an owned joint a restore made again and no owner has taken back yet (ClaimJoint). Not part of the
+            /// simulated state: not saved, not hashed.
+            bool claimed = true;
         };
 
         std::vector<JointData> joints;
@@ -2969,6 +2973,7 @@ namespace N2Engine::Physics
                 writer.Bool(joint.desc.useLimits);
                 writer.F32(joint.desc.limitMin);
                 writer.F32(joint.desc.limitMax);
+                writer.Bool(joint.desc.owned);
                 writer.F32(joint.restDistance);
                 writer.Bool(joint.added);
                 const std::vector<std::byte> settings = ConstraintSettingsBytes(*joint.constraint);
@@ -3152,33 +3157,23 @@ namespace N2Engine::Physics
             return CheckJoints(snap, why);
         }
 
-        // The joints must be the same ones as when the state was saved: a joint is made from the bodies' poses at that
-        // moment (its zero), so one made again is another joint, and a constraint cannot be put back into a world that
-        // lacks it. The same slot, generation, type and bodies; limits, collideConnected and the rest are put back.
+        // The joint set is put back to the saved one by ApplyJoints, which needs every saved joint's bodies to be the same
+        // live bodies (a body destroyed or replaced since cannot come back, and its joint with it). That is the only
+        // refusal: a joint made, ended or replaced inside the window is not one.
         bool CheckJoints(const Snapshot &snap, std::string &why) const
         {
-            const std::size_t slots = std::max(snap.joints.size(), joints.size());
-            for (std::size_t i = 0; i < slots; ++i)
+            for (std::size_t i = 0; i < snap.joints.size(); ++i)
             {
-                const JointData *live = i < joints.size() && joints[i].active ? &joints[i] : nullptr;
-                const SnapJoint *was = i < snap.joints.size() && snap.joints[i].active ? &snap.joints[i] : nullptr;
-                if (!live && !was)
+                const SnapJoint &was = snap.joints[i];
+                if (!was.active)
                 {
                     continue;
                 }
-                if (!live || !was || live->generation != was->generation || live->desc.type != was->desc.type ||
-                    !(live->desc.bodyA == was->desc.bodyA) || !(live->desc.bodyB == was->desc.bodyB))
+                if (!GetData(was.desc.bodyA) || (was.desc.bodyB.IsValid() && !GetData(was.desc.bodyB)))
                 {
-                    why = std::format("the joints differ: joint slot {} is {} now and was {} when the state was saved "
-                                      "(a joint made or ended inside the window cannot be rolled back; keep a joint for "
-                                      "the whole window)",
-                                      i, live ? "a joint" : "empty", was ? "a joint" : "empty");
-                    return false;
-                }
-                if (live->added != was->added)
-                {
-                    why = std::format("joint slot {} is {} the simulation now and was {} it when the state was saved", i,
-                                      live->added ? "in" : "out of", was->added ? "in" : "out of");
+                    why = std::format("joint slot {} held a body that is not the same live body now (destroyed or replaced "
+                                      "since the state was saved), so the joint cannot be put back",
+                                      i);
                     return false;
                 }
             }
@@ -3213,13 +3208,46 @@ namespace N2Engine::Physics
             return true;
         }
 
-        // Puts the joints back (before Jolt restores the bodies): their descriptions, the constraints themselves when a
-        // setting differs (limits changed inside the window, or a world that made the joint from other poses), and the
-        // order of Jolt's constraint list
+        // Puts the joint set back (before Jolt restores the bodies): a joint that is not the saved one of its slot (not in
+        // the snapshot, or another generation, type or bodies) is ended; a saved joint that is not live is made again from
+        // its saved settings, with the saved zero, in its saved slot and generation (an owned one waits to be claimed);
+        // the descriptions are put back and a constraint whose settings differ (limits changed inside the window) is
+        // rebuilt; last the constraint list goes back to the saved order (the solver runs in list order)
         bool ApplyJoints(const Snapshot &snap)
         {
+            const auto sameJoint = [&](const std::size_t i)
+            {
+                if (i >= joints.size() || i >= snap.joints.size() || !joints[i].active || !snap.joints[i].active)
+                {
+                    return false;
+                }
+                const JointData &live = joints[i];
+                const SnapJoint &was = snap.joints[i];
+                return live.generation == was.generation && live.desc.type == was.desc.type &&
+                       live.desc.bodyA == was.desc.bodyA && live.desc.bodyB == was.desc.bodyB;
+            };
+
+            bool changed = false;
+            for (std::size_t i = 0; i < joints.size(); ++i)
+            {
+                if (joints[i].active && !sameJoint(i))
+                {
+                    ReleaseJoint(joints[i]);
+                    changed = true;
+                }
+            }
+            // The table has as many slots as the saved one did, each with its saved generation (a handle held from then
+            // is valid again, and later creations and endings count generations as the original run did)
+            joints.resize(snap.joints.size());
+            for (std::size_t i = 0; i < snap.joints.size(); ++i)
+            {
+                if (!joints[i].active)
+                {
+                    joints[i].generation = snap.joints[i].generation;
+                }
+            }
+
             std::vector<bool> rebuild(snap.joints.size(), false);
-            bool any = false;
             for (std::size_t i = 0; i < snap.joints.size(); ++i)
             {
                 const SnapJoint &was = snap.joints[i];
@@ -3228,16 +3256,38 @@ namespace N2Engine::Physics
                     continue;
                 }
                 JointData &live = joints[i];
-                SetNoCollide(live, false);
-                live.desc = was.desc;
-                live.restDistance = was.restDistance;
-                SetNoCollide(live, true);
-                const std::vector<std::byte> liveSettings = ConstraintSettingsBytes(*live.constraint);
-                rebuild[i] = !std::equal(liveSettings.begin(), liveSettings.end(), was.settings.begin(), was.settings.end());
-                any = any || rebuild[i];
+                if (live.active)
+                {
+                    SetNoCollide(live, false);
+                    live.desc = was.desc;
+                    live.restDistance = was.restDistance;
+                    SetNoCollide(live, true);
+                    const std::vector<std::byte> liveSettings = ConstraintSettingsBytes(*live.constraint);
+                    rebuild[i] = !std::equal(liveSettings.begin(), liveSettings.end(), was.settings.begin(), was.settings.end());
+                }
+                else
+                {
+                    const BodyData *bodyA = GetData(was.desc.bodyA);
+                    const BodyData *bodyB = was.desc.bodyB.IsValid() ? GetData(was.desc.bodyB) : nullptr;
+                    live.active = true;
+                    live.desc = was.desc;
+                    live.restDistance = was.restDistance;
+                    live.idA = bodyA->id;
+                    live.idB = bodyB ? bodyB->id : JPH::BodyID();
+                    live.added = false;
+                    live.claimed = !was.desc.owned;
+                    if (!RebuildConstraint(live, was.settings))
+                    {
+                        live = JointData{.generation = live.generation};
+                        return false;
+                    }
+                    SetNoCollide(live, true);
+                    changed = true;
+                }
+                changed = changed || rebuild[i] || live.added != was.added;
             }
 
-            if (any || ConstraintOrder() != snap.constraintOrder)
+            if (changed || ConstraintOrder() != snap.constraintOrder)
             {
                 // Out and in again in the saved order; the bodies are not touched (Jolt restores them next)
                 for (const std::uint32_t slot : ConstraintOrder())
@@ -3251,9 +3301,14 @@ namespace N2Engine::Physics
                         return false;
                     }
                 }
+                for (JointData &joint : joints)
+                {
+                    joint.added = false;
+                }
                 for (const std::uint32_t slot : snap.constraintOrder)
                 {
                     system->AddConstraint(joints[slot].constraint.GetPtr());
+                    joints[slot].added = true;
                 }
             }
             return true;
@@ -3610,6 +3665,17 @@ namespace N2Engine::Physics
         if (!s.initialized || !(deltaTime > 0.0f) || !std::isfinite(deltaTime))
         {
             return;
+        }
+
+        // An owned joint a restore made again that no owner took back (ClaimJoint) since is ended: its owner is gone
+        for (Impl::JointData &joint : s.joints)
+        {
+            if (joint.active && !joint.claimed)
+            {
+                Logger::Warn("Jolt: a joint restored from a snapshot was not claimed by its owner before the next step; "
+                             "ended (the component that made it no longer exists)");
+                s.ReleaseJoint(joint);
+            }
         }
 
         // Kinematic bodies move to the pose set since the last step, in handle order (Jolt sets the velocity that
@@ -4439,6 +4505,34 @@ namespace N2Engine::Physics
     bool JoltBackend::IsJointValid(const PhysicsJointHandle joint) const
     {
         return const_cast<Impl &>(*_impl).GetJoint(joint) != nullptr;
+    }
+
+    bool JoltBackend::JointHolds(const PhysicsJointHandle joint, const PhysicsBodyHandle bodyA,
+                                 const PhysicsBodyHandle bodyB) const
+    {
+        const Impl::JointData *data = const_cast<Impl &>(*_impl).GetJoint(joint);
+        return data != nullptr && data->desc.bodyA == bodyA && data->desc.bodyB == bodyB;
+    }
+
+    PhysicsJointHandle JoltBackend::ClaimJoint(const JointDesc &desc)
+    {
+        Impl &s = *_impl;
+        for (std::uint32_t slot = 0; slot < s.joints.size(); ++slot)
+        {
+            Impl::JointData &joint = s.joints[slot];
+            if (!joint.active || joint.claimed || joint.desc.type != desc.type || !(joint.desc.bodyA == desc.bodyA) ||
+                !(joint.desc.bodyB == desc.bodyB) || joint.desc.anchorA != desc.anchorA ||
+                joint.desc.anchorB != desc.anchorB || joint.desc.axis != desc.axis)
+            {
+                continue;
+            }
+            joint.claimed = true;
+            PhysicsJointHandle handle;
+            handle.index = slot;
+            handle.generation = joint.generation;
+            return handle;
+        }
+        return INVALID_PHYSICS_JOINT_HANDLE;
     }
 
     // ===== Queries (J5) =====
