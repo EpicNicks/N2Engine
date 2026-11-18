@@ -547,6 +547,8 @@ TEST(PhysicsBackendDeclarationTest, FeatureGroupsDefaultToNoneAndPhysXDeclaresTh
               "triggers, scene queries");
     // PhysX implements layers and the matrix, triggers, contact and trigger events, and scene queries
     EXPECT_TRUE(Physics::PhysXBackend::kImplementedFeatures.IsComplete());
+    // and the optional joints (not required by the preset)
+    EXPECT_TRUE(Physics::PhysXBackend::kImplementedFeatures.Has(PhysicsFeature::Joints));
 }
 
 #ifdef N2ENGINE_JOLT_ENABLED
