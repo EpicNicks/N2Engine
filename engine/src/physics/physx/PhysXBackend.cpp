@@ -2859,6 +2859,13 @@ namespace N2Engine::Physics
         return GetJointData(joint) != nullptr;
     }
 
+    bool PhysXBackend::JointHolds(const PhysicsJointHandle joint, const PhysicsBodyHandle bodyA,
+                                  const PhysicsBodyHandle bodyB) const
+    {
+        const JointData *data = GetJointData(joint);
+        return data != nullptr && data->bodyA == bodyA && data->bodyB == bodyB;
+    }
+
     // Stub implementations for unused callbacks
     void PhysXBackend::onConstraintBreak(PxConstraintInfo *constraints, PxU32 count) {}
     void PhysXBackend::onWake(PxActor **actors, PxU32 count) {}
