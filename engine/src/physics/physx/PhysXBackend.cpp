@@ -784,6 +784,16 @@ namespace N2Engine::Physics
     {
         Logger::Info("Shutting down PhysX...");
 
+        // Joints first: a joint must be gone before its actors
+        for (const auto &joint : _joints)
+        {
+            if (joint.active && joint.joint)
+            {
+                joint.joint->release();
+            }
+        }
+        _joints.clear();
+
         for (const auto& bodyData : _bodies)
         {
             if (bodyData.active && bodyData.actor)
@@ -1002,6 +1012,8 @@ namespace N2Engine::Physics
         BodyData *data = GetBodyData(handle);
         if (!data)
             return;
+
+        ReleaseJointsOf(handle); // a joint cannot outlive either of its bodies
 
         if (data->actor)
         {
@@ -2565,6 +2577,286 @@ namespace N2Engine::Physics
         _scene->getSimulationStatistics(simulation);
         stats.activeBodies = simulation.nbActiveDynamicBodies + simulation.nbActiveKinematicBodies;
         return stats;
+    }
+
+    // ========== Joints ==========
+
+    namespace
+    {
+        constexpr float kPxPi = 3.14159265358979323846f;
+
+        bool FiniteVec(const Math::Vector3 &v)
+        {
+            return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+        }
+
+        // The rotation that takes the joint frame's X axis (the axis of a PhysX hinge or slider) onto `axis`
+        PxQuat RotationFromX(const PxVec3 &axis)
+        {
+            const float d = axis.x; // dot with (1,0,0)
+            if (d < -0.9999f)
+            {
+                return PxQuat(kPxPi, PxVec3(0.0f, 1.0f, 0.0f));
+            }
+            // cross((1,0,0), axis) = (0, -axis.z, axis.y)
+            return PxQuat(0.0f, -axis.z, axis.y, 1.0f + d).getNormalized();
+        }
+
+        void WakeBody(PxRigidActor *actor)
+        {
+            if (!actor || !actor->getScene())
+            {
+                return;
+            }
+            if (auto *dynamic = actor->is<PxRigidDynamic>();
+                dynamic && !(dynamic->getRigidBodyFlags() & PxRigidBodyFlag::eKINEMATIC))
+            {
+                dynamic->wakeUp();
+            }
+        }
+    }
+
+    const PhysXBackend::JointData *PhysXBackend::GetJointData(const PhysicsJointHandle handle) const
+    {
+        if (handle.index >= _joints.size())
+        {
+            return nullptr;
+        }
+        const JointData &data = _joints[handle.index];
+        return data.active && data.generation == handle.generation ? &data : nullptr;
+    }
+
+    void PhysXBackend::WakeJointBodies(const JointData &data)
+    {
+        for (const PhysicsBodyHandle handle : {data.bodyA, data.bodyB})
+        {
+            if (handle.IsValid())
+            {
+                if (const BodyData *body = GetBodyData(handle))
+                {
+                    WakeBody(body->actor);
+                }
+            }
+        }
+    }
+
+    void PhysXBackend::ReleaseJoint(JointData &data)
+    {
+        if (data.joint)
+        {
+            data.joint->release();
+        }
+        WakeJointBodies(data);
+        const uint32_t nextGeneration = data.generation + 1;
+        data = JointData{};
+        data.generation = nextGeneration; // a handle to this slot's old joint no longer matches
+    }
+
+    void PhysXBackend::ReleaseJointsOf(const PhysicsBodyHandle handle)
+    {
+        for (JointData &joint : _joints)
+        {
+            if (joint.active && (joint.bodyA == handle || joint.bodyB == handle))
+            {
+                ReleaseJoint(joint);
+            }
+        }
+    }
+
+    void PhysXBackend::ApplyJointSettings(const JointData &data, const JointDesc &desc) const
+    {
+        PxJoint *joint = data.joint;
+        // Off by default in PhysX too, but said outright
+        joint->setConstraintFlag(PxConstraintFlag::eCOLLISION_ENABLED, desc.collideConnected);
+        const PxTolerancesScale scale = _physics->getTolerancesScale();
+        // PhysX wants lower < upper; a range of nothing becomes a tiny one
+        constexpr float kMinRange = 1e-4f;
+        switch (data.type)
+        {
+        case JointType::Hinge:
+        {
+            auto *hinge = static_cast<PxRevoluteJoint *>(joint);
+            // The range contains the angle it was made at (0), within [-pi, pi]
+            const float low = desc.useLimits ? std::clamp(desc.limitMin, -kPxPi, 0.0f) : -kPxPi;
+            float high = desc.useLimits ? std::clamp(desc.limitMax, 0.0f, kPxPi) : kPxPi;
+            high = std::max(high, low + kMinRange);
+            const bool limited = desc.useLimits && !(low <= -kPxPi && high >= kPxPi);
+            if (limited)
+            {
+                hinge->setLimit(PxJointAngularLimitPair(low, high));
+            }
+            hinge->setRevoluteJointFlag(PxRevoluteJointFlag::eLIMIT_ENABLED, limited);
+            break;
+        }
+        case JointType::Slider:
+        {
+            auto *slider = static_cast<PxPrismaticJoint *>(joint);
+            // The range contains the position it was made at (0)
+            const float low = desc.useLimits ? std::min(desc.limitMin, 0.0f) : 0.0f;
+            float high = desc.useLimits ? std::max(desc.limitMax, 0.0f) : 0.0f;
+            high = std::max(high, low + kMinRange);
+            if (desc.useLimits)
+            {
+                slider->setLimit(PxJointLinearLimitPair(scale, low, high));
+            }
+            slider->setPrismaticJointFlag(PxPrismaticJointFlag::eLIMIT_ENABLED, desc.useLimits);
+            break;
+        }
+        case JointType::Distance:
+        {
+            auto *distance = static_cast<PxDistanceJoint *>(joint);
+            float low = data.restDistance;
+            float high = data.restDistance;
+            if (desc.useLimits)
+            {
+                low = std::max(0.0f, desc.limitMin);
+                high = std::max(low, desc.limitMax);
+            }
+            // Set in an order that keeps min <= max at every step
+            distance->setMinDistance(0.0f);
+            distance->setMaxDistance(high);
+            distance->setMinDistance(low);
+            distance->setDistanceJointFlag(PxDistanceJointFlag::eMIN_DISTANCE_ENABLED, low > 0.0f);
+            distance->setDistanceJointFlag(PxDistanceJointFlag::eMAX_DISTANCE_ENABLED, true);
+            distance->setDistanceJointFlag(PxDistanceJointFlag::eSPRING_ENABLED, false);
+            break;
+        }
+        case JointType::Fixed:
+        case JointType::Ball:
+            break;
+        }
+    }
+
+    PhysicsJointHandle PhysXBackend::CreateJoint(const JointDesc &desc)
+    {
+        if (!_scene || !_physics)
+        {
+            Logger::Warn("PhysX: a joint was created before the backend was initialized; ignored");
+            return INVALID_PHYSICS_JOINT_HANDLE;
+        }
+        const BodyData *bodyA = GetBodyData(desc.bodyA);
+        if (!bodyA || !bodyA->actor)
+        {
+            Logger::Warn("PhysX: a joint needs a live body A; ignored");
+            return INVALID_PHYSICS_JOINT_HANDLE;
+        }
+        const BodyData *bodyB = nullptr;
+        if (desc.bodyB.IsValid())
+        {
+            bodyB = GetBodyData(desc.bodyB);
+            if (!bodyB || !bodyB->actor || desc.bodyB == desc.bodyA)
+            {
+                Logger::Warn("PhysX: a joint's body B must be a live body other than body A; ignored");
+                return INVALID_PHYSICS_JOINT_HANDLE;
+            }
+        }
+        if (!FiniteVec(desc.anchorA) || !FiniteVec(desc.anchorB) || !FiniteVec(desc.axis) ||
+            !std::isfinite(desc.limitMin) || !std::isfinite(desc.limitMax))
+        {
+            Logger::Warn("PhysX: a joint has a non-finite anchor, axis or limit; ignored");
+            return INVALID_PHYSICS_JOINT_HANDLE;
+        }
+        const bool needsAxis = desc.type == JointType::Hinge || desc.type == JointType::Slider;
+        if (needsAxis && desc.axis.x * desc.axis.x + desc.axis.y * desc.axis.y + desc.axis.z * desc.axis.z < 1e-12f)
+        {
+            Logger::Warn("PhysX: a hinge or slider joint needs a non-zero axis; ignored");
+            return INVALID_PHYSICS_JOINT_HANDLE;
+        }
+
+        // The frames are built from the bodies' poses now (what they are then is the joint's zero). Frame 0 sits at
+        // anchorA of body A with its X axis (the hinge or slider axis) along the axis. Frame 1 is the same frame in
+        // the world (so the angle and the slider position start at 0), seen from body B, or the world.
+        PxRigidActor *actorA = bodyA->actor;
+        PxRigidActor *actorB = bodyB ? bodyB->actor : nullptr;
+        const PxTransform poseA = actorA->getGlobalPose();
+        const PxTransform poseB = actorB ? actorB->getGlobalPose() : PxTransform(PxIdentity);
+        const PxVec3 axis = needsAxis ? ToPx(desc.axis).getNormalized() : PxVec3(1.0f, 0.0f, 0.0f);
+        const PxTransform local0(ToPx(desc.anchorA), RotationFromX(axis));
+        const PxVec3 point1 = poseA.transform(local0.p);
+        const PxVec3 point2 = actorB ? poseB.transform(ToPx(desc.anchorB)) : ToPx(desc.anchorB);
+        const float restDistance = (point2 - point1).magnitude();
+        const PxTransform frameInWorld(point2, (poseA * local0).q);
+        const PxTransform local1 = actorB ? poseB.transformInv(frameInWorld) : frameInWorld;
+
+        PxJoint *joint = nullptr;
+        switch (desc.type)
+        {
+        case JointType::Fixed:
+            joint = PxFixedJointCreate(*_physics, actorA, local0, actorB, local1);
+            break;
+        case JointType::Hinge:
+            joint = PxRevoluteJointCreate(*_physics, actorA, local0, actorB, local1);
+            break;
+        case JointType::Ball:
+            joint = PxSphericalJointCreate(*_physics, actorA, local0, actorB, local1);
+            break;
+        case JointType::Slider:
+            joint = PxPrismaticJointCreate(*_physics, actorA, local0, actorB, local1);
+            break;
+        case JointType::Distance:
+            joint = PxDistanceJointCreate(*_physics, actorA, local0, actorB, local1);
+            break;
+        }
+        if (!joint)
+        {
+            Logger::Warn("PhysX: a joint could not be created; ignored");
+            return INVALID_PHYSICS_JOINT_HANDLE;
+        }
+
+        // The lowest free slot, like the Jolt backend
+        uint32_t slot = 0;
+        while (slot < _joints.size() && _joints[slot].active)
+        {
+            ++slot;
+        }
+        if (slot == _joints.size())
+        {
+            _joints.emplace_back();
+        }
+        JointData &data = _joints[slot];
+        data.active = true;
+        data.joint = joint;
+        data.type = desc.type;
+        data.bodyA = desc.bodyA;
+        data.bodyB = desc.bodyB;
+        data.restDistance = restDistance;
+        ApplyJointSettings(data, desc);
+        WakeJointBodies(data);
+
+        PhysicsJointHandle handle;
+        handle.index = slot;
+        handle.generation = data.generation;
+        return handle;
+    }
+
+    void PhysXBackend::DestroyJoint(const PhysicsJointHandle joint)
+    {
+        if (!GetJointData(joint))
+        {
+            return;
+        }
+        ReleaseJoint(_joints[joint.index]);
+    }
+
+    bool PhysXBackend::ConfigureJoint(const PhysicsJointHandle joint, const JointDesc &desc)
+    {
+        if (!GetJointData(joint))
+        {
+            return false;
+        }
+        JointData &data = _joints[joint.index];
+        if (desc.type != data.type || !std::isfinite(desc.limitMin) || !std::isfinite(desc.limitMax))
+        {
+            return false;
+        }
+        ApplyJointSettings(data, desc);
+        WakeJointBodies(data);
+        return true;
+    }
+
+    bool PhysXBackend::IsJointValid(const PhysicsJointHandle joint) const
+    {
+        return GetJointData(joint) != nullptr;
     }
 
     // Stub implementations for unused callbacks
