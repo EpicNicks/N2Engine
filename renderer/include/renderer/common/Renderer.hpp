@@ -21,6 +21,7 @@
 #include "renderer/common/IMesh.hpp"
 #include "renderer/common/ITexture.hpp"
 #include "renderer/common/TextureOptions.hpp"
+#include "renderer/common/UserShader.hpp"
 
 #include "renderer/common/SceneLighting.hpp"
 
@@ -204,6 +205,39 @@ namespace Renderer::Common
          * outline and shadow under the face; the software renderer alpha-tests them and ignores softness.
          */
         [[nodiscard]] virtual IShader* GetStandardTextShader() const { return nullptr; }
+
+        /**
+         * User shaders (orchestrator/proposals/user-shaders.md): makes a shader from the cooked payload of a `.n2shader` for
+         * THIS backend (`blob`; the backend takes the parts it needs and copies them, so the blob may go afterwards).
+         * Returns null, with the reason logged once, when the backend has no user shaders (the default body, and every
+         * backend until its stage lands), the blob is not acceptable (ValidateUserShaderBlob), a limit is reached
+         * (kMaxUserShaders), or the driver refuses the module. The shader belongs to the caller: DestroyShaderProgram frees
+         * it. Materials of a destroyed shader draw nothing.
+         */
+        virtual IShader* CreateUserShader(const UserShaderBlob &blob)
+        {
+            static_cast<void>(blob);
+            static std::atomic_flag warned;
+            if (!warned.test_and_set())
+            {
+                std::cerr << GetRendererName() << ": this renderer has no user shaders; CreateUserShader returns null"
+                          << std::endl;
+            }
+            return nullptr;
+        }
+
+        /**
+         * A material of a shader CreateUserShader made: its values start at the declared defaults, are set by the declared
+         * parameter names (SetFloat, SetInt (an int or a bool), SetVec2/3/4, SetColor; an unknown name or the wrong
+         * setter logs once and is ignored), and its texture parameters by slot (SetTextureSlot: `texture` is slot 0, the
+         * base texture). Null for a null shader or one this renderer did not make as a user shader (also the default body).
+         */
+        virtual IMaterial* CreateUserMaterial(IShader *shader, ITexture *texture)
+        {
+            static_cast<void>(shader);
+            static_cast<void>(texture);
+            return nullptr;
+        }
 
         /**
          * Copies the last frame into `buffer` (width * height * 4 bytes): RGBA8, rows bottom to top (row 0 is

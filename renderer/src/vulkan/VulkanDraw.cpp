@@ -2,6 +2,9 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <iterator>
+#include <utility>
+#include <span>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -75,6 +78,7 @@
 #include "vulkan_shaders/text_vert_spirv.h"
 #include "vulkan_shaders/unlit_frag_spirv.h"
 #include "vulkan_shaders/unlit_vert_spirv.h"
+#include "vulkan_shaders/user_vert_spirv_table.h"
 #endif
 
 using namespace Renderer::Vulkan;
@@ -368,6 +372,21 @@ void VulkanRenderer::DestroyDrawResources()
                 vkDestroyShaderModule(_device, shader->fragmentModule, nullptr);
             }
         }
+        // The user shaders (live and retired): only their fragment modules are theirs, the vertex module is shared
+        for (const std::unique_ptr<VulkanShader>& shader : draw.userShaders)
+        {
+            if (shader && shader->fragmentModule != VK_NULL_HANDLE)
+            {
+                vkDestroyShaderModule(_device, shader->fragmentModule, nullptr);
+            }
+        }
+        for (const VkShaderModule module : draw.userVertexModules)
+        {
+            if (module != VK_NULL_HANDLE)
+            {
+                vkDestroyShaderModule(_device, module, nullptr);
+            }
+        }
         const auto destroyDefault = [&](const std::unique_ptr<VulkanTexture>& texture)
         {
             if (!texture)
@@ -401,6 +420,8 @@ void VulkanRenderer::BeginDrawFrame(const uint32_t slot)
     // Runs after BeginFrame waited for this slot's fence: the slot's earlier frame has finished, so its ring chunks and
     // descriptor sets are not read any more
     static_assert(MAX_FRAMES_IN_FLIGHT == 2, "DrawState::frames has one entry per frame slot");
+    ++_draw->frameTick;
+    CollectUserShadersLocked();
     FrameDrawState& frame = _draw->frames[slot];
     for (const VkDescriptorPool pool : frame.pools)
     {
@@ -552,9 +573,19 @@ VkDescriptorSet VulkanRenderer::AllocateSet(const uint32_t slot, const VkDescrip
 
 VkPipeline VulkanRenderer::GetPipelineLocked(const BuiltInShader shaderKind, const RenderState& state, const bool wireframe)
 {
+    const VulkanShader* shader = _draw->shaders[ShaderIndex(shaderKind)].get();
+    if (shader == nullptr)
+    {
+        return VK_NULL_HANDLE;
+    }
+    return GetPipelineLocked(*shader, state, wireframe);
+}
+
+VkPipeline VulkanRenderer::GetPipelineLocked(const VulkanShader& shaderRef, const RenderState& state, const bool wireframe)
+{
     DrawState& draw = *_draw;
-    const VulkanShader* shader = draw.shaders[ShaderIndex(shaderKind)].get();
-    if (shader == nullptr || !shader->IsValid() || draw.pipelineLayout == VK_NULL_HANDLE || _renderPass == VK_NULL_HANDLE)
+    const VulkanShader* shader = &shaderRef;
+    if (!shader->IsValid() || shader->retired || draw.pipelineLayout == VK_NULL_HANDLE || _renderPass == VK_NULL_HANDLE)
     {
         return VK_NULL_HANDLE;
     }
@@ -564,7 +595,7 @@ VkPipeline VulkanRenderer::GetPipelineLocked(const BuiltInShader shaderKind, con
     }
 
     PipelineKey key;
-    key.shader = static_cast<std::uint8_t>(shaderKind);
+    key.shader = shader->id;
     key.depthTest = state.depthTest;
     key.depthWrite = state.depthWrite;
     key.cull = static_cast<std::uint8_t>(state.cull);
@@ -574,11 +605,23 @@ VkPipeline VulkanRenderer::GetPipelineLocked(const BuiltInShader shaderKind, con
     const std::uint32_t packed = key.Pack();
     if (const auto it = draw.pipelines.find(packed); it != draw.pipelines.end())
     {
+        if (shader->isUser)
+        {
+            draw.userPipelineUse[packed] = draw.frameTick;
+        }
         return it->second;
     }
     if (draw.failedPipelines.count(packed) != 0)
     {
         return VK_NULL_HANDLE; // this key failed before (logged once): skipped without retrying
+    }
+    if (shader->isUser && draw.userPipelineUse.size() >= 2 * draw.maxUserPipelines)
+    {
+        // Eviction runs at the start of a frame (the GPU must be done with a pipeline first); a frame that makes more than
+        // twice the limit before then is refused, so a hostile pack cannot grow the cache without bound inside one frame
+        LogOnce("user shader pipeline limit reached (" + std::to_string(draw.maxUserPipelines) +
+                "): draws that need a new pipeline are skipped until the next frame frees the least recently used ones");
+        return VK_NULL_HANDLE;
     }
 
     std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
@@ -597,8 +640,17 @@ VkPipeline VulkanRenderer::GetPipelineLocked(const BuiltInShader shaderKind, con
     binding.stride = sizeof(Common::Vertex);
     binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
     std::vector<VkVertexInputAttributeDescription> attributes;
-    for (const Attribute& attribute : Attributes(shaderKind))
+    // A user shader's vertex stage is the engine's variant for its varyings, which reads exactly the attributes
+    // UserVertexAttributeMask names (the layer warns about an attribute nothing reads)
+    const std::span<const Attribute> shaderAttributes =
+        shader->isUser ? std::span<const Attribute>(kLitAttributes) : Attributes(shader->kind);
+    const std::uint32_t userAttributes = shader->isUser ? Renderer::Common::UserVertexAttributeMask(shader->varyingMask) : 0;
+    for (const Attribute& attribute : shaderAttributes)
     {
+        if (shader->isUser && ((userAttributes >> attribute.location) & 1u) == 0)
+        {
+            continue;
+        }
         VkVertexInputAttributeDescription description{};
         description.location = attribute.location;
         description.binding = 0;
@@ -713,6 +765,10 @@ VkPipeline VulkanRenderer::GetPipelineLocked(const BuiltInShader shaderKind, con
         return VK_NULL_HANDLE;
     }
     draw.pipelines.emplace(packed, pipeline);
+    if (shader->isUser)
+    {
+        draw.userPipelineUse[packed] = draw.frameTick;
+    }
     return pipeline;
 }
 
@@ -836,8 +892,23 @@ void VulkanRenderer::UseShaderProgram(IShader* shader)
 
 bool VulkanRenderer::DestroyShaderProgram(IShader* shader)
 {
-    static_cast<void>(shader); // the built-ins belong to the renderer; nullptr and foreign shaders are not its to destroy
-    return false;
+    if (shader == nullptr)
+    {
+        return false;
+    }
+    std::lock_guard lock(_mutex);
+    // Only a live user shader is the caller's to destroy (the built-ins belong to the renderer; a foreign pointer is only
+    // compared, never dereferenced). It is retired now, so its materials draw nothing from here on; its modules and
+    // pipelines may still be in a recorded frame, so they are released at the next frame start (CollectUserShadersLocked)
+    const auto it = _draw->liveUserShaders.find(shader);
+    if (it == _draw->liveUserShaders.end())
+    {
+        return false;
+    }
+    it->second->retired = true;
+    _draw->liveUserShaders.erase(it);
+    _draw->hasRetiredUserShaders = true;
+    return true;
 }
 
 bool VulkanRenderer::IsValidShader(IShader* shader) const
@@ -854,7 +925,7 @@ bool VulkanRenderer::IsValidShader(IShader* shader) const
             return builtIn->IsValid();
         }
     }
-    return false; // compared only: a foreign pointer is never dereferenced
+    return _draw->liveUserShaders.count(shader) != 0; // compared only: a foreign pointer is never dereferenced
 }
 
 IShader* VulkanRenderer::GetStandardUnlitShader() const
@@ -957,6 +1028,267 @@ IMaterial* VulkanRenderer::CreateMaterial(IShader* shader, ITexture* texture)
     return raw;
 }
 
+IShader* VulkanRenderer::CreateUserShader(const Renderer::Common::UserShaderBlob& blob)
+{
+    const std::string label = blob.sourcePath.empty() ? blob.name : blob.sourcePath;
+    // Everything a hostile blob can get wrong is checked before the driver sees a byte of it
+    if (const std::string problem = Renderer::Common::ValidateUserShaderBlob(blob); !problem.empty())
+    {
+        LogOnce("CreateUserShader: '" + label + "' rejected: " + problem);
+        return nullptr;
+    }
+    std::lock_guard lock(_mutex);
+    if (!_initialized || _deviceLost)
+    {
+        return nullptr;
+    }
+    DrawState& draw = *_draw;
+    if (!HasBuiltInShaders())
+    {
+        LogOnce("CreateUserShader: the built-in shaders were not compiled into this build (no SPIR-V compiler was found when "
+                "CMake configured the renderer), so there is no user vertex stage: user shaders are not available");
+        return nullptr;
+    }
+    // A slot is free when empty; a retired shader keeps its slot until its resources are released
+    std::size_t used = 0;
+    for (const std::unique_ptr<VulkanShader>& slot : draw.userShaders)
+    {
+        used += slot ? 1 : 0;
+    }
+    if (used >= Renderer::Common::kMaxUserShaders)
+    {
+        LogOnce("CreateUserShader: '" + label + "' refused: " + std::to_string(Renderer::Common::kMaxUserShaders) +
+                " user shaders are already loaded");
+        return nullptr;
+    }
+    std::shared_ptr<const Renderer::Gpu::MaterialLayout> layout = Renderer::Gpu::MaterialLayout::FromUserShader(blob);
+    if (!layout)
+    {
+        return nullptr; // unreachable after the validation above
+    }
+
+    // The vertex variant that writes exactly the varyings this fragment stage reads (made on first use, then shared)
+    std::uint32_t varyingMask = 0;
+    std::string problem;
+    if (!Renderer::Common::ReadFragmentVaryings(blob.fragmentSpirv, varyingMask, problem))
+    {
+        return nullptr; // unreachable after the validation above
+    }
+#if N2ENGINE_VULKAN_HAS_SPIRV
+    if (draw.userVertexModules[varyingMask] == VK_NULL_HANDLE)
+    {
+        const UserVertexSpirvEntry& entry = kUserVertexSpirv[varyingMask];
+        draw.userVertexModules[varyingMask] = MakeModule(_device, Spirv{entry.words, entry.bytes});
+        if (draw.userVertexModules[varyingMask] == VK_NULL_HANDLE)
+        {
+            LogOnce("CreateUserShader: '" + label + "': vkCreateShaderModule failed for the user vertex stage");
+            return nullptr;
+        }
+    }
+#endif
+
+    VkShaderModuleCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    info.codeSize = blob.fragmentSpirv.size() * sizeof(std::uint32_t);
+    info.pCode = blob.fragmentSpirv.data();
+    VkShaderModule module = VK_NULL_HANDLE;
+    const VkResult result = vkCreateShaderModule(_device, &info, nullptr, &module);
+    if (result != VK_SUCCESS)
+    {
+        LogOnce("CreateUserShader: '" + label + "': the driver rejected the fragment module (result " +
+                std::to_string(static_cast<int>(result)) + ")");
+        return nullptr;
+    }
+
+    std::size_t slotIndex = draw.userShaders.size();
+    if (!draw.freeUserIds.empty())
+    {
+        slotIndex = draw.freeUserIds.back() - kBuiltInShaderCount;
+        draw.freeUserIds.pop_back();
+    }
+    else
+    {
+        draw.userShaders.emplace_back();
+    }
+    const auto id = static_cast<std::uint16_t>(kBuiltInShaderCount + slotIndex);
+    auto shader = std::make_unique<VulkanShader>(id, std::move(layout), blob.usesLighting);
+    shader->varyingMask = varyingMask;
+    shader->vertexModule = draw.userVertexModules[varyingMask];
+    shader->fragmentModule = module;
+    VulkanShader* raw = shader.get();
+    draw.userShaders[slotIndex] = std::move(shader);
+    draw.liveUserShaders.emplace(raw, raw);
+    return raw;
+}
+
+IMaterial* VulkanRenderer::CreateUserMaterial(IShader* shader, ITexture* texture)
+{
+    if (shader == nullptr)
+    {
+        return nullptr;
+    }
+    std::lock_guard lock(_mutex);
+    if (!_initialized || _deviceLost)
+    {
+        return nullptr;
+    }
+    // Only compared with the live user shaders, never dereferenced
+    const auto found = _draw->liveUserShaders.find(shader);
+    if (found == _draw->liveUserShaders.end())
+    {
+        LogOnce("CreateUserMaterial: the shader is not a live user shader of this renderer; returning null");
+        return nullptr;
+    }
+    DrawState* const draw = _draw.get(); // the materials die with it, so it outlives them
+    auto material = std::make_unique<Renderer::Gpu::BlockMaterial>(
+        found->second->layout, shader, texture, [this](const std::string& message) { LogOnce(message); },
+        [draw](const ITexture* candidate) -> std::uint64_t
+        {
+            std::lock_guard idLock(draw->textureIdMutex);
+            const auto id = draw->textureIds.find(candidate);
+            return id != draw->textureIds.end() ? id->second : 0;
+        });
+    IMaterial* raw = material.get();
+    _draw->materials.emplace(raw, std::move(material));
+    return raw;
+}
+
+void VulkanRenderer::CollectUserShadersLocked()
+{
+    DrawState& draw = *_draw;
+    const bool overLimit = draw.userPipelineUse.size() > draw.maxUserPipelines;
+    if (!draw.hasRetiredUserShaders && !overLimit)
+    {
+        return;
+    }
+    // Called at the start of a frame, before anything of it is recorded: waiting for the device means no pending command
+    // buffer still uses a pipeline or module released below
+    vkDeviceWaitIdle(_device);
+
+    // Retired shaders: their pipelines, their module, their slot (the id is recycled, and a pipeline key that failed for the
+    // old shader says nothing about the next one)
+    if (draw.hasRetiredUserShaders)
+    {
+        draw.hasRetiredUserShaders = false;
+        for (std::size_t slot = 0; slot < draw.userShaders.size(); ++slot)
+        {
+            VulkanShader* shader = draw.userShaders[slot].get();
+            if (shader == nullptr || !shader->retired)
+            {
+                continue;
+            }
+            for (auto it = draw.pipelines.begin(); it != draw.pipelines.end();)
+            {
+                if (PipelineKey::ShaderOf(it->first) == shader->id)
+                {
+                    vkDestroyPipeline(_device, it->second, nullptr);
+                    draw.userPipelineUse.erase(it->first);
+                    it = draw.pipelines.erase(it);
+                }
+                else
+                {
+                    ++it;
+                }
+            }
+            for (auto it = draw.failedPipelines.begin(); it != draw.failedPipelines.end();)
+            {
+                it = PipelineKey::ShaderOf(*it) == shader->id ? draw.failedPipelines.erase(it) : std::next(it);
+            }
+            if (shader->fragmentModule != VK_NULL_HANDLE)
+            {
+                vkDestroyShaderModule(_device, shader->fragmentModule, nullptr);
+            }
+            draw.freeUserIds.push_back(shader->id);
+            draw.userShaders[slot].reset();
+        }
+    }
+
+    // Past the limit: the least recently used user pipelines go until three quarters of it are left
+    if (draw.userPipelineUse.size() > draw.maxUserPipelines)
+    {
+        std::vector<std::pair<std::uint64_t, std::uint32_t>> byUse; // (last used tick, key)
+        byUse.reserve(draw.userPipelineUse.size());
+        for (const auto& [key, tick] : draw.userPipelineUse)
+        {
+            byUse.emplace_back(tick, key);
+        }
+        std::sort(byUse.begin(), byUse.end());
+        const std::size_t keep = draw.maxUserPipelines * 3 / 4;
+        for (std::size_t i = 0; i + keep < byUse.size(); ++i)
+        {
+            const std::uint32_t key = byUse[i].second;
+            if (const auto it = draw.pipelines.find(key); it != draw.pipelines.end())
+            {
+                vkDestroyPipeline(_device, it->second, nullptr);
+                draw.pipelines.erase(it);
+            }
+            draw.userPipelineUse.erase(key);
+        }
+    }
+}
+
+uint32_t VulkanRenderer::GetUserShaderCountForTest() const
+{
+    std::lock_guard lock(_mutex);
+    return static_cast<uint32_t>(_draw->liveUserShaders.size());
+}
+
+uint32_t VulkanRenderer::GetUserPipelineCountForTest() const
+{
+    std::lock_guard lock(_mutex);
+    return static_cast<uint32_t>(_draw->userPipelineUse.size());
+}
+
+bool VulkanRenderer::CreateUserPipelineForTest(IShader* shader, const RenderState& state, const bool wireframe)
+{
+    std::lock_guard lock(_mutex);
+    if (!_initialized || _deviceLost)
+    {
+        return false;
+    }
+    const auto found = _draw->liveUserShaders.find(shader);
+    return found != _draw->liveUserShaders.end() && GetPipelineLocked(*found->second, state, wireframe) != VK_NULL_HANDLE;
+}
+
+std::uint32_t VulkanRenderer::GetPipelineKeyForTest(IShader* shader, const RenderState& state, const bool wireframe) const
+{
+    std::lock_guard lock(_mutex);
+    const VulkanShader* found = nullptr;
+    for (const std::unique_ptr<VulkanShader>& builtIn : _draw->shaders)
+    {
+        if (builtIn && builtIn.get() == shader)
+        {
+            found = builtIn.get();
+        }
+    }
+    if (found == nullptr)
+    {
+        if (const auto user = _draw->liveUserShaders.find(shader); user != _draw->liveUserShaders.end())
+        {
+            found = user->second;
+        }
+    }
+    if (found == nullptr)
+    {
+        return 0xFFFFFFFFu;
+    }
+    PipelineKey key;
+    key.shader = found->id;
+    key.depthTest = state.depthTest;
+    key.depthWrite = state.depthWrite;
+    key.cull = static_cast<std::uint8_t>(state.cull);
+    key.blend = state.blend;
+    key.additive = state.blend && state.additive;
+    key.wireframe = wireframe;
+    return key.Pack();
+}
+
+void VulkanRenderer::SetMaxUserPipelinesForTest(const std::size_t limit)
+{
+    std::lock_guard lock(_mutex);
+    _draw->maxUserPipelines = limit == 0 ? Renderer::Common::kMaxUserPipelines : limit;
+}
+
 void VulkanRenderer::DestroyMaterial(IMaterial* material)
 {
     if (material == nullptr)
@@ -1008,7 +1340,7 @@ bool VulkanRenderer::GetMaterialBlockForTest(const IMaterial* material, std::vec
         return false;
     }
     const Renderer::Gpu::BlockMaterial::Snapshot snapshot = it->second->TakeSnapshot();
-    bytes.assign(snapshot.block.begin(), snapshot.block.end());
+    bytes.assign(snapshot.block.begin(), snapshot.block.begin() + snapshot.blockBytes);
     return true;
 }
 
@@ -1092,7 +1424,23 @@ void VulkanRenderer::DrawLocked(IMesh* mesh, const float* modelMatrix, IMaterial
     }
     const Renderer::Gpu::BlockMaterial& blockMaterial = *materialIt->second;
 
-    const VkPipeline pipeline = GetPipelineLocked(blockMaterial.kind, state, draw.wireframe);
+    // A user shader's material finds its shader by pointer among the LIVE user shaders: a destroyed (retired) one draws nothing
+    const VulkanShader* userShader = nullptr;
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    if (blockMaterial.IsUserShader())
+    {
+        const auto shaderIt = draw.liveUserShaders.find(blockMaterial.GetShader());
+        if (shaderIt == draw.liveUserShaders.end())
+        {
+            return;
+        }
+        userShader = shaderIt->second;
+        pipeline = GetPipelineLocked(*userShader, state, draw.wireframe);
+    }
+    else
+    {
+        pipeline = GetPipelineLocked(blockMaterial.kind, state, draw.wireframe);
+    }
     if (pipeline == VK_NULL_HANDLE)
     {
         return; // no shaders in this build, or the pipeline could not be made (logged)
@@ -1118,8 +1466,22 @@ void VulkanRenderer::DrawLocked(IMesh* mesh, const float* modelMatrix, IMaterial
         }
         if (texture == nullptr || texture->view == VK_NULL_HANDLE || texture->sampler == VK_NULL_HANDLE)
         {
-            // The text shader's atlas is its base sampler, and an absent one must read sdf 0 (draw nothing), not white
-            texture = (i == 0 && blockMaterial.kind == BuiltInShader::Text) ? draw.textBaseDefault.get() : draw.defaults[i].get();
+            if (userShader != nullptr)
+            {
+                // A user shader's unset slot reads what its manifest declares: white, black, the flat normal, or (0,0,0,0)
+                switch (blockMaterial.TextureDefault(i))
+                {
+                case Renderer::Common::UserTextureDefault::Black: texture = draw.defaults[1].get(); break;
+                case Renderer::Common::UserTextureDefault::Normal: texture = draw.defaults[3].get(); break;
+                case Renderer::Common::UserTextureDefault::None: texture = draw.textBaseDefault.get(); break;
+                case Renderer::Common::UserTextureDefault::White: texture = draw.defaults[0].get(); break;
+                }
+            }
+            else
+            {
+                // The text shader's atlas is its base sampler, and an absent one must read sdf 0 (draw nothing), not white
+                texture = (i == 0 && blockMaterial.kind == BuiltInShader::Text) ? draw.textBaseDefault.get() : draw.defaults[i].get();
+            }
         }
         if (texture == nullptr)
         {
@@ -1133,9 +1495,11 @@ void VulkanRenderer::DrawLocked(IMesh* mesh, const float* modelMatrix, IMaterial
     // draw whose chunk does not hold the current lighting yet, the lighting block after them
     const uint32_t slot = _currentFrame;
     FrameDrawState& frame = draw.frames[slot];
-    const bool lit = blockMaterial.kind == BuiltInShader::Lit;
+    const bool lit = userShader != nullptr ? userShader->usesLighting : blockMaterial.kind == BuiltInShader::Lit;
+    // The material's descriptor range: 128 for a built-in shader (kMaterialBlockRange), the layout's for a user shader
+    const std::uint32_t materialRange = snapshot.blockBytes;
     const VkDeviceSize perDrawBytes = AlignUp(kPerDrawBindingSize, draw.uniformAlignment);
-    const VkDeviceSize materialBytes = AlignUp(kMaterialBlockRange, draw.uniformAlignment);
+    const VkDeviceSize materialBytes = AlignUp(materialRange, draw.uniformAlignment);
     const VkDeviceSize lightingBytes = AlignUp(kLightingBlockSize, draw.uniformAlignment);
     std::size_t chunkIndex = 0;
     VkDeviceSize offset = 0;
@@ -1167,7 +1531,7 @@ void VulkanRenderer::DrawLocked(IMesh* mesh, const float* modelMatrix, IMaterial
     // values), then the block's padding up to its 16-byte alignment. The flipped viewport puts gl_FragCoord's row 0 at the
     // top, so the tint's circle is given in rows counted down
     WritePerDrawEffects(perDraw, WithFrameModifiers(state), _targetWidth, _targetHeight);
-    std::memcpy(chunk.mapped + offset + perDrawBytes, snapshot.block.data(), snapshot.block.size());
+    std::memcpy(chunk.mapped + offset + perDrawBytes, snapshot.block.data(), materialRange);
     if (copyLighting)
     {
         // The first lit draw of this lighting version in this chunk: its copy goes after the material block
@@ -1205,8 +1569,9 @@ void VulkanRenderer::DrawLocked(IMesh* mesh, const float* modelMatrix, IMaterial
 
     // Set 1: this chunk's material range and the five textures. A set holds no per-draw data (the offsets are dynamic), so
     // draws with the same textures in the same chunk share one
-    std::array<std::uint64_t, 11> key{};
+    std::array<std::uint64_t, 12> key{};
     key[0] = chunkIndex;
+    key[1 + 2 * kSamplerCount] = materialRange; // a set covers its material's range: the built-ins' and a user shader's differ
     for (std::size_t i = 0; i < kSamplerCount; ++i)
     {
         key[1 + i] = HandleValue(views[i]);
@@ -1224,7 +1589,7 @@ void VulkanRenderer::DrawLocked(IMesh* mesh, const float* modelMatrix, IMaterial
         {
             return;
         }
-        VkDescriptorBufferInfo materialInfo{chunk.buffer, 0, kMaterialBlockRange};
+        VkDescriptorBufferInfo materialInfo{chunk.buffer, 0, materialRange};
         std::array<VkDescriptorImageInfo, kSamplerCount> imageInfos{};
         std::array<VkWriteDescriptorSet, 1 + kSamplerCount> writes{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;

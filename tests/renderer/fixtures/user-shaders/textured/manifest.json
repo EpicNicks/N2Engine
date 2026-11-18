@@ -1,0 +1,96 @@
+{
+  "formatVersion": 1,
+  "contract": 1,
+  "name": "FixtureTextured",
+  "source": {
+    "file": "textured.n2shader",
+    "sha256": "94aa11ab0ce23ce6772edd5e543b935cd6ff671306af289d71ac8f4b3343bd0d"
+  },
+  "uses": [],
+  "state": {},
+  "blockSize": 16,
+  "params": [
+    {
+      "name": "u_Tint",
+      "type": "color",
+      "offset": 0,
+      "size": 16,
+      "default": [
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "u_Tex",
+      "type": "texture",
+      "slot": 0,
+      "default": "white"
+    },
+    {
+      "name": "u_Add",
+      "type": "texture",
+      "slot": 1,
+      "default": "black"
+    },
+    {
+      "name": "u_Normal",
+      "type": "texture",
+      "slot": 2,
+      "default": "normal"
+    }
+  ],
+  "textures": [
+    {
+      "name": "u_Tex",
+      "slot": 0,
+      "default": "white",
+      "binding": 1,
+      "samplerBinding": 6
+    },
+    {
+      "name": "u_Add",
+      "slot": 1,
+      "default": "black",
+      "binding": 2,
+      "samplerBinding": 7
+    },
+    {
+      "name": "u_Normal",
+      "slot": 2,
+      "default": "normal",
+      "binding": 3,
+      "samplerBinding": 8
+    }
+  ],
+  "vertexAttributes": [
+    "aPos",
+    "aNormal",
+    "aTexCoord",
+    "aColor",
+    "aTangent"
+  ],
+  "lint": "strict",
+  "payloads": {
+    "vulkan": {
+      "file": "shader.vulkan.frag.spv",
+      "bytes": 3452,
+      "sha256": "f89b4f3fa248c0ea6647ef6b3186cf514022136424bb9b96855a834b65569098"
+    }
+  },
+  "validated": {
+    "vulkan": [
+      "glslang",
+      "spirv-val",
+      "capabilities",
+      "reflect"
+    ]
+  },
+  "tools": {
+    "glslang": "Glslang Version: 11:15.3.0",
+    "spirvCross": "Git commit: vulkan-sdk-1.4.313.0-60-gd8e3e2b1 Timestamp: 2025-07-11T15:05:26",
+    "spirvDis": "SPIRV-Tools v2025.3 v2025.3.rc1-0-g33e02568",
+    "spirvVal": "SPIRV-Tools v2025.3 v2025.3.rc1-0-g33e02568"
+  }
+}

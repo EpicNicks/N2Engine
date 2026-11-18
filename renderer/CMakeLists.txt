@@ -229,6 +229,89 @@ file(WRITE "${OUTPUT}" "#pragma once\n#include <cstdint>\nconst uint32_t ${SYMBO
             list(APPEND N2_SPIRV_HEADERS "${_header}")
         endforeach()
 
+        # The user shaders' vertex stage (shaders/vulkan/user.vert) is compiled once per set of varyings the fragment stage can
+        # read (32 variants, bit i = fragment input location i: uv, colour, world position, normal, tangent): the validation
+        # layer warns about a vertex output nothing reads, so each pipeline pairs a fragment stage with the variant that writes
+        # exactly what it reads. user_vert_spirv_table.h lists them as kUserVertexSpirv[mask]
+        set(N2_USER_VERT_SOURCE "${N2_SHADER_SOURCE_DIR}/user.vert")
+        set(N2_USER_VERT_TABLE_HEADER "${N2_SHADER_OUTPUT_DIR}/user_vert_spirv_table.h")
+        set(N2_USER_VERT_TABLE_TEXT "#pragma once
+#include <cstddef>
+#include <cstdint>
+")
+        set(N2_USER_VERT_TABLE_ENTRIES "")
+        foreach(_mask RANGE 0 31)
+            set(_defines "")
+            math(EXPR _uv "${_mask} & 1")
+            math(EXPR _colour "(${_mask} >> 1) & 1")
+            math(EXPR _world "(${_mask} >> 2) & 1")
+            math(EXPR _normal "(${_mask} >> 3) & 1")
+            math(EXPR _tangent "(${_mask} >> 4) & 1")
+            if(_uv)
+                list(APPEND _defines N2_OUT_UV)
+            endif()
+            if(_colour)
+                list(APPEND _defines N2_OUT_COLOR)
+            endif()
+            if(_world)
+                list(APPEND _defines N2_OUT_WORLDPOS)
+            endif()
+            if(_normal)
+                list(APPEND _defines N2_OUT_NORMAL)
+            endif()
+            if(_tangent)
+                list(APPEND _defines N2_OUT_TANGENT)
+            endif()
+            set(_id "user_vert_m${_mask}")
+            set(_header "${N2_SHADER_OUTPUT_DIR}/${_id}_spirv.h")
+            if(N2_SPIRV_COMPILER_KIND STREQUAL "glslangValidator")
+                set(_define_args "")
+                foreach(_define IN LISTS _defines)
+                    list(APPEND _define_args "-D${_define}")
+                endforeach()
+                add_custom_command(
+                    OUTPUT "${_header}"
+                    COMMAND "${CMAKE_COMMAND}" -E make_directory "${N2_SHADER_OUTPUT_DIR}"
+                    COMMAND "${N2_SPIRV_COMPILER}" -V --target-env vulkan1.1 ${_define_args} --vn "kSpirv_${_id}" -o "${_header}" "${N2_USER_VERT_SOURCE}"
+                    DEPENDS "${N2_USER_VERT_SOURCE}"
+                    COMMENT "Compiling user.vert variant ${_mask} to SPIR-V (glslangValidator)"
+                    VERBATIM)
+            else()
+                set(_define_args "")
+                foreach(_define IN LISTS _defines)
+                    list(APPEND _define_args "-D${_define}")
+                endforeach()
+                add_custom_command(
+                    OUTPUT "${_header}"
+                    COMMAND "${CMAKE_COMMAND}" -E make_directory "${N2_SHADER_OUTPUT_DIR}"
+                    COMMAND "${N2_SPIRV_COMPILER}" --target-env=vulkan1.1 -mfmt=c ${_define_args} -o "${_header}.words" "${N2_USER_VERT_SOURCE}"
+                    COMMAND "${CMAKE_COMMAND}" "-DINPUT=${_header}.words" "-DOUTPUT=${_header}" "-DSYMBOL=kSpirv_${_id}"
+                            -P "${N2_SPIRV_WRAP_SCRIPT}"
+                    DEPENDS "${N2_USER_VERT_SOURCE}"
+                    COMMENT "Compiling user.vert variant ${_mask} to SPIR-V (glslc)"
+                    VERBATIM)
+            endif()
+            list(APPEND N2_SPIRV_HEADERS "${_header}")
+            string(APPEND N2_USER_VERT_TABLE_TEXT "#include \"${_id}_spirv.h\"
+")
+            string(APPEND N2_USER_VERT_TABLE_ENTRIES "    {kSpirv_${_id}, sizeof(kSpirv_${_id})},
+")
+        endforeach()
+        string(APPEND N2_USER_VERT_TABLE_TEXT "struct UserVertexSpirvEntry { const std::uint32_t* words; std::size_t bytes; };
+")
+        string(APPEND N2_USER_VERT_TABLE_TEXT "inline constexpr UserVertexSpirvEntry kUserVertexSpirv[32] = {
+${N2_USER_VERT_TABLE_ENTRIES}};
+")
+        file(MAKE_DIRECTORY "${N2_SHADER_OUTPUT_DIR}")
+        # Written only when its text changes, so an unchanged configure rebuilds nothing
+        set(_old_table "")
+        if(EXISTS "${N2_USER_VERT_TABLE_HEADER}")
+            file(READ "${N2_USER_VERT_TABLE_HEADER}" _old_table)
+        endif()
+        if(NOT _old_table STREQUAL N2_USER_VERT_TABLE_TEXT)
+            file(WRITE "${N2_USER_VERT_TABLE_HEADER}" "${N2_USER_VERT_TABLE_TEXT}")
+        endif()
+
         # Listed as sources of the renderer so building it runs the commands; PRIVATE, so only the renderer's own sources
         # (src/vulkan/VulkanDraw.cpp) can include them
         target_sources(renderer PRIVATE ${N2_SPIRV_HEADERS})

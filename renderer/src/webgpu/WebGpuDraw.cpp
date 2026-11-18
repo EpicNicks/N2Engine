@@ -801,7 +801,7 @@ namespace Renderer::WebGpu
         // SetScreenTint's values), then the struct's padding: WGSL rounds PerDraw up to 224 bytes. @builtin(position)
         // counts rows down from the top, so the tint's circle is given that way
         ShaderInterface::WritePerDrawEffects(perDraw, WithFrameModifiers(renderState), _targetWidth, _targetHeight);
-        std::memcpy(perDraw + perDrawBytes, snapshot.block.data(), snapshot.block.size());
+        std::memcpy(perDraw + perDrawBytes, snapshot.block.data(), snapshot.blockBytes);
         if (copyLighting)
         {
             // The first lit draw of this lighting version in this chunk: its copy goes after the material block
@@ -983,7 +983,7 @@ namespace Renderer::WebGpu
             return false;
         }
         const Gpu::BlockMaterial::Snapshot snapshot = it->second->TakeSnapshot();
-        bytes.assign(snapshot.block.begin(), snapshot.block.end());
+        bytes.assign(snapshot.block.begin(), snapshot.block.begin() + snapshot.blockBytes);
         return true;
     }
 }

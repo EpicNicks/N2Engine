@@ -1,0 +1,43 @@
+{
+  "formatVersion": 1,
+  "contract": 1,
+  "name": "FixtureVaryings",
+  "source": {
+    "file": "varyings.n2shader",
+    "sha256": "0a7aa38008d212b6891ae723eb4b81705d362f4cbccd93b9ec24f12db52c80bf"
+  },
+  "uses": [],
+  "state": {},
+  "blockSize": 0,
+  "params": [],
+  "textures": [],
+  "vertexAttributes": [
+    "aPos",
+    "aNormal",
+    "aTexCoord",
+    "aColor",
+    "aTangent"
+  ],
+  "lint": "strict",
+  "payloads": {
+    "vulkan": {
+      "file": "shader.vulkan.frag.spv",
+      "bytes": 1840,
+      "sha256": "5d74c7b320d2becacefc526e6fb80d38c753a754b54f32d406cfe85c8a522162"
+    }
+  },
+  "validated": {
+    "vulkan": [
+      "glslang",
+      "spirv-val",
+      "capabilities",
+      "reflect"
+    ]
+  },
+  "tools": {
+    "glslang": "Glslang Version: 11:15.3.0",
+    "spirvCross": "Git commit: vulkan-sdk-1.4.313.0-60-gd8e3e2b1 Timestamp: 2025-07-11T15:05:26",
+    "spirvDis": "SPIRV-Tools v2025.3 v2025.3.rc1-0-g33e02568",
+    "spirvVal": "SPIRV-Tools v2025.3 v2025.3.rc1-0-g33e02568"
+  }
+}

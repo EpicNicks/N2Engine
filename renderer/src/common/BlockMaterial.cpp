@@ -1,8 +1,11 @@
 #include "renderer/common/BlockMaterial.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <string>
 #include <utility>
+
+#include "renderer/common/UserShader.hpp"
 
 using namespace Renderer::Gpu;
 using namespace Renderer::Gpu::ShaderInterface;
@@ -68,15 +71,95 @@ BlockMaterial::BlockMaterial(const BuiltInShader shaderKind, IShader* owner, ITe
     }
 }
 
+std::shared_ptr<const MaterialLayout> MaterialLayout::FromUserShader(const Common::UserShaderBlob& blob)
+{
+    if (!Common::ValidateUserShaderBlob(blob).empty())
+    {
+        return nullptr;
+    }
+    auto layout = std::make_shared<MaterialLayout>();
+    layout->shaderName = blob.name.empty() ? std::string("user shader") : blob.name;
+    layout->blockSize = blob.blockSize;
+    // At least 16 bytes: a descriptor range of 0 is invalid, and a shader with no parameters has an empty block
+    layout->range = std::max<std::uint32_t>(16, (blob.blockSize + 15) / 16 * 16);
+    // The names are copied first and never added to afterwards, so the views into them stay valid
+    layout->names.reserve(blob.params.size());
+    layout->uniforms.reserve(blob.params.size());
+    for (const Common::UserParam& param : blob.params)
+    {
+        if (param.type == Common::UserParamType::Texture)
+        {
+            layout->textureDefaults[param.slot] = param.textureDefault;
+            continue;
+        }
+        UniformType type = UniformType::Float;
+        switch (param.type)
+        {
+        case Common::UserParamType::Float: type = UniformType::Float; break;
+        case Common::UserParamType::Int:
+        case Common::UserParamType::Bool: type = UniformType::Int; break;
+        case Common::UserParamType::Vec2: type = UniformType::Vec2; break;
+        case Common::UserParamType::Vec3: type = UniformType::Vec3; break;
+        case Common::UserParamType::Vec4:
+        case Common::UserParamType::Color: type = UniformType::Vec4; break;
+        case Common::UserParamType::Texture: break;
+        }
+        layout->names.push_back(param.name);
+        layout->uniforms.push_back(Uniform{layout->names.back(), Block::Material, param.offset, type, param.size, 1});
+        layout->defaults.push_back(Default{layout->uniforms.size() - 1, param.defaultValue});
+    }
+    return layout;
+}
+
+BlockMaterial::BlockMaterial(std::shared_ptr<const MaterialLayout> layout, IShader* owner, ITexture* baseTexture, Warn warn,
+                             TextureIdOf textureIdOf)
+    : kind(BuiltInShader::Unlit), shader(owner), _warn(std::move(warn)), _textureIdOf(std::move(textureIdOf)),
+      _layout(std::move(layout)), _texture(baseTexture)
+{
+    _textureId = (_textureIdOf && baseTexture != nullptr) ? _textureIdOf(baseTexture) : 0;
+    if (!_layout)
+    {
+        return;
+    }
+    for (const MaterialLayout::Default& entry : _layout->defaults)
+    {
+        const Uniform& uniform = _layout->uniforms[entry.uniform];
+        if (uniform.type == UniformType::Int)
+        {
+            const auto value = static_cast<std::int32_t>(entry.values[0]);
+            std::memcpy(_block.data() + uniform.offset, &value, sizeof(value));
+        }
+        else
+        {
+            WriteFloats(uniform.offset, entry.values.data(), uniform.size / sizeof(float));
+        }
+    }
+}
+
 const Uniform* BlockMaterial::Find(const std::string& name, const UniformType expected, const char* setter) const
 {
-    const Uniform* uniform = FindMaterialUniform(kind, name);
+    const Uniform* uniform = nullptr;
+    if (_layout)
+    {
+        for (const Uniform& candidate : _layout->uniforms)
+        {
+            if (candidate.name == name)
+            {
+                uniform = &candidate;
+                break;
+            }
+        }
+    }
+    else
+    {
+        uniform = FindMaterialUniform(kind, name);
+    }
     if (uniform == nullptr)
     {
         if (_warn)
         {
-            _warn("material uniform '" + name + "' is not in the " + std::string(ShaderName(kind)) +
-                  " shader's material block: ignored");
+            _warn("material uniform '" + name + "' is not in the " +
+                  (_layout ? _layout->shaderName : std::string(ShaderName(kind))) + " shader's material block: ignored");
         }
         return nullptr;
     }
@@ -94,7 +177,7 @@ const Uniform* BlockMaterial::Find(const std::string& name, const UniformType ex
 
 void BlockMaterial::WriteFloats(const std::uint32_t offset, const float* values, const std::uint32_t count)
 {
-    if (offset + count * sizeof(float) <= _block.size())
+    if (offset + count * sizeof(float) <= BlockRange())
     {
         std::memcpy(_block.data() + offset, values, count * sizeof(float));
     }
@@ -225,6 +308,7 @@ BlockMaterial::Snapshot BlockMaterial::TakeSnapshot() const
     std::lock_guard lock(_mutex);
     Snapshot snapshot;
     snapshot.block = _block;
+    snapshot.blockBytes = BlockRange();
     snapshot.textures[0] = _texture;
     snapshot.textureIds[0] = _textureId;
     for (std::size_t i = 0; i < _aux.size(); ++i)
