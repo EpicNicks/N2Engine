@@ -93,6 +93,44 @@ TEST(UserShaderBlobTest, EveryCookedFixtureIsAcceptedAndWithinTheLimits)
     EXPECT_FALSE(LoadFixture("solid").usesLighting);
 }
 
+TEST(UserShaderBlobTest, EveryCookedFixtureCarriesAWgslPayloadTheWebGpuTargetAccepts)
+{
+    using Renderer::Common::UserShaderTarget;
+    for (const char* name : {"solid", "textured", "ambient", "position", "varyings"})
+    {
+        const UserShaderBlob blob = LoadFixture(name);
+        EXPECT_EQ(ValidateUserShaderBlob(blob, UserShaderTarget::WebGpu), "") << name;
+        EXPECT_NE(blob.fragmentWgsl.find("@fragment"), std::string::npos) << name;
+    }
+    // Each target reads its own payload: a blob without the WGSL is not a WebGPU blob, one without SPIR-V not a Vulkan one
+    UserShaderBlob blob = ValidBlob();
+    blob.fragmentWgsl.clear();
+    EXPECT_EQ(ValidateUserShaderBlob(blob), "");
+    EXPECT_NE(ValidateUserShaderBlob(blob, UserShaderTarget::WebGpu).find("WebGPU fragment payload is empty"), std::string::npos);
+    blob = ValidBlob();
+    blob.fragmentSpirv.clear();
+    EXPECT_EQ(ValidateUserShaderBlob(blob, UserShaderTarget::WebGpu), "");
+    EXPECT_NE(ValidateUserShaderBlob(blob), "");
+    // A layout needs only the parameters, whichever payload the blob has
+    EXPECT_NE(MaterialLayout::FromUserShader(blob), nullptr);
+}
+
+TEST(UserShaderBlobTest, AHostileWgslPayloadIsRefusedBeforeTheDeviceSeesIt)
+{
+    using Renderer::Common::UserShaderTarget;
+    UserShaderBlob blob = ValidBlob();
+    blob.fragmentWgsl.assign(Renderer::Common::kUserShaderMaxWgslBytes + 1, 'a');
+    EXPECT_NE(ValidateUserShaderBlob(blob, UserShaderTarget::WebGpu).find("limit"), std::string::npos);
+    blob.fragmentWgsl = std::string("@fragment fn main() {}\0 ", 24);
+    EXPECT_NE(ValidateUserShaderBlob(blob, UserShaderTarget::WebGpu).find("NUL"), std::string::npos);
+    blob.fragmentWgsl = "fn main() {}";
+    EXPECT_NE(ValidateUserShaderBlob(blob, UserShaderTarget::WebGpu).find("@fragment"), std::string::npos);
+    // The parameter checks apply to every target
+    blob = ValidBlob();
+    blob.blockSize = 4096;
+    EXPECT_NE(ValidateUserShaderBlob(blob, UserShaderTarget::WebGpu).find("block"), std::string::npos);
+}
+
 TEST(UserShaderBlobTest, TheVaryingsAFragmentStageReadsAreReadFromItsInterface)
 {
     using namespace Renderer::Common;

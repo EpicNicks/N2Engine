@@ -217,13 +217,36 @@ namespace Renderer::WebGpu
     // Drawing (G3a)
     // -----------------------------------------------------------------------------------------------------------------
 
-    /// One of the built-in shaders (unlit, lit, text). The two entry points of a built-in live in ONE WGSL module (vs_main,
-    /// fs_main). There is no custom WGSL in v1, so LoadFromStrings fails and the Set* calls (a shader holds no values, the
-    /// material does) do nothing
+    /// The outcome of a device error scope (a validation scope around the creation of a user shader's module or pipeline).
+    /// Natively the creating call waits for it; in the browser it arrives later, from the event loop, so a user shader may be used
+    /// before it is known: the draw path looks at it and skips a shader the device rejected. Written by a callback on any thread
+    struct ScopeResult
+    {
+        std::mutex mutex;
+        bool done = false;
+        bool failed = false;
+        std::string message;
+    };
+
+    /// One of the built-in shaders (unlit, lit, text), or a USER shader (stage 3 of the user-shader plan). The two entry points of
+    /// a built-in live in ONE WGSL module (vs_main, fs_main); a user shader's module is only its fragment stage (entry point
+    /// main, the WGSL Tint wrote from the cooked SPIR-V), paired with the renderer's one user vertex module (State::userVertexModule).
+    /// LoadFromStrings fails and the Set* calls (a shader holds no values, the material does) do nothing
     class WebGpuShader final : public Common::IShader
     {
     public:
-        explicit WebGpuShader(const ShaderInterface::BuiltInShader shaderKind) : kind(shaderKind) {}
+        explicit WebGpuShader(const ShaderInterface::BuiltInShader shaderKind) : kind(shaderKind), id(static_cast<std::uint16_t>(shaderKind)) {}
+        /// A user shader: its id (the built-ins take 0-2, user shaders 3 and up), the material layout it shares with its
+        /// materials, whether it reads the scene lighting, and the label its log lines use
+        WebGpuShader(const std::uint16_t shaderId, std::shared_ptr<const Gpu::MaterialLayout> materialLayout, const bool readsLighting,
+                     std::string shaderLabel)
+            : kind(ShaderInterface::BuiltInShader::Unlit),
+              id(shaderId),
+              layout(std::move(materialLayout)),
+              usesLighting(readsLighting),
+              label(std::move(shaderLabel))
+        {
+        }
 
         bool LoadFromStrings(const std::string&, const std::string&) override { return false; }
         void Bind() const override {}
@@ -241,8 +264,15 @@ namespace Renderer::WebGpu
         void SetVec3(const std::string&, float, float, float) override {}
         void SetVec4(const std::string&, float, float, float, float) override {}
 
-        ShaderInterface::BuiltInShader kind;
-        ShaderModuleRef module;
+        [[nodiscard]] bool IsUserShader() const { return layout != nullptr; }
+
+        ShaderInterface::BuiltInShader kind; // meaningless (Unlit) for a user shader
+        std::uint16_t id = 0;
+        ShaderModuleRef module; // a built-in's whole module; a user shader's fragment module
+        std::shared_ptr<const Gpu::MaterialLayout> layout; // null for a built-in
+        bool usesLighting = false;                          // a user shader's "uses": ["lighting"]
+        std::string label;
+        std::shared_ptr<ScopeResult> check;                 // the validation of a user shader's module (see ScopeResult)
     };
 
     /// The pipeline cache key: (shader, vertex layout, RenderState) packed. The vertex layout is the attribute set of the
@@ -251,7 +281,7 @@ namespace Renderer::WebGpu
     /// blend and additive select the colour target's blend state (G3b): opaque, alpha blend or additive
     struct PipelineKey
     {
-        std::uint8_t shader = 0;
+        std::uint16_t shader = 0; // the built-ins' 0-2, a user shader's id (3 and up)
         std::uint8_t vertexLayout = 0;
         bool depthTest = true;
         bool depthWrite = true;
@@ -261,10 +291,12 @@ namespace Renderer::WebGpu
 
         [[nodiscard]] std::uint32_t Pack() const
         {
-            return static_cast<std::uint32_t>(shader) | (static_cast<std::uint32_t>(vertexLayout) << 4) |
-                (depthTest ? 1u << 8 : 0u) | (depthWrite ? 1u << 9 : 0u) | (static_cast<std::uint32_t>(cull) << 10) |
-                (blend ? 1u << 12 : 0u) | (additive ? 1u << 13 : 0u);
+            return static_cast<std::uint32_t>(shader) | (static_cast<std::uint32_t>(vertexLayout) << 16) |
+                (depthTest ? 1u << 20 : 0u) | (depthWrite ? 1u << 21 : 0u) | (static_cast<std::uint32_t>(cull) << 22) |
+                (blend ? 1u << 24 : 0u) | (additive ? 1u << 25 : 0u);
         }
+        /// The shader id of a packed key
+        [[nodiscard]] static std::uint16_t ShaderOf(const std::uint32_t packed) { return static_cast<std::uint16_t>(packed & 0xFFFFu); }
     };
 
     /// A piece of the per-draw uniform ring: a uniform buffer plus the CPU copy the draws of a frame fill from the start;
@@ -358,6 +390,17 @@ namespace Renderer::WebGpu
 
         // ---- G3a: drawing
         std::array<std::unique_ptr<WebGpuShader>, kShaderCount> shaders;
+        // ---- User shaders (stage 3): the one vertex module of them all, the shaders (a slot is free when empty; an id is
+        // kShaderCount + its slot, recycled once its shader is destroyed) and the pipelines they own. A user pipeline records the
+        // tick it was last used; past maxUserPipelines the least recently used are released (WebGPU keeps what a recorded command
+        // still uses alive, so nothing waits)
+        ShaderModuleRef userVertexModule;
+        std::vector<std::unique_ptr<WebGpuShader>> userShaders;
+        std::vector<std::uint16_t> freeUserIds;
+        std::unordered_map<const Common::IShader*, WebGpuShader*> liveUserShaders;
+        std::map<std::uint32_t, std::uint64_t> userPipelineUse;
+        std::uint64_t pipelineTick = 0;
+        std::size_t maxUserPipelines = Common::kMaxUserPipelines;
         BindGroupLayoutRef frameLayout;    // group 0: binding 0 the per-draw block, binding 1 the lighting block (both dynamic)
         BindGroupLayoutRef materialLayout; // group 1: binding 0 the material block (dynamic), 1-5 textures, 6-10 samplers
         PipelineLayoutRef pipelineLayout;
@@ -366,9 +409,10 @@ namespace Renderer::WebGpu
         std::set<std::uint32_t> failedPipelines;
         std::uint32_t pipelineCreateAttempts = 0;
         bool failPipelineCreationForTest = false;
-        // Group 1 by (ring chunk, the five texture ids): immutable, so shared by every draw with the same textures in the same
-        // chunk, and kept until a texture it names is destroyed (or Shutdown)
-        std::map<std::array<std::uint64_t, 1 + kTextureSlots>, BindGroupRef> materialGroups;
+        // Group 1 by (ring chunk, the material block's range, the five texture ids): immutable, so shared by every draw with the same
+        // textures and range in the same chunk, and kept until a texture it names is destroyed (or Shutdown). The range is 128 for a
+        // built-in shader and the layout's for a user shader, so the two never share a group
+        std::map<std::array<std::uint64_t, 2 + kTextureSlots>, BindGroupRef> materialGroups;
         std::vector<RingChunk> chunks;
         std::size_t activeChunk = 0;
         std::uint64_t ringChunkBytes = 256 * 1024; // the size of a new chunk (more when one draw needs more)

@@ -57,8 +57,20 @@ namespace Renderer::Common
         std::uint32_t blockSize = 0; ///< bytes of the generated material block (std140)
         bool usesLighting = false;   ///< "uses": ["lighting"]: the draw copies the scene lighting for this shader
         std::vector<UserParam> params;
-        /// The Vulkan fragment stage: SPIR-V words (shader.vulkan.frag.spv, as little-endian words)
+        /// The Vulkan fragment stage: SPIR-V words (shader.vulkan.frag.spv, as little-endian words). Empty for a blob made for
+        /// another backend
         std::vector<std::uint32_t> fragmentSpirv;
+        /// The WebGPU fragment stage: the WGSL module Tint wrote (shader.webgpu.wgsl), whose entry point is `main`, with the
+        /// contract's bindings (group 0 binding 0 PerDraw, binding 1 Lighting, group 1 binding 0 the material block, textures
+        /// at 1-5 and samplers at 6-10). Empty for a blob made for another backend
+        std::string fragmentWgsl;
+    };
+
+    /// The backend a blob is checked for: each takes its own payload
+    enum class UserShaderTarget : std::uint8_t
+    {
+        Vulkan,
+        WebGpu,
     };
 
     /// The limits the checks below enforce (proposal section 8). Exposed so tests and tools quote one source
@@ -66,6 +78,7 @@ namespace Renderer::Common
     inline constexpr std::uint32_t kUserShaderMaxParams = 64;
     inline constexpr std::uint32_t kUserShaderTextureSlots = 5;
     inline constexpr std::size_t kUserShaderMaxSpirvBytes = 256 * 1024;
+    inline constexpr std::size_t kUserShaderMaxWgslBytes = 256 * 1024;
     inline constexpr std::size_t kUserShaderMaxNameBytes = 64;
     inline constexpr std::uint32_t kUserShaderContractVersion = 1;
     /// How many user shaders a renderer keeps at once (a hostile pack cannot grow them without bound)
@@ -99,9 +112,15 @@ namespace Renderer::Common
     /// Float16, Int16, Int8): the allow-list of the proposal's section 8, applied before a driver sees the module
     [[nodiscard]] bool ReadFragmentVaryings(const std::vector<std::uint32_t>& spirv, std::uint32_t& mask, std::string& error);
 
-    /// The reason `blob` is not acceptable, or an empty string when it is: the contract version, the size limits, parameter
-    /// names (unique, identifiers, not starting with n2_ or gl_), offsets (inside the block, naturally aligned, the std140
-    /// alignment of the type, no overlaps), texture slots (0-4, unique), and the SPIR-V (a non-empty word array of at most
-    /// kUserShaderMaxSpirvBytes starting with the SPIR-V magic number, and passing ReadFragmentVaryings)
-    [[nodiscard]] std::string ValidateUserShaderBlob(const UserShaderBlob& blob);
+    /// The reason the parameters and limits of `blob` are not acceptable, or an empty string when they are: the contract
+    /// version, the size limits, parameter names (unique, identifiers, not starting with n2_ or gl_), offsets (inside the
+    /// block, naturally aligned, the std140 alignment of the type, no overlaps) and texture slots (0-4, unique). The part of
+    /// ValidateUserShaderBlob that does not depend on the backend (MaterialLayout::FromUserShader checks it)
+    [[nodiscard]] std::string ValidateUserShaderParams(const UserShaderBlob& blob);
+
+    /// The reason `blob` is not acceptable for `target`, or an empty string when it is: ValidateUserShaderParams, and the
+    /// target's payload. Vulkan: a non-empty SPIR-V word array of at most kUserShaderMaxSpirvBytes starting with the magic
+    /// number and passing ReadFragmentVaryings. WebGPU: non-empty text of at most kUserShaderMaxWgslBytes with no NUL byte
+    /// and an `@fragment` entry point named main (the rest is the device's to judge: Dawn and the browsers validate WGSL)
+    [[nodiscard]] std::string ValidateUserShaderBlob(const UserShaderBlob& blob, UserShaderTarget target = UserShaderTarget::Vulkan);
 }

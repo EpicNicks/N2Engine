@@ -76,8 +76,8 @@ fi
 
 shopt -s nullglob
 shaders=("$root"/renderer/shaders/webgpu/*.wgsl)
-if [ "${#shaders[@]}" -ne 3 ]; then
-  echo "::error::expected unlit.wgsl, lit.wgsl and text.wgsl under renderer/shaders/webgpu, found ${#shaders[@]} files"
+if [ "${#shaders[@]}" -ne 4 ]; then
+  echo "::error::expected unlit.wgsl, lit.wgsl, text.wgsl and user.wgsl under renderer/shaders/webgpu, found ${#shaders[@]} files"
   exit 2
 fi
 # The canvas pass lives in the loader. Validate its exact runtime source too;
@@ -104,6 +104,8 @@ for shader in "${shaders[@]}"; do
   # Tint writes one entry point per output file (--ep), so each of the two goes through the SPIR-V writer and spirv-val
   entries=(vs_main fs_main)
   if [ "$name" = present ]; then entries=(vs fs); fi
+  # user.wgsl is the vertex stage of the user shaders only: their fragment stage is the cooked WGSL, checked by the corpus below
+  if [ "$name" = user ]; then entries=(vs_main); fi
   case "$shader" in
     */compute/*)
       mapfile -t entries < <(grep -oE '@compute[^;{]*fn [A-Za-z_][A-Za-z0-9_]*' "$shader" | awk '{print $NF}')

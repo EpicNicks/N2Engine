@@ -195,7 +195,8 @@ export function cookShader(text, options = {}) {
         continue;
       }
       if (hasWarning(translatedLog)) { add({ stage: 'tint', severity: 'error', file: null, line: null, message: `${target}: tint printed a warning (warnings are errors): ${summarise(translatedLog)}` }); continue; }
-      const wgsl = fs.readFileSync(wgslPath, 'utf8');
+      // LF whatever the platform's Tint wrote (the Windows build writes CRLF): the payload and its hash are the same everywhere
+      const wgsl = fs.readFileSync(wgslPath, 'utf8').replace(/\r\n/g, '\n');
       passed.webgpu.push('tint');
       // the WGSL read back by Tint: parse, resolve and uniformity again, then its SPIR-V writer with spirv-val
       const roundTrip = run(tools.tint, ['--format', 'spvasm', '--validate', '--ep', 'main', '-o', path.join(work, 'roundtrip.spvasm'), wgslPath]);

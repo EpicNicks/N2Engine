@@ -73,7 +73,7 @@ BlockMaterial::BlockMaterial(const BuiltInShader shaderKind, IShader* owner, ITe
 
 std::shared_ptr<const MaterialLayout> MaterialLayout::FromUserShader(const Common::UserShaderBlob& blob)
 {
-    if (!Common::ValidateUserShaderBlob(blob).empty())
+    if (!Common::ValidateUserShaderParams(blob).empty())
     {
         return nullptr;
     }

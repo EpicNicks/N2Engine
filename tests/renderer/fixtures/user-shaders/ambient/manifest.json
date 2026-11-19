@@ -34,6 +34,11 @@
       "file": "shader.vulkan.frag.spv",
       "bytes": 3328,
       "sha256": "a6f883902d78f3117fff0556ad14c503bb635c9a958c918666f94f52cd2ebaf6"
+    },
+    "webgpu": {
+      "file": "shader.webgpu.wgsl",
+      "bytes": 1721,
+      "sha256": "ce7057da0723dd12d231f66685e437bbee8111cef9d70167b5197013bed43bbf"
     }
   },
   "validated": {
@@ -42,12 +47,22 @@
       "spirv-val",
       "capabilities",
       "reflect"
+    ],
+    "webgpu": [
+      "glslang",
+      "spirv-val",
+      "capabilities",
+      "reflect",
+      "tint",
+      "tint-roundtrip",
+      "wgsl-layout"
     ]
   },
   "tools": {
     "glslang": "Glslang Version: 11:15.3.0",
     "spirvCross": "Git commit: vulkan-sdk-1.4.313.0-60-gd8e3e2b1 Timestamp: 2025-07-11T15:05:26",
     "spirvDis": "SPIRV-Tools v2025.3 v2025.3.rc1-0-g33e02568",
-    "spirvVal": "SPIRV-Tools v2025.3 v2025.3.rc1-0-g33e02568"
+    "spirvVal": "SPIRV-Tools v2025.3 v2025.3.rc1-0-g33e02568",
+    "tint": "sha256:650ed934de155aeb"
   }
 }
