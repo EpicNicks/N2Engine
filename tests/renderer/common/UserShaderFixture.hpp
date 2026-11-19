@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <fstream>
 #include <iterator>
+#include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -57,6 +59,59 @@ namespace UserShaderTesting
         if (text == "normal") return UserTextureDefault::Normal;
         if (text == "none") return UserTextureDefault::None;
         throw std::runtime_error("unknown texture default " + text);
+    }
+
+    /// `blob` with its fragment entry point's interface cut down to the varyings in `keepMask` (the kUserVarying bits): the
+    /// inputs of the other locations stay declared but are no longer listed, which is what a module whose unread inputs were
+    /// stripped (by an optimiser, or a compiler that lists only what is used) looks like. glslang lists every declared input,
+    /// so the cooked fixtures always read as "all five"; this is how the narrower vertex variants are reached
+    inline UserShaderBlob WithFragmentInputsOnly(UserShaderBlob blob, const std::uint32_t keepMask)
+    {
+        constexpr std::uint32_t OpEntryPoint = 15, OpVariable = 59, OpDecorate = 71, DecorationLocation = 30, StorageInput = 1;
+        std::vector<std::uint32_t>& words = blob.fragmentSpirv;
+        std::map<std::uint32_t, std::uint32_t> location;
+        std::set<std::uint32_t> inputs;
+        std::size_t entryAt = 0;
+        for (std::size_t at = 5; at < words.size(); at += words[at] >> 16)
+        {
+            const std::uint32_t opcode = words[at] & 0xFFFFu;
+            if (opcode == OpDecorate && words[at + 2] == DecorationLocation)
+            {
+                location[words[at + 1]] = words[at + 3];
+            }
+            else if (opcode == OpVariable && words[at + 3] == StorageInput)
+            {
+                inputs.insert(words[at + 2]);
+            }
+            else if (opcode == OpEntryPoint)
+            {
+                entryAt = at;
+            }
+        }
+        const std::size_t count = words[entryAt] >> 16;
+        std::size_t name = entryAt + 3;
+        while (name < entryAt + count)
+        {
+            const std::uint32_t word = words[name++];
+            if ((word & 0xFFu) == 0 || (word & 0xFF00u) == 0 || (word & 0xFF0000u) == 0 || (word & 0xFF000000u) == 0)
+            {
+                break;
+            }
+        }
+        std::vector<std::uint32_t> kept;
+        for (std::size_t i = name; i < entryAt + count; ++i)
+        {
+            const std::uint32_t id = words[i];
+            const bool drop = inputs.count(id) != 0 && location.count(id) != 0 && ((keepMask >> location[id]) & 1u) == 0;
+            if (!drop)
+            {
+                kept.push_back(id);
+            }
+        }
+        words.erase(words.begin() + static_cast<std::ptrdiff_t>(name), words.begin() + static_cast<std::ptrdiff_t>(entryAt + count));
+        words.insert(words.begin() + static_cast<std::ptrdiff_t>(name), kept.begin(), kept.end());
+        words[entryAt] = static_cast<std::uint32_t>(((name - entryAt) + kept.size()) << 16) | OpEntryPoint;
+        return blob;
     }
 
     /// The blob of a fixture; throws (a test failure) when a file is missing or malformed

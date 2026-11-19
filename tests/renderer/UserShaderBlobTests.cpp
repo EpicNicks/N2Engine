@@ -96,12 +96,29 @@ TEST(UserShaderBlobTest, EveryCookedFixtureIsAcceptedAndWithinTheLimits)
 TEST(UserShaderBlobTest, TheVaryingsAFragmentStageReadsAreReadFromItsInterface)
 {
     using namespace Renderer::Common;
-    EXPECT_EQ(VaryingsOf("solid"), 0u) << "reads no varying";
-    EXPECT_EQ(VaryingsOf("ambient"), 0u);
-    EXPECT_EQ(VaryingsOf("textured"), kUserVaryingUv);
-    EXPECT_EQ(VaryingsOf("position"), kUserVaryingUv | kUserVaryingColor);
-    EXPECT_EQ(VaryingsOf("varyings"), kUserVaryingUv | kUserVaryingColor | kUserVaryingWorldPos | kUserVaryingNormal |
-                                          kUserVaryingTangent);
+    constexpr std::uint32_t all = kUserVaryingMasks - 1;
+    // What a compiler lists in the interface is its own business (glslang lists every declared input, an optimiser would not),
+    // so a cooked fixture reads as AT LEAST what it uses, and within the five
+    const auto covers = [](const std::uint32_t mask, const std::uint32_t used) { return (mask & used) == used && (mask & ~all) == 0; };
+    EXPECT_TRUE(covers(VaryingsOf("solid"), 0));
+    EXPECT_TRUE(covers(VaryingsOf("ambient"), 0));
+    EXPECT_TRUE(covers(VaryingsOf("textured"), kUserVaryingUv));
+    EXPECT_TRUE(covers(VaryingsOf("position"), kUserVaryingUv | kUserVaryingColor));
+    EXPECT_EQ(VaryingsOf("varyings"), all);
+
+    // An interface cut down to some locations reads as exactly those
+    const auto trimmed = [](const char* fixture, const std::uint32_t keep)
+    {
+        std::uint32_t mask = 0xFFFFFFFFu;
+        std::string error;
+        EXPECT_TRUE(ReadFragmentVaryings(WithFragmentInputsOnly(LoadFixture(fixture), keep).fragmentSpirv, mask, error)) << error;
+        return mask;
+    };
+    EXPECT_EQ(trimmed("position", kUserVaryingUv | kUserVaryingColor), kUserVaryingUv | kUserVaryingColor);
+    EXPECT_EQ(trimmed("position", kUserVaryingColor), kUserVaryingColor);
+    EXPECT_EQ(trimmed("varyings", kUserVaryingNormal | kUserVaryingTangent), kUserVaryingNormal | kUserVaryingTangent);
+    EXPECT_EQ(trimmed("solid", 0), 0u);
+    EXPECT_EQ(ValidateUserShaderBlob(WithFragmentInputsOnly(LoadFixture("position"), kUserVaryingUv)), "") << "still a valid blob";
 }
 
 TEST(UserShaderBlobTest, TheVertexAttributesFollowTheVaryings)
@@ -253,7 +270,8 @@ TEST(UserShaderBlobTest, TheSettersWriteTheDeclaredMembersAndRefuseTheRest)
     EXPECT_NE(owner.warnings[0].find("u_Missing"), std::string::npos);
     EXPECT_NE(owner.warnings[0].find("FixtureSolid"), std::string::npos);
     EXPECT_NE(owner.warnings[1].find("is a vec4"), std::string::npos);
-    EXPECT_EQ(FloatAt(material->TakeSnapshot(), 0), 1.0f) << "the refused writes changed nothing";
+    EXPECT_EQ(FloatAt(material->TakeSnapshot(), 0), 0.0f) << "the refused writes changed nothing (u_Color.r stays as set above)";
+    EXPECT_EQ(FloatAt(material->TakeSnapshot(), 4), 1.0f);
 }
 
 TEST(UserShaderBlobTest, ATextureParameterIsASlotWithADeclaredDefault)

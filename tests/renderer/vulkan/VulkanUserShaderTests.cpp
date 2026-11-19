@@ -249,6 +249,42 @@ TEST_F(VulkanUserShaderTest, TheVertexStageWritesTheVaryingsAShaderReads)
     }
 }
 
+TEST_F(VulkanUserShaderTest, AFragmentInterfaceThatListsFewerInputsGetsAVertexVariantThatWritesExactlyThose)
+{
+    // glslang lists every declared input, so the cooked fixtures always use the widest variant. A module whose unread inputs
+    // are not listed (WithFragmentInputsOnly) takes a narrower one, and the validation layer (a warning fails the test) checks
+    // that nothing is written that is not read and no attribute is provided that is not read. (Only inputs the shader does not
+    // use can be left out: leaving out a used one would be invalid SPIR-V)
+    struct Case
+    {
+        const char* fixture;
+        std::uint32_t keep;
+    };
+    const Case cases[] = {
+        {"solid", 0},
+        {"textured", Renderer::Common::kUserVaryingUv},
+        {"position", Renderer::Common::kUserVaryingUv | Renderer::Common::kUserVaryingColor},
+    };
+    for (const Case& test : cases)
+    {
+        IShader* wide = MakeShader(test.fixture);
+        IShader* narrow = R().CreateUserShader(UserShaderTesting::WithFragmentInputsOnly(LoadFixture(test.fixture), test.keep));
+        ASSERT_NE(narrow, nullptr) << test.fixture;
+        IMaterial* wideMaterial = MakeMaterial(wide);
+        IMaterial* narrowMaterial = MakeMaterial(narrow);
+        ASSERT_NE(wideMaterial, nullptr);
+        ASSERT_NE(narrowMaterial, nullptr);
+        if (std::string(test.fixture) == "textured")
+        {
+            wideMaterial->SetColor("u_Tint", 1.0f, 0.0f, 0.0f, 1.0f);
+            narrowMaterial->SetColor("u_Tint", 1.0f, 0.0f, 0.0f, 1.0f);
+        }
+        const Frame expected = DrawFullFrame(wideMaterial);
+        const Frame actual = DrawFullFrame(narrowMaterial);
+        EXPECT_TRUE(actual == expected) << test.fixture << ": the same picture with fewer varyings";
+    }
+}
+
 TEST_F(VulkanUserShaderTest, BuiltInAndUserDrawsShareAFrameAndTheirDescriptorRangesDiffer)
 {
     IMaterial* user = MakeMaterial(MakeShader("solid"));
