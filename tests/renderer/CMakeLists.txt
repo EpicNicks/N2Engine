@@ -102,5 +102,7 @@ if(N2ENGINE_RENDERER_WEBGPU AND NOT N2ENGINE_PLATFORM_WEB)
     # tests/renderer/common has the cross-backend test helpers (CrossBackendDiff.hpp, BlendReference.hpp), included as
     # "common/<name>.hpp"; tests/common has the glTF file builder the model golden shares with renderer_tests
     target_include_directories(webgpu_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/tests/common)
+    # The cooked user-shader fixtures (fixtures/user-shaders/, shared with renderer_tests)
+    target_compile_definitions(webgpu_tests PRIVATE N2_RENDERER_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME webgpu_tests COMMAND webgpu_tests)
 endif()
