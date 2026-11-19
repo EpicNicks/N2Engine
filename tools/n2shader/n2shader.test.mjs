@@ -14,7 +14,7 @@ import { runCorpus } from './lib/corpus.mjs';
 import { lintStage, stripComments } from './lib/lint.mjs';
 import { ShaderError, parseN2Shader } from './lib/parse.mjs';
 import { buildTargetSource, expandTemplate, materialSection, PRELUDE_DIR } from './lib/prelude.mjs';
-import { checkCapabilities, checkReflection, checkWgslLayout } from './lib/reflect.mjs';
+import { checkCapabilities, checkGlUniforms, checkReflection, checkWgslLayout } from './lib/reflect.mjs';
 import { layoutBlock } from './lib/std140.mjs';
 import { discoverTools, findTool, TOOL_NAMES } from './lib/tools.mjs';
 import { main, parseArguments } from './n2shader.mjs';
@@ -395,6 +395,34 @@ test('reflect: a module that matches the cook passes on both SPIR-V targets', ()
   for (const target of ['vulkan', 'webgpu']) assert.deepEqual(checkReflection(fakeReflection(target, h, layout), { target, header: h, layout }), []);
 });
 
+// The OpenGL text's uniform names against the SPIR-V reflection (GL cannot run in CI, and the renderer sets uniforms by name)
+test('gl uniforms: the names and types of a real GL text match the reflection of the same shader', () => {
+  const { h, layout } = reflectCase();
+  const reflection = fakeReflection('vulkan', h, layout);
+  const gl = buildTargetSource('gl', parseN2Shader(shader(header({ params: [param('u_Tint', 'color'), param('u_Gain', 'float'), param('u_Mask', 'texture')] }))), { path: 'a.n2shader' }).text;
+  assert.deepEqual(checkGlUniforms(gl, reflection, { header: h, layout }), []);
+  // a renamed uniform, a changed type, a missing one and an unknown extra are each reported
+  const messages = (text) => checkGlUniforms(text, reflection, { header: h, layout }).map((d) => d.message).join('\n');
+  assert.match(messages(gl.replace('uniform mat4 n2_Model;', 'uniform mat4 n2_ModelMatrix;')), /n2_Model.*not declared|n2_ModelMatrix/);
+  assert.match(messages(gl.replace('uniform float u_Gain;', 'uniform int u_Gain;')), /u_Gain.*int.*float/);
+  assert.match(messages(gl.replace('uniform float n2_TargetHeight;', '')), /n2_TargetHeight/);
+  assert.match(messages(gl.replace('uniform float u_Gain;', 'uniform float u_Gain;\nuniform float u_Extra;')), /u_Extra/);
+  assert.match(messages(gl.replace('uniform sampler2D n2_tex0;', '')), /n2_tex0/);
+});
+
+test('gl uniforms: the lighting uniforms follow the reflected Lighting block, with the flag renamed', () => {
+  const { header: h } = parseN2Shader(shader(header({ params: [param('u_Scale', 'float')], uses: ['lighting'] })));
+  const layout = layoutBlock(h.params);
+  const reflection = fakeReflection('vulkan', h, layout, (json) => {
+    json.types._l = { name: 'Lighting', members: LIGHTING.map((m) => ({ name: m.name, type: m.type, offset: m.offset })) };
+    json.ubos.push({ type: '_l', name: 'Lighting', block_size: 752, set: 0, binding: 1 });
+    return json;
+  });
+  const gl = buildTargetSource('gl', parseN2Shader(shader(header({ params: [param('u_Scale', 'float')], uses: ['lighting'] }))), { path: 'a.n2shader' }).text;
+  assert.deepEqual(checkGlUniforms(gl, reflection, { header: h, layout }), []);
+  assert.match(checkGlUniforms(gl.replace('uniform vec3 n2_AmbientLight;', ''), reflection, { header: h, layout }).map((d) => d.message).join('\n'), /n2_AmbientLight/);
+});
+
 test('reflect: an offset glslang assigned differently from the cook is reported with both numbers', () => {
   const { h, layout } = reflectCase();
   const json = fakeReflection('vulkan', h, layout, (j) => { j.types._m.members[1].offset = 24; return j; });
@@ -672,7 +700,7 @@ test('renderer fixtures: every committed manifest matches its .n2shader source',
   assert.ok(sources.length >= 5, 'the fixtures the renderer tests load');
   for (const file of sources) {
     const name = file.replace(/\.n2shader$/, '');
-    const result = cookShader(fs.readFileSync(path.join(dir, file), 'utf8'), { path: `tests/renderer/fixtures/user-shaders/${file}`, targets: ['vulkan', 'webgpu'], tools: noTools });
+    const result = cookShader(fs.readFileSync(path.join(dir, file), 'utf8'), { path: `tests/renderer/fixtures/user-shaders/${file}`, targets: ['vulkan', 'webgpu', 'gl'], tools: noTools });
     assert.ok(result.ok, `${file}: ${result.diagnostics.map((d) => d.message).join('; ')}`);
     const committed = JSON.parse(fs.readFileSync(path.join(dir, name, 'manifest.json'), 'utf8'));
     for (const key of ['formatVersion', 'contract', 'name', 'source', 'uses', 'state', 'blockSize', 'params', 'textures', 'vertexAttributes', 'lint']) {
@@ -685,6 +713,10 @@ test('renderer fixtures: every committed manifest matches its .n2shader source',
     const wgsl = fs.readFileSync(path.join(dir, name, committed.payloads.webgpu.file));
     assert.equal(Buffer.byteLength(wgsl.toString('utf8').replace(/\r\n/g, '\n')), committed.payloads.webgpu.bytes, `${file}: the WGSL size differs from the manifest`);
     assert.match(wgsl.toString('utf8'), /@fragment\s+fn main\(/, `${file}: the WGSL has no fragment entry point main`);
-    assert.equal(committed.payloads.gl, undefined, 'the OpenGL payload is not a fixture');
+    // the OpenGL payload is plain generated text, not tool output: byte for byte what the cook makes (LF)
+    const gl = fs.readFileSync(path.join(dir, name, committed.payloads.gl.file), 'utf8').replace(/\r\n/g, '\n');
+    assert.equal(gl, result.outputs.gl.data.toString('utf8'), `${file}: shader.gl.frag is stale; run scripts/cook-user-shader-fixtures.sh`);
+    assert.equal(Buffer.byteLength(gl), committed.payloads.gl.bytes, `${file}: the GL size differs from the manifest`);
+    assert.ok(committed.validated.gl.includes('gl-uniforms'), `${file}: the GL uniform names were not checked against the reflection`);
   }
 });

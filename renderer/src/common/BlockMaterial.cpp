@@ -90,6 +90,7 @@ std::shared_ptr<const MaterialLayout> MaterialLayout::FromUserShader(const Commo
         if (param.type == Common::UserParamType::Texture)
         {
             layout->textureDefaults[param.slot] = param.textureDefault;
+            layout->textureDeclared[param.slot] = true;
             continue;
         }
         UniformType type = UniformType::Float;

@@ -1,11 +1,13 @@
 #pragma once
 
+#include "renderer/common/BlockMaterial.hpp"
 #include "renderer/common/Renderer.hpp"
 #include "renderer/opengl/OpenGLShader.hpp"
 #include "renderer/opengl/OpenGLMaterial.hpp"
 #include "renderer/opengl/OpenGLMesh.hpp"
 #include "renderer/opengl/OpenGLTexture.hpp"
 
+#include <array>
 #include <cstdint>
 #include <unordered_map>
 #include <string>
@@ -49,6 +51,12 @@ namespace Renderer::OpenGL
         void UseShaderProgram(Common::IShader* shader) override;
         bool DestroyShaderProgram(Common::IShader* shader) override;
         bool IsValidShader(Common::IShader* shader) const override;
+        /// User shaders (stage 4 of orchestrator/proposals/user-shaders.md): the driver compiles the cooked GLSL 330 text of
+        /// `blob` (fragmentGlsl) with the engine's vertex stage (UserGl::VertexSource). The per-draw uniforms (n2_Model ...,
+        /// n2_TargetHeight) and, when the manifest asks for it, the scene lighting are set by name, as for the built-ins. Null,
+        /// logged, for a blob ValidateUserShaderBlob rejects for OpenGL, past kMaxUserShaders, or a program the driver refuses
+        Common::IShader* CreateUserShader(const Common::UserShaderBlob& blob) override;
+        Common::IMaterial* CreateUserMaterial(Common::IShader* shader, Common::ITexture* texture) override;
 
         // Frame management
         void BeginFrame() override;
@@ -126,6 +134,22 @@ namespace Renderer::OpenGL
         float m_projectionMatrix[16]{};
 
         Common::SceneLightingData m_currentLighting;
+        N2Engine::Math::Vector3 m_cameraPosition{0.0f, 0.0f, 0.0f}; // the last UpdateSceneLighting's, for user shaders made later
+
+        /// What a user shader (a program in m_shaderPrograms) needs besides the program: its material layout, whether it reads the
+        /// scene lighting, and its name for log lines
+        struct UserShaderInfo
+        {
+            std::shared_ptr<const Gpu::MaterialLayout> layout;
+            bool usesLighting = false;
+            std::string label;
+        };
+        std::unordered_map<Common::IShader*, UserShaderInfo> m_userShaders;
+        /// The 1x1 textures an unset slot reads (white, black, flat normal, transparent), made with the first user shader
+        std::array<OpenGLTexture*, 4> m_userTextureDefaults{};
+        void ApplyLightingToUserShaders();
+        void EnsureUserTextureDefaults();
+        void BindUserTextures(const OpenGLMaterial& material);
 
         // Linear lighting: GL_FRAMEBUFFER_SRGB is on only while the lit shader draws (see DrawIndices), and only
         // when this frame's target stores sRGB (the window's, if it was made sRGB-capable, and the offscreen

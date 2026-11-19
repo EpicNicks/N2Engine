@@ -23,6 +23,8 @@ namespace Renderer::OpenGL
         GLint tintCircleLoc = -1;
         /// uFramebufferEncodes: declared by the built-in lit shader, which tints in sRGB when GL_FRAMEBUFFER_SRGB is on
         GLint framebufferEncodesLoc = -1;
+        /// n2_TargetHeight: declared by the OpenGL prelude of the user shaders (n2_FragCoord() flips gl_FragCoord with it)
+        GLint targetHeightLoc = -1;
     };
 
     class OpenGLShader : public Common::IShader
@@ -52,10 +54,14 @@ namespace Renderer::OpenGL
         void SetVec4(const std::string &name, float x, float y, float z, float w);
 
         GLuint GetId() const;
+        /// A user shader's program (stage 4): a uniform the compiler left out (it is unused) is not worth a warning, since a
+        /// shader declares what it may not read. The built-in programs warn about a missing uniform once, as always
+        void SetQuiet(const bool quiet) { _quiet = quiet; }
         inline const ShaderUniforms &GetCommonUniforms() const { return _commonUniforms; }
 
     private:
         GLuint _programId;
+        bool _quiet = false;
         mutable std::unordered_map<std::string, int> _uniformLocationCache;
         ShaderUniforms _commonUniforms;
 

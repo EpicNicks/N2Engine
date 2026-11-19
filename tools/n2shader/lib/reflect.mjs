@@ -171,3 +171,56 @@ export function checkWgslLayout(wgsl, { header, layout }) {
   }
   return out;
 }
+
+// The members the OpenGL prelude spells differently from the SPIR-V blocks (a GLSL function n2_EncodeOutput exists, so the flag is
+// n2_EncodeOutputFlag), and the uniform the OpenGL prelude adds (the target's height, for n2_FragCoord())
+const GL_RENAMES = Object.freeze({ n2_EncodeOutput: 'n2_EncodeOutputFlag' });
+const GL_EXTRA_UNIFORMS = Object.freeze({ n2_TargetHeight: 'float' });
+
+/**
+ * The OpenGL payload (GLSL 330 text) against the SPIR-V reflection of the same shader (proposal section 13.11): GL cannot run in CI,
+ * and the renderer sets every uniform BY NAME, so the names and types of the plain uniforms the text declares must be exactly the
+ * members glslang reflected from the PerDraw, Lighting (when used) and Material blocks, plus the one OpenGL extra, plus one
+ * sampler2D per texture slot. Anything else, or anything missing, is an error: a drifted name would be silently ignored by GL
+ * (location -1) and the shader would draw with zeros.
+ * @param {string} glsl the generated GL text
+ * @param {object} json the spirv-cross --reflect output of the Vulkan target of the same shader
+ */
+export function checkGlUniforms(glsl, json, { header, layout }) {
+  const out = [];
+  const fail = (message) => out.push(error('gl-uniforms', `gl: ${message}`));
+  const lighting = header.uses.includes('lighting');
+
+  // the plain uniforms the GL text declares (top level, `uniform <type> <name>[N];`); a struct-typed array is one uniform here
+  const declared = new Map();
+  for (const match of glsl.matchAll(/^\s*uniform\s+(\w+)\s+(\w+)\s*(?:\[\s*\d+\s*\])?\s*;/gm)) declared.set(match[2], match[1]);
+
+  const blocks = new Map();
+  for (const ubo of json.ubos ?? []) blocks.set(ubo.name, json.types?.[ubo.type]?.members ?? []);
+  const expected = new Map();
+  const addBlock = (name, wantBlock) => {
+    const members = blocks.get(name);
+    if (!members) { if (wantBlock) fail(`the SPIR-V reflection has no ${name} block to compare with`); return; }
+    for (const member of members) {
+      const glName = GL_RENAMES[member.name] ?? member.name;
+      // a struct member (a light array) has the struct's name as its type: the GL text names the struct type itself
+      expected.set(glName, member.type);
+    }
+  };
+  addBlock('PerDraw', true);
+  if (lighting) addBlock('Lighting', true);
+  if (layout.members.length > 0) addBlock('Material', true);
+  for (const [name, type] of Object.entries(GL_EXTRA_UNIFORMS)) expected.set(name, type);
+  for (const param of header.params.filter((entry) => entry.type === 'texture')) expected.set(`n2_tex${param.slot}`, 'sampler2D');
+
+  for (const [name, type] of expected) {
+    if (!declared.has(name)) { fail(`the uniform "${name}" (${type}) the renderer sets by name is not declared in the GL text`); continue; }
+    const glType = declared.get(name);
+    const isStruct = /^(?:struct|N2\w+)$/.test(glType) || /^N2\w+$/.test(glType);
+    if (!isStruct && glType !== type && !(type === 'bool' && glType === 'int')) fail(`the uniform "${name}" is ${glType} in the GL text and ${type} in the SPIR-V reflection`);
+  }
+  for (const [name, type] of declared) {
+    if (!expected.has(name)) fail(`the GL text declares the uniform "${name}" (${type}), which the SPIR-V reflection of the same shader has no counterpart for`);
+  }
+  return out;
+}

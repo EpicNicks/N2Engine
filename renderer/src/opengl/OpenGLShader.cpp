@@ -188,7 +188,7 @@ GLint OpenGLShader::GetUniformLocation(const std::string &name) const
     _uniformLocationCache[name] = location;
 
     // Warn if uniform not found (but only once)
-    if (location == -1)
+    if (location == -1 && !_quiet)
     {
         std::cerr << "Warning: Uniform '" << name << "' not found in shader!" << std::endl;
     }
@@ -240,6 +240,24 @@ void OpenGLShader::CacheCommonUniforms()
     _commonUniforms.tintInsideLoc = glGetUniformLocation(_programId, "uTintInside");
     _commonUniforms.tintCircleLoc = glGetUniformLocation(_programId, "uTintCircle");
     _commonUniforms.framebufferEncodesLoc = glGetUniformLocation(_programId, "uFramebufferEncodes");
+
+    // A user shader (stage 4) declares the contract's n2_ names instead of the built-ins' u names: the same per-draw data under the
+    // names of renderer/common/UserShaderGl.hpp, so the draw path sets them without knowing which kind of program it has
+    const auto orUser = [this](GLint& location, const char* userName)
+    {
+        if (location == -1)
+        {
+            location = glGetUniformLocation(_programId, userName);
+        }
+    };
+    orUser(_commonUniforms.modelLoc, "n2_Model");
+    orUser(_commonUniforms.viewLoc, "n2_View");
+    orUser(_commonUniforms.projectionLoc, "n2_Projection");
+    orUser(_commonUniforms.stageDimLoc, "n2_StageDim");
+    orUser(_commonUniforms.tintSaturationLoc, "n2_TintSaturation");
+    orUser(_commonUniforms.tintInsideLoc, "n2_TintInside");
+    orUser(_commonUniforms.tintCircleLoc, "n2_TintCircle");
+    _commonUniforms.targetHeightLoc = glGetUniformLocation(_programId, "n2_TargetHeight");
 
     // Add to cache to avoid duplicate lookups
     if (_commonUniforms.modelLoc != -1)

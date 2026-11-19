@@ -58,6 +58,7 @@ namespace Renderer::Gpu
         std::uint32_t blockSize = 0;            ///< the generated block's bytes
         std::uint32_t range = 0;                ///< what a material descriptor covers: the block rounded up to 16 (at most 256)
         std::array<Common::UserTextureDefault, ShaderInterface::kSamplerCount> textureDefaults{};
+        std::array<bool, ShaderInterface::kSamplerCount> textureDeclared{}; ///< the slots the manifest declares a texture for
 
         /// The layout of an accepted blob (ValidateUserShaderBlob returned empty); null for a blob it rejects
         [[nodiscard]] static std::shared_ptr<const MaterialLayout> FromUserShader(const Common::UserShaderBlob& blob);

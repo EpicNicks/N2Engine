@@ -1,8 +1,11 @@
+#include <iostream>
+
 #include <math/Vector2.hpp>
 #include <math/Vector3.hpp>
 #include <math/Vector4.hpp>
 
 #include "renderer/opengl/OpenGLMaterial.hpp"
+#include "renderer/common/UserShaderGl.hpp"
 
 using namespace Renderer::OpenGL;
 
@@ -12,44 +15,107 @@ OpenGLMaterial::OpenGLMaterial(std::shared_ptr<OpenGLShader> shader, Common::ITe
     SetColor("uAlbedo", 1, 1, 1, 1);
 }
 
+OpenGLMaterial::OpenGLMaterial(std::shared_ptr<OpenGLShader> shader, Common::ITexture *texture,
+                               std::shared_ptr<const Gpu::MaterialLayout> userLayout)
+    : _shader(std::move(shader)), _layout(std::move(userLayout)),
+      _texture(texture ? static_cast<OpenGLTexture *>(texture) : nullptr)
+{
+    // No uAlbedo: the declared parameters are all a user program has. The defaults are what the manifest says
+    if (!_layout)
+    {
+        return;
+    }
+    using Gpu::ShaderInterface::UniformType;
+    for (const Gpu::MaterialLayout::Default &entry : _layout->defaults)
+    {
+        const Gpu::ShaderInterface::Uniform &uniform = _layout->uniforms[entry.uniform];
+        const std::string name(uniform.name);
+        const std::array<float, 4> &v = entry.values;
+        switch (uniform.type)
+        {
+        case UniformType::Float: _floats[name] = v[0]; break;
+        case UniformType::Int: _ints[name] = static_cast<int>(v[0]); break;
+        case UniformType::Vec2: _vec2s[name] = {v[0], v[1]}; break;
+        case UniformType::Vec3: _vec3s[name] = {v[0], v[1], v[2]}; break;
+        case UniformType::Vec4: _vec4s[name] = {v[0], v[1], v[2], v[3]}; break;
+        default: break; // a user parameter is never a matrix
+        }
+    }
+}
+
+bool OpenGLMaterial::AcceptUser(const std::string &name, const Gpu::ShaderInterface::UniformType expected, const char *setter)
+{
+    if (!_layout)
+    {
+        return true;
+    }
+    for (const Gpu::ShaderInterface::Uniform &uniform : _layout->uniforms)
+    {
+        if (uniform.name == name)
+        {
+            if (uniform.type == expected)
+            {
+                return true;
+            }
+            if (_warned.insert(name).second)
+            {
+                std::cerr << "material uniform '" << name << "' of the " << _layout->shaderName << " shader is set with the wrong type ("
+                          << setter << "): ignored" << std::endl;
+            }
+            return false;
+        }
+    }
+    if (_warned.insert(name).second)
+    {
+        std::cerr << "material uniform '" << name << "' is not in the " << _layout->shaderName << " shader's parameters: ignored"
+                  << std::endl;
+    }
+    return false;
+}
+
 void OpenGLMaterial::SetFloat(const std::string &name, float value)
 {
-    _floats[name] = value;
+    if (AcceptUser(name, Gpu::ShaderInterface::UniformType::Float, "SetFloat"))
+        _floats[name] = value;
 }
 
 void OpenGLMaterial::SetInt(const std::string &name, int value)
 {
-    _ints[name] = value;
+    if (AcceptUser(name, Gpu::ShaderInterface::UniformType::Int, "SetInt"))
+        _ints[name] = value;
 }
 
 void OpenGLMaterial::SetVec2(const std::string &name, float x, float y)
 {
-    _vec2s[name] = {x, y};
+    if (AcceptUser(name, Gpu::ShaderInterface::UniformType::Vec2, "SetVec2"))
+        _vec2s[name] = {x, y};
 }
 
 void OpenGLMaterial::SetVec2(const std::string &name, N2Engine::Math::Vector2 &value)
 {
-    _vec2s[name] = {value.x, value.y};
+    SetVec2(name, value.x, value.y);
 }
 
 void OpenGLMaterial::SetVec3(const std::string &name, float x, float y, float z)
 {
-    _vec3s[name] = {x, y, z};
+    if (AcceptUser(name, Gpu::ShaderInterface::UniformType::Vec3, "SetVec3"))
+        _vec3s[name] = {x, y, z};
 }
 
 void OpenGLMaterial::SetVec3(const std::string &name, N2Engine::Math::Vector3 &value)
 {
-    _vec3s[name] = {value.x, value.y, value.z};
+    SetVec3(name, value.x, value.y, value.z);
 }
 
 void OpenGLMaterial::SetVec4(const std::string &name, float x, float y, float z, float w)
 {
-    _vec4s[name] = {x, y, z, w};
+    if (AcceptUser(name, Gpu::ShaderInterface::UniformType::Vec4, "SetVec4"))
+        _vec4s[name] = {x, y, z, w};
 }
 
 void OpenGLMaterial::SetVec4(const std::string &name, N2Engine::Math::Vector4 &value)
 {
-    _vec4s[name] = {value.x, value.y, value.z, value.w};
+    SetVec4(name, value.x, value.y, value.z, value.w);
 }
 
 void Renderer::OpenGL::OpenGLMaterial::SetColor(const std::string &name, float r, float g, float b, float a)
@@ -68,8 +134,12 @@ void OpenGLMaterial::SetAuxTexture(Common::AuxTexture which, Common::ITexture *t
         return;
     // An invalid texture is stored as none, so what ApplyUniforms reads (the has-texture flags) is what is bound
     _auxTextures[slot] = texture && texture->IsValid() ? static_cast<OpenGLTexture *>(texture) : nullptr;
-    // The sampler's texture unit (the base colour texture is unit 0); sent with the other ints on every draw
-    _ints[AuxSamplerName(which)] = AuxTextureUnit(which);
+    // The sampler's texture unit (the base colour texture is unit 0); sent with the other ints on every draw. A user program has no
+    // such sampler (its n2_tex<slot> samplers are set by Apply)
+    if (!_layout)
+    {
+        _ints[AuxSamplerName(which)] = AuxTextureUnit(which);
+    }
 }
 
 Renderer::Common::ITexture *OpenGLMaterial::GetAuxTexture(Common::AuxTexture which) const
@@ -137,5 +207,17 @@ void OpenGLMaterial::Apply()
     for (const auto &[name, value] : _vec4s)
     {
         _shader->SetVec4(name, value[0], value[1], value[2], value[3]);
+    }
+
+    // A user program's samplers: slot N reads texture unit N (the base colour texture is unit 0, the AuxTexture slots 1-4)
+    if (_layout)
+    {
+        for (unsigned slot = 0; slot < _layout->textureDeclared.size(); ++slot)
+        {
+            if (_layout->textureDeclared[slot])
+            {
+                _shader->SetInt(Common::UserGl::TextureSamplerName(slot), static_cast<int>(slot));
+            }
+        }
     }
 }

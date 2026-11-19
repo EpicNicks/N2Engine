@@ -2,10 +2,12 @@
 #pragma once
 
 #include <memory>
+#include <set>
 #include <unordered_map>
 #include <array>
 #include <string>
 
+#include "renderer/common/BlockMaterial.hpp"
 #include "renderer/common/IMaterial.hpp"
 #include "renderer/common/ITexture.hpp"
 #include "renderer/opengl/OpenGLShader.hpp"
@@ -17,6 +19,13 @@ namespace Renderer::OpenGL
     {
     public:
         OpenGLMaterial(std::shared_ptr<OpenGLShader> shader, Common::ITexture *texture = nullptr);
+        /// A material of a user shader (stage 4): it starts at the manifest's defaults, takes only the declared parameter names and
+        /// types (an unknown name or the wrong setter warns once and is ignored, as on Vulkan and WebGPU), and sets the shader's
+        /// texture samplers (n2_tex<slot> on unit <slot>) on Apply
+        OpenGLMaterial(std::shared_ptr<OpenGLShader> shader, Common::ITexture *texture,
+                       std::shared_ptr<const Gpu::MaterialLayout> userLayout);
+        [[nodiscard]] bool IsUserShader() const { return _layout != nullptr; }
+        [[nodiscard]] const Gpu::MaterialLayout *UserLayout() const { return _layout.get(); }
         ~OpenGLMaterial() override = default;
 
         // IMaterial interface implementation
@@ -48,7 +57,13 @@ namespace Renderer::OpenGL
         [[nodiscard]] OpenGLTexture *GetAuxOpenGLTexture(Common::AuxTexture which) const;
 
     private:
+        /// The declared parameter `name` when it has the type `expected` (a user material), else a warning once per name and false.
+        /// Always true for a built-in material
+        bool AcceptUser(const std::string &name, Gpu::ShaderInterface::UniformType expected, const char *setter);
+
         std::shared_ptr<OpenGLShader> _shader;
+        std::shared_ptr<const Gpu::MaterialLayout> _layout; // null for a built-in shader's material
+        std::set<std::string> _warned;
         OpenGLTexture *_texture;
         std::array<OpenGLTexture *, kAuxTextureCount> _auxTextures{};
 
