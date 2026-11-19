@@ -1,5 +1,7 @@
 #include "renderer/common/UserShader.hpp"
 
+#include "renderer/common/UserShaderGl.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -241,6 +243,10 @@ std::string Renderer::Common::ValidateUserShaderBlob(const UserShaderBlob& blob,
         return problem;
     }
 
+    if (target == UserShaderTarget::OpenGl)
+    {
+        return UserGl::ValidateFragmentSource(blob.fragmentGlsl);
+    }
     if (target == UserShaderTarget::WebGpu)
     {
         if (blob.fragmentWgsl.empty())

@@ -64,6 +64,10 @@ namespace Renderer::Common
         /// contract's bindings (group 0 binding 0 PerDraw, binding 1 Lighting, group 1 binding 0 the material block, textures
         /// at 1-5 and samplers at 6-10). Empty for a blob made for another backend
         std::string fragmentWgsl;
+        /// The OpenGL fragment stage: the GLSL 330 text tools/n2shader generated (shader.gl.frag): the OpenGL prelude, the material
+        /// parameters as plain uniforms and the author's stage. The engine's vertex stage is the renderer's own
+        /// (UserGl::VertexSource). Empty for a blob made for another backend
+        std::string fragmentGlsl;
     };
 
     /// The backend a blob is checked for: each takes its own payload
@@ -71,6 +75,7 @@ namespace Renderer::Common
     {
         Vulkan,
         WebGpu,
+        OpenGl,
     };
 
     /// The limits the checks below enforce (proposal section 8). Exposed so tests and tools quote one source
@@ -79,6 +84,7 @@ namespace Renderer::Common
     inline constexpr std::uint32_t kUserShaderTextureSlots = 5;
     inline constexpr std::size_t kUserShaderMaxSpirvBytes = 256 * 1024;
     inline constexpr std::size_t kUserShaderMaxWgslBytes = 256 * 1024;
+    inline constexpr std::size_t kUserShaderMaxGlslBytes = 256 * 1024;
     inline constexpr std::size_t kUserShaderMaxNameBytes = 64;
     inline constexpr std::uint32_t kUserShaderContractVersion = 1;
     /// How many user shaders a renderer keeps at once (a hostile pack cannot grow them without bound)
@@ -121,6 +127,7 @@ namespace Renderer::Common
     /// The reason `blob` is not acceptable for `target`, or an empty string when it is: ValidateUserShaderParams, and the
     /// target's payload. Vulkan: a non-empty SPIR-V word array of at most kUserShaderMaxSpirvBytes starting with the magic
     /// number and passing ReadFragmentVaryings. WebGPU: non-empty text of at most kUserShaderMaxWgslBytes with no NUL byte
-    /// and an `@fragment` entry point named main (the rest is the device's to judge: Dawn and the browsers validate WGSL)
+    /// and an `@fragment` entry point named main (the rest is the device's to judge: Dawn and the browsers validate WGSL).
+    /// OpenGL: UserGl::ValidateFragmentSource (renderer/common/UserShaderGl.hpp)
     [[nodiscard]] std::string ValidateUserShaderBlob(const UserShaderBlob& blob, UserShaderTarget target = UserShaderTarget::Vulkan);
 }

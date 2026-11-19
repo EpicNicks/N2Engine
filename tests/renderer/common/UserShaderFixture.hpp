@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <fstream>
 #include <iterator>
@@ -14,7 +15,7 @@
 #include <renderer/common/UserShader.hpp>
 
 // Loads a cooked user shader of tests/renderer/fixtures/user-shaders/<name>/ (manifest.json, shader.vulkan.frag.spv and
-// shader.webgpu.wgsl, made by tools/n2shader through scripts/cook-user-shader-fixtures.sh) as the UserShaderBlob a backend is given. This is the
+// shader.webgpu.wgsl and shader.gl.frag, made by tools/n2shader through scripts/cook-user-shader-fixtures.sh) as the UserShaderBlob a backend is given. This is the
 // manifest-to-blob mapping the engine's loader (proposal stage 5) will have; the tests do it here so the backends can be
 // tested before that exists. Every backend's user-shader tests share it.
 namespace UserShaderTesting
@@ -184,6 +185,14 @@ namespace UserShaderTesting
         {
             const std::vector<std::uint8_t> wgsl = ReadBytes(directory + payloads.at("webgpu").at("file").get<std::string>());
             blob.fragmentWgsl.assign(wgsl.begin(), wgsl.end());
+        }
+        if (payloads.contains("gl"))
+        {
+            const std::vector<std::uint8_t> glsl = ReadBytes(directory + payloads.at("gl").at("file").get<std::string>());
+            blob.fragmentGlsl.assign(glsl.begin(), glsl.end());
+            // A checkout with CRLF conversion (Windows) reads the text with CR LF: the driver would take it, but the text is LF
+            // on every platform in the pack, so the tests see it so
+            blob.fragmentGlsl.erase(std::remove(blob.fragmentGlsl.begin(), blob.fragmentGlsl.end(), '\r'), blob.fragmentGlsl.end());
         }
         return blob;
     }

@@ -7,6 +7,8 @@
 #include <math/Matrix.hpp>
 
 #include "renderer/opengl/OpenGLRenderer.hpp"
+#include "renderer/common/UserShader.hpp"
+#include "renderer/common/UserShaderGl.hpp"
 #include "renderer/opengl/OpenGLShader.hpp"
 #include "renderer/opengl/OpenGLMesh.hpp"
 
@@ -117,6 +119,8 @@ void OpenGLRenderer::Shutdown()
     m_meshes.clear(); // Then meshes
     m_textures.clear();
     m_shaderPrograms.clear();
+    m_userShaders.clear();
+    m_userTextureDefaults = {}; // freed with m_textures above
     // They were in m_shaderPrograms; don't leave them dangling
     m_standardUnlitShader = nullptr;
     m_standardLitShader = nullptr;
@@ -186,6 +190,8 @@ bool OpenGLRenderer::DestroyShaderProgram(Common::IShader *shader)
         {
             m_currentShader = 0;
         }
+        // A user shader's materials draw nothing from now on (DrawIndices looks the shader up here)
+        m_userShaders.erase(shader);
         m_shaderPrograms.erase(it);
         return true;
     }
@@ -333,6 +339,86 @@ void OpenGLRenderer::DestroyTexture(Common::ITexture *texture)
     m_textures.erase(texture);
 }
 
+Renderer::Common::IShader* OpenGLRenderer::CreateUserShader(const Common::UserShaderBlob &blob)
+{
+    const std::string label = blob.sourcePath.empty() ? blob.name : blob.sourcePath;
+    // Everything a hostile blob can get wrong is checked before the driver sees a byte of it
+    if (const std::string problem = Common::ValidateUserShaderBlob(blob, Common::UserShaderTarget::OpenGl); !problem.empty())
+    {
+        std::cerr << "CreateUserShader: '" << label << "' rejected: " << problem << std::endl;
+        return nullptr;
+    }
+    if (m_userShaders.size() >= Common::kMaxUserShaders)
+    {
+        std::cerr << "CreateUserShader: '" << label << "' refused: " << Common::kMaxUserShaders
+                  << " user shaders are already loaded" << std::endl;
+        return nullptr;
+    }
+    std::shared_ptr<const Gpu::MaterialLayout> layout = Gpu::MaterialLayout::FromUserShader(blob);
+    if (!layout)
+    {
+        return nullptr; // unreachable after the validation above
+    }
+
+    // The driver compiles the text; its log (printed by OpenGLShader) cites the author's lines through the #line directive the cook
+    // wrote (source string number 1)
+    auto shader = std::make_shared<OpenGLShader>();
+    shader->SetQuiet(true);
+    if (!shader->LoadFromStrings(Common::UserGl::VertexSource(), blob.fragmentGlsl))
+    {
+        std::cerr << "CreateUserShader: '" << label << "': the driver could not build the program (see the log above; lines are the "
+                  << "author's, source string 1)" << std::endl;
+        return nullptr;
+    }
+    EnsureUserTextureDefaults();
+
+    Common::IShader *ptr = shader.get();
+    m_shaderPrograms[ptr] = shader;
+    m_userShaders[ptr] = UserShaderInfo{std::move(layout), blob.usesLighting, label};
+    if (blob.usesLighting)
+    {
+        // The lighting set before this shader existed
+        ApplyLightingToUserShaders();
+    }
+    return ptr;
+}
+
+Renderer::Common::IMaterial* OpenGLRenderer::CreateUserMaterial(Common::IShader *shader, Common::ITexture *texture)
+{
+    if (!shader)
+    {
+        return nullptr;
+    }
+    const auto info = m_userShaders.find(shader);
+    const auto program = m_shaderPrograms.find(shader);
+    if (info == m_userShaders.end() || program == m_shaderPrograms.end())
+    {
+        std::cerr << "CreateUserMaterial: the shader is not a live user shader of this renderer; returning null" << std::endl;
+        return nullptr;
+    }
+    auto material = std::make_unique<OpenGLMaterial>(program->second, texture, info->second.layout);
+    auto [iter, inserted] = m_materials.try_emplace(material.get(), std::move(material));
+    return iter->first;
+}
+
+void OpenGLRenderer::EnsureUserTextureDefaults()
+{
+    if (m_userTextureDefaults[0] != nullptr)
+    {
+        return;
+    }
+    // What an unset texture slot reads: white, black, the flat tangent-space normal and transparent black (UserTextureDefault)
+    const std::uint8_t pixels[4][4] = {{255, 255, 255, 255}, {0, 0, 0, 255}, {128, 128, 255, 255}, {0, 0, 0, 0}};
+    Common::TextureOptions options;
+    options.filter = Common::TextureFilter::Nearest;
+    options.wrap = Common::TextureWrap::ClampToEdge;
+    options.mipmaps = false;
+    for (std::size_t i = 0; i < m_userTextureDefaults.size(); ++i)
+    {
+        m_userTextureDefaults[i] = static_cast<OpenGLTexture *>(CreateTexture(pixels[i], 1, 1, 4, options));
+    }
+}
+
 Renderer::Common::IMaterial* OpenGLRenderer::CreateMaterial(Common::IShader* shader)
 {
     return OpenGLRenderer::CreateMaterial(shader, nullptr);
@@ -425,11 +511,108 @@ void OpenGLRenderer::SetViewProjection(const float *view, const float *projectio
     }
 }
 
+namespace
+{
+    /// Sets the lighting uniforms of the BOUND user program `shader` by `names` (UserGl::kUserLightingNames). The built-in lit shader's
+    /// are set by UpdateSceneLighting below, in the form the parity test reads (VulkanShaderParityTests). `encodeOutput` is the value of the encode flag
+    void SetLightingUniforms(Renderer::OpenGL::OpenGLShader &shader, const Renderer::Common::SceneLightingData &lighting,
+                             const N2Engine::Math::Vector3 &cameraPosition,
+                             const Renderer::Common::UserGl::LightingNames &names, const int encodeOutput)
+    {
+        using Renderer::Common::UserGl::LightMember;
+        using Renderer::Common::SceneLightingData;
+        shader.SetInt(names.encodeOutput, encodeOutput);
+
+        // Set ambient
+        shader.SetVec3(names.ambient, lighting.ambientColor.x, lighting.ambientColor.y, lighting.ambientColor.z);
+
+        // Set camera position directly from parameter
+        shader.SetVec3(names.cameraPos, cameraPosition.x, cameraPosition.y, cameraPosition.z);
+
+        // Set directional lights
+        const int numDirLights = std::min<int>(static_cast<int>(lighting.directionalLights.size()),
+                                               SceneLightingData::MAX_DIRECTIONAL_LIGHTS);
+        shader.SetInt(names.numDirectional, numDirLights);
+        for (int i = 0; i < numDirLights; ++i)
+        {
+            const auto &light = lighting.directionalLights[i];
+            shader.SetVec3(LightMember(names.directionalArray, i, "direction"), light.direction.x, light.direction.y,
+                           light.direction.z);
+            shader.SetVec3(LightMember(names.directionalArray, i, "color"), light.color.x, light.color.y, light.color.z);
+            shader.SetFloat(LightMember(names.directionalArray, i, "intensity"), light.intensity);
+        }
+
+        // Set point lights
+        const int numPointLights =
+            std::min<int>(static_cast<int>(lighting.pointLights.size()), SceneLightingData::MAX_POINT_LIGHTS);
+        shader.SetInt(names.numPoint, numPointLights);
+        for (int i = 0; i < numPointLights; ++i)
+        {
+            const auto &light = lighting.pointLights[i];
+            shader.SetVec3(LightMember(names.pointArray, i, "position"), light.position.x, light.position.y, light.position.z);
+            shader.SetVec3(LightMember(names.pointArray, i, "color"), light.color.x, light.color.y, light.color.z);
+            shader.SetFloat(LightMember(names.pointArray, i, "intensity"), light.intensity);
+            shader.SetFloat(LightMember(names.pointArray, i, "range"), light.range);
+            shader.SetFloat(LightMember(names.pointArray, i, "attenuation"), light.attenuation);
+        }
+
+        // Set spot lights
+        // At most MAX_SPOT_LIGHTS of the list, as the software renderer takes them; one without an axis (a zero
+        // direction) lights nothing and is left out, since normalising it would give NaN
+        const int spotCandidates =
+            std::min<int>(static_cast<int>(lighting.spotLights.size()), SceneLightingData::MAX_SPOT_LIGHTS);
+        int numSpotLights = 0;
+        for (int candidate = 0; candidate < spotCandidates; ++candidate)
+        {
+            const auto &light = lighting.spotLights[candidate];
+            const float length = std::sqrt(light.direction.x * light.direction.x + light.direction.y * light.direction.y +
+                                           light.direction.z * light.direction.z);
+            if (!(length > 1e-6f))
+            {
+                continue;
+            }
+            const int i = numSpotLights++;
+            shader.SetVec3(LightMember(names.spotArray, i, "position"), light.position.x, light.position.y, light.position.z);
+            shader.SetVec3(LightMember(names.spotArray, i, "direction"), light.direction.x / length,
+                           light.direction.y / length, light.direction.z / length);
+            shader.SetVec3(LightMember(names.spotArray, i, "color"), light.color.x, light.color.y, light.color.z);
+            shader.SetFloat(LightMember(names.spotArray, i, "intensity"), light.intensity);
+            shader.SetFloat(LightMember(names.spotArray, i, "range"), light.range);
+            shader.SetFloat(LightMember(names.spotArray, i, "cosInner"), std::cos(light.innerConeAngle));
+            shader.SetFloat(LightMember(names.spotArray, i, "cosOuter"), std::cos(light.outerConeAngle));
+        }
+        shader.SetInt(names.numSpot, numSpotLights);
+    }
+}
+
+void OpenGLRenderer::ApplyLightingToUserShaders()
+{
+    for (const auto &[ptr, info] : m_userShaders)
+    {
+        if (!info.usesLighting)
+        {
+            continue;
+        }
+        if (const auto it = m_shaderPrograms.find(ptr); it != m_shaderPrograms.end())
+        {
+            it->second->Bind();
+            SetLightingUniforms(*it->second, m_currentLighting, m_cameraPosition, Common::UserGl::kUserLightingNames,
+                                m_currentLighting.colorSpace == Common::ColorSpace::Linear ? 1 : 0);
+        }
+    }
+}
+
 void OpenGLRenderer::UpdateSceneLighting(
     const Common::SceneLightingData &lighting,
     const N2Engine::Math::Vector3 &cameraPosition)
 {
     m_currentLighting = lighting;
+    m_cameraPosition = cameraPosition;
+
+    // The user shaders that ask for the lighting ("uses": ["lighting"]) get the same data under the contract's names. Nothing
+    // encodes their output but themselves (the framebuffer's sRGB encode is on for the lit shader only), so their flag is 1
+    // whenever linear lighting is on, as in the lighting block of the Vulkan and WebGPU backends
+    ApplyLightingToUserShaders();
 
     // Update lit shader with lighting data
     if (!m_standardLitShader)
@@ -621,6 +804,12 @@ void OpenGLRenderer::DrawIndices(Common::IMesh *mesh, const float *modelMatrix, 
         return;
     }
 
+    // The material of a destroyed user shader draws nothing
+    if (glMaterial->IsUserShader() && m_userShaders.find(glMaterial->GetShader()) == m_userShaders.end())
+    {
+        return;
+    }
+
     // Apply material (binds shader and sets material properties)
     glMaterial->Apply();
 
@@ -649,8 +838,13 @@ void OpenGLRenderer::DrawIndices(Common::IMesh *mesh, const float *modelMatrix, 
         glUniformMatrix4fv(uniforms.projectionLoc, 1, GL_TRUE, m_projectionMatrix);
     }
 
+    if (glMaterial->IsUserShader())
+    {
+        BindUserTextures(*glMaterial);
+    }
+
     // Bind texture if material has one
-    if (const OpenGLTexture *texture = glMaterial->GetTexture(); texture && texture->IsValid())
+    else if (const OpenGLTexture *texture = glMaterial->GetTexture(); texture && texture->IsValid())
     {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, texture->GetHandle());
@@ -668,6 +862,11 @@ void OpenGLRenderer::DrawIndices(Common::IMesh *mesh, const float *modelMatrix, 
     for (const auto which : {Common::AuxTexture::Emissive, Common::AuxTexture::Occlusion, Common::AuxTexture::Normal,
                              Common::AuxTexture::MetallicRoughness})
     {
+        // (a user material's slots were bound by BindUserTextures above, against its own units)
+        if (glMaterial->IsUserShader())
+        {
+            break;
+        }
         if (const OpenGLTexture *texture = glMaterial->GetAuxOpenGLTexture(which); texture && texture->IsValid())
         {
             glActiveTexture(GL_TEXTURE0 + static_cast<GLenum>(OpenGLMaterial::AuxTextureUnit(which)));
@@ -715,9 +914,12 @@ void OpenGLRenderer::DrawIndices(Common::IMesh *mesh, const float *modelMatrix, 
     if (uniforms.tintSaturationLoc != -1)
     {
         const bool offscreen = m_offscreenFramebuffer != 0;
+        // The built-in shaders compare gl_FragCoord (rows up); a user shader's n2_FragCoord() counts rows down on every target,
+        // so its circle is given that way (as the Vulkan and WebGPU per-draw blocks do)
         const Common::ScreenTintUniforms tint =
             applied.tint.ToUniforms(static_cast<float>(offscreen ? m_offscreenWidth : m_width),
-                                    static_cast<float>(offscreen ? m_offscreenHeight : m_height), false);
+                                    static_cast<float>(offscreen ? m_offscreenHeight : m_height),
+                                    glMaterial->IsUserShader());
         glUniform1f(uniforms.tintSaturationLoc, tint.saturation);
         if (uniforms.tintInsideLoc != -1)
         {
@@ -727,6 +929,11 @@ void OpenGLRenderer::DrawIndices(Common::IMesh *mesh, const float *modelMatrix, 
         {
             glUniform3f(uniforms.tintCircleLoc, tint.circle.centreX, tint.circle.centreY, tint.circle.radius);
         }
+    }
+    // A user program's n2_FragCoord() flips gl_FragCoord with the target's height
+    if (uniforms.targetHeightLoc != -1)
+    {
+        glUniform1f(uniforms.targetHeightLoc, static_cast<float>(m_offscreenFramebuffer != 0 ? m_offscreenHeight : m_height));
     }
     // The lit shader tints in sRGB: it must know whether the framebuffer encodes its output (see uFramebufferEncodes)
     if (uniforms.framebufferEncodesLoc != -1)
@@ -743,6 +950,48 @@ void OpenGLRenderer::DrawIndices(Common::IMesh *mesh, const float *modelMatrix, 
                    reinterpret_cast<const void *>(offset));
     glBindVertexArray(0);
     NoteDraw(indexCount, glMesh->GetVertexCount());
+}
+
+void OpenGLRenderer::BindUserTextures(const OpenGLMaterial &material)
+{
+    const Gpu::MaterialLayout *layout = material.UserLayout();
+    if (layout == nullptr)
+    {
+        return;
+    }
+    // Slot 0 is the base colour texture (unit 0), slots 1-4 the AuxTexture slots (units 1-4). A texture the renderer no longer
+    // has, or none, reads the default the manifest declares for the slot
+    for (unsigned slot = 0; slot < layout->textureDeclared.size(); ++slot)
+    {
+        if (!layout->textureDeclared[slot])
+        {
+            continue;
+        }
+        const OpenGLTexture *texture = slot == 0 ? material.GetTexture()
+                                                 : material.GetAuxOpenGLTexture(static_cast<Common::AuxTexture>(slot - 1));
+        if (texture != nullptr && (m_textures.find(const_cast<OpenGLTexture *>(texture)) == m_textures.end() || !texture->IsValid()))
+        {
+            texture = nullptr;
+        }
+        if (texture == nullptr)
+        {
+            std::size_t which = 0;
+            switch (layout->textureDefaults[slot])
+            {
+            case Common::UserTextureDefault::White: which = 0; break;
+            case Common::UserTextureDefault::Black: which = 1; break;
+            case Common::UserTextureDefault::Normal: which = 2; break;
+            case Common::UserTextureDefault::None: which = 3; break;
+            }
+            texture = m_userTextureDefaults[which];
+        }
+        if (texture != nullptr)
+        {
+            glActiveTexture(GL_TEXTURE0 + slot);
+            glBindTexture(GL_TEXTURE_2D, texture->GetHandle());
+        }
+    }
+    glActiveTexture(GL_TEXTURE0);
 }
 
 void OpenGLRenderer::DrawObjects(const std::vector<Common::RenderObject> &objects)

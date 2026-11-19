@@ -29,6 +29,11 @@
       "file": "shader.webgpu.wgsl",
       "bytes": 815,
       "sha256": "46320d4fd688367af6055c366e3ad5090306b70c0c08a821275675b0b2d829da"
+    },
+    "gl": {
+      "file": "shader.gl.frag",
+      "bytes": 1764,
+      "sha256": "37e805c8536fd55b2f852dbc8f70b3d337d95a325c4c7d3d5fe7b60fbd283088"
     }
   },
   "validated": {
@@ -46,6 +51,10 @@
       "tint",
       "tint-roundtrip",
       "wgsl-layout"
+    ],
+    "gl": [
+      "glslang",
+      "gl-uniforms"
     ]
   },
   "tools": {

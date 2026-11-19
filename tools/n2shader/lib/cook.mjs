@@ -10,7 +10,7 @@ import {
 import { lintStage } from './lint.mjs';
 import { ShaderError, parseN2Shader } from './parse.mjs';
 import { buildTargetSource, PRELUDE_DIR } from './prelude.mjs';
-import { checkCapabilities, checkReflection, checkWgslLayout } from './reflect.mjs';
+import { checkCapabilities, checkGlUniforms, checkReflection, checkWgslLayout } from './reflect.mjs';
 import { layoutBlock } from './std140.mjs';
 import { discoverTools, run, sha256, toolVersion } from './tools.mjs';
 
@@ -110,8 +110,11 @@ export function cookShader(text, options = {}) {
   };
 
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'n2shader-'));
+  let vulkanReflection = null; // the SPIR-V reflection of the Vulkan target: what the OpenGL text's uniform names are checked against
   try {
-    for (const target of targets) {
+    // Vulkan first whatever order was asked: the OpenGL check needs its reflection
+    const ordered = [...targets].sort((a, b) => (a === 'gl') - (b === 'gl'));
+    for (const target of ordered) {
       passed[target] = [];
       const generated = buildTargetSource(target, parsed, { path: file, dir: preludeDir });
       const source = path.join(work, `${target}.frag`);
@@ -128,6 +131,12 @@ export function cookShader(text, options = {}) {
         diagnostics.forEach(add);
         if (out.status !== 0 && !diagnostics.some((entry) => entry.severity === 'error')) add({ stage: 'glslang', severity: 'error', file: null, line: null, message: `gl: glslang exited with ${out.status}: ${summarise(out.stdout + out.stderr)}` });
         if (out.status === 0) passed.gl.push('glslang');
+        // the renderer sets every uniform by name: the names and types declared must be what the SPIR-V reflection says
+        if (out.status === 0 && vulkanReflection) {
+          const uniformDiagnostics = checkGlUniforms(generated.text, vulkanReflection, { header, layout });
+          uniformDiagnostics.forEach(add);
+          if (uniformDiagnostics.length === 0) passed.gl.push('gl-uniforms');
+        }
         continue;
       }
 
@@ -173,6 +182,7 @@ export function cookShader(text, options = {}) {
         let json = null;
         try { json = JSON.parse(reflected.stdout); } catch { /* reported below */ }
         if (reflected.status !== 0 || json === null) { add({ stage: 'reflect', severity: 'error', file: null, line: null, message: `${target}: spirv-cross --reflect failed: ${summarise(reflected.stdout + reflected.stderr)}` }); continue; }
+        if (target === 'vulkan') vulkanReflection = json;
         const reflectDiagnostics = checkReflection(json, { target, header, layout });
         reflectDiagnostics.forEach(add);
         if (reflectDiagnostics.length > 0) continue;
