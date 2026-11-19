@@ -683,9 +683,7 @@ test('renderer fixtures: every committed manifest matches its .n2shader source',
     assert.equal(spirv.length, committed.payloads.vulkan.bytes, `${file}: the payload size differs from the manifest`);
     // the WebGPU payload: the WGSL Tint wrote, whose entry point the renderer names (main) and whose size the manifest records
     const wgsl = fs.readFileSync(path.join(dir, name, committed.payloads.webgpu.file));
-    assert.equal(Buffer.byteLength(wgsl.toString('utf8').replace(/
-/g, '
-')), committed.payloads.webgpu.bytes, `${file}: the WGSL size differs from the manifest`);
+    assert.equal(Buffer.byteLength(wgsl.toString('utf8').replace(/\r\n/g, '\n')), committed.payloads.webgpu.bytes, `${file}: the WGSL size differs from the manifest`);
     assert.match(wgsl.toString('utf8'), /@fragment\s+fn main\(/, `${file}: the WGSL has no fragment entry point main`);
     assert.equal(committed.payloads.gl, undefined, 'the OpenGL payload is not a fixture');
   }

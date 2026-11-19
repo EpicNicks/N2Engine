@@ -80,8 +80,8 @@
     },
     "webgpu": {
       "file": "shader.webgpu.wgsl",
-      "bytes": 2180,
-      "sha256": "3e233b77bc7aade791a4b2328307e73bc8afb826f7519a4b1c6e44bbccb79b4e"
+      "bytes": 2105,
+      "sha256": "ccaecb3c9af021eda55c600b84809d3df9d5cb7a716b09a4074bdc664df08197"
     }
   },
   "validated": {
