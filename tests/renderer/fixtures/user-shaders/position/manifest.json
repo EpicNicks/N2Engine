@@ -1,0 +1,43 @@
+{
+  "formatVersion": 1,
+  "contract": 1,
+  "name": "FixturePosition",
+  "source": {
+    "file": "position.n2shader",
+    "sha256": "ddff1b40d3ccb4118d1474119e6bda0448194d1c28363173dc28d55755c2738b"
+  },
+  "uses": [],
+  "state": {},
+  "blockSize": 0,
+  "params": [],
+  "textures": [],
+  "vertexAttributes": [
+    "aPos",
+    "aNormal",
+    "aTexCoord",
+    "aColor",
+    "aTangent"
+  ],
+  "lint": "strict",
+  "payloads": {
+    "vulkan": {
+      "file": "shader.vulkan.frag.spv",
+      "bytes": 1572,
+      "sha256": "e5d8d4b198859ab65acd5cf4be43bc40bd5e853ba171312b5c68506e630ecf39"
+    }
+  },
+  "validated": {
+    "vulkan": [
+      "glslang",
+      "spirv-val",
+      "capabilities",
+      "reflect"
+    ]
+  },
+  "tools": {
+    "glslang": "Glslang Version: 11:15.3.0",
+    "spirvCross": "Git commit: vulkan-sdk-1.4.313.0-60-gd8e3e2b1 Timestamp: 2025-07-11T15:05:26",
+    "spirvDis": "SPIRV-Tools v2025.3 v2025.3.rc1-0-g33e02568",
+    "spirvVal": "SPIRV-Tools v2025.3 v2025.3.rc1-0-g33e02568"
+  }
+}

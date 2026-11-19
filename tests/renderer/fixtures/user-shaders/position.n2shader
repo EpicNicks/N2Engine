@@ -1,0 +1,7 @@
+{ "n2shader": 1, "name": "FixturePosition", "params": [] }
+#stage fragment
+// No parameters (an empty material block) and the engine vertex stage's varyings: red follows the u coordinate, green the
+// v coordinate, blue the vertex colour's blue
+void main() {
+    n2_FragColor = vec4(n2_UV.x, n2_UV.y, n2_Color.b, 1.0);
+}

@@ -1,0 +1,9 @@
+{ "n2shader": 1, "name": "FixtureVaryings", "params": [] }
+#stage fragment
+// Reads all five varyings of the engine's vertex stage (the widest vertex variant): red is the normal's z (1 on the test
+// quad), green the world x remapped to 0..1 (a left-to-right gradient), blue stays 0 (the others are added with a factor of 0 so
+// they are read)
+void main() {
+    float keep = (n2_UV.x + n2_Color.b + length(n2_Tangent)) * 0.0;
+    n2_FragColor = vec4(n2_Normal.z, n2_WorldPos.x * 0.5 + 0.5, keep, 1.0);
+}

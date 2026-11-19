@@ -43,6 +43,21 @@ namespace Renderer::Common
         /// test fake without them; GetAuxTexture then reads null.
         virtual void SetAuxTexture(AuxTexture, ITexture *) {}
         [[nodiscard]] virtual ITexture* GetAuxTexture(AuxTexture) const { return nullptr; }
+        /// Sets one of the five texture slots by number: 0 is the base texture (SetTexture), 1-4 the AuxTexture slots in
+        /// enum order. A user shader's texture parameters are generic slots, so this is how a caller that knows a
+        /// parameter's slot (from the cooked manifest) fills it without a backend interface change. A slot past 4 does
+        /// nothing
+        virtual void SetTextureSlot(unsigned slot, ITexture *texture)
+        {
+            if (slot == 0)
+            {
+                SetTexture(texture);
+            }
+            else if (slot <= 4)
+            {
+                SetAuxTexture(static_cast<AuxTexture>(slot - 1), texture);
+            }
+        }
 
         [[nodiscard]] virtual IShader* GetShader() const = 0;
         [[nodiscard]] virtual ITexture* GetTexture() const = 0;

@@ -1,0 +1,17 @@
+{ "n2shader": 1, "name": "FixtureTextured",
+  "params": [
+    { "name": "u_Tint", "type": "color", "default": [1, 1, 1, 1] },
+    { "name": "u_Tex", "type": "texture", "default": "white" },
+    { "name": "u_Add", "type": "texture", "default": "black" },
+    { "name": "u_Normal", "type": "texture", "default": "normal" }
+  ]
+}
+#stage fragment
+// Three texture slots with three different defaults: the tint times the first texture, plus the second's rgb, with the
+// third's red channel in the alpha (the flat normal's 0.5 gives 128 in the target)
+void main() {
+    vec4 base = n2_texture(u_Tex, n2_UV) * u_Tint;
+    vec3 add = n2_texture(u_Add, n2_UV).rgb;
+    float flatNormal = n2_texture(u_Normal, n2_UV).r;
+    n2_FragColor = vec4(base.rgb + add, flatNormal);
+}

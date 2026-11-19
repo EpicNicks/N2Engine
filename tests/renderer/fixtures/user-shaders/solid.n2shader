@@ -1,0 +1,21 @@
+{ "n2shader": 1, "name": "FixtureSolid",
+  "params": [
+    { "name": "u_Color", "type": "color", "default": [1, 0, 0, 1] },
+    { "name": "u_Gain", "type": "float", "default": 1 },
+    { "name": "u_Offset", "type": "vec3", "default": [0, 0, 0] },
+    { "name": "u_Flag", "type": "bool", "default": false },
+    { "name": "u_Steps", "type": "int", "default": 2 },
+    { "name": "u_Pair", "type": "vec2", "default": [0.25, 0.5] }
+  ]
+}
+#stage fragment
+// A parameter block that exercises std140 packing (vec3 then bool in one 16 bytes, int, vec2): the draw's colour is
+// u_Color * u_Gain + u_Offset, inverted when u_Flag is set. u_Steps and u_Pair are read so the compiler keeps them.
+void main() {
+    vec3 rgb = u_Color.rgb * u_Gain + u_Offset;
+    rgb += float(u_Steps - 2) * 0.0 + (u_Pair.x - 0.25) * 0.0 + (u_Pair.y - 0.5) * 0.0;
+    if (u_Flag != 0) {
+        rgb = vec3(1.0) - rgb;
+    }
+    n2_FragColor = vec4(rgb, u_Color.a);
+}

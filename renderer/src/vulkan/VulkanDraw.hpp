@@ -32,13 +32,23 @@ namespace Renderer::Vulkan
     /// The one log line when wireframe was asked for and the device cannot do it (it is then drawn solid)
     inline constexpr const char* kWireframeIgnoredMessage = "wireframe ignored: fillModeNonSolid not supported";
 
-    /// One of the three built-in shaders: a vertex and a fragment module made from the SPIR-V compiled at build time.
-    /// There is no custom GLSL in v1, so LoadFromStrings fails and the Set* calls (a shader holds no values here, the
-    /// material does) do nothing.
+    /// One of the three built-in shaders (a vertex and a fragment module made from the SPIR-V compiled at build time), or a
+    /// USER shader (the engine's user vertex variant for the varyings it reads, shared, and a fragment module made from the
+    /// cooked SPIR-V). There is no GLSL compile on the device, so LoadFromStrings fails and the Set* calls (a shader holds no
+    /// values here, the material does) do nothing.
     class VulkanShader final : public Common::IShader
     {
     public:
-        explicit VulkanShader(const ShaderInterface::BuiltInShader shaderKind) : kind(shaderKind) {}
+        explicit VulkanShader(const ShaderInterface::BuiltInShader shaderKind)
+            : kind(shaderKind), id(static_cast<std::uint16_t>(shaderKind)), usesLighting(shaderKind == ShaderInterface::BuiltInShader::Lit)
+        {
+        }
+        /// A user shader: `shaderId` is its slot in the shader table (kBuiltInShaderCount and up)
+        VulkanShader(const std::uint16_t shaderId, std::shared_ptr<const Gpu::MaterialLayout> materialLayout, const bool lighting)
+            : kind(ShaderInterface::BuiltInShader::Unlit), id(shaderId), isUser(true), usesLighting(lighting),
+              layout(std::move(materialLayout))
+        {
+        }
 
         bool LoadFromStrings(const std::string&, const std::string&) override { return false; }
         void Bind() const override {}
@@ -56,8 +66,14 @@ namespace Renderer::Vulkan
         void SetVec3(const std::string&, float, float, float) override {}
         void SetVec4(const std::string&, float, float, float, float) override {}
 
-        ShaderInterface::BuiltInShader kind;
-        VkShaderModule vertexModule = VK_NULL_HANDLE;
+        ShaderInterface::BuiltInShader kind; // meaningless for a user shader
+        std::uint16_t id = 0;                // the PipelineKey's shader field: 0-2 the built-ins, 3 and up the user shaders
+        bool isUser = false;
+        bool retired = false;                // a user shader DestroyShaderProgram has retired: its materials draw nothing
+        bool usesLighting = false;           // the draw copies the scene lighting into the ring for this shader
+        std::uint32_t varyingMask = 0;       // a user shader: the fragment inputs it reads (the kUserVarying bits)
+        std::shared_ptr<const Gpu::MaterialLayout> layout; // a user shader's material block
+        VkShaderModule vertexModule = VK_NULL_HANDLE;   // a user shader's is the shared user vertex variant for its varyingMask (not owned)
         VkShaderModule fragmentModule = VK_NULL_HANDLE;
     };
 
@@ -87,13 +103,19 @@ namespace Renderer::Vulkan
         std::uint32_t activePoolSets = 0;
         // The material sets made so far this frame, by (chunk, the five views, the five samplers): a set holds only the
         // chunk's buffer and the textures (the per-draw offsets are dynamic), so draws with the same textures share one
-        std::map<std::array<std::uint64_t, 11>, VkDescriptorSet> materialSets;
+        // and the descriptor's range (a user shader's block range differs from the built-ins')
+        std::map<std::array<std::uint64_t, 12>, VkDescriptorSet> materialSets;
     };
 
-    /// The pipeline cache key: (shader, RenderState, wireframe) packed
+    /// The pipeline cache key: (shader, RenderState, wireframe) packed. The shader field is 16 bits (user shaders take ids
+    /// past the three built-ins), so the state bits start at bit 16 (before user shaders they started at bit 8): the packed
+    /// value is only ever a cache key and is never stored, so a built-in shader's key changing value changes nothing
     struct PipelineKey
     {
-        std::uint8_t shader = 0;
+        static constexpr std::uint32_t kStateShift = 16;
+        static constexpr std::uint32_t kShaderMask = (1u << kStateShift) - 1;
+
+        std::uint16_t shader = 0;
         bool depthTest = true;
         bool depthWrite = true;
         std::uint8_t cull = 0;
@@ -103,9 +125,14 @@ namespace Renderer::Vulkan
 
         [[nodiscard]] std::uint32_t Pack() const
         {
-            return static_cast<std::uint32_t>(shader) | (depthTest ? 1u << 8 : 0u) | (depthWrite ? 1u << 9 : 0u) |
-                (static_cast<std::uint32_t>(cull) << 10) | (blend ? 1u << 12 : 0u) | (additive ? 1u << 13 : 0u) |
-                (wireframe ? 1u << 14 : 0u);
+            return static_cast<std::uint32_t>(shader) | (depthTest ? 1u << 16 : 0u) | (depthWrite ? 1u << 17 : 0u) |
+                (static_cast<std::uint32_t>(cull) << 18) | (blend ? 1u << 20 : 0u) | (additive ? 1u << 21 : 0u) |
+                (wireframe ? 1u << 22 : 0u);
+        }
+        /// The shader id a packed key holds
+        [[nodiscard]] static std::uint16_t ShaderOf(const std::uint32_t packed)
+        {
+            return static_cast<std::uint16_t>(packed & kShaderMask);
         }
     };
 
@@ -118,6 +145,18 @@ namespace Renderer::Vulkan
 
         // The three built-ins. The modules exist only when the SPIR-V was built (N2ENGINE_VULKAN_HAS_SPIRV)
         std::array<std::unique_ptr<VulkanShader>, ShaderInterface::kBuiltInShaderCount> shaders;
+
+        // The user shaders (proposal stage 2): the one shared vertex module, the shader table (slot i holds id
+        // kBuiltInShaderCount + i; null when free), the free ids, the live shaders by pointer (a retired one is not in it,
+        // so its materials draw nothing) and, per user pipeline, the frame tick it was last used (LRU eviction)
+        std::array<VkShaderModule, Common::kUserVaryingMasks> userVertexModules{}; // by varying mask; made on first use
+        std::vector<std::unique_ptr<VulkanShader>> userShaders;
+        std::vector<std::uint16_t> freeUserIds;
+        std::unordered_map<const Common::IShader*, VulkanShader*> liveUserShaders;
+        std::map<std::uint32_t, std::uint64_t> userPipelineUse;
+        std::size_t maxUserPipelines = Common::kMaxUserPipelines;
+        std::uint64_t frameTick = 0; // BeginDrawFrame counts it; a user pipeline records the tick it was used in
+        bool hasRetiredUserShaders = false;
 
         std::unordered_map<const Common::IMaterial*, std::unique_ptr<Gpu::BlockMaterial>> materials;
         std::map<std::uint32_t, VkPipeline> pipelines;

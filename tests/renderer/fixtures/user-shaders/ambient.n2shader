@@ -1,0 +1,11 @@
+{ "n2shader": 1, "name": "FixtureAmbient",
+  "params": [
+    { "name": "u_Scale", "type": "float", "default": 1 }
+  ],
+  "uses": ["lighting"]
+}
+#stage fragment
+// Reads the scene lighting block: the ambient colour (set by UpdateSceneLighting) times u_Scale
+void main() {
+    n2_FragColor = vec4(n2_AmbientLight * u_Scale, 1.0);
+}

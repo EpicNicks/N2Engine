@@ -1,0 +1,98 @@
+{
+  "formatVersion": 1,
+  "contract": 1,
+  "name": "FixtureSolid",
+  "source": {
+    "file": "solid.n2shader",
+    "sha256": "df81b180c682426b0ae453d876485393413b2eda23e06eda714dfa958b0d7a42"
+  },
+  "uses": [],
+  "state": {},
+  "blockSize": 64,
+  "params": [
+    {
+      "name": "u_Color",
+      "type": "color",
+      "offset": 0,
+      "size": 16,
+      "default": [
+        1,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "name": "u_Gain",
+      "type": "float",
+      "offset": 16,
+      "size": 4,
+      "default": 1
+    },
+    {
+      "name": "u_Offset",
+      "type": "vec3",
+      "offset": 32,
+      "size": 12,
+      "default": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "u_Flag",
+      "type": "bool",
+      "offset": 44,
+      "size": 4,
+      "default": false
+    },
+    {
+      "name": "u_Steps",
+      "type": "int",
+      "offset": 48,
+      "size": 4,
+      "default": 2
+    },
+    {
+      "name": "u_Pair",
+      "type": "vec2",
+      "offset": 56,
+      "size": 8,
+      "default": [
+        0.25,
+        0.5
+      ]
+    }
+  ],
+  "textures": [],
+  "vertexAttributes": [
+    "aPos",
+    "aNormal",
+    "aTexCoord",
+    "aColor",
+    "aTangent"
+  ],
+  "lint": "strict",
+  "payloads": {
+    "vulkan": {
+      "file": "shader.vulkan.frag.spv",
+      "bytes": 2944,
+      "sha256": "5391d01dd5b0d4b8f6ab4835205fe95bd68716550a2f898a24fd4c29c59cdc48"
+    }
+  },
+  "validated": {
+    "vulkan": [
+      "glslang",
+      "spirv-val",
+      "capabilities",
+      "reflect"
+    ]
+  },
+  "tools": {
+    "glslang": "Glslang Version: 11:15.3.0",
+    "spirvCross": "Git commit: vulkan-sdk-1.4.313.0-60-gd8e3e2b1 Timestamp: 2025-07-11T15:05:26",
+    "spirvDis": "SPIRV-Tools v2025.3 v2025.3.rc1-0-g33e02568",
+    "spirvVal": "SPIRV-Tools v2025.3 v2025.3.rc1-0-g33e02568"
+  }
+}

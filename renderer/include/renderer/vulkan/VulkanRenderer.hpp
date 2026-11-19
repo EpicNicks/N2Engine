@@ -147,6 +147,7 @@ namespace Renderer
         struct DrawState;     // shaders, materials, the pipeline layout and cache, the uniform rings (private header)
         struct SwapchainState; // the swapchain and the present resources (private header, stage F)
         class VulkanTexture;  // a texture (private header)
+        class VulkanShader;   // a built-in or user shader (private header)
 
         /**
          * The Vulkan backend, stages 0 and A to F of #43: initialisation, an offscreen colour and depth target, a frame that
@@ -255,10 +256,20 @@ namespace Renderer
             Common::IShader* CreateShaderProgram(const char* vertexSource, const char* fragmentSource) override;
             /// A no-op: a draw takes its shader from its material
             void UseShaderProgram(Common::IShader* shader) override;
-            /// Always false: the built-in shaders belong to the renderer and are never destroyed by a caller
+            /// Frees a USER shader (CreateUserShader's): it is retired at once (its materials draw nothing) and its modules and
+            /// pipelines are released at the next frame start, after the GPU has finished with them, and its id is
+            /// recycled. False for the built-in shaders (the renderer's own), nullptr and foreign pointers
             bool DestroyShaderProgram(Common::IShader* shader) override;
-            /// True only for this renderer's built-in shaders
+            /// True for this renderer's built-in shaders and its live user shaders
             bool IsValidShader(Common::IShader* shader) const override;
+
+            /// User shaders (proposal stage 2): the blob's fragment SPIR-V behind the engine's user vertex shader
+            /// (renderer/shaders/vulkan/user.vert), the material block laid out from the blob's parameters (its own descriptor
+            /// range, up to 256 bytes; the built-ins keep 128), pipelines cached per (shader, state) like the built-ins'. Null
+            /// (logged once) for a blob ValidateUserShaderBlob rejects, past kMaxUserShaders, in a build without the
+            /// built-in shaders, or when the driver rejects the module
+            Common::IShader* CreateUserShader(const Common::UserShaderBlob& blob) override;
+            Common::IMaterial* CreateUserMaterial(Common::IShader* shader, Common::ITexture* texture) override;
 
             /// The row-major view and projection of the draws that follow (until the next call): each draw copies the
             /// values current when it is made. Null arguments are ignored. Identity until set
@@ -393,6 +404,17 @@ namespace Renderer
                                        bool wireframe);
             /// The pipelines made so far (one per distinct (shader, RenderState, wireframe) used)
             [[nodiscard]] uint32_t GetPipelineCountForTest() const;
+            /// User shaders: how many are live (not retired), how many pipelines they hold, whether a pipeline for `shader`
+            /// and `state` can be made, the packed pipeline key a draw of `shader` with `state` uses (a built-in shader is
+            /// passed through GetBuiltInShaderForTest), and the shader id (index in the shader table; 0-2 the built-ins)
+            [[nodiscard]] uint32_t GetUserShaderCountForTest() const;
+            [[nodiscard]] uint32_t GetUserPipelineCountForTest() const;
+            bool CreateUserPipelineForTest(Common::IShader* shader, const Common::RenderState& state, bool wireframe);
+            [[nodiscard]] std::uint32_t GetPipelineKeyForTest(Common::IShader* shader, const Common::RenderState& state,
+                                                              bool wireframe) const;
+            /// Test hook: the number of user-pipeline slots kept (replaces kMaxUserPipelines), so a test reaches the
+            /// eviction with a few shaders. 0 restores the default
+            void SetMaxUserPipelinesForTest(std::size_t limit);
             /// Whether wireframe drawing (fillModeNonSolid) is available on this device
             [[nodiscard]] bool IsWireframeSupportedForTest() const;
             [[nodiscard]] uint32_t GetLiveMaterialCountForTest() const;
@@ -495,6 +517,10 @@ namespace Renderer
             void EndDrawFrame(uint32_t slot);
             VkPipeline GetPipelineLocked(ShaderInterface::BuiltInShader shader, const Common::RenderState& state,
                                          bool wireframe);
+            VkPipeline GetPipelineLocked(const VulkanShader& shader, const Common::RenderState& state, bool wireframe);
+            /// Releases the retired user shaders (modules, pipelines) once the GPU is idle, and evicts the least recently
+            /// used user pipelines past kMaxUserPipelines. Runs at the start of a frame, with _mutex held
+            void CollectUserShadersLocked();
             bool AddRingChunk(uint32_t slot, VkDeviceSize minimumSize);
             bool AllocateRing(uint32_t slot, VkDeviceSize bytes, std::size_t& chunkIndex, VkDeviceSize& offset);
             VkDescriptorSet AllocateSet(uint32_t slot, VkDescriptorSetLayout layout);

@@ -37,3 +37,6 @@
 
 # Vendored third-party code: kept exactly as upstream ships it
 external/** -text
+
+# Cooked SPIR-V fixtures of the renderer's user-shader tests are binary
+tests/renderer/fixtures/**/*.spv binary
