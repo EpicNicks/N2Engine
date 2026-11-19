@@ -24,6 +24,7 @@ namespace Renderer
         namespace ShaderInterface = Gpu::ShaderInterface;
 
         class WebGpuTexture; // a texture (private header)
+        class WebGpuShader;  // a built-in or user shader (private header)
 
         /// Which adapters Initialize may take. Default asks the environment: N2_WEBGPU_EXPECT_CPU_DEVICE=1 means CpuOnly,
         /// anything else means Any.
@@ -135,8 +136,17 @@ namespace Renderer
             void UseShaderProgram(Common::IShader* shader) override;
             /// Always false: the built-in shaders belong to the renderer and are never destroyed by a caller
             bool DestroyShaderProgram(Common::IShader* shader) override;
-            /// True only for this renderer's built-in shaders (unlit, lit, text) once initialized
+            /// True for this renderer's built-in shaders (unlit, lit, text) once initialized and for its live user shaders
             bool IsValidShader(Common::IShader* shader) const override;
+
+            /// User shaders (stage 3 of orchestrator/proposals/user-shaders.md): a shader from the cooked WGSL of `blob`
+            /// (fragmentWgsl; the engine's vertex stage is the renderer's own). Null, logged once, for a blob
+            /// ValidateUserShaderBlob rejects for WebGPU, past kMaxUserShaders, or when the device rejects the WGSL (natively
+            /// known on return; in the browser the rejection arrives later and the shader's draws are skipped). The shader is
+            /// the caller's: DestroyShaderProgram frees it at once (its materials draw nothing, its pipelines are released)
+            Common::IShader* CreateUserShader(const Common::UserShaderBlob& blob) override;
+            /// A material of a user shader (see IRenderer::CreateUserMaterial); null for anything else
+            Common::IMaterial* CreateUserMaterial(Common::IShader* shader, Common::ITexture* texture) override;
 
             // Meshes and textures. Uploads are queue writes (they work inside or outside a frame). Destroying a mesh or a
             // texture only releases it: WebGPU keeps an object alive for every recorded or submitted command that uses it.
@@ -309,6 +319,16 @@ namespace Renderer
             [[nodiscard]] uint32_t GetPipelineCreateAttemptCountForTest() const;
             /// Makes (or finds) the pipeline for (shader, state) now, as a draw would. False when there is no such shader
             bool CreatePipelineForTest(ShaderInterface::BuiltInShader shader, const Common::RenderState& state);
+            /// The live user shaders, the pipelines of user shaders, and the limit of those (default kMaxUserPipelines)
+            [[nodiscard]] uint32_t GetUserShaderCountForTest() const;
+            [[nodiscard]] uint32_t GetUserPipelineCountForTest() const;
+            void SetMaxUserPipelinesForTest(std::size_t limit);
+            /// Makes (or finds) the pipeline of a user shader for `state`, as a draw would. False for a shader that is not a live
+            /// user shader of this renderer
+            bool CreateUserPipelineForTest(Common::IShader* shader, const Common::RenderState& state);
+            /// The packed pipeline key of (shader, state): the shader id in the low 16 bits (0-2 the built-ins, 3 and up user
+            /// shaders), the state above. 0xFFFFFFFF for a shader that is not this renderer's
+            [[nodiscard]] uint32_t GetPipelineKeyForTest(Common::IShader* shader, const Common::RenderState& state) const;
             /// Makes every pipeline creation fail (without calling the device) while set
             void SetFailPipelineCreationForTest(bool fail);
             /// The material bind groups cached (one per distinct (ring chunk, five textures) drawn with)
@@ -350,7 +370,9 @@ namespace Renderer
             void BeginDrawFrame();
             void EndDrawFrame();
             Common::IShader* GetStandardShader(ShaderInterface::BuiltInShader kind) const;
-            WGPURenderPipeline GetPipelineLocked(ShaderInterface::BuiltInShader shader, const Common::RenderState& state);
+            WGPURenderPipeline GetPipelineLocked(const WebGpuShader* shader, const Common::RenderState& state);
+            /// The live user shader `shader` names (never dereferenced before it is found), or null
+            WebGpuShader* FindUserShaderLocked(const Common::IShader* shader) const;
             bool AddRingChunk(uint64_t minimumSize);
             bool AllocateRing(uint64_t bytes, std::size_t& chunkIndex, uint64_t& offset);
             void DrawLocked(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material,

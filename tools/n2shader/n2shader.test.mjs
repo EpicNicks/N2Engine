@@ -672,7 +672,7 @@ test('renderer fixtures: every committed manifest matches its .n2shader source',
   assert.ok(sources.length >= 5, 'the fixtures the renderer tests load');
   for (const file of sources) {
     const name = file.replace(/\.n2shader$/, '');
-    const result = cookShader(fs.readFileSync(path.join(dir, file), 'utf8'), { path: `tests/renderer/fixtures/user-shaders/${file}`, targets: ['vulkan'], tools: noTools });
+    const result = cookShader(fs.readFileSync(path.join(dir, file), 'utf8'), { path: `tests/renderer/fixtures/user-shaders/${file}`, targets: ['vulkan', 'webgpu'], tools: noTools });
     assert.ok(result.ok, `${file}: ${result.diagnostics.map((d) => d.message).join('; ')}`);
     const committed = JSON.parse(fs.readFileSync(path.join(dir, name, 'manifest.json'), 'utf8'));
     for (const key of ['formatVersion', 'contract', 'name', 'source', 'uses', 'state', 'blockSize', 'params', 'textures', 'vertexAttributes', 'lint']) {
@@ -681,6 +681,12 @@ test('renderer fixtures: every committed manifest matches its .n2shader source',
     const spirv = fs.readFileSync(path.join(dir, name, committed.payloads.vulkan.file));
     assert.equal(spirv.readUInt32LE(0), 0x07230203, `${file}: the payload is not SPIR-V`);
     assert.equal(spirv.length, committed.payloads.vulkan.bytes, `${file}: the payload size differs from the manifest`);
-    assert.equal(committed.payloads.webgpu, undefined, 'the fixtures are cooked for Vulkan only');
+    // the WebGPU payload: the WGSL Tint wrote, whose entry point the renderer names (main) and whose size the manifest records
+    const wgsl = fs.readFileSync(path.join(dir, name, committed.payloads.webgpu.file));
+    assert.equal(Buffer.byteLength(wgsl.toString('utf8').replace(/
+/g, '
+')), committed.payloads.webgpu.bytes, `${file}: the WGSL size differs from the manifest`);
+    assert.match(wgsl.toString('utf8'), /@fragment\s+fn main\(/, `${file}: the WGSL has no fragment entry point main`);
+    assert.equal(committed.payloads.gl, undefined, 'the OpenGL payload is not a fixture');
   }
 });

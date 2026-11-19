@@ -6,6 +6,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -103,6 +104,44 @@ namespace Renderer::WebGpu
             }
         }
 
+        void OnScopePopped(WGPUPopErrorScopeStatus status, WGPUErrorType type, WGPUStringView message, void* userdata1, void*)
+        {
+            std::unique_ptr<std::shared_ptr<ScopeResult>> holder(static_cast<std::shared_ptr<ScopeResult>*>(userdata1));
+            ScopeResult& result = **holder;
+            std::lock_guard lock(result.mutex);
+            result.failed = status == WGPUPopErrorScopeStatus_Success && type != WGPUErrorType_NoError;
+            result.message = ToString(message);
+            result.done = true;
+        }
+
+        /// Opens a validation error scope on the device, runs `work` (which makes the device objects whose errors are wanted)
+        /// and pops the scope, so an error in `work` is captured here instead of counting as an uncaptured one. Natively the
+        /// pop is waited for (a few seconds at most): the result is final on return. In the browser it cannot be (no blocking
+        /// wait), so the result arrives from the event loop and `done` is false on return. `pending` is the block the callback
+        /// writes: the caller may keep it to look at the outcome later
+        template <typename Work>
+        std::shared_ptr<ScopeResult> RunInValidationScope(WebGpuRenderer::State& state, const Work& work)
+        {
+            auto result = std::make_shared<ScopeResult>();
+            wgpuDevicePushErrorScope(state.device.Get(), WGPUErrorFilter_Validation);
+            work();
+            WGPUPopErrorScopeCallbackInfo callback = WGPU_POP_ERROR_SCOPE_CALLBACK_INFO_INIT;
+            callback.callback = OnScopePopped;
+            callback.userdata1 = new std::shared_ptr<ScopeResult>(result);
+#ifdef __EMSCRIPTEN__
+            callback.mode = WGPUCallbackMode_AllowSpontaneous;
+            wgpuDevicePopErrorScope(state.device.Get(), callback);
+#else
+            callback.mode = WGPUCallbackMode_WaitAnyOnly;
+            const WGPUFuture future = wgpuDevicePopErrorScope(state.device.Get(), callback);
+            WGPUFutureWaitInfo info = WGPU_FUTURE_WAIT_INFO_INIT;
+            info.future = future;
+            constexpr std::uint64_t timeoutNanoseconds = 5ull * 1000 * 1000 * 1000;
+            wgpuInstanceWaitAny(state.instance.Get(), 1, &info, timeoutNanoseconds);
+#endif
+            return result;
+        }
+
         /// Writes a row-major 4x4 matrix as its columns: the transpose, which is how a mat4x4<f32> in a uniform block is read
         void WriteTransposed(std::uint8_t* destination, const float* rowMajor)
         {
@@ -154,6 +193,20 @@ namespace Renderer::WebGpu
                     return Fail(InitStatus::Failed, std::string("could not create the ") + entry.label + " module");
                 }
                 state.shaders[ShaderIndex(entry.kind)] = std::move(shader);
+            }
+        }
+
+        // The vertex stage of every user shader: one module (vs_main), the contract's five varyings always written
+        {
+            WGPUShaderSourceWGSL source = WGPU_SHADER_SOURCE_WGSL_INIT;
+            source.code = WGPUStringView{Wgsl::kUserWgsl.data(), Wgsl::kUserWgsl.size()};
+            WGPUShaderModuleDescriptor descriptor = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
+            descriptor.label = ToView("N2Engine user shader vertex stage");
+            descriptor.nextInChain = &source.chain;
+            state.userVertexModule.Reset(wgpuDeviceCreateShaderModule(state.device.Get(), &descriptor));
+            if (!state.userVertexModule)
+            {
+                return Fail(InitStatus::Failed, "could not create the user shader vertex module");
             }
         }
 
@@ -272,6 +325,8 @@ namespace Renderer::WebGpu
         state.activeChunk = 0;
         state.pipelines.clear();
         state.failedPipelines.clear();
+        state.userPipelineUse.clear();
+        state.pipelineTick = 0;
         state.pipelineCreateAttempts = 0;
         state.pipelineLayout.Reset();
         state.materialLayout.Reset();
@@ -280,6 +335,10 @@ namespace Renderer::WebGpu
         {
             shader.reset();
         }
+        state.liveUserShaders.clear();
+        state.userShaders.clear();
+        state.freeUserIds.clear();
+        state.userVertexModule.Reset();
         state.materials.clear();
         for (auto& texture : state.defaults)
         {
@@ -399,18 +458,38 @@ namespace Renderer::WebGpu
     // Pipelines
     // -----------------------------------------------------------------------------------------------------------------
 
-    WGPURenderPipeline WebGpuRenderer::GetPipelineLocked(const BuiltInShader kind, const RenderState& renderState)
+    WGPURenderPipeline WebGpuRenderer::GetPipelineLocked(const WebGpuShader* shader, const RenderState& renderState)
     {
         State& state = *_state;
-        const WebGpuShader* shader = state.shaders[ShaderIndex(kind)].get();
         if (shader == nullptr || !shader->IsValid() || !state.pipelineLayout)
         {
             return nullptr;
         }
+        const bool user = shader->IsUserShader();
+        if (user)
+        {
+            // A shader the device rejected (known at once natively; in the browser once its error scope has been delivered)
+            // is skipped: its pipelines would only raise more errors
+            if (shader->check)
+            {
+                std::lock_guard checkLock(shader->check->mutex);
+                if (shader->check->failed)
+                {
+                    LogOnce("user shader '" + shader->label + "' was rejected by the device: " + shader->check->message);
+                    return nullptr;
+                }
+            }
+            if (!state.userVertexModule)
+            {
+                return nullptr;
+            }
+        }
+        const BuiltInShader kind = shader->kind;
 
         PipelineKey key;
-        key.shader = static_cast<std::uint8_t>(kind);
-        key.vertexLayout = VertexLayoutId(kind);
+        key.shader = shader->id;
+        // A user shader reads the lit shader's attribute set (all five: the vertex stage writes the five varyings)
+        key.vertexLayout = user ? 1 : VertexLayoutId(kind);
         key.depthTest = renderState.depthTest;
         // Nothing writes depth while the test is off (as OpenGL): a draw with the test off and the write on shares the pipeline
         // of the draw with both off
@@ -421,16 +500,40 @@ namespace Renderer::WebGpu
         const std::uint32_t packed = key.Pack();
         if (const auto it = state.pipelines.find(packed); it != state.pipelines.end())
         {
+            if (user)
+            {
+                state.userPipelineUse[packed] = ++state.pipelineTick;
+            }
             return it->second.Get();
         }
         if (state.failedPipelines.count(packed) != 0)
         {
             return nullptr; // this key failed before (logged once): skipped without retrying
         }
+        if (user && state.userPipelineUse.size() >= state.maxUserPipelines)
+        {
+            // Past the limit (a hostile pack could grow shaders x states without bound): release the least recently used
+            // user pipelines down to three quarters of it. A recorded command keeps what it uses alive, so nothing waits
+            const std::size_t keep = std::max<std::size_t>(1, state.maxUserPipelines * 3 / 4);
+            LogOnce("user shader pipeline limit (" + std::to_string(state.maxUserPipelines) +
+                    ") reached: the least recently used user pipelines are released");
+            std::vector<std::pair<std::uint64_t, std::uint32_t>> byUse;
+            byUse.reserve(state.userPipelineUse.size());
+            for (const auto& [pipelineKey, tick] : state.userPipelineUse)
+            {
+                byUse.emplace_back(tick, pipelineKey);
+            }
+            std::sort(byUse.begin(), byUse.end());
+            for (std::size_t i = 0; i < byUse.size() && state.userPipelineUse.size() > keep; ++i)
+            {
+                state.pipelines.erase(byUse[i].second);
+                state.userPipelineUse.erase(byUse[i].second);
+            }
+        }
         // One interleaved vertex buffer of Common::Vertex (64 bytes); exactly the attributes the shader reads
         std::array<WGPUVertexAttribute, 5> attributes;
         std::uint32_t attributeCount = 0;
-        for (const ShaderInterface::Attribute& attribute : ShaderInterface::Attributes(kind))
+        for (const ShaderInterface::Attribute& attribute : ShaderInterface::Attributes(user ? BuiltInShader::Lit : kind))
         {
             WGPUVertexAttribute description = WGPU_VERTEX_ATTRIBUTE_INIT;
             description.format = AttributeFormat(attribute.components);
@@ -468,14 +571,14 @@ namespace Renderer::WebGpu
 
         WGPUFragmentState fragment = WGPU_FRAGMENT_STATE_INIT;
         fragment.module = shader->module.Get();
-        fragment.entryPoint = ToView("fs_main");
+        fragment.entryPoint = ToView(user ? "main" : "fs_main");
         fragment.targetCount = 1;
         fragment.targets = &target;
 
         WGPURenderPipelineDescriptor descriptor = WGPU_RENDER_PIPELINE_DESCRIPTOR_INIT;
         descriptor.label = ToView("N2Engine pipeline");
         descriptor.layout = state.pipelineLayout.Get();
-        descriptor.vertex.module = shader->module.Get();
+        descriptor.vertex.module = user ? state.userVertexModule.Get() : shader->module.Get();
         descriptor.vertex.entryPoint = ToView("vs_main");
         descriptor.vertex.bufferCount = 1;
         descriptor.vertex.buffers = &vertexLayout;
@@ -490,20 +593,42 @@ namespace Renderer::WebGpu
 
         ++state.pipelineCreateAttempts;
         RenderPipelineRef pipeline;
+        std::string rejection;
         if (!state.failPipelineCreationForTest)
         {
-            pipeline.Reset(wgpuDeviceCreateRenderPipeline(state.device.Get(), &descriptor));
+            if (user)
+            {
+                // A user shader's WGSL is untrusted: a module the device accepted may still not fit the pipeline (a binding the
+                // layout does not have, an input the vertex stage does not write). The error is captured here, not counted as an
+                // uncaptured one, and the key becomes a remembered failure
+                const std::shared_ptr<ScopeResult> scope = RunInValidationScope(
+                    state, [&] { pipeline.Reset(wgpuDeviceCreateRenderPipeline(state.device.Get(), &descriptor)); });
+                std::lock_guard scopeLock(scope->mutex);
+                if (scope->done && scope->failed)
+                {
+                    rejection = scope->message;
+                    pipeline.Reset();
+                }
+            }
+            else
+            {
+                pipeline.Reset(wgpuDeviceCreateRenderPipeline(state.device.Get(), &descriptor));
+            }
         }
         if (!pipeline)
         {
             // Remember the failure (a negative cache entry) so every later draw with this key skips quietly; one line per key
             state.failedPipelines.insert(packed);
             LogOnce("could not create the render pipeline for key " + std::to_string(packed) +
-                    ": draws with that state are skipped");
+                    ": draws with that state are skipped" + (rejection.empty() ? std::string() : ": " + rejection));
             return nullptr;
         }
         const WGPURenderPipeline raw = pipeline.Get();
         state.pipelines.emplace(packed, std::move(pipeline));
+        if (user)
+        {
+            state.userPipelineUse[packed] = ++state.pipelineTick;
+        }
         return raw;
     }
 
@@ -527,8 +652,41 @@ namespace Renderer::WebGpu
 
     bool WebGpuRenderer::DestroyShaderProgram(Common::IShader* shader)
     {
-        static_cast<void>(shader); // the built-in shaders belong to the renderer
-        return false;
+        if (shader == nullptr)
+        {
+            return false;
+        }
+        std::lock_guard lock(_mutex);
+        State& state = *_state;
+        // The built-in shaders belong to the renderer: only a live user shader is destroyed (a foreign pointer is only compared)
+        const auto found = state.liveUserShaders.find(shader);
+        if (found == state.liveUserShaders.end())
+        {
+            return false;
+        }
+        const std::uint16_t id = found->second->id;
+        // Its pipelines go now (a command already recorded keeps what it uses alive), and so does what was remembered of keys
+        // that failed for it: the id is recycled, and a failure says nothing about the next shader
+        for (auto it = state.pipelines.begin(); it != state.pipelines.end();)
+        {
+            if (PipelineKey::ShaderOf(it->first) == id)
+            {
+                state.userPipelineUse.erase(it->first);
+                it = state.pipelines.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
+        for (auto it = state.failedPipelines.begin(); it != state.failedPipelines.end();)
+        {
+            it = PipelineKey::ShaderOf(*it) == id ? state.failedPipelines.erase(it) : std::next(it);
+        }
+        state.liveUserShaders.erase(found);
+        state.userShaders[id - kShaderCount].reset();
+        state.freeUserIds.push_back(id);
+        return true;
     }
 
     bool WebGpuRenderer::IsValidShader(Common::IShader* shader) const
@@ -545,7 +703,126 @@ namespace Renderer::WebGpu
                 return true;
             }
         }
-        return false;
+        return _state->liveUserShaders.count(shader) != 0;
+    }
+
+    WebGpuShader* WebGpuRenderer::FindUserShaderLocked(const Common::IShader* shader) const
+    {
+        const auto found = _state->liveUserShaders.find(shader);
+        return found != _state->liveUserShaders.end() ? found->second : nullptr;
+    }
+
+    Common::IShader* WebGpuRenderer::CreateUserShader(const Common::UserShaderBlob& blob)
+    {
+        const std::string label = blob.sourcePath.empty() ? blob.name : blob.sourcePath;
+        // Everything a hostile blob can get wrong is checked before the device sees a byte of it
+        if (const std::string problem = Common::ValidateUserShaderBlob(blob, Common::UserShaderTarget::WebGpu); !problem.empty())
+        {
+            LogOnce("CreateUserShader: '" + label + "' rejected: " + problem);
+            return nullptr;
+        }
+        std::lock_guard lock(_mutex);
+        State& state = *_state;
+        if (!_initialized || state.lost.load() || !state.userVertexModule)
+        {
+            return nullptr;
+        }
+        std::size_t used = 0;
+        for (const auto& slot : state.userShaders)
+        {
+            used += slot ? 1 : 0;
+        }
+        if (used >= Common::kMaxUserShaders)
+        {
+            LogOnce("CreateUserShader: '" + label + "' refused: " + std::to_string(Common::kMaxUserShaders) +
+                    " user shaders are already loaded");
+            return nullptr;
+        }
+        std::shared_ptr<const Gpu::MaterialLayout> layout = Gpu::MaterialLayout::FromUserShader(blob);
+        if (!layout)
+        {
+            return nullptr; // unreachable after the validation above
+        }
+
+        // The device validates the WGSL; the error is captured by a scope (not counted as an uncaptured one)
+        ShaderModuleRef module;
+        const std::shared_ptr<ScopeResult> scope = RunInValidationScope(
+            state,
+            [&]
+            {
+                WGPUShaderSourceWGSL source = WGPU_SHADER_SOURCE_WGSL_INIT;
+                source.code = WGPUStringView{blob.fragmentWgsl.data(), blob.fragmentWgsl.size()};
+                WGPUShaderModuleDescriptor descriptor = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
+                descriptor.label = ToView("N2Engine user shader");
+                descriptor.nextInChain = &source.chain;
+                module.Reset(wgpuDeviceCreateShaderModule(state.device.Get(), &descriptor));
+            });
+        {
+            // Natively the verdict is in. In the browser it is not yet: the shader is kept, and its draws are skipped if the
+            // verdict (kept in shader->check) turns out to be a rejection
+            std::lock_guard scopeLock(scope->mutex);
+            if (scope->done && scope->failed)
+            {
+                LogOnce("CreateUserShader: '" + label + "': the device rejected the WGSL: " + scope->message);
+                return nullptr;
+            }
+        }
+        if (!module)
+        {
+            LogOnce("CreateUserShader: '" + label + "': could not create the shader module");
+            return nullptr;
+        }
+
+        std::size_t slotIndex = state.userShaders.size();
+        if (!state.freeUserIds.empty())
+        {
+            slotIndex = state.freeUserIds.back() - kShaderCount;
+            state.freeUserIds.pop_back();
+        }
+        else
+        {
+            state.userShaders.emplace_back();
+        }
+        const auto id = static_cast<std::uint16_t>(kShaderCount + slotIndex);
+        auto shader = std::make_unique<WebGpuShader>(id, std::move(layout), blob.usesLighting, label);
+        shader->module = std::move(module);
+        shader->check = scope;
+        WebGpuShader* raw = shader.get();
+        state.userShaders[slotIndex] = std::move(shader);
+        state.liveUserShaders.emplace(raw, raw);
+        return raw;
+    }
+
+    Common::IMaterial* WebGpuRenderer::CreateUserMaterial(Common::IShader* shader, Common::ITexture* texture)
+    {
+        if (shader == nullptr)
+        {
+            return nullptr;
+        }
+        std::lock_guard lock(_mutex);
+        State& state = *_state;
+        if (!_initialized || state.lost.load())
+        {
+            return nullptr;
+        }
+        const WebGpuShader* user = FindUserShaderLocked(shader);
+        if (user == nullptr)
+        {
+            LogOnce("CreateUserMaterial: the shader is not a live user shader of this renderer; returning null");
+            return nullptr;
+        }
+        State* const statePointer = _state.get(); // the materials die with it, so it outlives them
+        auto material = std::make_unique<Gpu::BlockMaterial>(
+            user->layout, shader, texture, [this](const std::string& message) { LogOnce(message); },
+            [statePointer](const ITexture* candidate) -> std::uint64_t
+            {
+                std::lock_guard idLock(statePointer->textureIdMutex);
+                const auto found = statePointer->textureIds.find(candidate);
+                return found != statePointer->textureIds.end() ? found->second : 0;
+            });
+        IMaterial* raw = material.get();
+        state.materials.emplace(raw, std::move(material));
+        return raw;
     }
 
     Common::IShader* WebGpuRenderer::GetStandardShader(const BuiltInShader kind) const
@@ -732,7 +1009,21 @@ namespace Renderer::WebGpu
         }
         const Gpu::BlockMaterial& blockMaterial = *materialIt->second;
 
-        const WGPURenderPipeline pipeline = GetPipelineLocked(blockMaterial.kind, renderState);
+        // A user material draws with its shader if that is still alive (a destroyed shader's materials draw nothing)
+        const WebGpuShader* drawShader = nullptr;
+        if (blockMaterial.IsUserShader())
+        {
+            drawShader = FindUserShaderLocked(blockMaterial.GetShader());
+        }
+        else
+        {
+            drawShader = state.shaders[ShaderIndex(blockMaterial.kind)].get();
+        }
+        if (drawShader == nullptr)
+        {
+            return;
+        }
+        const WGPURenderPipeline pipeline = GetPipelineLocked(drawShader, renderState);
         if (pipeline == nullptr)
         {
             return; // the pipeline could not be made (logged)
@@ -756,8 +1047,22 @@ namespace Renderer::WebGpu
             }
             if (texture == nullptr || !texture->view || texture->sampler == nullptr)
             {
-                // The text shader's atlas is its base sampler, and an absent one must read sdf 0 (draw nothing), not white
-                texture = (i == 0 && blockMaterial.kind == BuiltInShader::Text) ? state.textBaseDefault.get() : state.defaults[i].get();
+                if (blockMaterial.IsUserShader())
+                {
+                    // An unset slot of a user shader reads the default its manifest declares
+                    switch (blockMaterial.TextureDefault(i))
+                    {
+                    case Common::UserTextureDefault::Black: texture = state.defaults[1].get(); break;
+                    case Common::UserTextureDefault::Normal: texture = state.defaults[3].get(); break;
+                    case Common::UserTextureDefault::None: texture = state.textBaseDefault.get(); break;
+                    case Common::UserTextureDefault::White: texture = state.defaults[0].get(); break;
+                    }
+                }
+                else
+                {
+                    // The text shader's atlas is its base sampler, and an absent one must read sdf 0 (draw nothing), not white
+                    texture = (i == 0 && blockMaterial.kind == BuiltInShader::Text) ? state.textBaseDefault.get() : state.defaults[i].get();
+                }
             }
             if (texture == nullptr)
             {
@@ -768,9 +1073,11 @@ namespace Renderer::WebGpu
 
         // This draw's room in the ring: the per-draw block, then the material block, each at an aligned offset; and, for a lit
         // draw whose chunk does not hold the current lighting yet, the lighting block after them
-        const bool lit = blockMaterial.kind == BuiltInShader::Lit;
+        // A user shader reads the lighting when its manifest says so ("uses": ["lighting"]); the built-in lit shader always does
+        const bool lit = drawShader->IsUserShader() ? drawShader->usesLighting : blockMaterial.kind == BuiltInShader::Lit;
         const std::uint64_t perDrawBytes = AlignUp64(kPerDrawBindingSize, state.uniformAlignment);
-        const std::uint64_t materialBytes = AlignUp64(kMaterialBlockRange, state.uniformAlignment);
+        // The material block's range: 128 for a built-in shader, the layout's (up to 256) for a user shader
+        const std::uint64_t materialBytes = AlignUp64(snapshot.blockBytes, state.uniformAlignment);
         const std::uint64_t lightingBytes = AlignUp64(kLightingBlockSize, state.uniformAlignment);
         std::size_t chunkIndex = 0;
         std::uint64_t offset = 0;
@@ -837,11 +1144,12 @@ namespace Renderer::WebGpu
 
         // Group 1: this chunk's material range at a dynamic offset and the five textures with their samplers. Immutable, so
         // draws with the same textures in the same chunk share one
-        std::array<std::uint64_t, 1 + kSamplerCount> key{};
+        std::array<std::uint64_t, 2 + kSamplerCount> key{};
         key[0] = chunkIndex;
+        key[1] = snapshot.blockBytes;
         for (std::size_t i = 0; i < kSamplerCount; ++i)
         {
-            key[1 + i] = textures[i]->id;
+            key[2 + i] = textures[i]->id;
         }
         WGPUBindGroup materialGroup = nullptr;
         if (const auto it = state.materialGroups.find(key); it != state.materialGroups.end())
@@ -858,7 +1166,7 @@ namespace Renderer::WebGpu
             entries[0].binding = 0;
             entries[0].buffer = chunk.buffer.Get();
             entries[0].offset = 0;
-            entries[0].size = kMaterialBlockRange;
+            entries[0].size = snapshot.blockBytes;
             for (std::uint32_t i = 0; i < kSamplerCount; ++i)
             {
                 entries[1 + i].binding = kFirstSamplerBinding + i;
@@ -905,7 +1213,62 @@ namespace Renderer::WebGpu
     bool WebGpuRenderer::CreatePipelineForTest(const BuiltInShader shader, const Common::RenderState& renderState)
     {
         std::lock_guard lock(_mutex);
-        return _initialized && GetPipelineLocked(shader, renderState) != nullptr;
+        return _initialized && GetPipelineLocked(_state->shaders[ShaderIndex(shader)].get(), renderState) != nullptr;
+    }
+
+    std::uint32_t WebGpuRenderer::GetUserShaderCountForTest() const
+    {
+        std::lock_guard lock(_mutex);
+        return static_cast<std::uint32_t>(_state->liveUserShaders.size());
+    }
+
+    std::uint32_t WebGpuRenderer::GetUserPipelineCountForTest() const
+    {
+        std::lock_guard lock(_mutex);
+        return static_cast<std::uint32_t>(_state->userPipelineUse.size());
+    }
+
+    void WebGpuRenderer::SetMaxUserPipelinesForTest(const std::size_t limit)
+    {
+        std::lock_guard lock(_mutex);
+        _state->maxUserPipelines = limit;
+    }
+
+    bool WebGpuRenderer::CreateUserPipelineForTest(Common::IShader* shader, const Common::RenderState& renderState)
+    {
+        std::lock_guard lock(_mutex);
+        const WebGpuShader* user = _initialized ? FindUserShaderLocked(shader) : nullptr;
+        return user != nullptr && GetPipelineLocked(user, renderState) != nullptr;
+    }
+
+    std::uint32_t WebGpuRenderer::GetPipelineKeyForTest(Common::IShader* shader, const Common::RenderState& renderState) const
+    {
+        std::lock_guard lock(_mutex);
+        const WebGpuShader* found = nullptr;
+        for (const auto& builtIn : _state->shaders)
+        {
+            if (builtIn != nullptr && shader == builtIn.get())
+            {
+                found = builtIn.get();
+            }
+        }
+        if (found == nullptr)
+        {
+            found = FindUserShaderLocked(shader);
+        }
+        if (found == nullptr)
+        {
+            return 0xFFFFFFFFu;
+        }
+        PipelineKey key;
+        key.shader = found->id;
+        key.vertexLayout = found->IsUserShader() ? 1 : VertexLayoutId(found->kind);
+        key.depthTest = renderState.depthTest;
+        key.depthWrite = renderState.depthTest && renderState.depthWrite;
+        key.cull = static_cast<std::uint8_t>(renderState.cull);
+        key.blend = renderState.blend;
+        key.additive = renderState.blend && renderState.additive;
+        return key.Pack();
     }
 
     void WebGpuRenderer::SetFailPipelineCreationForTest(const bool fail)

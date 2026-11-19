@@ -13,8 +13,8 @@
 
 #include <renderer/common/UserShader.hpp>
 
-// Loads a cooked user shader of tests/renderer/fixtures/user-shaders/<name>/ (manifest.json and shader.vulkan.frag.spv, made by
-// tools/n2shader through scripts/cook-user-shader-fixtures.sh) as the UserShaderBlob a backend is given. This is the
+// Loads a cooked user shader of tests/renderer/fixtures/user-shaders/<name>/ (manifest.json, shader.vulkan.frag.spv and
+// shader.webgpu.wgsl, made by tools/n2shader through scripts/cook-user-shader-fixtures.sh) as the UserShaderBlob a backend is given. This is the
 // manifest-to-blob mapping the engine's loader (proposal stage 5) will have; the tests do it here so the backends can be
 // tested before that exists. Every backend's user-shader tests share it.
 namespace UserShaderTesting
@@ -164,16 +164,26 @@ namespace UserShaderTesting
             blob.params.push_back(param);
         }
 
-        const std::vector<std::uint8_t> spirv = ReadBytes(directory + manifest.at("payloads").at("vulkan").at("file").get<std::string>());
-        if (spirv.size() % 4 != 0)
+        // Every payload the manifest lists: a backend takes the one it needs (the Vulkan SPIR-V, the WebGPU WGSL)
+        const nlohmann::json& payloads = manifest.at("payloads");
+        if (payloads.contains("vulkan"))
         {
-            throw std::runtime_error(name + ": the SPIR-V is not a whole number of words");
+            const std::vector<std::uint8_t> spirv = ReadBytes(directory + payloads.at("vulkan").at("file").get<std::string>());
+            if (spirv.size() % 4 != 0)
+            {
+                throw std::runtime_error(name + ": the SPIR-V is not a whole number of words");
+            }
+            blob.fragmentSpirv.resize(spirv.size() / 4);
+            for (std::size_t i = 0; i < blob.fragmentSpirv.size(); ++i)
+            {
+                blob.fragmentSpirv[i] = static_cast<std::uint32_t>(spirv[4 * i]) | (static_cast<std::uint32_t>(spirv[4 * i + 1]) << 8) |
+                    (static_cast<std::uint32_t>(spirv[4 * i + 2]) << 16) | (static_cast<std::uint32_t>(spirv[4 * i + 3]) << 24);
+            }
         }
-        blob.fragmentSpirv.resize(spirv.size() / 4);
-        for (std::size_t i = 0; i < blob.fragmentSpirv.size(); ++i)
+        if (payloads.contains("webgpu"))
         {
-            blob.fragmentSpirv[i] = static_cast<std::uint32_t>(spirv[4 * i]) | (static_cast<std::uint32_t>(spirv[4 * i + 1]) << 8) |
-                (static_cast<std::uint32_t>(spirv[4 * i + 2]) << 16) | (static_cast<std::uint32_t>(spirv[4 * i + 3]) << 24);
+            const std::vector<std::uint8_t> wgsl = ReadBytes(directory + payloads.at("webgpu").at("file").get<std::string>());
+            blob.fragmentWgsl.assign(wgsl.begin(), wgsl.end());
         }
         return blob;
     }

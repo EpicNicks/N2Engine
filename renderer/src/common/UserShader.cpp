@@ -157,7 +157,7 @@ bool Renderer::Common::ReadFragmentVaryings(const std::vector<std::uint32_t>& sp
     return true;
 }
 
-std::string Renderer::Common::ValidateUserShaderBlob(const UserShaderBlob& blob)
+std::string Renderer::Common::ValidateUserShaderParams(const UserShaderBlob& blob)
 {
     if (blob.contract != kUserShaderContractVersion)
     {
@@ -230,6 +230,37 @@ std::string Renderer::Common::ValidateUserShaderBlob(const UserShaderBlob& blob)
             }
         }
         ranges.emplace_back(param.offset, param.offset + param.size);
+    }
+    return {};
+}
+
+std::string Renderer::Common::ValidateUserShaderBlob(const UserShaderBlob& blob, const UserShaderTarget target)
+{
+    if (std::string problem = ValidateUserShaderParams(blob); !problem.empty())
+    {
+        return problem;
+    }
+
+    if (target == UserShaderTarget::WebGpu)
+    {
+        if (blob.fragmentWgsl.empty())
+        {
+            return "the WebGPU fragment payload is empty";
+        }
+        if (blob.fragmentWgsl.size() > kUserShaderMaxWgslBytes)
+        {
+            return "the WebGPU fragment payload is " + std::to_string(blob.fragmentWgsl.size()) + " bytes; the limit is " +
+                std::to_string(kUserShaderMaxWgslBytes);
+        }
+        if (blob.fragmentWgsl.find('\0') != std::string::npos)
+        {
+            return "the WebGPU fragment payload is not text (it holds a NUL byte)";
+        }
+        if (blob.fragmentWgsl.find("@fragment") == std::string::npos)
+        {
+            return "the WebGPU fragment payload has no @fragment entry point";
+        }
+        return {};
     }
 
     if (blob.fragmentSpirv.empty())
