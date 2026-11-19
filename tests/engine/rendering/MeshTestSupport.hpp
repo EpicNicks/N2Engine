@@ -54,7 +54,7 @@ namespace MeshTestSupport
         [[nodiscard]] int Destroys() const { return destroyedMeshes + destroyedMaterials + destroyedTextures; }
     };
 
-    class RecordingMeshRenderer final : public Renderer::Common::IRenderer
+    class RecordingMeshRenderer : public Renderer::Common::IRenderer
     {
     public:
         RecordingMeshRenderer() : _counts(_own) {}

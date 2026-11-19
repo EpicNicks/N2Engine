@@ -80,6 +80,8 @@ namespace N2Engine::IO
                 return std::string(Text::Font::ResourceTypeName);
             if (ext == ".mat")
                 return std::string(Rendering::Material::ResourceTypeName);
+            if (ext == Rendering::Shader::Extension)
+                return std::string(Rendering::Shader::ResourceTypeName);
             if (AssetImport::FindModelImporter(ext) != nullptr) // .gltf, .glb, and .fbx, .obj with ufbx built
                 return std::string(Rendering::Model::ResourceTypeName);
             if (ext == SceneFile::Extension)
@@ -100,6 +102,7 @@ namespace N2Engine::IO
         Text::Font::RegisterLoader();
         Rendering::Texture::RegisterLoader();
         Rendering::Material::RegisterLoader();
+        Rendering::Shader::RegisterLoader();
         Rendering::Model::RegisterLoader();
         SceneFile::RegisterLoader();
         PrefabFile::RegisterLoader();

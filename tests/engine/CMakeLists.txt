@@ -183,6 +183,7 @@ target_compile_definitions(engine_tests PRIVATE
         N2_TEST_ASSETS_DIR="${CMAKE_SOURCE_DIR}/tests/assets"
         N2_RENDERER_SOURCE_DIR="${CMAKE_SOURCE_DIR}/renderer" # OpenGlShaderSourceTests reads the GLSL as text
         N2_ENGINE_SOURCE_DIR="${CMAKE_SOURCE_DIR}/engine" # DeterministicMathSourceScanTests scans the sources as text
+        N2_USER_SHADER_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/tests/renderer/fixtures/user-shaders" # the cooked user shaders (UserShaderMaterialTests)
         N2_MATH_SOURCE_DIR="${CMAKE_SOURCE_DIR}/math"
         N2_GOLDEN_REPLAY_DIR="${CMAKE_SOURCE_DIR}/tests/golden/replays" # the replay files of the golden determinism job (C2)
 )

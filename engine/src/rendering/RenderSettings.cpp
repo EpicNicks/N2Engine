@@ -25,6 +25,25 @@ namespace N2Engine::Rendering
         }
     }
 
+    namespace
+    {
+        std::atomic<UserShaderErrorStyle> &ErrorStyle()
+        {
+            static std::atomic<UserShaderErrorStyle> style{UserShaderErrorStyle::Unlit};
+            return style;
+        }
+    }
+
+    UserShaderErrorStyle RenderSettings::GetUserShaderErrorStyle()
+    {
+        return ErrorStyle().load();
+    }
+
+    void RenderSettings::SetUserShaderErrorStyle(const UserShaderErrorStyle style)
+    {
+        ErrorStyle().store(style);
+    }
+
     bool RenderSettings::GetForceShaderEncode()
     {
         return Force().load();

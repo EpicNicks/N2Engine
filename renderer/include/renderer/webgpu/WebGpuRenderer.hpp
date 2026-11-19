@@ -147,6 +147,7 @@ namespace Renderer
             Common::IShader* CreateUserShader(const Common::UserShaderBlob& blob) override;
             /// A material of a user shader (see IRenderer::CreateUserMaterial); null for anything else
             Common::IMaterial* CreateUserMaterial(Common::IShader* shader, Common::ITexture* texture) override;
+            [[nodiscard]] std::optional<Common::UserShaderTarget> GetUserShaderTarget() const override { return Common::UserShaderTarget::WebGpu; }
 
             // Meshes and textures. Uploads are queue writes (they work inside or outside a frame). Destroying a mesh or a
             // texture only releases it: WebGPU keeps an object alive for every recorded or submitted command that uses it.
