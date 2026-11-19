@@ -513,13 +513,8 @@ void OpenGLRenderer::SetViewProjection(const float *view, const float *projectio
 
 namespace
 {
-    /// The names a program's scene-lighting uniforms have: the built-in lit shader's and a user shader's (UserShaderGl.hpp) differ in
-    /// the spelling only
-    constexpr Renderer::Common::UserGl::LightingNames kBuiltInLightingNames{
-        "uEncodeOutput", "uAmbientLight", "uCameraPos", "uNumDirectionalLights", "uNumPointLights",
-        "uNumSpotLights", "uDirectionalLights", "uPointLights", "uSpotLights"};
-
-    /// Sets the lighting uniforms of the BOUND program `shader` by `names`. `encodeOutput` is the value of the encode flag
+    /// Sets the lighting uniforms of the BOUND user program `shader` by `names` (UserGl::kUserLightingNames). The built-in lit shader's
+    /// are set by UpdateSceneLighting below, in the form the parity test reads (VulkanShaderParityTests). `encodeOutput` is the value of the encode flag
     void SetLightingUniforms(Renderer::OpenGL::OpenGLShader &shader, const Renderer::Common::SceneLightingData &lighting,
                              const N2Engine::Math::Vector3 &cameraPosition,
                              const Renderer::Common::UserGl::LightingNames &names, const int encodeOutput)
@@ -590,35 +585,6 @@ namespace
     }
 }
 
-void OpenGLRenderer::UpdateSceneLighting(
-    const Common::SceneLightingData &lighting,
-    const N2Engine::Math::Vector3 &cameraPosition)
-{
-    m_currentLighting = lighting;
-    m_cameraPosition = cameraPosition;
-
-    // Update lit shader with lighting data
-    if (m_standardLitShader)
-    {
-        if (auto shaderIt = m_shaderPrograms.find(m_standardLitShader); shaderIt != m_shaderPrograms.end())
-        {
-            auto *shader = static_cast<OpenGLShader*>(shaderIt->second.get());
-            shader->Bind();
-
-            // Linear lighting: the lit result is encoded by the framebuffer (GL_FRAMEBUFFER_SRGB, set per draw), or by
-            // the shader when the target isn't sRGB. Gamma lighting writes it as it is.
-            SetLightingUniforms(*shader, lighting, cameraPosition, kBuiltInLightingNames,
-                                lighting.colorSpace == Common::ColorSpace::Linear &&
-                                        (!m_framebufferIsSrgb || lighting.forceShaderEncode) ? 1 : 0);
-        }
-    }
-
-    // The user shaders that ask for the lighting ("uses": ["lighting"]) get the same data under the contract's names. Nothing
-    // encodes their output but themselves (the framebuffer's sRGB encode is on for the lit shader only), so the flag is 1
-    // whenever linear lighting is on, as in the lighting block of the Vulkan and WebGPU backends
-    ApplyLightingToUserShaders();
-}
-
 void OpenGLRenderer::ApplyLightingToUserShaders()
 {
     for (const auto &[ptr, info] : m_userShaders)
@@ -635,6 +601,116 @@ void OpenGLRenderer::ApplyLightingToUserShaders()
         }
     }
 }
+
+void OpenGLRenderer::UpdateSceneLighting(
+    const Common::SceneLightingData &lighting,
+    const N2Engine::Math::Vector3 &cameraPosition)
+{
+    m_currentLighting = lighting;
+    m_cameraPosition = cameraPosition;
+
+    // The user shaders that ask for the lighting ("uses": ["lighting"]) get the same data under the contract's names. Nothing
+    // encodes their output but themselves (the framebuffer's sRGB encode is on for the lit shader only), so their flag is 1
+    // whenever linear lighting is on, as in the lighting block of the Vulkan and WebGPU backends
+    ApplyLightingToUserShaders();
+
+    // Update lit shader with lighting data
+    if (!m_standardLitShader)
+        return;
+
+    auto shaderIt = m_shaderPrograms.find(m_standardLitShader);
+    if (shaderIt == m_shaderPrograms.end())
+        return;
+
+    auto *shader = static_cast<OpenGLShader*>(shaderIt->second.get());
+    shader->Bind();
+
+    // Linear lighting: the lit result is encoded by the framebuffer (GL_FRAMEBUFFER_SRGB, set per draw), or by
+    // the shader when the target isn't sRGB. Gamma lighting writes it as it is.
+    shader->SetInt("uEncodeOutput",
+                   lighting.colorSpace == Common::ColorSpace::Linear &&
+                           (!m_framebufferIsSrgb || lighting.forceShaderEncode) ? 1 : 0);
+
+    // Set ambient
+    shader->SetVec3("uAmbientLight",
+                    lighting.ambientColor.x,
+                    lighting.ambientColor.y,
+                    lighting.ambientColor.z);
+
+    // Set camera position directly from parameter
+    shader->SetVec3("uCameraPos",
+                    cameraPosition.x,
+                    cameraPosition.y,
+                    cameraPosition.z);
+
+    // Set directional lights
+    const int numDirLights = std::min<int>(static_cast<int>(lighting.directionalLights.size()),
+                                           Common::SceneLightingData::MAX_DIRECTIONAL_LIGHTS);
+    shader->SetInt("uNumDirectionalLights", numDirLights);
+
+    for (int i = 0; i < numDirLights; ++i)
+    {
+        const auto &light = lighting.directionalLights[i];
+        std::string base = "uDirectionalLights[" + std::to_string(i) + "]";
+
+        shader->SetVec3(base + ".direction",
+                        light.direction.x, light.direction.y, light.direction.z);
+        shader->SetVec3(base + ".color",
+                        light.color.x, light.color.y, light.color.z);
+        shader->SetFloat(base + ".intensity", light.intensity);
+    }
+
+    // Set point lights
+    const int numPointLights = std::min<int>(static_cast<int>(lighting.pointLights.size()),
+                                             Common::SceneLightingData::MAX_POINT_LIGHTS);
+    shader->SetInt("uNumPointLights", numPointLights);
+
+    for (int i = 0; i < numPointLights; ++i)
+    {
+        const auto &light = lighting.pointLights[i];
+        std::string base = "uPointLights[" + std::to_string(i) + "]";
+
+        shader->SetVec3(base + ".position",
+                        light.position.x, light.position.y, light.position.z);
+        shader->SetVec3(base + ".color",
+                        light.color.x, light.color.y, light.color.z);
+        shader->SetFloat(base + ".intensity", light.intensity);
+        shader->SetFloat(base + ".range", light.range);
+        shader->SetFloat(base + ".attenuation", light.attenuation);
+    }
+
+    // Set spot lights
+    // At most MAX_SPOT_LIGHTS of the list, as the software renderer takes them; one without an axis (a zero
+    // direction) lights nothing and is left out, since normalising it would give NaN
+    const int spotCandidates = std::min<int>(static_cast<int>(lighting.spotLights.size()),
+                                             Common::SceneLightingData::MAX_SPOT_LIGHTS);
+    int numSpotLights = 0;
+    for (int candidate = 0; candidate < spotCandidates; ++candidate)
+    {
+        const auto &light = lighting.spotLights[candidate];
+        const float length = std::sqrt(light.direction.x * light.direction.x + light.direction.y * light.direction.y +
+                                       light.direction.z * light.direction.z);
+        if (!(length > 1e-6f))
+        {
+            continue;
+        }
+        const int i = numSpotLights++;
+        std::string base = "uSpotLights[" + std::to_string(i) + "]";
+
+        shader->SetVec3(base + ".position",
+                        light.position.x, light.position.y, light.position.z);
+        shader->SetVec3(base + ".direction",
+                        light.direction.x / length, light.direction.y / length, light.direction.z / length);
+        shader->SetVec3(base + ".color",
+                        light.color.x, light.color.y, light.color.z);
+        shader->SetFloat(base + ".intensity", light.intensity);
+        shader->SetFloat(base + ".range", light.range);
+        shader->SetFloat(base + ".cosInner", std::cos(light.innerConeAngle));
+        shader->SetFloat(base + ".cosOuter", std::cos(light.outerConeAngle));
+    }
+    shader->SetInt("uNumSpotLights", numSpotLights);
+}
+
 
 void OpenGLRenderer::ApplyRenderState(const Common::RenderState &state)
 {

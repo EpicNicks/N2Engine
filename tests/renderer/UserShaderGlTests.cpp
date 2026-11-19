@@ -273,10 +273,11 @@ TEST(UserShaderGlTest, TheRenderersOwnSourceSetsTheUserUniformsByTheNamesOfTheSh
     EXPECT_TRUE(Contains(renderer, "targetHeightLoc"));
     EXPECT_TRUE(Contains(renderer, "glUniform1f(uniforms.targetHeightLoc"));
 
-    // The lighting: one function sets both the built-in lit shader's and the user shaders' uniforms, from the names of the shared header
+    // The lighting: the user shaders' uniforms are set from the names of the shared header; the built-in lit shader's code is the one
+    // VulkanShaderParityTests reads
     EXPECT_TRUE(Contains(renderer, "UserGl::kUserLightingNames"));
     EXPECT_TRUE(Contains(renderer, "UserGl::LightMember"));
-    EXPECT_TRUE(Contains(renderer, "\"uDirectionalLights\"")) << "the built-in lit shader keeps its names";
+    EXPECT_TRUE(Contains(renderer, "\"uDirectionalLights[\"")) << "the built-in lit shader keeps its own code and names";
     for (const char* member : {"direction", "color", "intensity", "position", "range", "attenuation", "cosInner", "cosOuter"})
     {
         EXPECT_TRUE(Contains(renderer, std::string("\"") + member + "\"")) << member;
