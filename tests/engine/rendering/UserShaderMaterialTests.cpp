@@ -484,6 +484,13 @@ protected:
         fs::create_directories(s_root / "assets");
         WriteText("shaders/solid.n2shader", FixtureSource("solid"));
         WriteText("shaders/textured.n2shader", FixtureSource("textured"));
+        WriteText("shaders/reserved.n2shader", R"({ "n2shader": 1, "name": "Reserved", "params": [
+      { "name": "baseColor", "type": "color", "default": [1, 1, 1, 1] },
+      { "name": "u_Mask", "type": "texture", "default": "black" },
+      { "name": "baseColorTexture", "type": "texture" } ] }
+    #stage fragment
+    void main() { n2_FragColor = baseColor * n2_texture(baseColorTexture, n2_UV) * n2_texture(u_Mask, n2_UV); }
+    )");
         WriteText("materials/green.mat", R"({
             "shading": "unlit",
             "shader": "../shaders/solid.n2shader",
@@ -672,13 +679,6 @@ TEST_F(ShaderMatAssetTest, AUserShaderMaterialReachesTheBackendAsTheCookedBlobWi
 
 TEST_F(ShaderMatAssetTest, TheReservedBaseColorAndBaseColorTextureFeedAShaderThatDeclaresThemAndTexturesGoToTheirSlots)
 {
-    WriteText("shaders/reserved.n2shader", R"({ "n2shader": 1, "name": "Reserved", "params": [
-  { "name": "baseColor", "type": "color", "default": [1, 1, 1, 1] },
-  { "name": "u_Mask", "type": "texture", "default": "black" },
-  { "name": "baseColorTexture", "type": "texture" } ] }
-#stage fragment
-void main() { n2_FragColor = baseColor * n2_texture(baseColorTexture, n2_UV) * n2_texture(u_Mask, n2_UV); }
-)");
     const auto shader = IO::Resources::Instance().Load<Shader>(fs::path("res://shaders/reserved.n2shader"));
     ASSERT_NE(shader, nullptr);
     EXPECT_EQ(shader->FindParam("baseColorTexture")->slot, 0);
