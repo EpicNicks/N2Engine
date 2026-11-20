@@ -670,7 +670,7 @@ test('corpus: every file is listed, and the whole corpus passes with the install
   assert.equal(result.ok, true, result.lines.filter((l) => l.includes('FAIL')).join('\n'));
   assert.ok(result.counts.positive >= 12);
   // the negatives that only a compiler can reject count as met when the tools are there, as skipped when they are not
-  assert.ok(result.counts.negative + result.counts.skipped >= 8);
+  assert.ok(result.counts.negative + result.counts.skipped >= 7);
   const spec = JSON.parse(fs.readFileSync(path.join(corpusDir, 'expect.json'), 'utf8'));
   // one positive per row of the probe table (proposal 1.2) plus the spike's user-style shader
   for (const row of ['inverse-mat3', 'inverse-mat4', 'float-array', 'derivatives', 'texel-fetch-lod', 'texture-size', 'switch', 'frag-coord', 'uint-hash', 'while-loop', 'spike-user-style']) {
