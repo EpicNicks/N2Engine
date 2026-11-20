@@ -70,6 +70,14 @@ namespace Renderer::Common
         /// parameters as plain uniforms and the author's stage. The engine's vertex stage is the renderer's own
         /// (UserGl::VertexSource). Empty for a blob made for another backend
         std::string fragmentGlsl;
+        /// A custom VERTEX stage (stage 9d), for the target the blob is made for; all empty for a shader with the engine's own. The
+        /// Vulkan SPIR-V words, the WebGPU WGSL module (entry point `main`) or the OpenGL GLSL 330 text. It reads the engine's five
+        /// attributes (locations 0-4), writes all five varyings (the fragment stage then reads them all), sees the PerDraw block and the
+        /// Material block (the parameters), and has no textures. The pipeline uses it in place of the shared vertex stage
+        std::vector<std::uint32_t> vertexSpirv;
+        std::string vertexWgsl;
+        std::string vertexGlsl;
+        [[nodiscard]] bool HasVertexStage() const { return !vertexSpirv.empty() || !vertexWgsl.empty() || !vertexGlsl.empty(); }
     };
 
     /// The backend a blob is checked for: each takes its own payload
@@ -119,6 +127,13 @@ namespace Renderer::Common
     /// capability outside the contract's list (Shader, Matrix, ImageQuery, DerivativeControl, Sampled1D, SampledBuffer,
     /// Float16, Int16, Int8): the allow-list of the proposal's section 8, applied before a driver sees the module
     [[nodiscard]] bool ReadFragmentVaryings(const std::vector<std::uint32_t>& spirv, std::uint32_t& mask, std::string& error);
+
+    /// The same walk for a custom VERTEX stage's SPIR-V (stage 9d): every length checked, exactly one entry point and it a vertex stage,
+    /// only the contract's capabilities, no input location past 4 (the engine's five attributes). False, with `error` set, otherwise
+    [[nodiscard]] bool ReadVertexInterface(const std::vector<std::uint32_t>& spirv, std::string& error);
+
+    /// The checks of the FRAGMENT payload alone (ValidateUserShaderBlob is these, then the vertex payload's)
+    [[nodiscard]] std::string ValidateFragmentPayload(const UserShaderBlob& blob, UserShaderTarget target);
 
     /// The reason the parameters and limits of `blob` are not acceptable, or an empty string when they are: the contract
     /// version, the size limits, parameter names (unique, identifiers, not starting with n2_ or gl_), offsets (inside the

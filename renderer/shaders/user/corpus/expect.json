@@ -14,7 +14,8 @@
     { "file": "lighting.n2shader" },
     { "file": "matrix-params.n2shader" },
     { "file": "nan-checks.n2shader" },
-    { "file": "authored-wgsl.n2shader" }
+    { "file": "authored-wgsl.n2shader" },
+    { "file": "vertex-hook.n2shader" }
   ],
   "negative": [
     { "file": "negative-non-uniform-sample.n2shader", "expect": [

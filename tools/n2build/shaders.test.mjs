@@ -67,6 +67,12 @@ test('missingShaderTools: Tint is needed for WebGPU only', () => {
   assert.equal(missingShaderTools(all, ['webgpu']).length, 1);
 });
 
+test('stripSource keeps the line of a custom vertex stage (the engine tells it from the text)', () => {
+  const text = '{ "n2shader": 1, "name": "V" }\n#stage fragment\nvoid main() {}\n#stage vertex\nvoid n2_vertex() {}\n';
+  assert.equal(stripSource(text), '{ "n2shader": 1, "name": "V" }\n#stage fragment\n#stage vertex\n');
+  assert.equal(stripSource('{ "n2shader": 1 }\n#stage fragment\nvoid main() {}\n'), '{ "n2shader": 1 }\n#stage fragment\n');
+});
+
 test('stripSource keeps the header and an empty fragment stage', () => {
   const text = fs.readFileSync(path.join(fixtures, 'solid.n2shader'), 'utf8');
   const stripped = stripSource(text);

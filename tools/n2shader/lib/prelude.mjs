@@ -97,6 +97,36 @@ export function buildTargetSource(target, parsed, { path: file = 'shader.n2shade
     ? '#version 330 core\n'
     : '#version 450\n#extension GL_GOOGLE_cpp_style_line_directive : enable\n#extension GL_EXT_samplerless_texture_functions : enable\n';
   const lineDirective = target === 'gl' ? `#line ${parsed.firstLine} 1\n` : `#line ${parsed.firstLine} "${linePath(file)}"\n`;
-  const before = `${head}// n2shader contract ${CONTRACT_VERSION}, target ${target}\n${prelude}${nanShims}${materialSection(target, header)}${lineDirective}`;
-  return { text: `${before}${parsed.source}\n`, userLine: before.split('\n').length };
+  // With a custom vertex stage the engine's vertex stage is the author's, which writes all five varyings: the SPIR-V targets' fragment
+  // stage is made to read them all, so no vertex output goes unread (the validation layer warns about one). The author's main is renamed
+  // for the generated one, which reads the varyings and calls it
+  const hasVertex = typeof parsed.vertex === 'string';
+  const rename = hasVertex && target !== 'gl' ? '#define main n2_user_main\n' : '';
+  const trailer = hasVertex && target !== 'gl'
+    ? '#undef main\nvoid main() {\n    float n2_sink = n2_UV.x + n2_Color.x + n2_WorldPos.x + n2_Normal.x + n2_Tangent.x;\n    n2_user_main();\n}\n'
+    : '';
+  const before = `${head}// n2shader contract ${CONTRACT_VERSION}, target ${target}\n${prelude}${nanShims}${materialSection(target, header)}${rename}${lineDirective}`;
+  return { text: `${before}${parsed.source}\n${trailer}`, userLine: before.split('\n').length };
+}
+
+const VERTEX_TEMPLATE_FILES = Object.freeze({ vulkan: 'vertex-vulkan.glsl', webgpu: 'vertex-webgpu.glsl', gl: 'vertex-opengl.glsl' });
+
+/**
+ * The complete GLSL of one target's custom vertex stage: version header, the vertex prelude (attributes, varyings, PerDraw, the clip
+ * remap, n2_DefaultVertex and n2_SetPosition), the Material block (the header's params), the author's n2_vertex() behind a #line, and
+ * the generated main. Only for a parsed file that has a vertex stage.
+ * @returns {{ text: string, userLine: number }}
+ */
+export function buildVertexSource(target, parsed, { path: file = 'shader.n2shader', dir = PRELUDE_DIR } = {}) {
+  if (typeof parsed.vertex !== 'string') throw new Error('buildVertexSource: the file has no vertex stage');
+  const { header } = parsed;
+  const prelude = expandTemplate(readTemplate(VERTEX_TEMPLATE_FILES[target], dir), { lighting: false, slots: [], dir });
+  const head = target === 'gl' ? '#version 330 core\n' : '#version 450\n#extension GL_GOOGLE_cpp_style_line_directive : enable\n';
+  const lineDirective = target === 'gl' ? `#line ${parsed.vertexFirstLine} 2\n` : `#line ${parsed.vertexFirstLine} "${linePath(file)}"\n`;
+  const nanShims = usesNanChecks(parsed.vertex) ? readTemplate('nan-shims.glsl', dir) : '';
+  // The Material block only: a texture is a fragment-stage resource in v1
+  const material = materialSection(target, { ...header, params: header.params.filter((param) => param.type !== 'texture') });
+  const before = `${head}// n2shader contract ${CONTRACT_VERSION}, target ${target}, vertex stage\n${prelude}${nanShims}${material}${lineDirective}`;
+  const trailer = 'void main() {\n    n2_DefaultVertex();\n    n2_vertex();\n    if (!n2_positionSet) {\n        n2_SetPosition(n2_Projection * n2_View * vec4(n2_WorldPos, 1.0));\n    }\n}\n';
+  return { text: `${before}${parsed.vertex}\n${trailer}`, userLine: before.split('\n').length };
 }

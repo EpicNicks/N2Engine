@@ -73,7 +73,8 @@ namespace Renderer::Vulkan
         bool usesLighting = false;           // the draw copies the scene lighting into the ring for this shader
         std::uint32_t varyingMask = 0;       // a user shader: the fragment inputs it reads (the kUserVarying bits)
         std::shared_ptr<const Gpu::MaterialLayout> layout; // a user shader's material block
-        VkShaderModule vertexModule = VK_NULL_HANDLE;   // a user shader's is the shared user vertex variant for its varyingMask (not owned)
+        VkShaderModule vertexModule = VK_NULL_HANDLE;   // a user shader's is the shared user vertex variant for its varyingMask (not owned) or its own
+        VkShaderModule ownVertexModule = VK_NULL_HANDLE; // a user shader with a custom vertex stage (stage 9d): the module it made, destroyed with it
         VkShaderModule fragmentModule = VK_NULL_HANDLE;
     };
 

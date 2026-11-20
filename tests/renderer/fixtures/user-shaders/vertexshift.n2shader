@@ -1,0 +1,17 @@
+{ "n2shader": 1, "name": "FixtureVertexShift",
+  "params": [
+    { "name": "u_Color", "type": "color", "default": [0, 1, 0, 1] },
+    { "name": "u_Shift", "type": "float", "default": 0 }
+  ]
+}
+#stage fragment
+// A flat colour: where it shows is the vertex stage's doing
+void main() {
+    n2_FragColor = u_Color;
+}
+#stage vertex
+// Stage 9d: a custom vertex stage. The engine's default maths ran first; this moves the world position along x by a parameter of the
+// Material block (the clip position follows from n2_WorldPos).
+void n2_vertex() {
+    n2_WorldPos.x += u_Shift;
+}

@@ -1184,3 +1184,85 @@ TEST(MatrixParamTest, ApplyUniformsGivesTheBackendTheMatricesRowMajorAndTheIdent
     EXPECT_EQ(target.floats["u_Gain"], 1.0f);
 }
 
+// ===== Stage 9d: a custom vertex stage =====
+
+TEST(ShaderVertexStageTest, TheCookedVertexPayloadsReachTheBlobOfEachBackend)
+{
+    const auto shader = FixtureShader("vertexshift");
+    ASSERT_NE(shader, nullptr);
+    EXPECT_TRUE(shader->HasVertexStage());
+    EXPECT_FALSE(FixtureShader("solid")->HasVertexStage());
+    for (const UserShaderTarget target : {UserShaderTarget::Vulkan, UserShaderTarget::WebGpu, UserShaderTarget::OpenGl})
+    {
+        std::string error;
+        const auto blob = shader->MakeBlob(target, error);
+        ASSERT_TRUE(blob.has_value()) << error;
+        EXPECT_EQ(Renderer::Common::ValidateUserShaderBlob(*blob, target), "");
+        EXPECT_TRUE(blob->HasVertexStage());
+        EXPECT_EQ(!blob->vertexSpirv.empty(), target == UserShaderTarget::Vulkan);
+        EXPECT_EQ(!blob->vertexWgsl.empty(), target == UserShaderTarget::WebGpu);
+        EXPECT_EQ(!blob->vertexGlsl.empty(), target == UserShaderTarget::OpenGl);
+    }
+    std::string error;
+    const auto plain = FixtureShader("solid")->MakeBlob(UserShaderTarget::Vulkan, error);
+    ASSERT_TRUE(plain.has_value()) << error;
+    EXPECT_FALSE(plain->HasVertexStage()) << "a shader without one keeps the engine's vertex stage";
+}
+
+TEST(ShaderVertexStageTest, TheGlslStageEndsWhereTheVertexStageBegins)
+{
+    const auto shader = FixtureShader("vertexshift");
+    ASSERT_NE(shader, nullptr);
+    std::string stage;
+    int firstLine = 0;
+    ASSERT_TRUE(shader->GetStage(stage, firstLine));
+    EXPECT_NE(stage.find("n2_FragColor = u_Color"), std::string::npos);
+    EXPECT_EQ(stage.find("n2_vertex"), std::string::npos) << "the vertex block is not part of the fragment text";
+    EXPECT_EQ(stage.find("#stage"), std::string::npos);
+}
+
+TEST(ShaderVertexStageTest, CookedDataThatDisagreesWithTheHeaderAboutTheVertexStageIsStale)
+{
+    std::string error;
+    // The header has no vertex stage (any more) but the cooked data does
+    auto without = Shader::FromSource(FixtureSource("vertexshift").substr(0, FixtureSource("vertexshift").find("#stage vertex")), "x.n2shader");
+    ASSERT_NE(without, nullptr);
+    EXPECT_FALSE(without->HasVertexStage());
+    without->SetCookedDirectory(FixtureDir() / "vertexshift");
+    EXPECT_FALSE(without->MakeBlob(UserShaderTarget::Vulkan, error).has_value());
+    EXPECT_NE(error.find("stale"), std::string::npos) << error;
+    // The header has one (now) but the data was cooked without
+    auto with = Shader::FromSource(FixtureSource("solid") + "#stage vertex\nvoid n2_vertex() {}\n", "y.n2shader");
+    ASSERT_NE(with, nullptr);
+    EXPECT_TRUE(with->HasVertexStage());
+    with->SetCookedDirectory(FixtureDir() / "solid");
+    error.clear();
+    EXPECT_FALSE(with->MakeBlob(UserShaderTarget::Vulkan, error).has_value());
+    EXPECT_NE(error.find("stale"), std::string::npos) << error;
+}
+
+TEST(ShaderVertexStageTest, AStrippedPackStillSaysThereIsAVertexStage)
+{
+    // n2build's stripped source: the header, `#stage fragment`, and an empty `#stage vertex` line
+    const std::string source = FixtureSource("vertexshift");
+    const std::string stripped = source.substr(0, source.find("#stage fragment")) + "#stage fragment\n#stage vertex\n";
+    auto shader = Shader::FromSource(stripped, "z.n2shader");
+    ASSERT_NE(shader, nullptr);
+    EXPECT_TRUE(shader->HasVertexStage());
+    shader->SetCookedDirectory(FixtureDir() / "vertexshift");
+    std::string error;
+    EXPECT_TRUE(shader->MakeBlob(UserShaderTarget::Vulkan, error).has_value()) << error;
+}
+
+TEST(ShaderVertexStageTest, TheRuntimeCompileDoesNotBuildAVertexStageAndSaysSo)
+{
+    auto shader = FixtureShader("vertexshift");
+    ASSERT_NE(shader, nullptr);
+    shader->SetCookedDirectory(fs::temp_directory_path() / "n2-no-cooked-data-here"); // nothing cooked: only the runtime path is left
+    std::string error;
+    for (const UserShaderTarget target : {UserShaderTarget::Vulkan, UserShaderTarget::OpenGl})
+    {
+        EXPECT_FALSE(shader->MakeBlob(target, error).has_value());
+        EXPECT_NE(error.find("custom vertex stage"), std::string::npos) << error;
+    }
+}

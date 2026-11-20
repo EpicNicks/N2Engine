@@ -269,6 +269,7 @@ namespace Renderer::WebGpu
         ShaderInterface::BuiltInShader kind; // meaningless (Unlit) for a user shader
         std::uint16_t id = 0;
         ShaderModuleRef module; // a built-in's whole module; a user shader's fragment module
+        ShaderModuleRef vertexModule; // a user shader with a custom vertex stage (stage 9d): its own vertex module (entry point main)
         std::shared_ptr<const Gpu::MaterialLayout> layout; // null for a built-in
         bool usesLighting = false;                          // a user shader's "uses": ["lighting"]
         std::string label;

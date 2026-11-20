@@ -596,8 +596,10 @@ namespace Renderer::WebGpu
         WGPURenderPipelineDescriptor descriptor = WGPU_RENDER_PIPELINE_DESCRIPTOR_INIT;
         descriptor.label = ToView("N2Engine pipeline");
         descriptor.layout = state.pipelineLayout.Get();
-        descriptor.vertex.module = user ? state.userVertexModule.Get() : shader->module.Get();
-        descriptor.vertex.entryPoint = ToView("vs_main");
+        // A user shader's custom vertex stage (stage 9d) is its own module with the entry point main; otherwise the shared one (vs_main)
+        const bool ownVertex = user && shader->vertexModule;
+        descriptor.vertex.module = ownVertex ? shader->vertexModule.Get() : (user ? state.userVertexModule.Get() : shader->module.Get());
+        descriptor.vertex.entryPoint = ToView(ownVertex ? "main" : "vs_main");
         descriptor.vertex.bufferCount = 1;
         descriptor.vertex.buffers = &vertexLayout;
         descriptor.primitive.topology = WGPUPrimitiveTopology_TriangleList;
@@ -764,6 +766,7 @@ namespace Renderer::WebGpu
 
         // The device validates the WGSL; the error is captured by a scope (not counted as an uncaptured one)
         ShaderModuleRef module;
+        ShaderModuleRef vertexModule; // a custom vertex stage, when the blob has one (stage 9d)
         const std::shared_ptr<ScopeResult> scope = RunInValidationScope(
             state,
             [&]
@@ -774,6 +777,15 @@ namespace Renderer::WebGpu
                 descriptor.label = ToView("N2Engine user shader");
                 descriptor.nextInChain = &source.chain;
                 module.Reset(wgpuDeviceCreateShaderModule(state.device.Get(), &descriptor));
+                if (!blob.vertexWgsl.empty())
+                {
+                    WGPUShaderSourceWGSL vertexSource = WGPU_SHADER_SOURCE_WGSL_INIT;
+                    vertexSource.code = WGPUStringView{blob.vertexWgsl.data(), blob.vertexWgsl.size()};
+                    WGPUShaderModuleDescriptor vertexDescriptor = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
+                    vertexDescriptor.label = ToView("N2Engine user shader vertex");
+                    vertexDescriptor.nextInChain = &vertexSource.chain;
+                    vertexModule.Reset(wgpuDeviceCreateShaderModule(state.device.Get(), &vertexDescriptor));
+                }
             });
         {
             // Natively the verdict is in. In the browser it is not yet: the shader is kept, and its draws are skipped if the
@@ -785,7 +797,7 @@ namespace Renderer::WebGpu
                 return nullptr;
             }
         }
-        if (!module)
+        if (!module || (!blob.vertexWgsl.empty() && !vertexModule))
         {
             LogOnce("CreateUserShader: '" + label + "': could not create the shader module");
             return nullptr;
@@ -804,6 +816,7 @@ namespace Renderer::WebGpu
         const auto id = static_cast<std::uint16_t>(kShaderCount + slotIndex);
         auto shader = std::make_unique<WebGpuShader>(id, std::move(layout), blob.usesLighting, label);
         shader->module = std::move(module);
+        shader->vertexModule = std::move(vertexModule);
         shader->check = scope;
         WebGpuShader* raw = shader.get();
         state.userShaders[slotIndex] = std::move(shader);

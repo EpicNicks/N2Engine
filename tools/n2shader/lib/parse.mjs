@@ -187,13 +187,16 @@ export function parseN2Shader(text, { path = 'shader.n2shader' } = {}) {
   const stageIndex = lines.findIndex((line) => line === '#stage fragment');
   if (stageIndex < 0) fail('no "#stage fragment" line (the header must be followed by a line that is exactly #stage fragment)');
   let wgslIndex = -1; // the optional "#stage wgsl" (authored WebGPU), after the fragment stage
+  let vertexIndex = -1; // the optional "#stage vertex" (a custom vertex stage, stage 9d), after the fragment stage
   for (let index = 0; index < lines.length; index += 1) {
     if (index === stageIndex || !/^\s*#\s*stage\b/.test(lines[index])) continue;
     if (index < stageIndex) fail('"#stage" inside the header', index + 1);
-    if (/^\s*#\s*stage\s+vertex\b/.test(lines[index])) fail('"#stage vertex" is reserved: v1 supplies the vertex stage', index + 1);
     if (lines[index] === '#stage wgsl' && wgslIndex < 0) { wgslIndex = index; continue; }
+    if (lines[index] === '#stage vertex' && vertexIndex < 0) { vertexIndex = index; continue; }
     fail(`unknown or repeated stage line ${JSON.stringify(lines[index].trim())}`, index + 1);
   }
+  // Each stage runs to the next stage line (or the end of the file)
+  const stageEnd = (index) => [wgslIndex, vertexIndex].filter((other) => other > index).sort((a, b) => a - b)[0] ?? lines.length;
 
   const headerText = lines.slice(0, stageIndex).join('\n');
   if (Buffer.byteLength(headerText, 'utf8') > LIMITS.headerBytes) fail(`the header is over ${LIMITS.headerBytes / 1024} KiB`);
@@ -207,12 +210,17 @@ export function parseN2Shader(text, { path = 'shader.n2shader' } = {}) {
   const authored = header.targets.webgpu === 'authored';
   if (authored && wgslIndex < 0) fail('"targets": {"webgpu": "authored"} needs a "#stage wgsl" block after the fragment stage', stageIndex + 1);
   if (!authored && wgslIndex >= 0) fail('a "#stage wgsl" block needs "targets": {"webgpu": "authored"} in the header (otherwise the WGSL is generated)', wgslIndex + 1);
-  const source = lines.slice(stageIndex + 1, wgslIndex < 0 ? undefined : wgslIndex).join('\n');
+  const source = lines.slice(stageIndex + 1, stageEnd(stageIndex)).join('\n');
   if (source.trim() === '') fail('the fragment stage is empty', stageIndex + 1);
   const parsed = { header, source, firstLine: stageIndex + 2, lines: lines.length };
   if (wgslIndex >= 0) {
-    parsed.wgsl = lines.slice(wgslIndex + 1).join('\n');
+    parsed.wgsl = lines.slice(wgslIndex + 1, stageEnd(wgslIndex)).join('\n');
     parsed.wgslFirstLine = wgslIndex + 2;
+  }
+  if (vertexIndex >= 0) {
+    parsed.vertex = lines.slice(vertexIndex + 1, stageEnd(vertexIndex)).join('\n');
+    parsed.vertexFirstLine = vertexIndex + 2;
+    if (parsed.vertex.trim() === '') fail('the vertex stage is empty', vertexIndex + 1);
   }
   return parsed;
 }

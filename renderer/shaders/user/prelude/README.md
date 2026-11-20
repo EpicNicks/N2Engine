@@ -24,3 +24,6 @@ uniform `n2_TargetHeight` that the OpenGL renderer sets in stage 4), and the ver
 
 A `bool` parameter is declared as an `int` (a bool is not allowed in a uniform block), 0 or 1. A `texture` parameter is
 declared as a `const int` holding its slot, to pass to `n2_texture`.
+
+## Custom vertex stage templates (stage 9d)
+`vertex-vulkan.glsl`, `vertex-webgpu.glsl` and `vertex-opengl.glsl` are the preludes of a `#stage vertex` block, each including `vertex-common.glsl` (`n2_DefaultVertex`, `n2_SetPosition`, the position flag). They are used only for a shader that has the block (`buildVertexSource` in `tools/n2shader/lib/prelude.mjs`); the C++ twin does not build vertex stages, so they are not in the engine's embedded list. The Vulkan and WebGPU texts reuse the fragment preludes' block conventions (row_major PerDraw on Vulkan, column-major on WebGPU), the clip remap `N2_CLIP_Z`, and write all five varyings at locations 0-4.

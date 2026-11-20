@@ -364,7 +364,7 @@ Renderer::Common::IShader* OpenGLRenderer::CreateUserShader(const Common::UserSh
     // wrote (source string number 1)
     auto shader = std::make_shared<OpenGLShader>();
     shader->SetQuiet(true);
-    if (!shader->LoadFromStrings(Common::UserGl::VertexSource(), blob.fragmentGlsl))
+    if (!shader->LoadFromStrings(blob.vertexGlsl.empty() ? std::string(Common::UserGl::VertexSource()) : blob.vertexGlsl, blob.fragmentGlsl))
     {
         std::cerr << "CreateUserShader: '" << label << "': the driver could not build the program (see the log above; lines are the "
                   << "author's, source string 1)" << std::endl;

@@ -162,7 +162,7 @@ void main() {
 <h2 id="limits">What is not available, and the limits</h2>
 <p>The cook refuses these with a message at your line, so you find out when you save, not when a player runs it:</p>
 <ul>
-<li><code>gl_Position</code> (the vertex stage is the engine's); <code>gl_FragCoord</code> (use <code>n2_FragCoord()</code>), <code>gl_FrontFacing</code>, <code>gl_FragDepth</code>, <code>gl_VertexID</code>, <code>gl_InstanceID</code> and other <code>gl_</code> inputs.</li>
+<li><code>gl_Position</code> (the vertex stage is the engine's unless you write <a href="#vertex-stage">your own</a>, which sets the position with <code>n2_SetPosition</code>); <code>gl_FragCoord</code> (use <code>n2_FragCoord()</code>), <code>gl_FrontFacing</code>, <code>gl_FragDepth</code>, <code>gl_VertexID</code>, <code>gl_InstanceID</code> and other <code>gl_</code> inputs.</li>
 <li>Any <code>uniform</code>, <code>in</code>, <code>out</code>, <code>layout</code> or <code>buffer</code> declaration of your own (parameters come from the header), <code>#extension</code> lines, and 3D, cube, array, shadow and integer textures and images.</li>
 <li>Atomics, barriers and image access; <code>textureGrad</code> and <code>textureGather</code>.</li>
 <li><strong>Sample, then branch.</strong> Sampling after a <code>discard</code> or inside a non-uniform branch is an error on WebGPU (the browser's rule); sample first (as the example does) or use <code>n2_textureLod</code> / <code>n2_texelFetch</code>, which need no derivatives.</li>
@@ -170,6 +170,25 @@ void main() {
 <li><strong>Size limits:</strong> 256 KiB and 20,000 lines for the file, a 64 KiB header. Everything else that translates to all three backends (<code>inverse</code>, <code>determinant</code>, arrays, <code>switch</code>, <code>fwidth</code>) is allowed.</li>
 </ul>
 <p>The conformance corpus in <code>renderer/shaders/user/corpus</code> has a working example of each of these and a refused one of the rest.</p>
+
+<h2 id="vertex-stage">A custom vertex stage</h2>
+<p>By default the engine writes the vertex stage (so a shader cannot forget the depth remap), and your fragment stage reads what it writes. To move geometry (waves, wind, billboards, a squash), add a <code>#stage vertex</code> block after the fragment stage:</p>
+<pre><code>{ "n2shader": 1, "name": "Wave", "params": [ { "name": "u_Wave", "type": "float", "default": 0.1 } ] }
+#stage fragment
+void main() { n2_FragColor = n2_Color; }
+#stage vertex
+void n2_vertex() {
+    n2_WorldPos.y += sin(n2_WorldPos.x * 4.0) * u_Wave;
+}</code></pre>
+<p>You write <code>void n2_vertex()</code>, never <code>main</code>. The engine's <code>main</code> does three things: it runs its default maths (the world position, the normal matrix, the unit tangent with its mirror sign, the uv and the vertex colour), then calls your <code>n2_vertex()</code>, then writes the clip position from <code>n2_WorldPos</code> unless you called <code>n2_SetPosition(vec4 clip)</code> yourself (give it OpenGL clip space, z from -w to w; it applies the target's depth remap, which is why <code>gl_Position</code> stays unavailable).</p>
+<ul>
+<li><strong>What you can read:</strong> the five vertex attributes as <code>n2_in_Position</code> (<code>vec3</code>), <code>n2_in_Normal</code> (<code>vec3</code>), <code>n2_in_UV</code> (<code>vec2</code>), <code>n2_in_Color</code> (<code>vec4</code>) and <code>n2_in_Tangent</code> (<code>vec4</code>); <code>n2_Model</code>, <code>n2_View</code>, <code>n2_Projection</code>; and the shader's parameters (the same block as the fragment stage, so <code>u_Wave</code> above is one value in both).</li>
+<li><strong>What you can write:</strong> the five varyings the fragment stage reads, <code>n2_UV</code>, <code>n2_Color</code>, <code>n2_WorldPos</code>, <code>n2_Normal</code>, <code>n2_Tangent</code>, already filled by the default maths, and the clip position through <code>n2_SetPosition</code>. A normal you change is not renormalised for you.</li>
+<li><strong>Not in the vertex stage (v1):</strong> textures, <code>n2_FragCoord()</code>, <code>n2_FragColor</code>, <code>discard</code>, <code>gl_VertexID</code>/<code>gl_InstanceID</code>, the lighting block, and your own <code>main</code>. The same strict loop rules apply. <code>isnan</code> and <code>isinf</code> work as in the fragment stage.</li>
+<li><strong>Cooking:</strong> each target gets a vertex payload next to the fragment one (<code>shader.vulkan.vert.spv</code>, <code>shader.webgpu.vertex.wgsl</code>, <code>shader.gl.vert</code>), checked like the fragment stage (glslang, spirv-val, the reflection of the PerDraw and Material blocks and of the five inputs and outputs, Tint and naga for WGSL). The engine makes your fragment stage read all five varyings (it renames your <code>main</code> and wraps it), so no vertex output is left unread, which the Vulkan validation layer would report.</li>
+<li><strong>Only cooked:</strong> the runtime compiler (<code>N2ENGINE_RUNTIME_SHADER_COMPILER</code>) does not build vertex stages: a shader with one draws from the cooked data the project's build or the editor makes, and as the <a href="#fallback">fallback</a> without it. A stripped pack keeps the empty <code>#stage vertex</code> line so the engine knows the cooked data has a vertex stage.</li>
+<li><strong>Costs:</strong> one more shader module per such shader and its pipelines; shaders without a vertex stage use the engine's shared module, exactly as before.</li>
+</ul>
 
 <h2 id="authored-wgsl">Authored WGSL for the web</h2>
 <p>By default the WebGPU build runs the WGSL that Tint makes from your GLSL, so one source drives every backend. When that translation gets in the way (a feature WGSL has and GLSL does not, a hand-tuned loop), a shader can supply its own WGSL for the web only. Set <code>"targets": { "webgpu": "authored" }</code> in the header and add a <code>#stage wgsl</code> block after the fragment stage:</p>

@@ -516,3 +516,45 @@ TEST_F(WebGpuUserShaderTest, WgslThatDoesNotFitThePipelineLayoutFailsOnlyItsPipe
     EXPECT_EQ(DrawFullFrame(material).Count(kBlack), Size * Size);
     EXPECT_NE(capture.Text().find("could not create the render pipeline"), std::string::npos) << capture.Text();
 }
+
+// ===== Stage 9d: a custom vertex stage =====
+
+TEST_F(WebGpuUserShaderTest, ACustomVertexStageMovesTheGeometryByAParameterOfTheMaterialBlock)
+{
+    UserShaderBlob blob = LoadFixture("vertexshift");
+    ASSERT_FALSE(blob.vertexWgsl.empty()) << "the fixture carries its own vertex stage";
+    IShader* shader = R().CreateUserShader(blob);
+    ASSERT_NE(shader, nullptr);
+    IMaterial* material = MakeMaterial(shader);
+    ASSERT_NE(material, nullptr);
+    IMesh* mesh = MakeMesh(Quad(-0.5f, -0.5f, 0.5f, 0.5f, 0.0f));
+
+    // u_Shift 0: the quad is where it was made, the middle of the frame (the Vulkan test of the same fixture asserts the same pixels)
+    const Frame centred = RenderFrame([&] { R().DrawMesh(mesh, Identity, material, RenderState{}); });
+    EXPECT_EQ(centred.At(32, 32), kGreen);
+    EXPECT_NE(centred.At(56, 32), kGreen);
+
+    // u_Shift 1: the vertex stage moves the world x by one, so the quad covers the right quarter
+    material->SetFloat("u_Shift", 1.0f);
+    const Frame moved = RenderFrame([&] { R().DrawMesh(mesh, Identity, material, RenderState{}); });
+    EXPECT_NE(moved.At(32, 32), kGreen);
+    EXPECT_EQ(moved.At(56, 32), kGreen);
+}
+
+TEST_F(WebGpuUserShaderTest, AShaderWithACustomVertexStageAndOneWithoutShareAFrame)
+{
+    IMaterial* plain = MakeMaterial(MakeShader("solid"));
+    IMaterial* shifted = MakeMaterial(MakeShader("vertexshift"));
+    ASSERT_NE(plain, nullptr);
+    ASSERT_NE(shifted, nullptr);
+    shifted->SetFloat("u_Shift", -1.0f);
+    IMesh* quad = MakeMesh(Quad(-0.5f, -0.5f, 0.5f, 0.5f, 0.0f));
+    const Frame frame = RenderFrame(
+        [&]
+        {
+            R().DrawMesh(quad, Identity, plain, RenderState{});
+            R().DrawMesh(quad, Identity, shifted, RenderState{});
+        });
+    EXPECT_EQ(frame.At(32, 32), kRed) << "the engine's own vertex stage, the shader without one";
+    EXPECT_EQ(frame.At(8, 32), kGreen) << "the custom one, moved to the left quarter";
+}

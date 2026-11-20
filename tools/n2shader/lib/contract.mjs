@@ -50,6 +50,11 @@ export const VARYINGS = Object.freeze([
 ].map(([name, location]) => Object.freeze({ name, location })));
 export const OUTPUT_NAME = 'n2_FragColor';
 
+/** The attributes a custom vertex stage reads (the engine's Common::Vertex), by name and location; the varyings it writes are VARYINGS */
+export const VERTEX_INPUTS = Object.freeze([
+  ['n2_in_Position', 0], ['n2_in_Normal', 1], ['n2_in_UV', 2], ['n2_in_Color', 3], ['n2_in_Tangent', 4],
+].map(([name, location]) => Object.freeze({ name, location })));
+
 /** What `uses` may hold in v1 ("time" is not in the contract) */
 export const USES = Object.freeze(['lighting']);
 

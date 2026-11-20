@@ -3,7 +3,7 @@
 // allowed capabilities) and the WGSL layout check of the WebGPU payload (proposal sections 2.1 layer 3 and 13.13). Each
 // takes parsed data and returns diagnostics, so tests feed it fixtures.
 import {
-  ALLOWED_CAPABILITIES, LIGHTING, LIGHTING_BLOCK_SIZE, OUTPUT_NAME, PER_DRAW, SAMPLER_BINDING_BASE, TEXTURE_BINDING_BASE, VARYINGS,
+  ALLOWED_CAPABILITIES, LIGHTING, LIGHTING_BLOCK_SIZE, OUTPUT_NAME, PER_DRAW, SAMPLER_BINDING_BASE, TEXTURE_BINDING_BASE, VARYINGS, VERTEX_INPUTS,
 } from './contract.mjs';
 import { alignUp } from './std140.mjs';
 
@@ -106,6 +106,53 @@ export function checkReflection(json, { target, header, layout }) {
   if (outputs.length !== 1 || outputs[0].location !== 0 || outputs[0].type !== 'vec4' || outputs[0].name !== OUTPUT_NAME) {
     fail(`the module must have exactly one vec4 output "${OUTPUT_NAME}" at location 0 (found ${outputs.map((entry) => `${entry.type} ${entry.name}@${entry.location}`).join(', ') || 'none'})`);
   }
+  return out;
+}
+
+/**
+ * The self-check of a custom vertex stage's SPIR-V (stage 9d): the PerDraw and Material blocks at the contract's offsets, nothing else
+ * bound (no lighting, no textures), the engine's attributes in and the five varyings out.
+ */
+export function checkVertexReflection(json, { target, header, layout }) {
+  const out = [];
+  const fail = (message) => out.push(error('reflect', `${target} vertex: ${message}`));
+  for (const key of ['ssbos', 'images', 'subpass_inputs', 'push_constants', 'atomic_counters', 'acceleration_structures', 'textures', 'separate_images', 'separate_samplers']) {
+    if (Array.isArray(json[key]) && json[key].length > 0) fail(`the vertex stage declares ${key.replace('_', ' ')}, which v1 does not offer there`);
+  }
+  const expected = new Map([['0:0', 'PerDraw']]);
+  if (layout.members.length > 0) expected.set('1:0', 'Material');
+  const found = new Map();
+  for (const ubo of json.ubos ?? []) {
+    const key = `${ubo.set ?? 0}:${ubo.binding ?? 0}`;
+    if (!expected.has(key)) { fail(`unexpected uniform block "${ubo.name}" at set ${ubo.set}, binding ${ubo.binding}`); continue; }
+    if (ubo.name !== expected.get(key)) fail(`the block at set/binding ${key.replace(':', '/')} is named "${ubo.name}", expected "${expected.get(key)}"`);
+    found.set(key, ubo);
+  }
+  const members = (ubo) => (json.types?.[ubo.type]?.members ?? []);
+  const compare = (label, got, wanted) => {
+    if (got.length !== wanted.length) { fail(`${label} has ${got.length} members, the contract has ${wanted.length}`); return; }
+    wanted.forEach((want, index) => {
+      if (got[index].name !== want.name) fail(`${label} member ${index} is "${got[index].name}", expected "${want.name}"`);
+      else if (got[index].offset !== want.offset) fail(`${label}.${want.name}: glslang put it at offset ${got[index].offset}, the cook computed ${want.offset}`);
+    });
+  };
+  if (found.has('0:0')) compare('PerDraw', members(found.get('0:0')), PER_DRAW);
+  else fail('the PerDraw block (set 0, binding 0) is missing from the module');
+  if (layout.members.length > 0) {
+    if (found.has('1:0')) compare('Material', members(found.get('1:0')), layout.members);
+    else fail('the Material block (set 1, binding 0) is missing from the module');
+  }
+  for (const input of json.inputs ?? []) {
+    if (!VERTEX_INPUTS.some((entry) => entry.name === input.name && entry.location === input.location)) {
+      fail(`unexpected input "${input.name}" at location ${input.location} (the contract: ${VERTEX_INPUTS.map((v) => `${v.name}@${v.location}`).join(', ')})`);
+    }
+  }
+  for (const output of json.outputs ?? []) {
+    if (!VARYINGS.some((entry) => entry.name === output.name && entry.location === output.location)) {
+      fail(`unexpected output "${output.name}" at location ${output.location} (the contract: ${VARYINGS.map((v) => `${v.name}@${v.location}`).join(', ')})`);
+    }
+  }
+  if ((json.outputs ?? []).length !== VARYINGS.length) fail(`the vertex stage must write all five varyings (found ${(json.outputs ?? []).length})`);
   return out;
 }
 

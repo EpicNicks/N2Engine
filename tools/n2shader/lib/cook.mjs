@@ -10,12 +10,14 @@ import {
 import { lintStage } from './lint.mjs';
 import { ShaderError, parseN2Shader } from './parse.mjs';
 import { checkAuthoredWgsl } from './authored.mjs';
-import { buildTargetSource, PRELUDE_DIR } from './prelude.mjs';
-import { checkCapabilities, checkGlUniforms, checkReflection, checkWgslLayout } from './reflect.mjs';
+import { buildTargetSource, buildVertexSource, PRELUDE_DIR } from './prelude.mjs';
+import { checkCapabilities, checkGlUniforms, checkReflection, checkVertexReflection, checkWgslLayout } from './reflect.mjs';
 import { layoutBlock } from './std140.mjs';
 import { discoverTools, run, sha256, toolVersion } from './tools.mjs';
 
 const PAYLOAD_FILES = { vulkan: 'shader.vulkan.frag.spv', webgpu: 'shader.webgpu.wgsl', gl: 'shader.gl.frag' };
+/** The custom vertex stage's payloads (stage 9d): the manifest's payloads are keyed <target>Vertex */
+const VERTEX_PAYLOAD_FILES = { vulkan: 'shader.vulkan.vert.spv', webgpu: 'shader.webgpu.vertex.wgsl', gl: 'shader.gl.vert' };
 export const MANIFEST_FILE = 'manifest.json';
 
 const LINE_PATTERN = /^(ERROR|WARNING):\s*(.+?):(\d+):\s*(.*)$/;
@@ -99,6 +101,11 @@ export function cookShader(text, options = {}) {
   if (lint) {
     for (const entry of lintStage(parsed.source, { firstLine: parsed.firstLine, header, strict })) {
       add({ stage: 'lint', severity: entry.severity, file, line: entry.line, message: entry.message, rule: entry.rule });
+    }
+    if (typeof parsed.vertex === 'string') {
+      for (const entry of lintStage(parsed.vertex, { firstLine: parsed.vertexFirstLine, header, strict, stage: 'vertex' })) {
+        add({ stage: 'lint', severity: entry.severity, file, line: entry.line, message: entry.message, rule: entry.rule });
+      }
     }
     if (result.failedStage !== null) return result;
   }
@@ -235,6 +242,12 @@ export function cookShader(text, options = {}) {
       if (hasWarning(checkedLog)) { add({ stage: 'naga', severity: 'error', file: null, line: null, message: `webgpu: naga printed a warning: ${summarise(checkedLog)}` }); continue; }
       passed.webgpu.push('naga');
     }
+    // The custom vertex stage of each target, after every fragment stage (the fragment flow above has many exits)
+    if (typeof parsed.vertex === 'string') {
+      for (const target of ordered) {
+        if (result.failedStage === null && passed[target]) cookVertexStage({ target, parsed, header, layout, file, tools, work, result, passed, used, skip, add, preludeDir });
+      }
+    }
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
   }
@@ -246,6 +259,98 @@ export function cookShader(text, options = {}) {
   result.ok = true;
   result.manifest = buildManifest({ text, file, header, layout, targets, outputs: result.outputs, passed, tools, used, strict, lint });
   return result;
+}
+
+/**
+ * One target's custom vertex stage (stage 9d): the generated GLSL through glslang (Vulkan and WebGPU: SPIR-V, validated, reflected; WebGPU
+ * then Tint to WGSL, checked and run through naga; OpenGL: the text, syntax-checked by glslang). Adds <target>Vertex to the outputs.
+ */
+function cookVertexStage({ target, parsed, header, layout, file, tools, work, result, passed, used, skip, add, preludeDir }) {
+  if (result.failedStage !== null) return;
+  const generated = buildVertexSource(target, parsed, { path: file, dir: preludeDir });
+  const key = `${target}Vertex`;
+  result.outputs[key] = { file: VERTEX_PAYLOAD_FILES[target], data: null };
+  const source = path.join(work, `${target}.vert`);
+  fs.writeFileSync(source, generated.text);
+  const inputName = path.basename(source);
+  if (target === 'gl') {
+    result.outputs[key].data = Buffer.from(generated.text);
+    if (!tools.glslang) { skip('glslang', `${target} vertex`, 'glslangValidator'); return; }
+    used.add('glslang');
+    const out = run(tools.glslang, ['-S', 'vert', source]);
+    const diagnostics = parseGlslangOutput(`${out.stdout}\n${out.stderr}`, { target: `${target} vertex`, userPath: file, inputName });
+    diagnostics.forEach(add);
+    if (out.status !== 0 && !diagnostics.some((entry) => entry.severity === 'error')) add({ stage: 'glslang', severity: 'error', file: null, line: null, message: `gl vertex: glslang exited with ${out.status}: ${summarise(out.stdout + out.stderr)}` });
+    if (out.status === 0) passed.gl.push('vertex-glslang');
+    return;
+  }
+  if (!tools.glslang) { skip('glslang', `${target} vertex`, 'glslangValidator'); return; }
+  used.add('glslang');
+  const spv = path.join(work, `${target}.vert.spv`);
+  const compiled = run(tools.glslang, ['-V', '--target-env', 'vulkan1.1', '-S', 'vert', '-o', spv, source]);
+  const diagnostics = parseGlslangOutput(`${compiled.stdout}\n${compiled.stderr}`, { target: `${target} vertex`, userPath: file, inputName });
+  diagnostics.forEach(add);
+  if (compiled.status !== 0) {
+    if (!diagnostics.some((entry) => entry.severity === 'error')) add({ stage: 'glslang', severity: 'error', file: null, line: null, message: `${target} vertex: glslang exited with ${compiled.status}: ${summarise(compiled.stdout + compiled.stderr)}` });
+    return;
+  }
+  passed[target].push('vertex-glslang');
+  if (!tools.spirvVal) skip('spirv-val', `${target} vertex`, 'spirv-val');
+  else {
+    used.add('spirvVal');
+    const valid = run(tools.spirvVal, ['--target-env', 'vulkan1.1', spv]);
+    if (valid.status !== 0) { add({ stage: 'spirv-val', severity: 'error', file: null, line: null, message: `${target} vertex: ${summarise(valid.stdout + valid.stderr)}` }); return; }
+    passed[target].push('vertex-spirv-val');
+  }
+  if (!tools.spirvDis) skip('spirv-dis', `${target} vertex`, 'spirv-dis');
+  else {
+    used.add('spirvDis');
+    const capabilityDiagnostics = checkCapabilities(run(tools.spirvDis, [spv]).stdout, `${target} vertex`);
+    capabilityDiagnostics.forEach(add);
+    if (capabilityDiagnostics.length > 0) return;
+    passed[target].push('vertex-capabilities');
+  }
+  if (!tools.spirvCross) skip('reflect', `${target} vertex`, 'spirv-cross');
+  else {
+    used.add('spirvCross');
+    const reflected = run(tools.spirvCross, [spv, '--reflect']);
+    let json = null;
+    try { json = JSON.parse(reflected.stdout); } catch { /* reported below */ }
+    if (reflected.status !== 0 || json === null) { add({ stage: 'reflect', severity: 'error', file: null, line: null, message: `${target} vertex: spirv-cross --reflect failed: ${summarise(reflected.stdout + reflected.stderr)}` }); return; }
+    const reflectDiagnostics = checkVertexReflection(json, { target, header, layout });
+    reflectDiagnostics.forEach(add);
+    if (reflectDiagnostics.length > 0) return;
+    passed[target].push('vertex-reflect');
+  }
+  if (target === 'vulkan') { result.outputs[key].data = fs.readFileSync(spv); return; }
+
+  // ---- WebGPU: Tint turns the vertex SPIR-V into WGSL (entry point main), naga reads it back
+  if (!tools.tint) { skip('tint', 'webgpu vertex', 'tint'); return; }
+  used.add('tint');
+  const wgslPath = path.join(work, 'webgpu.vertex.wgsl');
+  const translated = run(tools.tint, ['--format', 'wgsl', '-o', wgslPath, spv]);
+  const translatedLog = `${translated.stdout}\n${translated.stderr}`;
+  if (translated.status !== 0 || !fs.existsSync(wgslPath)) { add({ stage: 'tint', severity: 'error', file: null, line: null, message: `webgpu vertex: tint failed: ${summarise(translatedLog)}` }); return; }
+  if (hasWarning(translatedLog)) { add({ stage: 'tint', severity: 'error', file: null, line: null, message: `webgpu vertex: tint printed a warning (warnings are errors): ${summarise(translatedLog)}` }); return; }
+  const wgsl = fs.readFileSync(wgslPath, 'utf8').replace(/\r\n/g, '\n');
+  passed.webgpu.push('vertex-tint');
+  const roundTrip = run(tools.tint, ['--format', 'spvasm', '--validate', '--ep', 'main', '-o', path.join(work, 'vertex-roundtrip.spvasm'), wgslPath]);
+  if (roundTrip.status !== 0 || hasWarning(`${roundTrip.stdout}\n${roundTrip.stderr}`)) { add({ stage: 'tint', severity: 'error', file: null, line: null, message: `webgpu vertex: tint rejected its own WGSL: ${summarise(roundTrip.stdout + roundTrip.stderr)}` }); return; }
+  passed.webgpu.push('vertex-tint-roundtrip');
+  if (!/@vertex\s+fn\s+main\s*\(/.test(wgsl)) { add({ stage: 'wgsl-layout', severity: 'error', file: null, line: null, message: 'webgpu vertex: the module has no "@vertex fn main"' }); return; }
+  const vertexHeader = { ...header, params: header.params.filter((param) => param.type !== 'texture') };
+  const layoutDiagnostics = checkWgslLayout(wgsl, { header: vertexHeader, layout });
+  layoutDiagnostics.forEach(add);
+  if (layoutDiagnostics.length > 0) return;
+  passed.webgpu.push('vertex-wgsl-layout');
+  result.outputs[key].data = Buffer.from(wgsl);
+  if (!tools.naga) { skip('naga', 'webgpu vertex', 'naga'); return; }
+  used.add('naga');
+  const checked = run(tools.naga, [wgslPath]);
+  const checkedLog = `${checked.stdout}\n${checked.stderr}`;
+  if (checked.status !== 0) { add({ stage: 'naga', severity: 'error', file: null, line: null, message: `webgpu vertex: naga rejected the WGSL: ${summarise(checkedLog)}` }); return; }
+  if (hasWarning(checkedLog)) { add({ stage: 'naga', severity: 'error', file: null, line: null, message: `webgpu vertex: naga printed a warning: ${summarise(checkedLog)}` }); return; }
+  passed.webgpu.push('vertex-naga');
 }
 
 /** The WebGPU target of a shader with "targets": {"webgpu": "authored"}: checks the author's WGSL and makes it the payload */
@@ -299,6 +404,8 @@ function buildManifest({ text, file, header, layout, targets, outputs, passed, t
   for (const target of targets) {
     const output = outputs[target];
     if (output?.data) payloads[target] = { file: output.file, bytes: output.data.length, sha256: sha256(output.data) };
+    const vertex = outputs[`${target}Vertex`];
+    if (vertex?.data) payloads[`${target}Vertex`] = { file: vertex.file, bytes: vertex.data.length, sha256: sha256(vertex.data) };
   }
   const toolVersions = {};
   for (const name of [...used].sort()) toolVersions[name] = toolVersion(name, tools[name]);
@@ -311,6 +418,8 @@ function buildManifest({ text, file, header, layout, targets, outputs, passed, t
     state: header.state,
     // only a shader with an authored payload says so (the key is absent otherwise, so every other manifest is unchanged)
     ...(header.targets.webgpu === 'authored' ? { authored: ['webgpu'] } : {}),
+    // a custom vertex stage (stage 9d) is another payload per target; the key is absent for every other shader
+    ...(Object.keys(outputs).some((name) => name.endsWith('Vertex')) ? { vertexStage: true } : {}),
     blockSize: layout.size,
     params,
     textures,

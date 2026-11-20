@@ -49,6 +49,8 @@ namespace UserShaderTesting
         if (text == "vec3") return UserParamType::Vec3;
         if (text == "vec4") return UserParamType::Vec4;
         if (text == "color") return UserParamType::Color;
+        if (text == "mat3") return UserParamType::Mat3;
+        if (text == "mat4") return UserParamType::Mat4;
         if (text == "texture") return UserParamType::Texture;
         throw std::runtime_error("unknown parameter type " + text);
     }
@@ -193,6 +195,32 @@ namespace UserShaderTesting
             // A checkout with CRLF conversion (Windows) reads the text with CR LF: the driver would take it, but the text is LF
             // on every platform in the pack, so the tests see it so
             blob.fragmentGlsl.erase(std::remove(blob.fragmentGlsl.begin(), blob.fragmentGlsl.end(), '\r'), blob.fragmentGlsl.end());
+        }
+        // A custom vertex stage (stage 9d): the <target>Vertex payloads, when the manifest lists them
+        if (payloads.contains("vulkanVertex"))
+        {
+            const std::vector<std::uint8_t> spirv = ReadBytes(directory + payloads.at("vulkanVertex").at("file").get<std::string>());
+            if (spirv.size() % 4 != 0)
+            {
+                throw std::runtime_error(name + ": the vertex SPIR-V is not a whole number of words");
+            }
+            blob.vertexSpirv.resize(spirv.size() / 4);
+            for (std::size_t i = 0; i < blob.vertexSpirv.size(); ++i)
+            {
+                blob.vertexSpirv[i] = static_cast<std::uint32_t>(spirv[4 * i]) | (static_cast<std::uint32_t>(spirv[4 * i + 1]) << 8) |
+                    (static_cast<std::uint32_t>(spirv[4 * i + 2]) << 16) | (static_cast<std::uint32_t>(spirv[4 * i + 3]) << 24);
+            }
+        }
+        if (payloads.contains("webgpuVertex"))
+        {
+            const std::vector<std::uint8_t> wgsl = ReadBytes(directory + payloads.at("webgpuVertex").at("file").get<std::string>());
+            blob.vertexWgsl.assign(wgsl.begin(), wgsl.end());
+        }
+        if (payloads.contains("glVertex"))
+        {
+            const std::vector<std::uint8_t> glsl = ReadBytes(directory + payloads.at("glVertex").at("file").get<std::string>());
+            blob.vertexGlsl.assign(glsl.begin(), glsl.end());
+            blob.vertexGlsl.erase(std::remove(blob.vertexGlsl.begin(), blob.vertexGlsl.end(), '\r'), blob.vertexGlsl.end());
         }
         return blob;
     }

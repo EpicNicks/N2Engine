@@ -1,0 +1,16 @@
+{ "n2shader": 1, "name": "VertexHook",
+  "params": [
+    { "name": "u_Wave", "type": "float", "default": 0.1 },
+    { "name": "u_Tint", "type": "color", "default": [1, 1, 1, 1] }
+  ] }
+#stage fragment
+void main() {
+    n2_FragColor = u_Tint * n2_Color * vec4(n2_UV, 1.0, 1.0);
+}
+#stage vertex
+// Stage 9d: a custom vertex stage. The engine runs its default maths first (world position, normal, tangent, uv and colour), then
+// this hook, then writes the clip position from n2_WorldPos unless the hook called n2_SetPosition(clip) itself.
+void n2_vertex() {
+    n2_WorldPos.y += sin(n2_WorldPos.x * 4.0) * u_Wave;
+    n2_Color = n2_in_Color * 0.5 + vec4(0.5);
+}

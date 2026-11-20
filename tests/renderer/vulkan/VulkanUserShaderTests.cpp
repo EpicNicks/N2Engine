@@ -508,3 +508,65 @@ TEST_F(VulkanUserShaderTest, ABlobThatBreaksALimitIsRefusedBeforeTheDriverSeesIt
     EXPECT_EQ(R().CreateUserMaterial(nullptr, nullptr), nullptr);
     EXPECT_EQ(R().CreateUserMaterial(R().GetStandardUnlitShader(), nullptr), nullptr);
 }
+
+// ===== Stage 9d: a custom vertex stage =====
+
+TEST_F(VulkanUserShaderTest, ACustomVertexStageMovesTheGeometryByAParameterOfTheMaterialBlock)
+{
+    UserShaderBlob blob = LoadFixture("vertexshift");
+    ASSERT_FALSE(blob.vertexSpirv.empty()) << "the fixture carries its own vertex stage";
+    IShader* shader = R().CreateUserShader(blob);
+    ASSERT_NE(shader, nullptr);
+    IMaterial* material = MakeMaterial(shader);
+    ASSERT_NE(material, nullptr);
+    IMesh* mesh = MakeMesh(Quad(-0.5f, -0.5f, 0.5f, 0.5f, 0.0f));
+    CerrCapture capture;
+
+    // u_Shift 0: the quad is where it was made, the middle of the frame
+    const Frame centred = RenderFrame([&] { R().DrawMesh(mesh, Identity, material, RenderState{}); });
+    EXPECT_EQ(centred.At(32, 32), kGreen);
+    EXPECT_NE(centred.At(56, 32), kGreen) << "the right quarter is empty";
+
+    // u_Shift 1: the vertex stage moves the world x by one (the whole frame is two wide), so the quad covers the right quarter
+    material->SetFloat("u_Shift", 1.0f);
+    const Frame moved = RenderFrame([&] { R().DrawMesh(mesh, Identity, material, RenderState{}); });
+    EXPECT_NE(moved.At(32, 32), kGreen);
+    EXPECT_EQ(moved.At(56, 32), kGreen);
+    EXPECT_EQ(capture.Text().find("VUID"), std::string::npos) << capture.Text() << "no validation message: the vertex stage's interface is the fragment's";
+}
+
+TEST_F(VulkanUserShaderTest, AShaderWithACustomVertexStageAndOneWithoutShareAFrame)
+{
+    IMaterial* plain = MakeMaterial(MakeShader("solid"));
+    IMaterial* shifted = MakeMaterial(MakeShader("vertexshift"));
+    ASSERT_NE(plain, nullptr);
+    ASSERT_NE(shifted, nullptr);
+    shifted->SetFloat("u_Shift", -1.0f);
+    IMesh* quad = MakeMesh(Quad(-0.5f, -0.5f, 0.5f, 0.5f, 0.0f));
+    const Frame frame = RenderFrame(
+        [&]
+        {
+            R().DrawMesh(quad, Identity, plain, RenderState{});
+            R().DrawMesh(quad, Identity, shifted, RenderState{});
+        });
+    EXPECT_EQ(frame.At(32, 32), kRed) << "the engine's own vertex stage, the shader without one";
+    EXPECT_EQ(frame.At(8, 32), kGreen) << "the custom one, moved to the left quarter";
+}
+
+TEST_F(VulkanUserShaderTest, ADestroyedShaderWithACustomVertexStageIsReleasedWithItsModule)
+{
+    CerrCapture capture;
+    for (int round = 0; round < 3; ++round)
+    {
+        IShader* shader = MakeShader("vertexshift");
+        ASSERT_NE(shader, nullptr);
+        IMaterial* material = MakeMaterial(shader);
+        ASSERT_NE(material, nullptr);
+        IMesh* quad = MakeMesh(Quad(-0.5f, -0.5f, 0.5f, 0.5f, 0.0f));
+        const Frame frame = RenderFrame([&] { R().DrawMesh(quad, Identity, material, RenderState{}); });
+        EXPECT_EQ(frame.At(32, 32), kGreen);
+        R().DestroyShaderProgram(shader);
+        RenderFrame([] {}); // the retired shader is released at the next frame, its vertex module with it
+    }
+    EXPECT_EQ(capture.Text().find("VUID"), std::string::npos) << capture.Text();
+}
