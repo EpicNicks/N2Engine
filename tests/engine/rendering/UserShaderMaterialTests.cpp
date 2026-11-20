@@ -266,7 +266,7 @@ void main() {}
 #stage fragment
 void main() {}
 )", "n2_");
-    refused(R"({ "n2shader": 1, "params": [ {"name": "a", "type": "mat4"} ] }
+    refused(R"({ "n2shader": 1, "params": [ {"name": "a", "type": "mat2"} ] }
 #stage fragment
 void main() {}
 )", "unknown type");
