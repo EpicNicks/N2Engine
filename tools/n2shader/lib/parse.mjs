@@ -1,6 +1,6 @@
 // The .n2shader parser: a strict-JSON header, then everything after the line "#stage fragment" is GLSL (proposal section
 // 3.1). The header is validated completely here, so the later stages work on a normalised, known-good description.
-import { LIMITS, FORMAT_VERSION, PARAM_TYPES, TEXTURE_DEFAULTS, BLEND_MODES, CULL_MODES, QUEUES, USES, RESERVED_PARAMS } from './contract.mjs';
+import { LIMITS, FORMAT_VERSION, PARAM_TYPES, TEXTURE_DEFAULTS, BLEND_MODES, CULL_MODES, QUEUES, USES, RESERVED_PARAMS, DEPTH_RANGE, isTextureType } from './contract.mjs';
 import { layoutBlock } from './std140.mjs';
 
 export class ShaderError extends Error {
@@ -15,7 +15,7 @@ export class ShaderError extends Error {
 }
 
 const TOP_KEYS = ['n2shader', 'name', 'params', 'uses', 'state', 'targets'];
-const PARAM_KEYS = ['name', 'type', 'default', 'min', 'max', 'step', 'label', 'tooltip', 'group'];
+const PARAM_KEYS = ['name', 'type', 'default', 'min', 'max', 'step', 'label', 'tooltip', 'group', 'depth'];
 const STATE_KEYS = ['blend', 'cull', 'depthWrite', 'queue'];
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 // GLSL keywords that cannot be a member name (the short list a parameter name could plausibly hit)
@@ -66,8 +66,8 @@ function checkDefault(param, fail) {
   if ((type === 'mat3' || type === 'mat4') && param.hasDefault) {
     fail(`parameter "${param.name}": a ${type} starts as the identity matrix and takes no "default" (set it from a Material, a .mat file or a script)`);
   }
-  if (type === 'texture' && !TEXTURE_DEFAULTS.includes(value)) {
-    fail(`parameter "${param.name}": a texture default must be one of ${TEXTURE_DEFAULTS.join(', ')}`);
+  if (isTextureType(type) && !TEXTURE_DEFAULTS.includes(value)) {
+    fail(`parameter "${param.name}": a ${type} default must be one of ${TEXTURE_DEFAULTS.join(', ')}`);
   }
 }
 
@@ -120,6 +120,14 @@ export function validateHeader(raw, fail) {
       param[key] = entry[key];
     }
     if (param.min !== undefined && param.max !== undefined && param.min > param.max) fail(`parameter "${name}": min is above max`);
+    if (type === 'texture3d') {
+      if (!Number.isInteger(entry.depth) || entry.depth < DEPTH_RANGE.min || entry.depth > DEPTH_RANGE.max) {
+        fail(`parameter "${name}": a texture3d needs "depth", the number of slices (an integer from ${DEPTH_RANGE.min} to ${DEPTH_RANGE.max})`);
+      }
+      param.depth = entry.depth;
+    } else if (entry.depth !== undefined) {
+      fail(`parameter "${name}": "depth" applies to texture3d only`);
+    }
     for (const key of ['label', 'tooltip', 'group']) {
       if (entry[key] === undefined) continue;
       if (typeof entry[key] !== 'string') fail(`parameter "${name}": "${key}" must be a string`);
@@ -129,7 +137,10 @@ export function validateHeader(raw, fail) {
   }
 
   // Texture slots: declaration order, except that the reserved baseColorTexture takes slot 0 (the Material's base texture)
-  const textures = params.filter((param) => param.type === 'texture');
+  for (const param of params) {
+    if (param.type === 'texture3d' && seen.has(`${param.name}_depth`)) fail(`parameter "${param.name}_depth" collides with the constant the texture3d "${param.name}" defines`);
+  }
+  const textures = params.filter((param) => isTextureType(param.type));
   if (textures.length > LIMITS.textures) fail(`at most ${LIMITS.textures} textures (found ${textures.length})`);
   const ordered = [...textures.filter((param) => param.name === 'baseColorTexture'), ...textures.filter((param) => param.name !== 'baseColorTexture')];
   ordered.forEach((param, slot) => { param.slot = slot; });

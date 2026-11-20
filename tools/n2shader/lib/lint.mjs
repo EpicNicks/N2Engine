@@ -1,6 +1,6 @@
 // The user-stage lint (proposal sections 2.1, 5.2, 8 and 13.2): mechanical checks that run before any compiler, each with
 // a message that says what to write instead. Line numbers are the .n2shader file's.
-import { ALLOWED_EXTENSIONS } from './contract.mjs';
+import { ALLOWED_EXTENSIONS, isTextureType } from './contract.mjs';
 
 /** Replaces comments and string literals by spaces (newlines kept), so the rules never match inside them */
 export function stripComments(source) {
@@ -172,7 +172,7 @@ export function lintStage(source, { firstLine, header, strict = true, stage = 'f
   if (strict) {
     const constants = new Set([...text.matchAll(/\bconst\s+(?:highp\s+|mediump\s+|lowp\s+)?(?:int|uint)\s+([A-Za-z_]\w*)\s*=/g)].map((match) => match[1]));
     const boundedParams = new Set(header.params.filter((param) => param.type === 'int' && Number.isFinite(param.max)).map((param) => param.name));
-    const textureSlots = new Set(header.params.filter((param) => param.type === 'texture').map((param) => param.name));
+    const textureSlots = new Set(header.params.filter((param) => isTextureType(param.type)).map((param) => param.name));
     for (const match of text.matchAll(/\bfor\s*\(/g)) {
       const open = match.index + match[0].length - 1;
       const close = matchParen(text, open);

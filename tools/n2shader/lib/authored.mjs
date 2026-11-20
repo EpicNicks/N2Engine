@@ -5,7 +5,7 @@
 // validate it the way they validate a generated module, and checkWgslLayout (reflect.mjs) compares the Material struct and the
 // texture bindings with the header.
 
-import { PER_DRAW, SAMPLER_BINDING_BASE, TEXTURE_BINDING_BASE, VARYINGS } from './contract.mjs';
+import { PER_DRAW, SAMPLER_BINDING_BASE, TEXTURE_BINDING_BASE, VARYINGS, isTextureType } from './contract.mjs';
 
 /** The WGSL type of each varying, as the engine's vertex stage writes it (renderer/shaders/webgpu/user.wgsl) */
 const VARYING_TYPES = Object.freeze({ n2_UV: 'vec2<f32>', n2_Color: 'vec4<f32>', n2_WorldPos: 'vec3<f32>', n2_Normal: 'vec3<f32>', n2_Tangent: 'vec4<f32>' });
@@ -67,7 +67,7 @@ export function checkAuthoredWgsl(wgsl, { header, layout }) {
   if (entries.length !== 1 || entries[0] !== 'main') fail(`the module needs exactly one fragment entry point, "@fragment fn main(...)" (found ${entries.length === 0 ? 'none' : entries.map((name) => `"${name}"`).join(', ')})`);
 
   // the resources: exactly the contract's bindings for this shader
-  const textureSlots = header.params.filter((param) => param.type === 'texture').map((param) => param.slot);
+  const textureSlots = header.params.filter((param) => isTextureType(param.type)).map((param) => param.slot);
   const allowed = new Map([['0/0', 'the PerDraw uniform block']]);
   if (header.uses.includes('lighting')) allowed.set('0/1', 'the Lighting uniform block');
   if (layout.members.length > 0) allowed.set('1/0', 'the Material uniform block');

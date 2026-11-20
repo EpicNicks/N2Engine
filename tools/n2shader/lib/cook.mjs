@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  CONTRACT_VERSION, FORMAT_VERSION, SAMPLER_BINDING_BASE, TARGETS, TEXTURE_BINDING_BASE, VERTEX_ATTRIBUTES,
+  CONTRACT_VERSION, FORMAT_VERSION, SAMPLER_BINDING_BASE, TARGETS, TEXTURE_BINDING_BASE, VERTEX_ATTRIBUTES, isTextureType,
 } from './contract.mjs';
 import { lintStage } from './lint.mjs';
 import { ShaderError, parseN2Shader } from './parse.mjs';
@@ -338,7 +338,7 @@ function cookVertexStage({ target, parsed, header, layout, file, tools, work, re
   if (roundTrip.status !== 0 || hasWarning(`${roundTrip.stdout}\n${roundTrip.stderr}`)) { add({ stage: 'tint', severity: 'error', file: null, line: null, message: `webgpu vertex: tint rejected its own WGSL: ${summarise(roundTrip.stdout + roundTrip.stderr)}` }); return; }
   passed.webgpu.push('vertex-tint-roundtrip');
   if (!/@vertex\s+fn\s+main\s*\(/.test(wgsl)) { add({ stage: 'wgsl-layout', severity: 'error', file: null, line: null, message: 'webgpu vertex: the module has no "@vertex fn main"' }); return; }
-  const vertexHeader = { ...header, params: header.params.filter((param) => param.type !== 'texture') };
+  const vertexHeader = { ...header, params: header.params.filter((param) => !isTextureType(param.type)) };
   const layoutDiagnostics = checkWgslLayout(wgsl, { header: vertexHeader, layout });
   layoutDiagnostics.forEach(add);
   if (layoutDiagnostics.length > 0) return;
@@ -391,13 +391,15 @@ function buildManifest({ text, file, header, layout, targets, outputs, passed, t
   const members = new Map(layout.members.map((member) => [member.name, member]));
   const params = header.params.map((param) => {
     const entry = { name: param.name, type: param.type };
-    if (param.type === 'texture') entry.slot = param.slot;
-    else { entry.offset = members.get(param.name).offset; entry.size = members.get(param.name).size; }
+    if (isTextureType(param.type)) {
+      entry.slot = param.slot;
+      if (param.type === 'texture3d') entry.depth = param.depth;
+    } else { entry.offset = members.get(param.name).offset; entry.size = members.get(param.name).size; }
     entry.default = param.default;
     for (const key of ['min', 'max', 'step', 'label', 'tooltip', 'group']) if (param[key] !== undefined) entry[key] = param[key];
     return entry;
   });
-  const textures = header.params.filter((param) => param.type === 'texture').sort((a, b) => a.slot - b.slot).map((param) => ({
+  const textures = header.params.filter((param) => isTextureType(param.type)).sort((a, b) => a.slot - b.slot).map((param) => ({
     name: param.name, slot: param.slot, default: param.default, binding: TEXTURE_BINDING_BASE + param.slot, samplerBinding: SAMPLER_BINDING_BASE + param.slot,
   }));
   const payloads = {};

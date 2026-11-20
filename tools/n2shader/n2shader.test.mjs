@@ -14,7 +14,7 @@ import { runCorpus } from './lib/corpus.mjs';
 import { lintStage, stripComments } from './lib/lint.mjs';
 import { ShaderError, parseN2Shader } from './lib/parse.mjs';
 import { checkAuthoredWgsl } from './lib/authored.mjs';
-import { buildTargetSource, buildVertexSource, expandTemplate, materialSection, PRELUDE_DIR, usesNanChecks } from './lib/prelude.mjs';
+import { buildTargetSource, buildVertexSource, expandTemplate, materialSection, PRELUDE_DIR, usesAtlasTextures, usesNanChecks } from './lib/prelude.mjs';
 import { checkCapabilities, checkGlUniforms, checkReflection, checkVertexReflection, checkWgslLayout } from './lib/reflect.mjs';
 import { layoutBlock } from './lib/std140.mjs';
 import { discoverTools, findTool, TOOL_NAMES } from './lib/tools.mjs';
@@ -369,6 +369,57 @@ test('vertex stage: the reflection self-check of the vertex SPIR-V', () => {
   bad((j) => { j.textures = [{ name: 'tex', set: 1, binding: 1 }]; }, /declares textures/);
   bad((j) => { j.types._1.members[3].offset = 200; }, /PerDraw\.n2_StageDim/);
   bad((j) => { j.ubos.push({ name: 'Lighting', set: 0, binding: 1, type: '_1', block_size: 4 }); }, /unexpected uniform block "Lighting"/);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Cube and 3D textures as atlases (stage 9e)
+// ---------------------------------------------------------------------------------------------------------------------
+test('atlas textures: a cube and a texture3d take texture slots, the 3D one declares its depth', () => {
+  const params = [param('u_Sky', 'cube'), param('baseColorTexture', 'texture'), { name: 'u_Lut', type: 'texture3d', depth: 16 }, param('u_Gain', 'float')];
+  const { header: h } = parseN2Shader(shader(header({ params })));
+  assert.deepEqual(h.params.filter((p) => ['texture', 'cube', 'texture3d'].includes(p.type)).map((p) => [p.name, p.slot]), [['u_Sky', 1], ['baseColorTexture', 0], ['u_Lut', 2]]);
+  assert.equal(h.params[2].depth, 16);
+  assert.equal(layoutBlock(h.params).members.length, 1, 'only u_Gain is in the block');
+  assert.equal(h.params[0].default, 'white');
+  assert.equal(usesAtlasTextures(h), true);
+  assert.equal(usesAtlasTextures(parseN2Shader(shader(header())).header), false);
+});
+
+const atlasRejections = [
+  ['a texture3d without depth', [param('u_V', 'texture3d')], /needs "depth"/],
+  ['a depth of 1', [{ name: 'u_V', type: 'texture3d', depth: 1 }], /integer from 2 to 256/],
+  ['a depth over 256', [{ name: 'u_V', type: 'texture3d', depth: 257 }], /integer from 2 to 256/],
+  ['a fractional depth', [{ name: 'u_V', type: 'texture3d', depth: 2.5 }], /integer from 2 to 256/],
+  ['a depth on a cube', [{ name: 'u_V', type: 'cube', depth: 4 }], /"depth" applies to texture3d only/],
+  ['a cube default that is a colour', [param('u_V', 'cube', { default: [1, 0, 0, 1] })], /cube default must be one of/],
+  ['a name that collides with a depth constant', [{ name: 'u_V', type: 'texture3d', depth: 4 }, param('u_V_depth', 'float')], /collides with the constant/],
+  ['six atlases and textures together', [...Array.from({ length: 3 }, (_, i) => param(`u_C${i}`, 'cube')), ...Array.from({ length: 3 }, (_, i) => param(`u_T${i}`, 'texture'))], /at most 5 textures/],
+];
+for (const [name, params, pattern] of atlasRejections) test(`atlas textures reject: ${name}`, () => rejects(shader(header({ params })), pattern));
+
+test('atlas textures: the lookups and the slot constants are generated for a shader that has one, and only for it', () => {
+  const params = [param('u_Sky', 'cube'), { name: 'u_Lut', type: 'texture3d', depth: 16 }];
+  const parsed = parseN2Shader(shader(header({ params }), 'void main() { n2_FragColor = n2_textureCube(u_Sky, n2_Normal) + n2_texture3D(u_Lut, u_Lut_depth, n2_WorldPos); }'));
+  for (const target of ['vulkan', 'webgpu', 'gl']) {
+    const text = buildTargetSource(target, parsed).text;
+    assert.match(text, /vec4 n2_textureCube\(int slot, vec3 dir\)/, target);
+    assert.match(text, /vec4 n2_texture3D\(int slot, int depth, vec3 uvw\)/, target);
+    assert.match(text, /const int u_Sky = 0;/, target);
+    assert.match(text, /const int u_Lut = 1;/, target);
+    assert.match(text, /const int u_Lut_depth = 16;/, target);
+    assert.equal(text.split('\n')[buildTargetSource(target, parsed).userLine - 1], 'void main() { n2_FragColor = n2_textureCube(u_Sky, n2_Normal) + n2_texture3D(u_Lut, u_Lut_depth, n2_WorldPos); }', `${target}: #line still right`);
+  }
+  assert.match(buildTargetSource('vulkan', parsed).text, /layout\(set = 1, binding = 1\) uniform sampler2D n2_tex0;/);
+  const plain = parseN2Shader(shader(header({ params: [param('u_T', 'texture')] }), 'void main() { n2_FragColor = n2_texture(u_T, n2_UV); }'));
+  for (const target of ['vulkan', 'webgpu', 'gl']) assert.equal(buildTargetSource(target, plain).text.includes('n2_textureCube'), false, target);
+});
+
+test('atlas textures: the manifest says what each parameter is, with the 3D one\'s depth', () => {
+  const params = [param('u_Sky', 'cube', { default: 'black' }), { name: 'u_Lut', type: 'texture3d', depth: 16 }];
+  const result = cookShader(shader(header({ params }), 'void main() { n2_FragColor = n2_textureCube(u_Sky, n2_Normal); }'), { path: 'a.n2shader', targets: ['gl'], tools: noTools });
+  assert.equal(result.ok, true, JSON.stringify(result.diagnostics));
+  assert.deepEqual(result.manifest.params.map((p) => [p.name, p.type, p.slot, p.depth, p.default]), [['u_Sky', 'cube', 0, undefined, 'black'], ['u_Lut', 'texture3d', 1, 16, 'white']]);
+  assert.deepEqual(result.manifest.textures.map((t) => [t.name, t.slot, t.binding]), [['u_Sky', 0, 1], ['u_Lut', 1, 2]]);
 });
 
 test('header accepts exactly 256 bytes of block and exactly 5 textures', () => {

@@ -65,6 +65,8 @@ namespace N2Engine::Rendering
             if (name == "texture") return ShaderParamType::Texture;
             if (name == "mat3") return ShaderParamType::Mat3;
             if (name == "mat4") return ShaderParamType::Mat4;
+            if (name == "cube") return ShaderParamType::Cube;
+            if (name == "texture3d") return ShaderParamType::Texture3D;
             return std::nullopt;
         }
 
@@ -82,6 +84,8 @@ namespace N2Engine::Rendering
             case ShaderParamType::Texture: return "texture";
             case ShaderParamType::Mat3: return "mat3";
             case ShaderParamType::Mat4: return "mat4";
+            case ShaderParamType::Cube: return "cube";
+            case ShaderParamType::Texture3D: return "texture3d";
             }
             return "float";
         }
@@ -115,6 +119,8 @@ namespace N2Engine::Rendering
             switch (param.type)
             {
             case ShaderParamType::Texture:
+            case ShaderParamType::Cube:
+            case ShaderParamType::Texture3D:
                 if (!value.is_string() || (value.get<std::string>() != "white" && value.get<std::string>() != "black" &&
                                            value.get<std::string>() != "normal" && value.get<std::string>() != "none"))
                 {
@@ -297,6 +303,16 @@ namespace N2Engine::Rendering
                         return fail(std::format("parameter '{}': {}", param.name, why));
                     }
                 }
+                if (param.type == ShaderParamType::Texture3D)
+                {
+                    if (!entry.contains("depth") || !entry["depth"].is_number_integer() || entry["depth"].get<int>() < 2 ||
+                        entry["depth"].get<int>() > 256)
+                    {
+                        return fail(std::format("parameter '{}': a texture3d needs \"depth\", the number of slices (an integer from 2 to 256)",
+                                                param.name));
+                    }
+                    param.depth = entry["depth"].get<int>();
+                }
                 if (entry.contains("label") && entry["label"].is_string())
                 {
                     param.label = entry["label"].get<std::string>();
@@ -318,14 +334,14 @@ namespace N2Engine::Rendering
         int slot = 0;
         for (ShaderParam &param : params)
         {
-            if (param.type == ShaderParamType::Texture && param.name == "baseColorTexture")
+            if (IsTextureParam(param.type) && param.name == "baseColorTexture")
             {
                 param.slot = slot++;
             }
         }
         for (ShaderParam &param : params)
         {
-            if (param.type == ShaderParamType::Texture && param.name != "baseColorTexture")
+            if (IsTextureParam(param.type) && param.name != "baseColorTexture")
             {
                 param.slot = slot++;
             }
@@ -398,6 +414,9 @@ namespace N2Engine::Rendering
             _text.push_back(rest[i]);
         }
         // A custom vertex stage: a line that is exactly `#stage vertex` after the fragment stage's line
+        _hasAtlasTexture = std::ranges::any_of(_params, [](const ShaderParam &param) {
+            return param.type == ShaderParamType::Cube || param.type == ShaderParamType::Texture3D;
+        });
         _hasVertexStage = false;
         {
             const std::size_t fragmentAt = _text.find("\n#stage fragment\n");
@@ -661,11 +680,13 @@ namespace N2Engine::Rendering
                 case ShaderParamType::Vec3: param.type = UserParamType::Vec3; break;
                 case ShaderParamType::Vec4: param.type = UserParamType::Vec4; break;
                 case ShaderParamType::Color: param.type = UserParamType::Color; break;
-                case ShaderParamType::Texture: param.type = UserParamType::Texture; break;
+                case ShaderParamType::Texture:
+                case ShaderParamType::Cube: // a cube and a 3D texture are 2D atlases to the backends: one 2D texture slot
+                case ShaderParamType::Texture3D: param.type = UserParamType::Texture; break;
                 case ShaderParamType::Mat3: param.type = UserParamType::Mat3; break;
                 case ShaderParamType::Mat4: param.type = UserParamType::Mat4; break;
                 }
-                if (declared.type == ShaderParamType::Texture)
+                if (IsTextureParam(declared.type))
                 {
                     param.slot = entry.at("slot").get<std::uint32_t>();
                     param.textureDefault = declared.defaultTexture == "black" ? UserTextureDefault::Black
@@ -856,9 +877,11 @@ namespace N2Engine::Rendering
         return std::nullopt;
 #else
         using Renderer::Common::UserShaderTarget;
-        if (_hasVertexStage)
+        if (NeedsCook())
         {
-            why = "it has a custom vertex stage, which is only made by the cook (tools/n2shader; the project's build and the editor do it)";
+            why = _hasVertexStage
+                ? "it has a custom vertex stage, which is only made by the cook (tools/n2shader; the project's build and the editor do it)"
+                : "it has a cube or 3D texture parameter, whose lookups are only made by the cook (tools/n2shader; the project's build and the editor do it)";
             return std::nullopt;
         }
         if (target == UserShaderTarget::WebGpu)

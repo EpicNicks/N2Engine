@@ -3,7 +3,7 @@
 // allowed capabilities) and the WGSL layout check of the WebGPU payload (proposal sections 2.1 layer 3 and 13.13). Each
 // takes parsed data and returns diagnostics, so tests feed it fixtures.
 import {
-  ALLOWED_CAPABILITIES, LIGHTING, LIGHTING_BLOCK_SIZE, OUTPUT_NAME, PER_DRAW, SAMPLER_BINDING_BASE, TEXTURE_BINDING_BASE, VARYINGS, VERTEX_INPUTS,
+  ALLOWED_CAPABILITIES, LIGHTING, LIGHTING_BLOCK_SIZE, OUTPUT_NAME, PER_DRAW, SAMPLER_BINDING_BASE, TEXTURE_BINDING_BASE, VARYINGS, VERTEX_INPUTS, isTextureType,
 } from './contract.mjs';
 import { alignUp } from './std140.mjs';
 
@@ -67,7 +67,7 @@ export function checkReflection(json, { target, header, layout }) {
     } else fail('the Material block (set 1, binding 0) is missing from the module');
   }
 
-  const slots = header.params.filter((param) => param.type === 'texture');
+  const slots = header.params.filter((param) => isTextureType(param.type));
   if (target === 'vulkan') {
     if ((json.separate_images ?? []).length + (json.separate_samplers ?? []).length > 0) fail('separate textures and samplers in the Vulkan module (the Vulkan target uses combined samplers)');
     const textures = json.textures ?? [];
@@ -213,7 +213,7 @@ export function checkWgslLayout(wgsl, { header, layout }) {
       if (!binding || Number(binding[1]) !== 1 || Number(binding[2]) !== 0) fail(`the Material uniform must be at @group(1) @binding(0) (found ${binding ? `${binding[1]}/${binding[2]}` : 'none'})`);
     }
   }
-  for (const param of header.params.filter((entry) => entry.type === 'texture')) {
+  for (const param of header.params.filter((entry) => isTextureType(entry.type))) {
     const texture = new RegExp(`@group\\((\\d+)u?\\)\\s*@binding\\((\\d+)u?\\)\\s*var\\s+n2_tex${param.slot}\\s*:\\s*texture_2d<f32>`).exec(wgsl);
     if (!texture || Number(texture[1]) !== 1 || Number(texture[2]) !== TEXTURE_BINDING_BASE + param.slot) fail(`texture slot ${param.slot} must be @group(1) @binding(${TEXTURE_BINDING_BASE + param.slot}) (found ${texture ? `${texture[1]}/${texture[2]}` : 'none'})`);
     const sampler = new RegExp(`@group\\((\\d+)u?\\)\\s*@binding\\((\\d+)u?\\)\\s*var\\s+n2_samp${param.slot}\\s*:\\s*sampler\\b`).exec(wgsl);
@@ -261,7 +261,7 @@ export function checkGlUniforms(glsl, json, { header, layout }) {
   if (lighting) addBlock('Lighting', true);
   if (layout.members.length > 0) addBlock('Material', true);
   for (const [name, type] of Object.entries(GL_EXTRA_UNIFORMS)) expected.set(name, type);
-  for (const param of header.params.filter((entry) => entry.type === 'texture')) expected.set(`n2_tex${param.slot}`, 'sampler2D');
+  for (const param of header.params.filter((entry) => isTextureType(entry.type))) expected.set(`n2_tex${param.slot}`, 'sampler2D');
 
   for (const [name, type] of expected) {
     if (!declared.has(name)) { fail(`the uniform "${name}" (${type}) the renderer sets by name is not declared in the GL text`); continue; }

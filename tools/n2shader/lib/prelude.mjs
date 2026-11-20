@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CONTRACT_VERSION, SAMPLER_BINDING_BASE, TEXTURE_BINDING_BASE } from './contract.mjs';
+import { isTextureType, CONTRACT_VERSION, SAMPLER_BINDING_BASE, TEXTURE_BINDING_BASE } from './contract.mjs';
 import { layoutBlock } from './std140.mjs';
 
 export const PRELUDE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../renderer/shaders/user/prelude');
@@ -68,9 +68,16 @@ export function materialSection(target, header) {
     }
   }
   for (const param of header.params) {
-    if (param.type === 'texture') lines.push(`const int ${param.name} = ${param.slot};`);
+    if (isTextureType(param.type)) lines.push(`const int ${param.name} = ${param.slot};`);
+    // a texture3d's slice count, for n2_texture3D(slot, depth, uvw)
+    if (param.type === 'texture3d') lines.push(`const int ${param.name}_depth = ${param.depth};`);
   }
   return `${lines.join('\n')}\n`;
+}
+
+/** Whether the header declares a cube or a texture3d: then the atlas lookups (texture-atlas.glsl) follow the prelude */
+export function usesAtlasTextures(header) {
+  return header.params.some((param) => param.type === 'cube' || param.type === 'texture3d');
 }
 
 /** Whether the author's stage names isnan or isinf: then the NaN shims (nan-shims.glsl) follow the prelude. Plain word search, the C++ twin's rule */
@@ -90,9 +97,10 @@ const linePath = (file) => file.replace(/\\/g, '/').replace(/["\r\n]/g, '_');
 export function buildTargetSource(target, parsed, { path: file = 'shader.n2shader', dir = PRELUDE_DIR } = {}) {
   if (!Object.hasOwn(TEMPLATE_FILES, target)) throw new Error(`unknown target "${target}"`);
   const { header } = parsed;
-  const slots = header.params.filter((param) => param.type === 'texture').map((param) => param.slot).sort((a, b) => a - b);
+  const slots = header.params.filter((param) => isTextureType(param.type)).map((param) => param.slot).sort((a, b) => a - b);
   const prelude = expandTemplate(readTemplate(TEMPLATE_FILES[target], dir), { lighting: header.uses.includes('lighting'), slots, dir });
-  const nanShims = usesNanChecks(parsed.source) ? readTemplate('nan-shims.glsl', dir) : '';
+  const nanShims = (usesNanChecks(parsed.source) ? readTemplate('nan-shims.glsl', dir) : '')
+    + (usesAtlasTextures(header) ? readTemplate('texture-atlas.glsl', dir) : '');
   const head = target === 'gl'
     ? '#version 330 core\n'
     : '#version 450\n#extension GL_GOOGLE_cpp_style_line_directive : enable\n#extension GL_EXT_samplerless_texture_functions : enable\n';
@@ -125,7 +133,7 @@ export function buildVertexSource(target, parsed, { path: file = 'shader.n2shade
   const lineDirective = target === 'gl' ? `#line ${parsed.vertexFirstLine} 2\n` : `#line ${parsed.vertexFirstLine} "${linePath(file)}"\n`;
   const nanShims = usesNanChecks(parsed.vertex) ? readTemplate('nan-shims.glsl', dir) : '';
   // The Material block only: a texture is a fragment-stage resource in v1
-  const material = materialSection(target, { ...header, params: header.params.filter((param) => param.type !== 'texture') });
+  const material = materialSection(target, { ...header, params: header.params.filter((param) => !isTextureType(param.type)) });
   const before = `${head}// n2shader contract ${CONTRACT_VERSION}, target ${target}, vertex stage\n${prelude}${nanShims}${material}${lineDirective}`;
   const trailer = 'void main() {\n    n2_DefaultVertex();\n    n2_vertex();\n    if (!n2_positionSet) {\n        n2_SetPosition(n2_Projection * n2_View * vec4(n2_WorldPos, 1.0));\n    }\n}\n';
   return { text: `${before}${parsed.vertex}\n${trailer}`, userLine: before.split('\n').length };

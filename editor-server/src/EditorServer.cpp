@@ -8476,7 +8476,7 @@ namespace N2Engine::Editor
         else
         {
             using Rendering::ShaderParamType;
-            static constexpr std::array<std::string_view, 10> typeNames{"float", "int", "bool", "vec2", "vec3", "vec4", "color", "texture", "mat3", "mat4"};
+            static constexpr std::array<std::string_view, 12> typeNames{"float", "int", "bool", "vec2", "vec3", "vec4", "color", "texture", "mat3", "mat4", "cube", "texture3d"};
             info["name"] = shader->GetName();
             info["usesLighting"] = shader->UsesLighting();
             nlohmann::json state = nlohmann::json::object();
@@ -8502,6 +8502,8 @@ namespace N2Engine::Editor
                 case ShaderParamType::Vec4:
                 case ShaderParamType::Color: entry["default"] = param.defaultValue; break;
                 case ShaderParamType::Texture:
+                case ShaderParamType::Cube:
+                case ShaderParamType::Texture3D:
                     entry["default"] = param.defaultTexture;
                     entry["slot"] = param.slot;
                     break;

@@ -32,7 +32,15 @@ namespace N2Engine::Rendering
         Texture,
         Mat3, ///< a 3x3 matrix, row-major, the identity until set (no default is declared)
         Mat4, ///< a 4x4 matrix, row-major, the identity until set
+        Cube,      ///< a cube texture: six square faces side by side in one 2D texture (+X -X +Y -Y +Z -Z), read with n2_textureCube
+        Texture3D, ///< a 3D texture: `depth` slices side by side in one 2D texture, read with n2_texture3D; the header gives "depth"
     };
+
+    /// The parameter types that hold a Texture and take one of the five 2D texture slots (a cube and a 3D texture are atlases, stage 9e)
+    [[nodiscard]] constexpr bool IsTextureParam(const ShaderParamType type)
+    {
+        return type == ShaderParamType::Texture || type == ShaderParamType::Cube || type == ShaderParamType::Texture3D;
+    }
 
     /// One declared parameter. The reserved names bind to the standard Material fields: a `color` named baseColor takes the
     /// material's base colour (times the draw's tint) and a `texture` named baseColorTexture its base colour texture, unless the
@@ -44,6 +52,7 @@ namespace N2Engine::Rendering
         std::array<float, 4> defaultValue{};  ///< a non-texture default (a bool or int: the value cast)
         std::string defaultTexture = "white"; ///< a texture's default: white, black, normal or none
         int slot = -1;                        ///< a texture's slot 0-4 (the cook's rule: baseColorTexture first, then declaration order)
+        int depth = 0;                        ///< a Texture3D's slice count (2 to 256)
         /// The editor's hints (ignored by the runtime)
         std::string label;
         std::optional<float> min, max;
@@ -91,6 +100,9 @@ namespace N2Engine::Rendering
         /// Whether the file has a `#stage vertex` block (a custom vertex stage, stage 9d). Such a shader draws from its cooked payloads
         /// only: the runtime compile (the C++ twin of the cook) does not build vertex stages
         [[nodiscard]] bool HasVertexStage() const { return _hasVertexStage; }
+        /// Whether the shader draws from cooked payloads only: a custom vertex stage or a cube or 3D texture parameter (their lookup
+        /// functions are in the cook's prelude, which the runtime compile's C++ twin does not embed)
+        [[nodiscard]] bool NeedsCook() const { return _hasVertexStage || _hasAtlasTexture; }
         [[nodiscard]] const ShaderStateHints &GetStateHints() const { return _state; }
         /// The file it was loaded from (empty for one made with FromSource)
         [[nodiscard]] const std::string &GetSourcePath() const { return _sourcePath; }
@@ -137,6 +149,7 @@ namespace N2Engine::Rendering
         std::vector<ShaderParam> _params;
         bool _usesLighting = false;
         bool _hasVertexStage = false;
+        bool _hasAtlasTexture = false;
         ShaderStateHints _state;
         std::string _sourcePath;
         std::uint64_t _version = 1;

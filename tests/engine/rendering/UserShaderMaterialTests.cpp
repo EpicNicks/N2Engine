@@ -1266,3 +1266,98 @@ TEST(ShaderVertexStageTest, TheRuntimeCompileDoesNotBuildAVertexStageAndSaysSo)
         EXPECT_NE(error.find("custom vertex stage"), std::string::npos) << error;
     }
 }
+
+// ===== Stage 9e: cube and 3D textures as 2D atlases =====
+
+TEST(AtlasTextureTest, ACubeAndATexture3DAreTextureParametersWithSlotsAndTheVolumeKeepsItsDepth)
+{
+    const auto shader = FixtureShader("atlas");
+    ASSERT_NE(shader, nullptr);
+    const Rendering::ShaderParam *sky = shader->FindParam("u_Sky");
+    const Rendering::ShaderParam *volume = shader->FindParam("u_Vol");
+    ASSERT_NE(sky, nullptr);
+    ASSERT_NE(volume, nullptr);
+    EXPECT_EQ(sky->type, ShaderParamType::Cube);
+    EXPECT_EQ(volume->type, ShaderParamType::Texture3D);
+    EXPECT_TRUE(Rendering::IsTextureParam(sky->type));
+    EXPECT_TRUE(Rendering::IsTextureParam(volume->type));
+    EXPECT_FALSE(Rendering::IsTextureParam(ShaderParamType::Mat4));
+    EXPECT_EQ(sky->slot, 0);
+    EXPECT_EQ(volume->slot, 1);
+    EXPECT_EQ(volume->depth, 2);
+    EXPECT_EQ(sky->defaultTexture, "black");
+    EXPECT_TRUE(shader->NeedsCook());
+    EXPECT_FALSE(shader->HasVertexStage());
+    EXPECT_FALSE(FixtureShader("textured")->NeedsCook());
+}
+
+TEST(AtlasTextureTest, ATexture3DNeedsAnIntegerDepthFromTwoTo256)
+{
+    const auto refused = [](const std::string &entry)
+    {
+        WarningCapture capture;
+        const auto shader = Shader::FromSource("{ \"n2shader\": 1, \"params\": [ " + entry + " ] }\n#stage fragment\nvoid main() {}\n", "v.n2shader");
+        EXPECT_EQ(shader, nullptr) << entry;
+        EXPECT_TRUE(capture.Mentions("depth")) << entry;
+    };
+    refused(R"({"name": "u_V", "type": "texture3d"})");
+    refused(R"({"name": "u_V", "type": "texture3d", "depth": 1})");
+    refused(R"({"name": "u_V", "type": "texture3d", "depth": 257})");
+    refused(R"({"name": "u_V", "type": "texture3d", "depth": 2.5})");
+    EXPECT_NE(Shader::FromSource(R"({ "n2shader": 1, "params": [ {"name": "u_V", "type": "texture3d", "depth": 256} ] }
+#stage fragment
+void main() {}
+)", "ok.n2shader"), nullptr);
+}
+
+TEST(AtlasTextureTest, TheBackendsSeeOneTwoDimensionalTextureSlotForEach)
+{
+    const auto shader = FixtureShader("atlas");
+    ASSERT_NE(shader, nullptr);
+    for (const UserShaderTarget target : {UserShaderTarget::Vulkan, UserShaderTarget::WebGpu, UserShaderTarget::OpenGl})
+    {
+        std::string error;
+        const auto blob = shader->MakeBlob(target, error);
+        ASSERT_TRUE(blob.has_value()) << error;
+        EXPECT_EQ(Renderer::Common::ValidateUserShaderBlob(*blob, target), "");
+        int textures = 0;
+        for (const Renderer::Common::UserParam &param : blob->params)
+        {
+            if (param.type == Renderer::Common::UserParamType::Texture)
+            {
+                ++textures;
+            }
+        }
+        EXPECT_EQ(textures, 2) << "the cube and the volume are slots 0 and 1 of the five";
+    }
+}
+
+TEST(AtlasTextureTest, AMaterialHoldsTheirTexturesAndWritesThemInAMatFile)
+{
+    auto material = Material::Create(ShadingModel::Unlit);
+    material->SetShader(FixtureShader("atlas"));
+    const std::vector<std::uint8_t> pixels = {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255, 0, 255, 255, 255, 255, 0, 255, 255};
+    Renderer::Common::TextureOptions options;
+    options.mipmaps = false;
+    const auto atlas = Texture::Create(6, 1, pixels, options);
+    ASSERT_NE(atlas, nullptr);
+    WarningCapture capture;
+    EXPECT_TRUE(material->SetTexture("u_Sky", atlas));
+    EXPECT_TRUE(material->SetTexture("u_Vol", atlas));
+    EXPECT_FALSE(material->SetTexture("u_Dir", atlas)) << "a vec3 is not a texture";
+    EXPECT_EQ(material->GetParam("u_Sky")->texture, atlas);
+    const json saved = material->ToJson();
+    EXPECT_TRUE(saved.at("params").contains("u_Sky"));
+    EXPECT_TRUE(saved.at("params").contains("u_Vol"));
+    EXPECT_TRUE(capture.Mentions("does not fit this setter"));
+}
+
+TEST(AtlasTextureTest, TheRuntimeCompileDoesNotBuildThemAndSaysSo)
+{
+    auto shader = FixtureShader("atlas");
+    ASSERT_NE(shader, nullptr);
+    shader->SetCookedDirectory(fs::temp_directory_path() / "n2-no-cooked-data-here");
+    std::string error;
+    EXPECT_FALSE(shader->MakeBlob(UserShaderTarget::OpenGl, error).has_value());
+    EXPECT_NE(error.find("cube or 3D texture"), std::string::npos) << error;
+}

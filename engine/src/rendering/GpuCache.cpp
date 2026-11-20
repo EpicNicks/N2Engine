@@ -434,7 +434,7 @@ namespace N2Engine::Rendering
                     std::array<ITexture *, Renderer::Common::kUserShaderTextureSlots> slots{};
                     for (const ShaderParam &param : userShader->GetParams())
                     {
-                        if (param.type != ShaderParamType::Texture || param.slot < 0 ||
+                        if (!IsTextureParam(param.type) || param.slot < 0 ||
                             param.slot >= static_cast<int>(slots.size()))
                         {
                             continue;
