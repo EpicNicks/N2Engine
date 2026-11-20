@@ -41,6 +41,7 @@
 <li><a href="ui.html">UI</a></li>
 <li><a href="meshes.html">Meshes, models &amp; textures</a></li>
 <li><a href="sprite2d.html">Sprites &amp; 2D shapes</a></li>
+<li><a href="user-shaders.html">User shaders</a></li>
 <li><a href="particles.html" aria-current="page">Particles</a></li>
 <li><a href="soft-bodies.html">Soft bodies</a></li>
 <li><a href="resources.html">Resources &amp; paths</a></li>
@@ -149,6 +150,9 @@ ps:Stop()          -- no new ones; the flying ones finish
 <li>Particles start at the object's position when they are emitted and are simulated in <strong>world space</strong>: moving the object moves where new particles start, not the ones already flying. The cone points along the object's local +Y axis, turned by its rotation.</li>
 </ul>
 <p class="src">Source: <code>engine/include/engine/rendering/ParticleSystem.hpp</code>, <code>engine/src/rendering/ParticleSystem.cpp</code>; tests: <code>ParticleSystemTest.*</code> (<code>tests/engine/particles/ParticleSystemTests.cpp</code>), <code>ReflectionRegistryTest.EveryBuiltinTypeIsDescribableAndItsFieldsAreItsSavedKeys</code></p>
+
+<h2 id="shader">A user shader <span class="badge">user shaders, stage 8</span></h2>
+<p><code>ParticleSystem::SetShader(shader)</code> (Lua: <code>ps:SetShader('res://shaders/x.n2shader')</code>, <code>nil</code> goes back) draws the particle quads with a <a href="user-shaders.html">user shader</a> instead of the standard unlit shader. All the billboards are one dynamic mesh drawn in one call, so one private Material (<code>UserShaderSlot</code>) serves every particle: each particle's colour (the start-to-end fade) reaches the shader as the varying <code>n2_Color</code>, the system's texture as the reserved <code>baseColorTexture</code>, and the system keeps its blend mode (alpha or additive) and two-sided quads. Parameters are set with <code>SetShaderParam</code>, <code>SetShaderInt</code> and <code>SetShaderVec4</code>, or on <code>ps:GetMaterialInstance()</code> in Lua; a value is per system, not per particle (a per-particle value is the vertex colour). Runtime only: not a serialized field. Where the renderer cannot make the shader's material (the software renderer), the standard material draws the particles as before. Test: <code>SoftwareParticlesGoldenTest.AParticleSystemWithAUserShaderDrawsTheFallbackWhereTheShaderCannotRun</code>.</p>
 
 <h2 id="backends">Backends and the seam <span class="badge">PR #125</span></h2>
 <p>A <code>ParticleSystem</code> does not simulate anything itself: it emits (rate, shape, speed) and hands the new particles to an <code>IParticleBackend</code> (<code>engine/include/engine/physics/IParticleBackend.hpp</code>), which moves them and expires them. The interface has no PhysX or CUDA type in it. Its calls: <code>CreateSystem(desc)</code> returning a handle, <code>Spawn(handle, positions, velocities)</code>, <code>SetParams</code>, <code>Clear</code>, <code>Destroy</code>, <code>Step(dt)</code>, <code>GetAliveCount</code> and <code>CopyPositions(handle, out)</code>, which fills one <code>Vector4</code> per living particle: x, y, z the world position and w the age as a fraction of the lifetime (the drawing code turns that into size and colour).</p>

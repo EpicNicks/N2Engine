@@ -124,6 +124,7 @@ namespace N2Engine::UI
         }
         // The sprite's share of its texture: destroyed with the last share, and only on a renderer that exists
         _spriteTexture.Release(true);
+        _shaderSlot.Release(true); // the user shader's GPU material, likewise
         _mesh = nullptr;
         _material = nullptr;
         _renderer = nullptr;
@@ -153,6 +154,20 @@ namespace N2Engine::UI
         }
         if (!EnsureResources(renderer))
         {
+            return;
+        }
+
+        // A user shader draws the sprite through the slot's own Material (a raw texture is not an asset a Material can hold, so it
+        // keeps the standard path). The standard path below is not touched when there is no shader.
+        if (_shaderSlot.HasShader() && !_texture)
+        {
+            _spriteTexture.Release(true); // the slot's Material holds the sprite's GPU texture itself
+            const Common::Color shaderColor = GetDrawColor();
+            _shaderSlot.Sync(_sprite, Renderer::Common::BlendCutOutBelow(_sprite != nullptr, renderer->SupportsBlending(), shaderColor.a));
+            if (Renderer::Common::IMaterial *gpu = _shaderSlot.Prepare(*renderer, shaderColor))
+            {
+                renderer->DrawMesh(_mesh, ComposeModel(canvasToWorld, ModelMatrixFor(rect)).Data(), gpu, state);
+            }
             return;
         }
 

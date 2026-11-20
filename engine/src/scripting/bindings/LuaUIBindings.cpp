@@ -9,6 +9,7 @@
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/scripting/ScriptCallback.hpp"
 #include "engine/GameObjectScene.hpp"
+#include "engine/rendering/Shader.hpp"
 #include "engine/rendering/Texture.hpp"
 #include "engine/ui/Button.hpp"
 #include "engine/ui/Canvas.hpp"
@@ -139,6 +140,17 @@ namespace N2Engine::Scripting::Bindings
         BindComponentType<UI::Image>(
             lua, "Image",
             "GetColor", Forward<ImageRef, &UI::UIGraphic::GetColor>(),
+            // A user shader (a .n2shader path) for this image, nil for the standard one; the shader's parameters are set on the
+            // MaterialInstance of GetMaterialInstance (nil without a shader). Runtime only: not saved in the scene
+            "SetShader", [](const ImageRef &ref, const sol::optional<std::string> path)
+            { ref.Pin()->SetShader(path ? LoadShaderOrThrow(*path, "Image:SetShader") : nullptr); },
+            "GetShader", [](const ImageRef &ref) -> sol::optional<std::string>
+            {
+                const auto &shader = ref.Pin()->GetShader();
+                return shader ? sol::optional<std::string>(ShaderPathForLua(*shader)) : sol::nullopt;
+            },
+            "GetMaterialInstance", [](const ImageRef &ref, const sol::this_state state)
+            { return PrivateMaterialInstance(state, ref.Pin()->GetShaderMaterial()); },
             "SetColor", Forward<ImageRef, &UI::UIGraphic::SetColor>(),
             "GetRaycastTarget", Forward<ImageRef, &UI::UIGraphic::GetRaycastTarget>(),
             "SetRaycastTarget", Forward<ImageRef, &UI::UIGraphic::SetRaycastTarget>(),

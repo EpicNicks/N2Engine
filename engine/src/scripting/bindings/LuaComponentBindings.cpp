@@ -44,6 +44,7 @@
 #include "engine/io/Resources.hpp"
 #include "engine/rendering/Light.hpp"
 #include "engine/rendering/Material.hpp"
+#include "engine/rendering/Shader.hpp"
 #include "engine/rendering/Mesh.hpp"
 #include "engine/rendering/MeshRenderer.hpp"
 #include "engine/rendering/ParticleSystem.hpp"
@@ -459,6 +460,26 @@ namespace N2Engine::Scripting::Bindings
         return texture;
     }
 
+    std::shared_ptr<Rendering::Shader> LoadShaderOrThrow(const std::string &path, const std::string_view caller)
+    {
+        auto shader = IO::Resources::Instance().Load<Rendering::Shader>(std::filesystem::path(path));
+        if (!shader)
+        {
+            throw std::runtime_error(std::format("{}: can't load shader '{}'", caller, path));
+        }
+        return shader;
+    }
+
+    std::string ShaderPathForLua(const Rendering::Shader &shader)
+    {
+        return AssetPathForLua(shader, shader.GetSourcePath());
+    }
+
+    sol::object PrivateMaterialInstance(const sol::this_state state, std::shared_ptr<Rendering::Material> material)
+    {
+        return MaterialInstanceFor(state, std::move(material), {});
+    }
+
     std::string TexturePathForLua(const Rendering::Texture &texture)
     {
         return AssetPathForLua(texture, texture.GetSourcePath());
@@ -593,6 +614,17 @@ namespace N2Engine::Scripting::Bindings
             lua, "Sprite2D",
             "SetShape", Forward<Sprite2DRef, &Rendering::Sprite2D::SetShape>(),
             "GetShape", Forward<Sprite2DRef, &Rendering::Sprite2D::GetShape>(),
+            // A user shader (a .n2shader path) for this sprite, nil for the built-in one; the shader's parameters are set on the
+            // MaterialInstance of GetMaterialInstance (nil without a shader). Runtime only: not saved in the scene
+            "SetShader", [](const Sprite2DRef &ref, const sol::optional<std::string> path)
+            { ref.Pin()->SetShader(path ? LoadShaderOrThrow(*path, "Sprite2D:SetShader") : nullptr); },
+            "GetShader", [](const Sprite2DRef &ref) -> sol::optional<std::string>
+            {
+                const auto &shader = ref.Pin()->GetShader();
+                return shader ? sol::optional<std::string>(ShaderPathForLua(*shader)) : sol::nullopt;
+            },
+            "GetMaterialInstance", [](const Sprite2DRef &ref, const sol::this_state state)
+            { return PrivateMaterialInstance(state, ref.Pin()->GetShaderMaterial()); },
             "SetSize", Forward<Sprite2DRef, &Rendering::Sprite2D::SetSize>(),
             "GetSize", Forward<Sprite2DRef, &Rendering::Sprite2D::GetSize>(),
             "SetSides", Forward<Sprite2DRef, &Rendering::Sprite2D::SetSides>(),
@@ -881,6 +913,17 @@ namespace N2Engine::Scripting::Bindings
             // Control: Play starts emitting (the rate, and the burst once); Stop stops emitting but lets the
             // particles finish; Clear removes them all; EmitBurst(n) starts n particles now, playing or not
             "Play", [](const ParticleSystemRef &c) { c.Pin()->Play(); },
+            // A user shader (a .n2shader path) for the particle quads, nil for the built-in one; its parameters are set on the
+            // MaterialInstance of GetMaterialInstance (nil without a shader). Runtime only: not saved in the scene
+            "SetShader", [](const ParticleSystemRef &c, const sol::optional<std::string> path)
+            { c.Pin()->SetShader(path ? LoadShaderOrThrow(*path, "ParticleSystem:SetShader") : nullptr); },
+            "GetShader", [](const ParticleSystemRef &c) -> sol::optional<std::string>
+            {
+                const auto &shader = c.Pin()->GetShader();
+                return shader ? sol::optional<std::string>(ShaderPathForLua(*shader)) : sol::nullopt;
+            },
+            "GetMaterialInstance", [](const ParticleSystemRef &c, const sol::this_state state)
+            { return PrivateMaterialInstance(state, c.Pin()->GetShaderMaterial()); },
             "Stop", [](const ParticleSystemRef &c) { c.Pin()->Stop(); },
             "Clear", [](const ParticleSystemRef &c) { c.Pin()->Clear(); },
             "EmitBurst", [](const ParticleSystemRef &c, const int count) { c.Pin()->EmitBurst(count); },

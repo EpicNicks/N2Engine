@@ -1052,6 +1052,15 @@ ParticleSystem = {}
 ---Starts emitting: the emission rate, and the burst once
 function ParticleSystem:Play() end
 
+---Draw with a user shader (a .n2shader asset) instead of the built-in one; nil goes back and forgets the parameter values. All the particles are one mesh, so one material serves them all: each particle's colour reaches the shader as n2_Color. Runtime only: not saved in the scene, a prefab, a snapshot or any state hash.
+---@param path string|nil a res:// path to a .n2shader
+function ParticleSystem:SetShader(path) end
+---@return string|nil path the shader's path, nil for the built-in one
+function ParticleSystem:GetShader() end
+---The shader's parameters, as a MaterialInstance on this component's own material (nothing else shares it). nil when there is no shader.
+---@return MaterialInstance|nil instance
+function ParticleSystem:GetMaterialInstance() end
+
 ---Stops emitting; the particles already flying finish their lives
 function ParticleSystem:Stop() end
 
@@ -1658,6 +1667,15 @@ Image = {}
 
 ---@return Color
 function Image:GetColor() end
+
+---Draw with a user shader (a .n2shader asset) instead of the built-in one; nil goes back and forgets the parameter values. The sprite is the shader's baseColorTexture, the colour (with a Button's tint) the baseColor; a raw texture still draws with the built-in shader. Runtime only: not saved in the scene, a prefab, a snapshot or any state hash.
+---@param path string|nil a res:// path to a .n2shader
+function Image:SetShader(path) end
+---@return string|nil path the shader's path, nil for the built-in one
+function Image:GetShader() end
+---The shader's parameters, as a MaterialInstance on this component's own material (nothing else shares it). nil when there is no shader.
+---@return MaterialInstance|nil instance
+function Image:GetMaterialInstance() end
 ---@param color Color
 function Image:SetColor(color) end
 ---@return boolean
@@ -2411,6 +2429,15 @@ Sprite2D = {}
 function Sprite2D:SetShape(shape) end
 ---@return Sprite2DShape
 function Sprite2D:GetShape() end
+
+---Draw with a user shader (a .n2shader asset) instead of the built-in one; nil goes back and forgets the parameter values. The sprite's texture is the shader's baseColorTexture, its colour the baseColor, and its saturation and flash are not applied. Runtime only: not saved in the scene, a prefab, a snapshot or any state hash.
+---@param path string|nil a res:// path to a .n2shader
+function Sprite2D:SetShader(path) end
+---@return string|nil path the shader's path, nil for the built-in one
+function Sprite2D:GetShader() end
+---The shader's parameters, as a MaterialInstance on this component's own material (nothing else shares it). nil when there is no shader.
+---@return MaterialInstance|nil instance
+function Sprite2D:GetMaterialInstance() end
 ---World units; for a circle or regular polygon, the diameter on each axis
 ---@param size Vector2
 function Sprite2D:SetSize(size) end

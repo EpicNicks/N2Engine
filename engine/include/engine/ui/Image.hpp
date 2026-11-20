@@ -11,6 +11,7 @@
 
 #include "engine/rendering/GpuCache.hpp"
 #include "engine/rendering/Texture.hpp"
+#include "engine/rendering/UserShaderSlot.hpp"
 #include "engine/ui/UIGraphic.hpp"
 
 namespace N2Engine::UI
@@ -62,6 +63,21 @@ namespace N2Engine::UI
         void SetFlash(const Common::Color &flash) { _flash = Renderer::Common::ColorEffects::ClampFlash(flash); }
         [[nodiscard]] const Common::Color &GetFlash() const { return _flash; }
 
+        /// A user shader (`.n2shader`, a Shader asset) to draw the image with instead of the standard unlit shader; null goes back (and
+        /// forgets the parameter values). The image keeps a Material of its own for it (Rendering::UserShaderSlot): the sprite reaches the
+        /// shader as the reserved baseColorTexture, the colour (with a Button's tint) as baseColor, and the cut-out on a renderer that
+        /// cannot blend stays; the saturation and flash are the standard shader's and are not applied. Only the sprite is shown through a
+        /// shader, not a raw SetTexture texture (the built-in path draws that, as before). Runtime only: not a serialized field
+        void SetShader(std::shared_ptr<Rendering::Shader> shader) { _shaderSlot.SetShader(std::move(shader)); }
+        [[nodiscard]] const std::shared_ptr<Rendering::Shader> &GetShader() const { return _shaderSlot.GetShader(); }
+        /// Sets a parameter the shader declares; false (with one warning) without a shader, for an unknown name or a wrong type
+        template <typename Value>
+        bool SetShaderParam(std::string_view name, Value &&value) { return _shaderSlot.SetParam(name, std::forward<Value>(value)); }
+        bool SetShaderInt(std::string_view name, int value) { return _shaderSlot.SetParamInt(name, value); }
+        bool SetShaderVec4(std::string_view name, float x, float y, float z, float w) { return _shaderSlot.SetParamVec4(name, x, y, z, w); }
+        /// The image's private Material when it has a shader (Material::GetParam reads the values), else null
+        [[nodiscard]] const std::shared_ptr<Rendering::Material> &GetShaderMaterial() const { return _shaderSlot.GetMaterial(); }
+
         /// The model matrix (row-major, as the renderers take it) that maps the unit square onto the rect
         [[nodiscard]] static Math::Matrix<float, 4, 4> ModelMatrixFor(const Rect &rect);
 
@@ -81,6 +97,7 @@ namespace N2Engine::UI
         std::weak_ptr<const void> _rendererLifetime; // expired once _renderer is destroyed
         Renderer::Common::IMesh *_mesh = nullptr;
         Renderer::Common::IMaterial *_material = nullptr;
+        Rendering::UserShaderSlot _shaderSlot; // the user shader and its Material, when one is set
 
         /// Creates the quad and material on first use; false if the renderer couldn't
         bool EnsureResources(Renderer::Common::IRenderer *renderer);

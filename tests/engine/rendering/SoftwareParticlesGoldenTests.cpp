@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -17,6 +18,8 @@
 #include "engine/Time.hpp"
 #include "engine/common/Color.hpp"
 #include "engine/rendering/ParticleSystem.hpp"
+#include "engine/rendering/RenderSettings.hpp"
+#include "engine/rendering/Shader.hpp"
 
 // Golden-image tests through the engine: a ParticleSystem drawn by Scene::Render on a headless SoftwareRenderer (no
 // window or GPU) and read back. The checks are structural (colours, pixel counts, where the ink lies) with
@@ -315,4 +318,55 @@ TEST(SoftwareParticlesGoldenTest, AFullyFadedParticleIsNotDrawn)
     EXPECT_EQ(CoverageExcept(frame, Black).count, 0) << "the software renderer can't blend, so it skips alpha 0";
     fx.system->CleanupRenderResources(&renderer);
     renderer.Shutdown();
+}
+
+// User shaders, stage 8: the particle quads drawn through a user shader (UserShaderSlot: a private Material). The software renderer has no
+// user shaders, so it draws the unlit fallback with the particles' vertex colour: the same red square as without a shader.
+TEST(SoftwareParticlesGoldenTest, AParticleSystemWithAUserShaderDrawsTheFallbackWhereTheShaderCannotRun)
+{
+    const auto shader = Rendering::Shader::FromSource(R"({ "n2shader": 1, "name": "Glow",
+  "params": [ { "name": "u_Power", "type": "float", "default": 1 } ] }
+#stage fragment
+void main() { n2_FragColor = n2_Color * u_Power; }
+)", "glow");
+    ASSERT_NE(shader, nullptr);
+    shader->SetCookedDirectory(std::filesystem::temp_directory_path() / "n2-no-cooked-data-here");
+    const Rendering::UserShaderErrorStyle before = Rendering::RenderSettings::GetUserShaderErrorStyle();
+    Rendering::RenderSettings::SetUserShaderErrorStyle(Rendering::UserShaderErrorStyle::Unlit);
+
+    SoftwareRenderer renderer;
+    ASSERT_TRUE(renderer.Initialize(nullptr, kSize, kSize));
+    FxScene fx = MakeFxScene("SoftwareParticles_Shader");
+    fx.system->startSize = 1.0f;
+    fx.system->endSize = 1.0f;
+    EXPECT_FALSE(fx.system->SetShaderParam("u_Power", 2.0f)) << "no shader yet";
+    fx.system->SetShader(shader);
+    EXPECT_TRUE(fx.system->SetShaderParam("u_Power", 2.0f));
+    EXPECT_FALSE(fx.system->SetShaderParam("u_Missing", 1.0f));
+    ASSERT_NE(fx.system->GetShaderMaterial(), nullptr);
+    fx.system->EmitBurst(1);
+
+    const Frame frame = Draw(*fx.scene, MakeCamera(), renderer);
+    const Coverage c = CoverageExcept(frame, Black);
+    ASSERT_GT(c.count, 0) << "the particle drew nothing through the shader's material";
+    int otherColours = 0;
+    for (int y = 0; y < kSize; ++y)
+    {
+        for (int x = 0; x < kSize; ++x)
+        {
+            const Rgb pixel = frame.At(x, y);
+            if (pixel != Black && pixel != Rgb{255, 0, 0})
+            {
+                ++otherColours;
+            }
+        }
+    }
+    EXPECT_EQ(otherColours, 0) << "the particles' own red";
+    EXPECT_NEAR(static_cast<float>(c.count), kPixelsPerUnit * kPixelsPerUnit, 40.0f);
+
+    fx.system->SetShader(nullptr);
+    EXPECT_EQ(fx.system->GetShaderMaterial(), nullptr);
+    fx.system->CleanupRenderResources(&renderer);
+    renderer.Shutdown();
+    Rendering::RenderSettings::SetUserShaderErrorStyle(before);
 }

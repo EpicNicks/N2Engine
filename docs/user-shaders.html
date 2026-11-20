@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>User shaders · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+<li><a href="design-decisions.html">Design decisions</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="physics2d.html">2D physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="sprite2d.html">Sprites &amp; 2D shapes</a></li>
+<li><a href="user-shaders.html" aria-current="page">User shaders</a></li>
+<li><a href="particles.html">Particles</a></li>
+<li><a href="soft-bodies.html">Soft bodies</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+<li><a href="netcode.html">Netcode (n2net)</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+<li><a href="editor-extensions.html">Lua editor extensions</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="editor.html">Editor projects</a></li>
+<li><a href="mcp.html">MCP bridge (n2-mcp)</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+<li><a href="web-build.html">Web build</a></li>
+<li><a href="project-modules.html">Project modules</a></li>
+<li><a href="build-targets.html">Build targets</a></li>
+<li><a href="platform.html">The platform layer</a></li>
+<li><a href="packs.html">Packs &amp; the virtual filesystem</a></li>
+<li><a href="android.html">Android</a></li>
+<li><a href="apple.html">iOS &amp; macOS</a></li>
+<li><a href="private-targets.html">Private targets</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>User shaders</h1>
+<p class="lead">A <code>.n2shader</code> file is a fragment shader you write once and use on a <a href="meshes.html#materials">Material</a>, a <a href="sprite2d.html#shader">Sprite2D</a>, a UI Image or a particle system, on Vulkan, WebGPU (the browser) and OpenGL, with the editor cooking it when you save. This page is for the person writing one: the file, the names you can use, what is not available, and how to set its parameters. The engineering behind it is in <code>orchestrator/proposals/user-shaders.md</code>; how a pack and the editor handle it is in <a href="packs.html#shaders">Packs</a> and <a href="editor.html#shaders">Editor projects</a>.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#file">The file</a></li>
+<li><a href="#params">Parameters</a></li>
+<li><a href="#stage">What the fragment stage can use</a></li>
+<li><a href="#limits">What is not available, and the limits</a></li>
+<li><a href="#use">Using a shader</a></li>
+<li><a href="#fallback">When it cannot be drawn</a></li>
+<li><a href="#state">Shaders are not game state</a></li>
+</ol>
+</div>
+
+<h2 id="file">The file</h2>
+<p>A <code>.n2shader</code> is one text file: a JSON header, then a line that is exactly <code>#stage fragment</code>, then GLSL (version 450 core, no <code>#version</code> line of your own). The engine writes the vertex stage, so a shader is fragment-only and the vertex input and the five varyings are fixed.</p>
+<pre class="lang-glsl"><code>{ "n2shader": 1,
+  "name": "Dissolve",
+  "params": [
+    { "name": "baseColor",        "type": "color",   "default": [1, 1, 1, 1] },
+    { "name": "baseColorTexture", "type": "texture", "default": "white" },
+    { "name": "u_Threshold",      "type": "float",   "default": 0.5, "min": 0, "max": 1, "label": "Threshold" },
+    { "name": "u_Edge",           "type": "color",   "default": [1, 0.5, 0, 1] },
+    { "name": "u_Noise",          "type": "texture", "default": "white" }
+  ],
+  "state": { "blend": "alpha", "cull": "none" }
+}
+#stage fragment
+void main() {
+    vec4 base  = baseColor * n2_texture(baseColorTexture, n2_UV) * n2_Color;
+    float n    = n2_texture(u_Noise, n2_UV).r;
+    if (n &lt; u_Threshold) { discard; }
+    float edge = 1.0 - smoothstep(0.0, 0.08, n - u_Threshold);
+    n2_FragColor = mix(base, u_Edge, edge);
+}</code></pre>
+<ul>
+<li><strong>Header keys:</strong> <code>n2shader</code> (the format, 1), <code>name</code>, <code>params</code>, <code>uses</code> (optional, <code>["lighting"]</code>), <code>state</code> (optional hints) and <code>targets</code> (<code>{"webgpu": "generated"}</code>, the only value). Any other key is an error that names it.</li>
+<li><strong>Errors cite your file.</strong> The generated GLSL is compiled behind a <code>#line</code> directive, so a message reads <code>assets/dissolve.n2shader:14: error: ...</code> with your line number, in the editor (<code>GetShaderInfo</code>, the host log), in <code>n2build</code> and in the engine's log.</li>
+<li><strong>Line endings</strong> may be LF or CRLF; a leading byte order mark is ignored.</li>
+</ul>
+
+<h2 id="params">Parameters</h2>
+<table>
+<thead><tr><th>Type</th><th>In GLSL</th><th>Set with</th><th>Default</th></tr></thead>
+<tbody>
+<tr><td><code>float</code></td><td><code>float</code></td><td>a number</td><td>a number (0)</td></tr>
+<tr><td><code>int</code></td><td><code>int</code></td><td>an integer</td><td>an integer (0)</td></tr>
+<tr><td><code>bool</code></td><td><code>int</code>, 0 or 1 (a bool cannot be in a uniform block)</td><td>true or false, or an int</td><td>true or false</td></tr>
+<tr><td><code>vec2</code>, <code>vec3</code>, <code>vec4</code></td><td>the same</td><td>2, 3 or 4 numbers</td><td>an array of that many numbers</td></tr>
+<tr><td><code>color</code></td><td><code>vec4</code>, as given (sRGB-authored, no conversion)</td><td>a Color</td><td>an array of 4 numbers</td></tr>
+<tr><td><code>texture</code></td><td>a <code>const int</code> that is its slot, for <code>n2_texture</code></td><td>a texture asset</td><td><code>white</code>, <code>black</code>, <code>normal</code> (a flat normal map) or <code>none</code> (transparent)</td></tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Names</strong> are GLSL identifiers, unique, and do not start with <code>n2_</code> or <code>gl_</code> (those are the engine's). They are also the keys scripts and code use.</li>
+<li><strong>Editor hints</strong> <code>label</code>, <code>min</code>, <code>max</code>, <code>step</code>, <code>tooltip</code> and <code>group</code> are ignored by the shader; <code>min</code> and <code>max</code> also clamp a number that is set (it is clamped, not refused).</li>
+<li><strong>Reserved names</strong> bind to the standard fields so a custom shader tints and textures like the built-ins: a <code>color</code> named <code>baseColor</code> is the Material's base colour times the draw's colour (a Sprite2D's or Image's colour, a particle's), and a <code>texture</code> named <code>baseColorTexture</code> is the Material's base colour texture (the sprite's texture) and takes <strong>slot 0</strong>. Other textures take slots 1&ndash;4 in the order declared (or 0&ndash;3 without a <code>baseColorTexture</code>).</li>
+<li><strong>Limits:</strong> at most 64 parameters, 5 textures and a 256-byte block (std140 layout, in declaration order). No arrays and no matrices as parameters in v1 (you may use arrays inside the shader).</li>
+<li><strong><code>state</code></strong> supplies defaults for a Material that does not set them: <code>blend</code> (<code>none</code>, <code>alpha</code>, <code>additive</code>), <code>cull</code> (<code>none</code> or <code>back</code>), <code>depthWrite</code>, <code>queue</code> (<code>opaque</code>, <code>transparent</code>). They are hints: a value the <code>.mat</code> sets wins, and <code>queue</code> has no effect unless the Material also blends.</li>
+</ul>
+
+<h2 id="stage">What the fragment stage can use</h2>
+<table>
+<thead><tr><th>Name</th><th>What it is</th></tr></thead>
+<tbody>
+<tr><td><code>n2_UV</code>, <code>n2_Color</code>, <code>n2_WorldPos</code>, <code>n2_Normal</code>, <code>n2_Tangent</code></td><td>The vertex stage's outputs: texture coordinates (<code>vec2</code>), vertex colour (<code>vec4</code>; a particle's start-to-end colour, white on a sprite), world position, world normal, world tangent (<code>vec4</code>)</td></tr>
+<tr><td><code>n2_FragColor</code></td><td>The one output, <code>vec4</code></td></tr>
+<tr><td><code>n2_texture(slot, uv)</code>, <code>n2_textureLod(slot, uv, lod)</code>, <code>n2_texelFetch(slot, texel, lod)</code>, <code>n2_textureSize(slot, lod)</code></td><td>Sampling. The slot is the texture parameter's name. <strong>Write these, never <code>sampler2D</code></strong>: the spelling differs between backends and the prelude hides it</td></tr>
+<tr><td><code>n2_FragCoord()</code></td><td>The pixel position, origin top-left on every backend (raw <code>gl_FragCoord</code> differs, so it is refused)</td></tr>
+<tr><td><code>n2_Model</code>, <code>n2_View</code>, <code>n2_Projection</code></td><td>The draw's matrices; <code>n2_Model * v</code> means the same everywhere</td></tr>
+<tr><td><code>n2_StageDim</code>, <code>n2_TintSaturation</code>, <code>n2_TintInside</code>, <code>n2_TintCircle</code></td><td>The per-draw screen-tint values the built-in shaders read (the editor's and the game's screen tint)</td></tr>
+</tbody>
+</table>
+<p><strong>Lighting</strong> is opt-in: with <code>"uses": ["lighting"]</code> the scene's lights are in the prelude (<code>n2_CameraPos</code>, <code>n2_AmbientLight</code>, <code>n2_NumDirectionalLights</code> and the light arrays) and so are three helpers: <code>n2_LightDiffuse(normal, worldPos)</code>, the lit shader's Blinn-Phong diffuse part (ambient plus each light), <code>n2_Attenuation(distance, range, attenuation)</code>, and <code>n2_EncodeOutput(color)</code>, the sRGB encode for authors lighting in linear space (a no-op unless the project's linear lighting is on). There are no shadows. A shader without <code>uses</code> does not pay for any of it.</p>
+
+<h2 id="limits">What is not available, and the limits</h2>
+<p>The cook refuses these with a message at your line, so you find out when you save, not when a player runs it:</p>
+<ul>
+<li><code>isnan</code> and <code>isinf</code> (WGSL cannot represent NaN or infinity: compare against a large finite number); <code>gl_Position</code> (the vertex stage is the engine's); <code>gl_FragCoord</code> (use <code>n2_FragCoord()</code>), <code>gl_FrontFacing</code>, <code>gl_FragDepth</code>, <code>gl_VertexID</code>, <code>gl_InstanceID</code> and other <code>gl_</code> inputs.</li>
+<li>Any <code>uniform</code>, <code>in</code>, <code>out</code>, <code>layout</code> or <code>buffer</code> declaration of your own (parameters come from the header), <code>#extension</code> lines, and 3D, cube, array, shadow and integer textures and images.</li>
+<li>Atomics, barriers and image access; <code>textureGrad</code> and <code>textureGather</code>.</li>
+<li><strong>Sample, then branch.</strong> Sampling after a <code>discard</code> or inside a non-uniform branch is an error on WebGPU (the browser's rule); sample first (as the example does) or use <code>n2_textureLod</code> / <code>n2_texelFetch</code>, which need no derivatives.</li>
+<li>In the default (strict) mode, loops need an integer literal or <code>const</code> bound: <code>while</code> and <code>do</code> are refused (a shader that never ends cannot be ruled out in general, so a bounded <code>for</code> is the rule). The cook tool has a <code>--relaxed</code> option for your own use (<code>node tools/n2shader/n2shader.mjs cook --relaxed</code>).</li>
+<li><strong>Size limits:</strong> 256 KiB and 20,000 lines for the file, a 64 KiB header. Everything else that translates to all three backends (<code>inverse</code>, <code>determinant</code>, arrays, <code>switch</code>, <code>fwidth</code>) is allowed.</li>
+</ul>
+<p>The conformance corpus in <code>renderer/shaders/user/corpus</code> has a working example of each of these and a refused one of the rest.</p>
+
+<h2 id="use">Using a shader</h2>
+<ul>
+<li><strong>On a Material:</strong> set <code>"shader": "res://shaders/dissolve.n2shader"</code> and <code>"params": {...}</code> in the <code>.mat</code> (or <code>Material::SetShader</code> and the typed setters), and every user of the Material draws with it. In Lua, <code>Material.Load</code> gives the shared asset and <code>renderer:GetMaterialInstance(slot)</code> a copy that is yours alone (<a href="meshes.html#materials">Materials</a>).</li>
+<li><strong>On a Sprite2D, a UI Image or a ParticleSystem</strong> (a component with no Material of its own): <code>SetShader</code> gives it a private Material, so one object's values never reach another's.
+<pre class="lang-lua"><code>local fx = go:AddComponent('Sprite2D')
+fx:SetTexture('res://art/hero.png')
+fx:SetShader('res://shaders/dissolve.n2shader')
+local m = fx:GetMaterialInstance()       -- the shader's parameters, on this sprite's own material
+m:SetFloat('u_Threshold', 0.3)
+m:SetColor('u_Edge', Color.Red)
+m:SetTexture('u_Noise', 'res://art/noise.png')</code></pre>
+<pre class="lang-cpp"><code>sprite->SetShader(shader);                 // a std::shared_ptr&lt;Shader&gt;, or nullptr for the built-in one
+sprite->SetShaderParam("u_Threshold", 0.3f);
+sprite->SetShaderParam("u_Edge", Common::Color::Red);
+sprite->SetShaderInt("u_Steps", 4);</code></pre>
+<p>The component's texture is the shader's <code>baseColorTexture</code>, its colour the <code>baseColor</code>, and on a renderer that cannot blend the cut-out of a texture's transparent pixels stays. Its <strong>saturation and flash are not applied</strong> (they are the built-in shaders'; a user shader declares what it reads). A UI Image shows only its sprite through a shader, not a raw texture set with <code>SetTexture</code>. Setting <code>nil</code> goes back to the built-in shader.</p></li>
+<li><strong>Not in scene files.</strong> A component's shader and its values are runtime state: set them from a script or code, for example in <code>Start</code>. Saving values per object in scenes and prefabs is a later stage.</li>
+<li><strong>Per frame.</strong> Setting a number, vector or colour every frame costs nothing extra (they are uniforms); setting a texture makes a new GPU material, so do it when it changes.</li>
+</ul>
+
+<h2 id="fallback">When it cannot be drawn</h2>
+<p>A Material, sprite, image or particle system whose shader cannot be drawn is never skipped, and never stops a frame: it draws the built-in unlit shader with its base colour and texture, and logs <strong>one</strong> error naming the shader and the reason. In the editor host the fallback is flat magenta so the failure is obvious; in a player it looks like the object without the shader. The reasons: the shader was never cooked for this backend (or was cooked from an older header: <em>stale</em>), the cook failed (the diagnostics are in <code>GetShaderInfo</code>), the backend has no user shaders (the software renderer), or the compile on the device failed. A pack whose shader sources were stripped (<a href="packs.html#shaders">Packs</a>) cannot recompile and uses the fallback when its payload does not fit.</p>
+
+<h2 id="state">Shaders are not game state</h2>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>A shader and its parameter values are render-only. Nothing a shader computes can reach the simulation, and no shader value, Material instance or component shader is part of a rollback snapshot, a replication payload or a golden-replay hash. A test sets a Material parameter every frame and checks the state hash does not move; a component's shader is not even a serialized field.</p>
+</div>
+<p class="src">Source: <code>engine/include/engine/rendering/Shader.hpp</code>, <code>UserShaderSlot.hpp</code>, <code>engine/src/rendering/GpuCache.cpp</code>, <code>tools/n2shader/</code>, <code>renderer/shaders/user/prelude/</code></p>
+
+<div class="page-footer">
+<span>Describes the user shaders through stage 8 (issue #397).</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+<script src="assets/highlight.js" defer></script>
+<script src="assets/search.js" defer></script>
+</body>
+</html>

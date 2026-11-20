@@ -41,6 +41,7 @@
 <li><a href="ui.html">UI</a></li>
 <li><a href="meshes.html">Meshes, models &amp; textures</a></li>
 <li><a href="sprite2d.html" aria-current="page">Sprites &amp; 2D shapes</a></li>
+<li><a href="user-shaders.html">User shaders</a></li>
 <li><a href="particles.html">Particles</a></li>
 <li><a href="soft-bodies.html">Soft bodies</a></li>
 <li><a href="resources.html">Resources &amp; paths</a></li>
@@ -173,6 +174,15 @@ local ring = AddTextureOutline(player, body, 2, Color(1, 0.9, 0.2, 1))</code></p
 <li><strong>Not saved.</strong> The outline is a runtime texture, not a project asset: a scene saved with it does not find it again. Make it in a script (in <code>Start</code>, say).</li>
 <li><strong>Shapes.</strong> The recipe is for a <code>Rect</code> sprite. A textured circle shows only the middle of its texture, which the outline texture does not know about.</li>
 </ul>
+
+<h2 id="shader">A user shader <span class="badge">user shaders, stage 8</span></h2>
+<p><code>Sprite2D::SetShader(shader)</code> (Lua: <code>sprite:SetShader('res://shaders/x.n2shader')</code>, <code>nil</code> goes back) draws the sprite with a <a href="user-shaders.html">user shader</a> instead of the built-in unlit one. The sprite keeps a <strong>private</strong> Material for it (<code>UserShaderSlot</code>), so one sprite's values never reach another's; its parameters are set with <code>SetShaderParam(name, value)</code> (a float, a vec2, a vec3, a Color or a texture), <code>SetShaderInt</code> and <code>SetShaderVec4</code> in C++, and on the <code>MaterialInstance</code> that <code>sprite:GetMaterialInstance()</code> returns in Lua (nil without a shader). The sprite's texture is the shader's reserved <code>baseColorTexture</code>, its colour the <code>baseColor</code>, and it still draws in the Transparent queue, blended, with both faces.</p>
+<ul>
+<li><strong>Saturation and flash are not applied</strong> through a shader: they are the built-in shader's uniforms.</li>
+<li><strong>On the software renderer</strong> (no user shaders) the sprite draws the built-in unlit shader with its colour and texture, <em>with the cut-out kept</em>, and one logged error; in the editor host it is flat magenta.</li>
+<li><strong>Runtime only.</strong> The shader and its values are not scene fields (a scene file reads and writes exactly what it did, a test pins it), not in prefabs and not in any state hash. Set them from a script, for example in <code>Start</code>.</li>
+</ul>
+<p>Tests: <code>Sprite2DShaderTest</code> and <code>UserShaderSlotTest</code> (<code>tests/engine/rendering/UserShaderComponentsTests.cpp</code>). Source: <code>engine/src/rendering/Sprite2D.cpp</code> (<code>EnsureMaterial</code>), <code>UserShaderSlot.cpp</code>.</p>
 
 <h2 id="performance">Performance</h2>
 <p>Each sprite is one draw call. Sprites with the same shape, size, outline, region and pivot share one mesh, kept while any sprite uses it. <code>tests/engine/rendering/Sprite2DTests.cpp</code> draws 2,000 circles on the software renderer and prints the time as a <code>[SPRITE2D-PERF]</code> line. Batching many sprites into one draw is not done yet.</p>
