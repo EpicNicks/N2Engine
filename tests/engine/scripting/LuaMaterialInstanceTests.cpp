@@ -255,7 +255,7 @@ TEST_F(LuaMaterialInstanceTest, AnEmptySlotHasNoInstanceAndTheShapesHaveOne)
     Run(R"(quad:SetMaterial("res://materials/a.mat"); inst = quad:GetMaterialInstance())");
     EXPECT_TRUE(Eval<bool>("inst:SetFloat(\"u_Gain\", 3)"));
     const sol::object shape = Lua()["quad"];
-    const auto drawn = shape.as<ComponentRef<QuadRenderer>>().Pin()->GetMaterial();
+    const auto drawn = shape.as<ComponentRef<Example::QuadRenderer>>().Pin()->GetMaterial();
     ASSERT_NE(drawn, nullptr);
     EXPECT_EQ(drawn->GetParam("u_Gain")->value[0], 3.0f);
     EXPECT_NE(drawn, IO::Resources::Instance().Load<Rendering::Material>(fs::path("res://materials/a.mat")));
