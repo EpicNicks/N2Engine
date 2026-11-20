@@ -19,6 +19,7 @@
 #include <math/UUID.hpp>
 #include <nlohmann/json.hpp>
 #include <renderer/common/IMaterial.hpp>
+#include <renderer/common/RenderState.hpp>
 #include <renderer/common/UserShader.hpp>
 #include <renderer/software/SoftwareRenderer.hpp>
 #include <renderer/software/SWMaterial.hpp>
@@ -34,10 +35,12 @@
 #include "engine/rendering/GpuCache.hpp"
 #include "engine/rendering/Material.hpp"
 #include "engine/rendering/Mesh.hpp"
+#include "engine/rendering/MeshDrawing.hpp"
 #include "engine/rendering/MeshRenderer.hpp"
 #include "engine/rendering/RenderSettings.hpp"
 #include "engine/rendering/Shader.hpp"
 #include "engine/rendering/Texture.hpp"
+#include "engine/rendering/UserShaderSlot.hpp"
 
 #include "MeshTestSupport.hpp"
 
@@ -507,6 +510,16 @@ protected:
             "shader": "../shaders/textured.n2shader",
             "params": { "u_Tex": null }
         })");
+        // Stage 9a: one shader per blend hint with a .mat for each, and one .mat that overrides the hint
+        for (const std::string hint : {"premultiplied", "multiply", "additive", "alpha"})
+        {
+            WriteText("shaders/blend_" + hint + ".n2shader",
+                      "{ \"n2shader\": 1, \"name\": \"B\", \"state\": { \"blend\": \"" + hint + "\" } }\n" +
+                          "#stage fragment\nvoid main() { n2_FragColor = vec4(1.0); }\n");
+            WriteText("materials/blend_" + hint + ".mat", "{\"shader\": \"../shaders/blend_" + hint + ".n2shader\"}");
+        }
+        WriteText("materials/blend_override.mat",
+                  "{\"shader\": \"../shaders/blend_multiply.n2shader\", \"blendMode\": \"additive\", \"alphaMode\": \"opaque\"}");
 
         IO::ResourceUUID::Initialize(Math::UUID::GenerateNameBased(Math::UUID::ZERO, "ShaderMatAssetTest"));
         IO::ResourceLoader::Instance().ClearCache();
@@ -945,4 +958,114 @@ TEST(UserShaderSoftwareGoldenTest, AMaterialWithAShaderDrawsItsBaseColourUnlitOn
     const auto magenta = RenderQuad(ShaderMaterial("solid"));
     Rendering::RenderSettings::SetUserShaderErrorStyle(UserShaderErrorStyle::Unlit);
     EXPECT_EQ(Centre(magenta), (std::array<std::uint8_t, 3>{255, 0, 255}));
+}
+
+// ===== Stage 9a: premultiplied and multiply blending =====
+
+TEST(BlendModeTest, TheBlendFunctionOfEachModeAndAdditiveWinning)
+{
+    using namespace Renderer::Common;
+    const BlendFunc alpha = BlendFuncFor(false, BlendVariant::Alpha);
+    EXPECT_EQ(alpha.srcColor, BlendFactor::SrcAlpha);
+    EXPECT_EQ(alpha.dstColor, BlendFactor::OneMinusSrcAlpha);
+    EXPECT_EQ(alpha.srcAlpha, BlendFactor::SrcAlpha);
+    EXPECT_EQ(alpha.dstAlpha, BlendFactor::OneMinusSrcAlpha);
+    const BlendFunc premultiplied = BlendFuncFor(false, BlendVariant::Premultiplied);
+    EXPECT_EQ(premultiplied.srcColor, BlendFactor::One);
+    EXPECT_EQ(premultiplied.dstColor, BlendFactor::OneMinusSrcAlpha);
+    EXPECT_EQ(premultiplied.srcAlpha, BlendFactor::One);
+    EXPECT_EQ(premultiplied.dstAlpha, BlendFactor::OneMinusSrcAlpha);
+    const BlendFunc multiply = BlendFuncFor(false, BlendVariant::Multiply);
+    EXPECT_EQ(multiply.srcColor, BlendFactor::DstColor);
+    EXPECT_EQ(multiply.dstColor, BlendFactor::Zero);
+    EXPECT_EQ(multiply.srcAlpha, BlendFactor::Zero) << "the target's alpha stays";
+    EXPECT_EQ(multiply.dstAlpha, BlendFactor::One);
+    for (const BlendVariant variant : {BlendVariant::Alpha, BlendVariant::Premultiplied, BlendVariant::Multiply})
+    {
+        const BlendFunc additive = BlendFuncFor(true, variant);
+        EXPECT_EQ(additive.srcColor, BlendFactor::SrcAlpha);
+        EXPECT_EQ(additive.dstColor, BlendFactor::One);
+        EXPECT_EQ(additive.dstAlpha, BlendFactor::One);
+    }
+    EXPECT_EQ(RenderState{}.variant, BlendVariant::Alpha);
+}
+
+TEST(BlendModeTest, AMaterialsBlendModeIsAMatKeyThatIsWrittenOnlyWhenItIsNotAlpha)
+{
+    auto material = Material::Create(ShadingModel::Unlit);
+    EXPECT_EQ(material->GetBlendMode(), Rendering::BlendMode::Alpha);
+    EXPECT_FALSE(material->ToJson().contains("blendMode")) << "an old .mat round-trips byte for byte";
+    for (const auto &[mode, name] : {std::pair{Rendering::BlendMode::Additive, "additive"},
+                                     std::pair{Rendering::BlendMode::Premultiplied, "premultiplied"},
+                                     std::pair{Rendering::BlendMode::Multiply, "multiply"}})
+    {
+        material->SetBlendMode(mode);
+        const json saved = material->ToJson();
+        EXPECT_EQ(saved.at("blendMode"), name);
+        WarningCapture capture;
+        const auto loaded = Material::FromJson(saved);
+        ASSERT_NE(loaded, nullptr);
+        EXPECT_EQ(loaded->GetBlendMode(), mode);
+        EXPECT_TRUE(capture.messages.empty());
+    }
+    WarningCapture capture;
+    const auto bad = Material::FromJson(json{{"blendMode", "screen"}});
+    ASSERT_NE(bad, nullptr);
+    EXPECT_EQ(bad->GetBlendMode(), Rendering::BlendMode::Alpha);
+    EXPECT_FALSE(capture.messages.empty());
+}
+
+TEST(BlendModeTest, ADrawStateTakesTheMaterialsModeOnlyForABlendMaterialInABlendingState)
+{
+    using Renderer::Common::BlendVariant;
+    using Renderer::Common::RenderState;
+    auto material = Material::Create(ShadingModel::Unlit);
+    material->SetAlphaMode(Rendering::AlphaMode::Blend);
+    material->SetBlendMode(Rendering::BlendMode::Multiply);
+    RenderState state = RenderState::Transparent();
+    Rendering::MeshDrawing::ApplyBlendMode(state, *material);
+    EXPECT_EQ(state.variant, BlendVariant::Multiply);
+    EXPECT_FALSE(state.additive);
+    material->SetBlendMode(Rendering::BlendMode::Additive);
+    Rendering::MeshDrawing::ApplyBlendMode(state, *material);
+    EXPECT_TRUE(state.additive);
+    material->SetBlendMode(Rendering::BlendMode::Premultiplied);
+    Rendering::MeshDrawing::ApplyBlendMode(state, *material);
+    EXPECT_FALSE(state.additive);
+    EXPECT_EQ(state.variant, BlendVariant::Premultiplied);
+
+    RenderState opaque = RenderState::Opaque();
+    Rendering::MeshDrawing::ApplyBlendMode(opaque, *material);
+    EXPECT_EQ(opaque, RenderState::Opaque()) << "an opaque state is not touched";
+    material->SetAlphaMode(Rendering::AlphaMode::Opaque);
+    RenderState transparent = RenderState::Transparent();
+    Rendering::MeshDrawing::ApplyBlendMode(transparent, *material);
+    EXPECT_EQ(transparent, RenderState::Transparent()) << "a material that is not Blend is not touched";
+}
+
+TEST_F(ShaderMatAssetTest, AShadersBlendHintSetsTheMaterialsModeUnlessTheMatSaysOtherwise)
+{
+    const auto load = [](const std::string &name)
+    { return IO::Resources::Instance().Load<Material>(fs::path("res://materials/" + name + ".mat")); };
+
+    const auto premultiplied = load("blend_premultiplied");
+    ASSERT_NE(premultiplied, nullptr);
+    EXPECT_EQ(premultiplied->GetBlendMode(), Rendering::BlendMode::Premultiplied);
+    EXPECT_TRUE(premultiplied->IsBlended()) << "the hint makes the material a Blend one, as alpha always did";
+    EXPECT_EQ(load("blend_multiply")->GetBlendMode(), Rendering::BlendMode::Multiply);
+    EXPECT_EQ(load("blend_additive")->GetBlendMode(), Rendering::BlendMode::Additive);
+    EXPECT_EQ(load("blend_alpha")->GetBlendMode(), Rendering::BlendMode::Alpha);
+    // A value the .mat sets wins over the hint
+    const auto overridden = load("blend_override");
+    ASSERT_NE(overridden, nullptr);
+    EXPECT_EQ(overridden->GetBlendMode(), Rendering::BlendMode::Additive);
+    EXPECT_FALSE(overridden->IsBlended());
+
+    // The private Material of a component's shader slot follows the hint too
+    Rendering::UserShaderSlot slot;
+    slot.SetShader(premultiplied->GetShader());
+    ASSERT_NE(slot.GetMaterial(), nullptr);
+    EXPECT_EQ(slot.GetMaterial()->GetBlendMode(), Rendering::BlendMode::Premultiplied);
+    slot.SetShader(load("blend_alpha")->GetShader());
+    EXPECT_EQ(slot.GetMaterial()->GetBlendMode(), Rendering::BlendMode::Alpha);
 }

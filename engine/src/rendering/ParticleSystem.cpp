@@ -13,6 +13,7 @@
 #include "engine/Positionable.hpp"
 #include "engine/Time.hpp"
 #include "engine/common/ScriptUtils.hpp"
+#include "engine/rendering/MeshDrawing.hpp"
 #include "engine/rendering/RenderCamera.hpp"
 #include "engine/serialization/MathSerialization.hpp"
 
@@ -705,6 +706,11 @@ namespace N2Engine::Rendering
             if (Renderer::Common::IMaterial *userMaterial = _shaderSlot.Prepare(*renderer, Common::Color::White))
             {
                 drawMaterial = userMaterial;
+                // A shader that asks for premultiplied or multiply blending gets it; plain alpha leaves the system's own blend mode
+                if (_shaderSlot.GetMaterial()->GetBlendMode() != BlendMode::Alpha)
+                {
+                    MeshDrawing::ApplyBlendMode(drawState, *_shaderSlot.GetMaterial());
+                }
             }
         }
         renderer->DrawMesh(_mesh, kIdentity, drawMaterial, drawState);

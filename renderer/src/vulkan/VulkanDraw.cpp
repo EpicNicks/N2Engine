@@ -662,6 +662,7 @@ VkPipeline VulkanRenderer::GetPipelineLocked(const VulkanShader& shaderRef, cons
     key.cull = static_cast<std::uint8_t>(state.cull);
     key.blend = state.blend;
     key.additive = state.blend && state.additive; // GL: additive without blend is an opaque draw, so it shares the opaque pipeline
+    key.variant = (state.blend && !state.additive) ? static_cast<std::uint8_t>(state.variant) : 0;
     key.wireframe = wireframe;
     const std::uint32_t packed = key.Pack();
     if (const auto it = draw.pipelines.find(packed); it != draw.pipelines.end())
@@ -769,13 +770,29 @@ VkPipeline VulkanRenderer::GetPipelineLocked(const VulkanShader& shaderRef, cons
     VkPipelineColorBlendAttachmentState attachment{};
     if (state.blend)
     {
-        const VkBlendFactor destinationFactor = state.additive ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        const Renderer::Common::BlendFunc func = Renderer::Common::BlendFuncFor(state.additive, state.variant);
+        const auto factor = [](const Renderer::Common::BlendFactor f) {
+            switch (f)
+            {
+            case Renderer::Common::BlendFactor::Zero:
+                return VK_BLEND_FACTOR_ZERO;
+            case Renderer::Common::BlendFactor::One:
+                return VK_BLEND_FACTOR_ONE;
+            case Renderer::Common::BlendFactor::SrcAlpha:
+                return VK_BLEND_FACTOR_SRC_ALPHA;
+            case Renderer::Common::BlendFactor::OneMinusSrcAlpha:
+                return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            case Renderer::Common::BlendFactor::DstColor:
+                return VK_BLEND_FACTOR_DST_COLOR;
+            }
+            return VK_BLEND_FACTOR_ONE;
+        };
         attachment.blendEnable = VK_TRUE;
-        attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-        attachment.dstColorBlendFactor = destinationFactor;
+        attachment.srcColorBlendFactor = factor(func.srcColor);
+        attachment.dstColorBlendFactor = factor(func.dstColor);
         attachment.colorBlendOp = VK_BLEND_OP_ADD;
-        attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-        attachment.dstAlphaBlendFactor = destinationFactor;
+        attachment.srcAlphaBlendFactor = factor(func.srcAlpha);
+        attachment.dstAlphaBlendFactor = factor(func.dstAlpha);
         attachment.alphaBlendOp = VK_BLEND_OP_ADD;
     }
     else
@@ -1341,6 +1358,7 @@ std::uint32_t VulkanRenderer::GetPipelineKeyForTest(IShader* shader, const Rende
     key.cull = static_cast<std::uint8_t>(state.cull);
     key.blend = state.blend;
     key.additive = state.blend && state.additive;
+    key.variant = (state.blend && !state.additive) ? static_cast<std::uint8_t>(state.variant) : 0;
     key.wireframe = wireframe;
     return key.Pack();
 }

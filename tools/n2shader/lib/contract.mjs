@@ -58,7 +58,7 @@ export const VERTEX_ATTRIBUTES = Object.freeze(['aPos', 'aNormal', 'aTexCoord', 
 
 export const PARAM_TYPES = Object.freeze(['float', 'int', 'bool', 'vec2', 'vec3', 'vec4', 'color', 'texture']);
 export const TEXTURE_DEFAULTS = Object.freeze(['white', 'black', 'normal', 'none']);
-export const BLEND_MODES = Object.freeze(['none', 'alpha', 'additive']);
+export const BLEND_MODES = Object.freeze(['none', 'alpha', 'additive', 'premultiplied', 'multiply']);
 export const CULL_MODES = Object.freeze(['none', 'back']);
 export const QUEUES = Object.freeze(['opaque', 'transparent']);
 

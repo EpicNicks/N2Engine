@@ -6,6 +6,54 @@
 
 namespace Renderer::Common
 {
+    /// How a blended draw mixes with what is behind it, beyond plain alpha blending and RenderState::additive (user shaders'
+    /// `state.blend`, stage 9a). Only counts with RenderState::blend and without RenderState::additive.
+    enum class BlendVariant : std::uint8_t
+    {
+        Alpha,         ///< SRC_ALPHA, ONE_MINUS_SRC_ALPHA (the default)
+        Premultiplied, ///< ONE, ONE_MINUS_SRC_ALPHA: the shader's colour is already multiplied by its alpha
+        Multiply       ///< DST_COLOR, ZERO: the target colour times the shader's colour; its alpha is not used and the target's alpha stays
+    };
+
+    /// A blend factor of a RenderState's blend function, which each backend maps to its own enum
+    enum class BlendFactor : std::uint8_t
+    {
+        Zero,
+        One,
+        SrcAlpha,
+        OneMinusSrcAlpha,
+        DstColor
+    };
+
+    /// The four factors (colour and alpha, equation ADD) a blended draw uses
+    struct BlendFunc
+    {
+        BlendFactor srcColor = BlendFactor::SrcAlpha;
+        BlendFactor dstColor = BlendFactor::OneMinusSrcAlpha;
+        BlendFactor srcAlpha = BlendFactor::SrcAlpha;
+        BlendFactor dstAlpha = BlendFactor::OneMinusSrcAlpha;
+    };
+
+    /// The factors for `additive` (wins) and `variant`. Alpha and additive use the same factors for colour and alpha, as OpenGL's
+    /// glBlendFunc always did
+    [[nodiscard]] constexpr BlendFunc BlendFuncFor(const bool additive, const BlendVariant variant)
+    {
+        if (additive)
+        {
+            return {BlendFactor::SrcAlpha, BlendFactor::One, BlendFactor::SrcAlpha, BlendFactor::One};
+        }
+        switch (variant)
+        {
+        case BlendVariant::Premultiplied:
+            return {BlendFactor::One, BlendFactor::OneMinusSrcAlpha, BlendFactor::One, BlendFactor::OneMinusSrcAlpha};
+        case BlendVariant::Multiply:
+            return {BlendFactor::DstColor, BlendFactor::Zero, BlendFactor::Zero, BlendFactor::One};
+        case BlendVariant::Alpha:
+            break;
+        }
+        return {};
+    }
+
     /// Which triangle faces a draw discards. Front faces wind counter-clockwise (the OpenGL default).
     enum class CullMode : std::uint8_t
     {
@@ -175,6 +223,9 @@ namespace Renderer::Common
         /// With blend: add the source (SRC_ALPHA, ONE) instead of mixing it with what is behind (fire, sparks).
         /// The software renderer, which can't blend at all, ignores it too.
         bool additive = false;
+        /// With blend and without additive: premultiplied or multiply blending instead of plain alpha (BlendVariant). The software renderer
+        /// ignores it
+        BlendVariant variant = BlendVariant::Alpha;
         /**
          * How much the draw is dimmed, 0 (not at all, the default) to 1: the colour it would write is mixed towards a
          * darkened grey of its own luminance, rgb = mix(rgb, luma(rgb) * DimGrey, dim), alpha unchanged (StageDimmed).

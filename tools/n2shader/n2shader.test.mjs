@@ -151,10 +151,17 @@ test('header accepts exactly 256 bytes of block and exactly 5 textures', () => {
   assert.equal(layoutBlock(h.params).size, 256);
 });
 
+test('header accepts every blend mode of the contract', () => {
+  for (const blend of ['none', 'alpha', 'additive', 'premultiplied', 'multiply']) {
+    const { header: h } = parseN2Shader(shader(header({ state: { blend } })));
+    assert.equal(h.state.blend, blend);
+  }
+});
+
 test('header rejects: unknown uses, state values, targets', () => {
   rejects(shader(header({ uses: ['time'] })), /unknown "uses" entry "time"/);
   rejects(shader(header({ uses: 'lighting' })), /"uses" must be an array/);
-  rejects(shader(header({ state: { blend: 'multiply' } })), /state.blend must be one of/);
+  rejects(shader(header({ state: { blend: 'screen' } })), /state.blend must be one of/);
   rejects(shader(header({ state: { cull: 'front' } })), /state.cull must be one of/);
   rejects(shader(header({ state: { depthWrite: 'no' } })), /depthWrite must be true or false/);
   rejects(shader(header({ state: { sorting: 1 } })), /unknown state key/);
