@@ -182,7 +182,8 @@ namespace N2Engine::Rendering::UserShaderCompiler
         struct BlockLayout
         {
             std::vector<Member> members;
-            std::uint32_t size = 0;
+            std::uint32_t size = 0;       ///< the block's size, rounded up to 16 (what the cook's manifest calls blockSize)
+            std::uint32_t extent = 0;     ///< where the last member ends: the size glslang's reflection reports
         };
 
         std::uint32_t AlignUp(const std::uint32_t value, const std::uint32_t alignment)
@@ -214,6 +215,7 @@ namespace N2Engine::Rendering::UserShaderCompiler
                 cursor = member.offset + member.size;
                 layout.members.push_back(member);
             }
+            layout.extent = cursor;
             layout.size = layout.members.empty() ? 0 : AlignUp(cursor, 16);
             return layout;
         }
@@ -567,10 +569,12 @@ namespace N2Engine::Rendering::UserShaderCompiler
             {
                 return std::string("the compiled shader has no Material block");
             }
-            if (program.getUniformBlock(blockIndex).size != static_cast<int>(layout.size))
+            // glslang reports where the last member ends (4 for a block of one float); the block is that rounded up to 16
+            const int reported = program.getUniformBlock(blockIndex).size;
+            if (reported != static_cast<int>(layout.extent) && reported != static_cast<int>(layout.size))
             {
-                return std::format("the Material block is {} bytes in the compiled shader, {} by the header's layout",
-                                   program.getUniformBlock(blockIndex).size, layout.size);
+                return std::format("the Material block is {} bytes in the compiled shader, {} by the header's layout (ending at {})", reported,
+                                   layout.size, layout.extent);
             }
             for (const Member &member : layout.members)
             {
