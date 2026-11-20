@@ -20,11 +20,12 @@ namespace N2Engine::Rendering
     /**
      * What a component keeps to draw with a user shader (`.n2shader`, orchestrator/proposals/user-shaders.md, stage 8): the Shader asset and
      * a PRIVATE Material of its own (unlit shading, blended, both faces) that holds the shader and the parameter values, so one object's
-     * values never reach another's (the Material is never shared and never saved). Used by Sprite2D, the UI Image and ParticleSystem.
+     * values never reach another's (the Material is never shared; the slot saves its shader and values itself, Save). Used by Sprite2D, the UI Image and ParticleSystem.
      *
-     * Runtime state only, like the Lua Material instances: it is not a serialized field, so it is not in a scene file, a prefab, a
-     * rollback snapshot, a replication payload or a golden-replay hash (rendering is not simulation state). A component without a shader
-     * never touches any of this: its draw path is exactly what it was.
+     * Render-only, like the Lua Material instances: the component saves it in a scene or prefab file (`shaderState`, only when a shader is
+     * set, so a file without one is what it always was) but it is in no schema and no replicated field, so it is never in a rollback
+     * snapshot, a replication payload or a golden-replay hash (rendering is not simulation state). A component without a shader never
+     * touches any of this: its draw path is exactly what it was.
      *
      * Where the shader cannot be drawn (the software renderer, a shader that is not cooked or compiled, a compile error) the Material gets
      * the fallback GpuCache gives any Material with a shader: the built-in unlit shader with the base colour and texture (flat magenta in
@@ -63,6 +64,15 @@ namespace N2Engine::Rendering
         bool SetParam(std::string_view name, std::shared_ptr<Texture> value) { return SetTexture(name, std::move(value)); }
         bool SetParamInt(std::string_view name, int value) { return SetInt(name, value); }
         bool SetParamVec4(std::string_view name, float x, float y, float z, float w) { return SetVec4(name, x, y, z, w); }
+
+        /// The slot as a scene or prefab file keeps it: `{"shader": <the asset's UUID>, "params": {the values set, as a .mat writes them}}`, or
+        /// null without a shader (the component then writes nothing, so a file without a shader is what it always was). The shader is named by
+        /// UUID, as every asset reference in a scene is, so it survives a move of the asset. Each instance holds its own values, so a
+        /// prefab's instances differ the way any component fields do. Still runtime-only for the simulation: not a replicated field, so no
+        /// snapshot, replication payload or replay hash holds it
+        [[nodiscard]] nlohmann::json Save() const;
+        /// Reads what Save wrote; null, anything else or a shader that cannot be loaded (warned about) clears the slot
+        void Load(const nlohmann::json &json);
 
         /// Gives the Material the draw's inputs: the component's texture as the base colour texture (the shader's reserved
         /// baseColorTexture) and the cut-out for a renderer that cannot blend. Cheap: each is set only when it changed

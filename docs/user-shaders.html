@@ -171,6 +171,25 @@ void main() {
 </ul>
 <p>The conformance corpus in <code>renderer/shaders/user/corpus</code> has a working example of each of these and a refused one of the rest.</p>
 
+<h2 id="authored-wgsl">Authored WGSL for the web</h2>
+<p>By default the WebGPU build runs the WGSL that Tint makes from your GLSL, so one source drives every backend. When that translation gets in the way (a feature WGSL has and GLSL does not, a hand-tuned loop), a shader can supply its own WGSL for the web only. Set <code>"targets": { "webgpu": "authored" }</code> in the header and add a <code>#stage wgsl</code> block after the fragment stage:</p>
+<pre><code>{ "n2shader": 1, "name": "Tint", "params": [ { "name": "u_Color", "type": "color", "default": [1, 0.5, 0, 1] } ],
+  "targets": { "webgpu": "authored" } }
+#stage fragment
+void main() { n2_FragColor = u_Color * n2_Color; }     // Vulkan and OpenGL
+#stage wgsl
+struct Material { u_Color : vec4&lt;f32&gt;, }
+@group(1) @binding(0) var&lt;uniform&gt; material : Material;
+@fragment
+fn main(@location(1) n2_Color : vec4&lt;f32&gt;) -&gt; @location(0) vec4&lt;f32&gt; { return material.u_Color * n2_Color; }</code></pre>
+<p>The GLSL still feeds Vulkan and OpenGL (and the runtime compiler); keeping the two equal is yours. To start from the generated WGSL, cook the shader without the <code>targets</code> line and copy <code>shader.webgpu.wgsl</code>. The cook still holds the module to the contract, and tells you the file and line:</p>
+<ul>
+<li>One <code>@fragment fn main</code>, its inputs written as parameters (<code>@location(0)</code> <code>n2_UV</code> <code>vec2&lt;f32&gt;</code>, <code>1</code> <code>n2_Color</code> <code>vec4&lt;f32&gt;</code>, <code>2</code> <code>n2_WorldPos</code> <code>vec3&lt;f32&gt;</code>, <code>3</code> <code>n2_Normal</code> <code>vec3&lt;f32&gt;</code>, <code>4</code> <code>n2_Tangent</code> <code>vec4&lt;f32&gt;</code>, any subset), returning <code>@location(0) vec4&lt;f32&gt;</code>. No <code>@vertex</code>, no <code>@compute</code>, no <code>enable</code>, <code>requires</code> or <code>diagnostic</code> directive.</li>
+<li>Only the contract's resources: <code>@group(0) @binding(0)</code> the per-draw block with the contract's members in its order (only if you use it), <code>@group(0) @binding(1)</code> the lighting block with <code>"uses": ["lighting"]</code>, <code>@group(1) @binding(0)</code> the Material struct laid out as the header says (same member names, order and offsets), and for each texture parameter <code>texture_2d&lt;f32&gt;</code> <code>n2_tex<em>N</em></code> at binding <code>1 + slot</code> and <code>sampler</code> <code>n2_samp<em>N</em></code> at <code>6 + slot</code>.</li>
+<li>Tint and naga both read it (and Tint writes it back to SPIR-V), as for a generated module. At most 256 KiB.</li>
+</ul>
+<p>The player validates the module again with the browser's own WGSL compiler, so a module that slips past the cook makes the shader draw as the <a href="#fallback">fallback</a>, never crash. The manifest of an authored shader lists <code>"authored": ["webgpu"]</code>.</p>
+
 <h2 id="use">Using a shader</h2>
 <ul>
 <li><strong>On a Material:</strong> set <code>"shader": "res://shaders/dissolve.n2shader"</code> and <code>"params": {...}</code> in the <code>.mat</code> (or <code>Material::SetShader</code> and the typed setters), and every user of the Material draws with it. In Lua, <code>Material.Load</code> gives the shared asset and <code>renderer:GetMaterialInstance(slot)</code> a copy that is yours alone (<a href="meshes.html#materials">Materials</a>).</li>
@@ -187,7 +206,7 @@ sprite->SetShaderParam("u_Threshold", 0.3f);
 sprite->SetShaderParam("u_Edge", Common::Color::Red);
 sprite->SetShaderInt("u_Steps", 4);</code></pre>
 <p>The component's texture is the shader's <code>baseColorTexture</code>, its colour the <code>baseColor</code>, and on a renderer that cannot blend the cut-out of a texture's transparent pixels stays. Its <strong>saturation and flash are not applied</strong> (they are the built-in shaders'; a user shader declares what it reads). A UI Image shows only its sprite through a shader, not a raw texture set with <code>SetTexture</code>. Setting <code>nil</code> goes back to the built-in shader.</p></li>
-<li><strong>Not in scene files.</strong> A component's shader and its values are runtime state: set them from a script or code, for example in <code>Start</code>. Saving values per object in scenes and prefabs is a later stage.</li>
+<li><strong>In scene and prefab files, per object.</strong> A <code>Sprite2D</code>, <code>Image</code> or <code>ParticleSystem</code> with a shader saves a <code>shaderState</code> key: <code>{"shader": "&lt;the .n2shader asset's UUID&gt;", "params": {"u_Gain": 2.5, "u_Color": {...}}}</code>, the same value spellings as a <code>.mat</code>'s <code>params</code> (a texture as its path). The shader is named by UUID, so moving the asset keeps the link. A component without a shader writes no such key, so every file written before this is unchanged, and loading a file without it clears the slot. Each instance has its own values (a prefab's instances differ the way any component fields do). The key is in no schema and is never replicated, so rollback snapshots, replication and replay hashes do not hold it. An unusable shader or a value that does not fit its parameter is dropped with a warning, as in a <code>.mat</code>. There is no inspector widget yet (the editor frontend is separate): set values from a script, or write the key.</li>
 <li><strong>Per frame.</strong> Setting a number, vector or colour every frame costs nothing extra (they are uniforms); setting a texture makes a new GPU material, so do it when it changes.</li>
 </ul>
 

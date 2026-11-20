@@ -9,6 +9,7 @@ import {
 } from './contract.mjs';
 import { lintStage } from './lint.mjs';
 import { ShaderError, parseN2Shader } from './parse.mjs';
+import { checkAuthoredWgsl } from './authored.mjs';
 import { buildTargetSource, PRELUDE_DIR } from './prelude.mjs';
 import { checkCapabilities, checkGlUniforms, checkReflection, checkWgslLayout } from './reflect.mjs';
 import { layoutBlock } from './std140.mjs';
@@ -118,11 +119,16 @@ export function cookShader(text, options = {}) {
     const ordered = [...targets].sort((a, b) => (a === 'gl') - (b === 'gl'));
     for (const target of ordered) {
       passed[target] = [];
+      result.outputs[target] = { file: PAYLOAD_FILES[target], data: null };
+      if (target === 'webgpu' && header.targets.webgpu === 'authored') {
+        // The author's own WGSL replaces the one Tint makes: the contract's checks, then Tint and naga as for a generated module
+        authoredWebGpu({ parsed, header, layout, file, tools, work, result, passed, used, skip, add });
+        continue;
+      }
       const generated = buildTargetSource(target, parsed, { path: file, dir: preludeDir });
       const source = path.join(work, `${target}.frag`);
       fs.writeFileSync(source, generated.text);
       const inputName = path.basename(source);
-      result.outputs[target] = { file: PAYLOAD_FILES[target], data: null };
 
       if (target === 'gl') {
         result.outputs.gl.data = Buffer.from(generated.text);
@@ -242,6 +248,40 @@ export function cookShader(text, options = {}) {
   return result;
 }
 
+/** The WebGPU target of a shader with "targets": {"webgpu": "authored"}: checks the author's WGSL and makes it the payload */
+function authoredWebGpu({ parsed, header, layout, file, tools, work, result, passed, used, skip, add }) {
+  const wgsl = parsed.wgsl.replace(/\r\n/g, '\n').replace(/^\n+/, '').replace(/\s+$/, '\n');
+  const diagnostics = checkAuthoredWgsl(wgsl, { header, layout });
+  for (const diagnostic of diagnostics) add({ ...diagnostic, file, line: parsed.wgslFirstLine });
+  if (diagnostics.length > 0) return;
+  passed.webgpu.push('wgsl-authored');
+  const wgslPath = path.join(work, 'authored.wgsl');
+  fs.writeFileSync(wgslPath, wgsl);
+  // errors cite the author's file and line: the work file's line n is the file's wgslFirstLine + n - 1
+  const cite = (text) => summarise(text.replace(/[^\s:]*authored\.wgsl:(\d+)(?::(\d+))?/g, (_, line, column) => `${file}:${parsed.wgslFirstLine + Number(line) - 1}${column ? `:${column}` : ''}`));
+  if (!tools.tint) skip('tint', 'webgpu', 'tint');
+  else {
+    used.add('tint');
+    const parsedByTint = run(tools.tint, ['--format', 'spvasm', '--validate', '--ep', 'main', '-o', path.join(work, 'authored.spvasm'), wgslPath]);
+    const log = `${parsedByTint.stdout}\n${parsedByTint.stderr}`;
+    if (parsedByTint.status !== 0) { add({ stage: 'tint', severity: 'error', file: null, line: null, message: `webgpu (authored): tint rejected the WGSL: ${cite(log)}` }); return; }
+    if (hasWarning(log)) { add({ stage: 'tint', severity: 'error', file: null, line: null, message: `webgpu (authored): tint printed a warning (warnings are errors): ${cite(log)}` }); return; }
+    passed.webgpu.push('tint-roundtrip');
+  }
+  const layoutDiagnostics = checkWgslLayout(wgsl, { header, layout });
+  layoutDiagnostics.forEach(add);
+  if (layoutDiagnostics.length > 0) return;
+  passed.webgpu.push('wgsl-layout');
+  result.outputs.webgpu.data = Buffer.from(wgsl);
+  if (!tools.naga) { skip('naga', 'webgpu', 'naga'); return; }
+  used.add('naga');
+  const checked = run(tools.naga, [wgslPath]);
+  const checkedLog = `${checked.stdout}\n${checked.stderr}`;
+  if (checked.status !== 0) { add({ stage: 'naga', severity: 'error', file: null, line: null, message: `webgpu (authored): naga rejected the WGSL: ${cite(checkedLog)}` }); return; }
+  if (hasWarning(checkedLog)) { add({ stage: 'naga', severity: 'error', file: null, line: null, message: `webgpu (authored): naga printed a warning: ${cite(checkedLog)}` }); return; }
+  passed.webgpu.push('naga');
+}
+
 function buildManifest({ text, file, header, layout, targets, outputs, passed, tools, used, strict, lint }) {
   const members = new Map(layout.members.map((member) => [member.name, member]));
   const params = header.params.map((param) => {
@@ -269,6 +309,8 @@ function buildManifest({ text, file, header, layout, targets, outputs, passed, t
     source: { file: path.basename(file), sha256: sha256(text.replace(/\r\n/g, '\n')) },
     uses: header.uses,
     state: header.state,
+    // only a shader with an authored payload says so (the key is absent otherwise, so every other manifest is unchanged)
+    ...(header.targets.webgpu === 'authored' ? { authored: ['webgpu'] } : {}),
     blockSize: layout.size,
     params,
     textures,

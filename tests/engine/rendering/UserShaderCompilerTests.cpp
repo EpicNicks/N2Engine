@@ -177,6 +177,32 @@ TEST(UserShaderCompilerTest, TheNanShimsFollowThePreludeOnlyWhenTheStageNamesIsn
     }
 }
 
+TEST(UserShaderCompilerTest, AnAuthoredWgslBlockIsNotPartOfTheGlslTheDesktopTargetsCompile)
+{
+    const std::string text = "{ \"n2shader\": 1, \"name\": \"Authored\", \"targets\": { \"webgpu\": \"authored\" } }\n#stage fragment\n"
+                             "void main() { n2_FragColor = vec4(1.0); }\n"
+                             "#stage wgsl\n@fragment fn main() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }\n";
+    const auto shader = Shader::FromSource(text, "authored.n2shader");
+    ASSERT_NE(shader, nullptr);
+    std::string stage;
+    int firstLine = 0;
+    ASSERT_TRUE(shader->GetStage(stage, firstLine));
+    EXPECT_EQ(firstLine, 3);
+    EXPECT_EQ(stage, "void main() { n2_FragColor = vec4(1.0); }\n");
+    for (const UserShaderTarget target : {UserShaderTarget::Vulkan, UserShaderTarget::OpenGl})
+    {
+        std::string error;
+        const auto built = BuildSource(target, *shader, "authored.n2shader", error);
+        ASSERT_TRUE(built.has_value()) << error;
+        EXPECT_EQ(built->find("@fragment"), std::string::npos);
+        EXPECT_EQ(built->find("#stage"), std::string::npos);
+    }
+    // A shader without the block keeps its whole stage
+    const auto plain = Shader::FromSource("{ \"n2shader\": 1, \"name\": \"P\" }\n#stage fragment\nvoid main() {}\n", "p.n2shader");
+    ASSERT_TRUE(plain->GetStage(stage, firstLine));
+    EXPECT_EQ(stage, "void main() {}\n");
+}
+
 TEST(UserShaderCompilerTest, TheCacheKeyChangesWithTheSourceAndTheTarget)
 {
     using N2Engine::Rendering::UserShaderCompiler::CacheKey;

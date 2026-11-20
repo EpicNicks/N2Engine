@@ -413,6 +413,24 @@ namespace N2Engine::Rendering
             {
                 firstLine = line + 1;
                 source = end == std::string::npos ? std::string() : _text.substr(end + 1);
+                // The GLSL ends where an authored WebGPU module begins (stage 9f): that block is the WebGPU payload's, never compiled here
+                constexpr std::string_view wgslStage = "#stage wgsl";
+                for (std::size_t at = 0; at < source.size();)
+                {
+                    const std::size_t lineEnd = source.find('\n', at);
+                    const std::string_view candidate = std::string_view(source).substr(
+                        at, lineEnd == std::string::npos ? std::string::npos : lineEnd - at);
+                    if (candidate == wgslStage)
+                    {
+                        source.resize(at);
+                        break;
+                    }
+                    if (lineEnd == std::string::npos)
+                    {
+                        break;
+                    }
+                    at = lineEnd + 1;
+                }
                 return true;
             }
             if (end == std::string::npos)

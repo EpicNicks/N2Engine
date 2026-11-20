@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -19,6 +20,7 @@
 #include "engine/GameObjectScene.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/common/Color.hpp"
+#include "engine/io/Resources.hpp"
 #include "engine/rendering/RenderSettings.hpp"
 #include "engine/rendering/Shader.hpp"
 #include "engine/rendering/Sprite2D.hpp"
@@ -265,16 +267,126 @@ TEST(Sprite2DShaderTest, ClearingTheShaderGoesBackToTheBuiltInDraw)
     EXPECT_TRUE(IsGreen(frame.At(32, 32))) << "no shader: the built-in unlit draw, not the editor's magenta";
 }
 
-TEST(Sprite2DShaderTest, TheShaderIsNotASceneField)
+// ===== Stage 9g: the shader and its values as scene and prefab data =====
+
+namespace
 {
-    auto go = GameObject::Create("Saved");
-    go->CreatePositionable();
-    auto *sprite = go->AddComponent<Sprite2D>();
-    sprite->SetShader(MakeShader());
-    sprite->SetShaderParam("u_Gain", 2.0f);
-    const nlohmann::json saved = sprite->Serialize();
-    EXPECT_EQ(saved.dump().find("shader"), std::string::npos) << "runtime only: no key, so every scene file reads and writes what it did";
-    EXPECT_EQ(saved.dump().find("u_Gain"), std::string::npos);
+    /// A shader as a project asset would be found: registered, so a saved UUID resolves to it in this process
+    std::shared_ptr<Shader> RegisteredShader()
+    {
+        auto shader = MakeShader();
+        IO::Resources::Instance().RegisterAsset(shader);
+        return shader;
+    }
+
+    nlohmann::json SaveOf(Sprite2D &sprite) { return sprite.Serialize(); }
+
+    std::shared_ptr<GameObject> NewSpriteObject(Sprite2D *&sprite)
+    {
+        auto go = GameObject::Create("S");
+        go->CreatePositionable();
+        sprite = go->AddComponent<Sprite2D>();
+        return go;
+    }
+}
+
+TEST(Sprite2DShaderTest, ASpriteWithoutAShaderSavesNothingAboutOne)
+{
+    Sprite2D *sprite = nullptr;
+    const auto go = NewSpriteObject(sprite);
+    const nlohmann::json saved = SaveOf(*sprite);
+    EXPECT_EQ(saved.dump().find("shader"), std::string::npos) << "every scene file written before 9g is what it was";
+    // And a file that never had the key loads as no shader (an old scene)
+    sprite->SetShader(RegisteredShader());
+    ASSERT_TRUE(sprite->GetShader() != nullptr);
+    sprite->Deserialize(saved);
+    EXPECT_FALSE(sprite->GetShader() != nullptr) << "a file with no shader key clears the slot, as a null asset reference clears a reference";
+}
+
+TEST(Sprite2DShaderTest, TheShaderAndItsValuesAreSavedPerInstanceAndLoadBack)
+{
+    const auto shader = RegisteredShader();
+    Sprite2D *first = nullptr;
+    Sprite2D *second = nullptr;
+    const auto a = NewSpriteObject(first);
+    const auto b = NewSpriteObject(second);
+    first->SetShader(shader);
+    second->SetShader(shader);
+    first->SetShaderParam("u_Gain", 2.5f);
+    first->SetShaderParam("u_Color", Common::Color(0.0f, 1.0f, 0.0f, 1.0f));
+    first->SetShaderInt("u_Steps", 5);
+    second->SetShaderParam("u_Gain", 0.5f);
+
+    const nlohmann::json savedFirst = SaveOf(*first);
+    const nlohmann::json savedSecond = SaveOf(*second);
+    ASSERT_TRUE(savedFirst.contains("shaderState"));
+    EXPECT_EQ(savedFirst.at("shaderState").at("shader"), shader->GetUUID().ToString()) << "named by UUID, so a moved asset still resolves";
+    EXPECT_EQ(savedFirst.at("shaderState").at("params").at("u_Gain"), 2.5f);
+    EXPECT_EQ(savedSecond.at("shaderState").at("params").at("u_Gain"), 0.5f) << "each instance holds its own values";
+    EXPECT_FALSE(savedSecond.at("shaderState").at("params").contains("u_Steps"));
+
+    // A new component loads what was saved, whichever order the files come in
+    Sprite2D *loaded = nullptr;
+    const auto c = NewSpriteObject(loaded);
+    loaded->Deserialize(savedFirst);
+    ASSERT_TRUE(loaded->GetShader() != nullptr);
+    EXPECT_EQ(loaded->GetShader(), shader);
+    EXPECT_EQ(loaded->GetShaderMaterial()->GetParam("u_Gain")->value[0], 2.5f);
+    EXPECT_EQ(loaded->GetShaderMaterial()->GetParam("u_Color")->value, (std::array<float, 4>{0, 1, 0, 1}));
+    EXPECT_EQ(loaded->GetShaderMaterial()->GetParam("u_Steps")->value[0], 5.0f);
+    EXPECT_EQ(SaveOf(*loaded).at("shaderState"), savedFirst.at("shaderState")) << "a round trip is stable";
+    // The same shader again keeps the values the file did not mention at their defaults
+    loaded->Deserialize(savedSecond);
+    EXPECT_EQ(loaded->GetShaderMaterial()->GetParam("u_Gain")->value[0], 0.5f);
+    EXPECT_EQ(loaded->GetShaderMaterial()->GetParam("u_Steps")->value[0], 2.0f);
+}
+
+TEST(Sprite2DShaderTest, ABadShaderInAFileClearsTheSlotWithAWarningAndNeverThrows)
+{
+    Sprite2D *sprite = nullptr;
+    const auto go = NewSpriteObject(sprite);
+    sprite->SetShader(RegisteredShader());
+    nlohmann::json saved = SaveOf(*sprite);
+    saved["shaderState"] = nlohmann::json{{"shader", "00000000-0000-0000-0000-00000000dead"}, {"params", {{"u_Gain", 2}}}};
+    EXPECT_NO_THROW(sprite->Deserialize(saved));
+    EXPECT_FALSE(sprite->GetShader() != nullptr);
+    for (const nlohmann::json &junk : {nlohmann::json(5), nlohmann::json("shader"), nlohmann::json::array(), nlohmann::json::object(),
+                                       nlohmann::json{{"shader", 7}}, nlohmann::json{{"shader", nullptr}}})
+    {
+        saved["shaderState"] = junk;
+        sprite->SetShader(RegisteredShader());
+        EXPECT_NO_THROW(sprite->Deserialize(saved)) << junk.dump();
+        EXPECT_FALSE(sprite->GetShader() != nullptr) << junk.dump();
+    }
+}
+
+TEST(Sprite2DShaderTest, ValuesThatDoNotFitTheShadersParametersAreDroppedAsInAMatFile)
+{
+    const auto shader = RegisteredShader();
+    Sprite2D *sprite = nullptr;
+    const auto go = NewSpriteObject(sprite);
+    sprite->SetShader(shader);
+    nlohmann::json saved = SaveOf(*sprite);
+    saved["shaderState"] = nlohmann::json{{"shader", shader->GetUUID().ToString()},
+                                          {"params", {{"u_Gain", "fast"}, {"nope", 1}, {"u_Steps", 3}, {"u_Color", {1, 2}}}}};
+    sprite->Deserialize(saved);
+    ASSERT_TRUE(sprite->GetShader() != nullptr);
+    EXPECT_EQ(sprite->GetShaderMaterial()->GetParam("u_Steps")->value[0], 3.0f);
+    EXPECT_EQ(sprite->GetShaderMaterial()->GetParam("u_Gain")->value[0], 1.0f) << "the default: the wrong type is ignored";
+    EXPECT_EQ(sprite->GetShaderMaterial()->GetParam("u_Color")->value, (std::array<float, 4>{1, 1, 1, 1}));
+}
+
+TEST(Sprite2DShaderTest, TheShaderStateIsNotAFieldAnEditorScriptOrTheNetworkKnows)
+{
+    Sprite2D *sprite = nullptr;
+    const auto go = NewSpriteObject(sprite);
+    sprite->SetShader(RegisteredShader());
+    ASSERT_TRUE(SaveOf(*sprite).contains("shaderState"));
+    for (const FieldInfo &field : sprite->DescribeFields())
+    {
+        EXPECT_NE(field.name, "shaderState") << "not in a schema, so not in an inspector, a script's field list or the replication fingerprint";
+        EXPECT_FALSE(field.replicated && field.name.find("shader") != std::string::npos);
+    }
 }
 
 #ifdef N2ENGINE_SCRIPTING_ENABLED

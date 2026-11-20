@@ -435,6 +435,16 @@ namespace N2Engine::Rendering
         return true;
     }
 
+    void Material::AdoptParams(const Material &from)
+    {
+        if (!_shader || _shader != from._shader)
+        {
+            return;
+        }
+        _params = from._params;
+        Changed(true); // the textures among them are part of the GPU material
+    }
+
     bool Material::SetTexture(const std::string_view name, std::shared_ptr<Texture> texture)
     {
         const ShaderParam *param = MatchParam(name, {ShaderParamType::Texture}, "SetTexture");

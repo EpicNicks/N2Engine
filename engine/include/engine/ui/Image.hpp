@@ -67,7 +67,7 @@ namespace N2Engine::UI
         /// forgets the parameter values). The image keeps a Material of its own for it (Rendering::UserShaderSlot): the sprite reaches the
         /// shader as the reserved baseColorTexture, the colour (with a Button's tint) as baseColor, and the cut-out on a renderer that
         /// cannot blend stays; the saturation and flash are the standard shader's and are not applied. Only the sprite is shown through a
-        /// shader, not a raw SetTexture texture (the built-in path draws that, as before). Runtime only: not a serialized field
+        /// shader, not a raw SetTexture texture (the built-in path draws that, as before). Saved as `shaderState` when set (UserShaderSlot::Save)
         void SetShader(std::shared_ptr<Rendering::Shader> shader) { _shaderSlot.SetShader(std::move(shader)); }
         [[nodiscard]] const std::shared_ptr<Rendering::Shader> &GetShader() const { return _shaderSlot.GetShader(); }
         /// Sets a parameter the shader declares; false (with one warning) without a shader, for an unknown name or a wrong type

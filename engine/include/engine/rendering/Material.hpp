@@ -243,6 +243,9 @@ namespace N2Engine::Rendering
         /// column vector). A value that is not finite is zero. False, with one warning, for a count that does not fit the parameter's type
         bool SetMat3(std::string_view name, std::span<const float, 9> values);
         bool SetMat4(std::string_view name, std::span<const float, 16> values);
+        /// Takes the parameter values `from` holds, when it has the same shader as this material (nothing changes otherwise). How a component
+        /// loads the values of its shader slot from a scene file
+        void AdoptParams(const Material &from);
         /// A texture parameter; null clears it (the shader's default). The texture must be loaded
         bool SetTexture(std::string_view name, std::shared_ptr<Texture> texture);
         /// What a parameter holds now: the value set, else the shader's default; nullopt for a name the shader does not declare

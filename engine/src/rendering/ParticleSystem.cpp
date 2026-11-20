@@ -75,6 +75,8 @@ namespace N2Engine::Rendering
         RegisterMember(NAMEOF(backend), backend)
             .Tooltip("Auto: PhysX on the GPU when the project enables it and it works, else CPU. PhysX: falls back to CPU, with a warning. CPU: the same on every machine. Read when the system starts.");
         RegisterMember(NAMEOF(playOnAwake), playOnAwake);
+        // A user shader and its values, only when one is set (stage 9g): a system without one saves what it always did
+        RegisterOptionalState("shaderState", [this] { return _shaderSlot.Save(); }, [this](const nlohmann::json &json) { _shaderSlot.Load(json); });
         RegisterMember(NAMEOF(maxParticles), maxParticles).Range(0.0, kMaxParticlesLimit)
             .Tooltip("The most particles alive at once; more are dropped. Read when the system starts.");
         RegisterMember(NAMEOF(seed), seed).Tooltip("The same seed gives the same particles. Read when the system starts.");

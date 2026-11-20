@@ -87,8 +87,8 @@ namespace N2Engine::Rendering
         /// A user shader (`.n2shader`, a Shader asset) to draw with instead of the built-in unlit one; null goes back (and forgets the
         /// parameter values). The sprite keeps a Material of its own for it, so one sprite's values never reach another's. Its texture
         /// reaches the shader as the reserved baseColorTexture, its colour as baseColor, and the cut-out on a renderer that cannot blend
-        /// stays; the saturation and flash are the built-in shader's and are not applied. Runtime only: not a scene or prefab field (a
-        /// scene's per-instance shader values are for a later stage), set it from a script or code. See UserShaderSlot
+        /// stays; the saturation and flash are the built-in shader's and are not applied. Saved in a scene or prefab file as `shaderState`
+        /// (only when set; per object; not a field a schema or the network knows). See UserShaderSlot::Save
         void SetShader(std::shared_ptr<Shader> shader) { _shaderSlot.SetShader(std::move(shader)); }
         [[nodiscard]] const std::shared_ptr<Shader> &GetShader() const { return _shaderSlot.GetShader(); }
         /// Sets a parameter the shader declares; false (with one warning) without a shader, for an unknown name or a wrong type

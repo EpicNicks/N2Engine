@@ -13,6 +13,7 @@ import { cookShader, manifestBytes, parseGlslangOutput, writeOutputs } from './l
 import { runCorpus } from './lib/corpus.mjs';
 import { lintStage, stripComments } from './lib/lint.mjs';
 import { ShaderError, parseN2Shader } from './lib/parse.mjs';
+import { checkAuthoredWgsl } from './lib/authored.mjs';
 import { buildTargetSource, expandTemplate, materialSection, PRELUDE_DIR, usesNanChecks } from './lib/prelude.mjs';
 import { checkCapabilities, checkGlUniforms, checkReflection, checkWgslLayout } from './lib/reflect.mjs';
 import { layoutBlock } from './lib/std140.mjs';
@@ -106,7 +107,7 @@ test('parse: baseColorTexture takes slot 0, the others follow in declaration ord
 const headerRejections = [
   ['no #stage line', '{ "n2shader": 1, "name": "A" }\nvoid main() {}\n', /no "#stage fragment" line/],
   ['#stage vertex', '{ "n2shader": 1, "name": "A" }\n#stage fragment\nvoid main() {}\n#stage vertex\nvoid main() {}\n', /"#stage vertex" is reserved/],
-  ['#stage wgsl', '{ "n2shader": 1, "name": "A" }\n#stage fragment\nvoid main() {}\n#stage wgsl\n', /unknown or repeated stage/],
+  ['#stage wgsl', '{ "n2shader": 1, "name": "A" }\n#stage fragment\nvoid main() {}\n#stage wgsl\n', /needs "targets"/],
   ['a repeated #stage fragment', '{ "n2shader": 1, "name": "A" }\n#stage fragment\nvoid main() {}\n#stage fragment\n', /unknown or repeated stage/],
   ['invalid JSON', '{ "n2shader": 1, \n#stage fragment\nvoid main() {}\n', /not valid JSON/],
   ['JSON comments (strict JSON)', '{ "n2shader": 1, // note\n "name": "A" }\n#stage fragment\nvoid main() {}\n', /not valid JSON/],
@@ -167,6 +168,97 @@ test('header: mat3 and mat4 are row_major std140 members and take no default (st
   assert.match(gl, /uniform mat4 u_X;/);
 });
 
+// ---------------------------------------------------------------------------------------------------------------------
+// Authored WGSL (stage 9f)
+// ---------------------------------------------------------------------------------------------------------------------
+const GOOD_WGSL = `struct Material {
+  u_Color : vec4<f32>,
+}
+
+@group(1) @binding(0) var<uniform> material : Material;
+
+@fragment
+fn main(@location(0) n2_UV : vec2<f32>, @location(1u) n2_Color : vec4<f32>) -> @location(0) vec4<f32> {
+  return material.u_Color * n2_Color;
+}
+`;
+const authoredShader = (wgsl, { header: extra = {}, glsl = 'void main() { n2_FragColor = u_Color; }' } = {}) => {
+  const head = JSON.stringify({ n2shader: 1, name: 'Authored', params: [{ name: 'u_Color', type: 'color', default: [1, 1, 1, 1] }], targets: { webgpu: 'authored' }, ...extra });
+  return `${head}\n#stage fragment\n${glsl}\n${wgsl === null ? '' : `#stage wgsl\n${wgsl}`}`;
+};
+const authoredContext = (text) => {
+  const parsed = parseN2Shader(text);
+  return { header: parsed.header, layout: layoutBlock(parsed.header.params), parsed };
+};
+
+test('authored: the header and the #stage wgsl block go together', () => {
+  const parsed = parseN2Shader(authoredShader(GOOD_WGSL));
+  assert.equal(parsed.header.targets.webgpu, 'authored');
+  assert.equal(parsed.source.includes('#stage'), false, 'the GLSL stage ends where the WGSL begins');
+  assert.equal(parsed.wgsl.startsWith('struct Material'), true);
+  assert.equal(parsed.wgslFirstLine, 5);
+  rejects(authoredShader(null), /needs a "#stage wgsl" block/);
+  rejects(`${JSON.stringify({ n2shader: 1, name: 'X' })}\n#stage fragment\nvoid main() {}\n#stage wgsl\n${GOOD_WGSL}`, /needs "targets": \{"webgpu": "authored"\}/);
+  rejects(authoredShader(GOOD_WGSL, { header: { targets: { webgpu: 'handwritten' } } }), /must be "generated" or "authored"/);
+  rejects(`${authoredShader(GOOD_WGSL)}\n#stage wgsl\n${GOOD_WGSL}`, /unknown or repeated stage line/);
+  // GLSL is unchanged by the WGSL after it
+  const generated = buildTargetSource('vulkan', parsed);
+  assert.equal(generated.text.includes('@fragment'), false);
+});
+
+test('authored: a module that keeps to the contract passes, whatever the literal suffixes', () => {
+  const { header, layout } = authoredContext(authoredShader(GOOD_WGSL));
+  assert.deepEqual(checkAuthoredWgsl(GOOD_WGSL, { header, layout }), []);
+  // Tint's spelling (0u, @fragment on its own line) is the same module
+  assert.deepEqual(checkAuthoredWgsl(GOOD_WGSL.replace('@location(0)', '@location(0u)').replace('@group(1) @binding(0)', '@group(1u) @binding(0u)').replace('@fragment\nfn', '@fragment fn'), { header, layout }), []);
+});
+
+const authoredRejections = [
+  ['an enable directive', `enable f16;\n${GOOD_WGSL}`, /directives are not allowed/],
+  ['a vertex entry point', `${GOOD_WGSL}\n@vertex fn vs() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0); }`, /@vertex and @compute are not allowed/],
+  ['a second fragment entry', `${GOOD_WGSL}\n@fragment fn other() -> @location(0) vec4<f32> { return vec4<f32>(0.0); }`, /exactly one fragment entry point/],
+  ['a fragment entry with another name', GOOD_WGSL.replace('fn main', 'fn fs_main'), /exactly one fragment entry point/],
+  ['a binding outside the contract', `@group(2) @binding(0) var<uniform> extra : Material;\n${GOOD_WGSL}`, /not a resource of this shader's contract/],
+  ['a storage buffer', `@group(1) @binding(3) var<storage, read> data : array<f32>;\n${GOOD_WGSL}`, /not a resource of this shader's contract/],
+  ['a Material block that is not a uniform', GOOD_WGSL.replace('var<uniform>', 'var<private>'), /must be "var<uniform>"/],
+  ['an input that is not a varying location', GOOD_WGSL.replace('@location(1u) n2_Color : vec4<f32>', '@location(7) n2_Color : vec4<f32>'), /not one of the engine's varyings/],
+  ['an input of the wrong type', GOOD_WGSL.replace('n2_UV : vec2<f32>', 'n2_UV : vec3<f32>'), /a vec2<f32>; found vec3<f32>/],
+  ['a struct as the input', GOOD_WGSL.replace('(@location(0) n2_UV : vec2<f32>, @location(1u) n2_Color : vec4<f32>)', '(input : VertexOut)'), /write the inputs as parameters of main/],
+  ['a second output', GOOD_WGSL.replace('-> @location(0) vec4<f32>', '-> @location(1) vec4<f32>'), /must return "@location\(0\) vec4<f32>"/],
+  ['an empty block', '\n', /is empty/],
+];
+for (const [name, wgsl, pattern] of authoredRejections) {
+  test(`authored rejects: ${name}`, () => {
+    const { header, layout } = authoredContext(authoredShader(GOOD_WGSL));
+    const diagnostics = checkAuthoredWgsl(wgsl, { header, layout });
+    assert.ok(diagnostics.some((entry) => pattern.test(entry.message)), JSON.stringify(diagnostics.map((entry) => entry.message)));
+  });
+}
+
+test('authored: PerDraw must be the contract\'s struct, and an oversize module is refused', () => {
+  const { header, layout } = authoredContext(authoredShader(GOOD_WGSL));
+  const perDraw = `struct PerDraw { n2_Model : mat4x4<f32>, n2_View : mat4x4<f32>, n2_Projection : mat4x4<f32>, n2_StageDim : f32, n2_TintSaturation : f32, n2_TintInside : i32, n2_TintCircle : vec3<f32>, }\n@group(0) @binding(0) var<uniform> perDraw : PerDraw;\n`;
+  assert.deepEqual(checkAuthoredWgsl(perDraw + GOOD_WGSL, { header, layout }), []);
+  const swapped = perDraw.replace('n2_StageDim : f32, n2_TintSaturation : f32', 'n2_TintSaturation : f32, n2_StageDim : f32');
+  assert.ok(checkAuthoredWgsl(swapped + GOOD_WGSL, { header, layout }).some((entry) => /PerDraw member 3/.test(entry.message)));
+  assert.ok(checkAuthoredWgsl(`// ${'x'.repeat(300 * 1024)}\n${GOOD_WGSL}`, { header, layout }).some((entry) => /over 256 KiB/.test(entry.message)));
+});
+
+test('authored: the cook keeps the author\'s WGSL as the WebGPU payload, says so in the manifest, and reads the GLSL for the other targets', () => {
+  const result = cookShader(authoredShader(GOOD_WGSL), { path: 'a.n2shader', targets: ['vulkan', 'webgpu', 'gl'], tools: noTools });
+  assert.equal(result.ok, true, JSON.stringify(result.diagnostics));
+  assert.equal(result.outputs.webgpu.data.toString('utf8'), GOOD_WGSL);
+  assert.deepEqual(result.manifest.authored, ['webgpu']);
+  assert.ok(result.manifest.validated.webgpu.includes('wgsl-authored'));
+  assert.equal(result.outputs.gl.data.toString('utf8').includes('@fragment'), false);
+  // an ordinary shader's manifest has no such key
+  const plain = cookShader(shader(header()), { path: 'p.n2shader', targets: ['webgpu'], tools: noTools });
+  assert.equal('authored' in plain.manifest, false);
+  // a contract violation stops the cook at its own stage with the line of the block
+  const bad = cookShader(authoredShader(GOOD_WGSL.replace('@fragment', '@fragment @invariant')), { path: 'b.n2shader', targets: ['webgpu'], tools: noTools });
+  assert.equal(bad.ok, bad.failedStage === null);
+});
+
 test('header accepts exactly 256 bytes of block and exactly 5 textures', () => {
   const params = [...Array.from({ length: 16 }, (_, i) => param(`u_V${i}`, 'vec4')), ...Array.from({ length: 5 }, (_, i) => param(`u_T${i}`, 'texture'))];
   const { header: h } = parseN2Shader(shader(header({ params })));
@@ -187,7 +279,7 @@ test('header rejects: unknown uses, state values, targets', () => {
   rejects(shader(header({ state: { cull: 'front' } })), /state.cull must be one of/);
   rejects(shader(header({ state: { depthWrite: 'no' } })), /depthWrite must be true or false/);
   rejects(shader(header({ state: { sorting: 1 } })), /unknown state key/);
-  rejects(shader(header({ targets: { webgpu: 'authored' } })), /not supported in v1/);
+  rejects(shader(header({ targets: { webgpu: 'authored' } })), /needs a "#stage wgsl" block/);
   rejects(shader(header({ targets: { gl: 'generated' } })), /unknown target "gl"/);
 });
 
