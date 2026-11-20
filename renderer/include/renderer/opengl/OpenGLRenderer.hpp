@@ -57,6 +57,7 @@ namespace Renderer::OpenGL
         /// logged, for a blob ValidateUserShaderBlob rejects for OpenGL, past kMaxUserShaders, or a program the driver refuses
         Common::IShader* CreateUserShader(const Common::UserShaderBlob& blob) override;
         Common::IMaterial* CreateUserMaterial(Common::IShader* shader, Common::ITexture* texture) override;
+        [[nodiscard]] std::optional<Common::UserShaderTarget> GetUserShaderTarget() const override { return Common::UserShaderTarget::OpenGl; }
 
         // Frame management
         void BeginFrame() override;

@@ -228,6 +228,8 @@ namespace N2Engine::IO
         
         std::filesystem::path GetProjectRoot() const { return _projectRoot; }
         std::filesystem::path GetAssetsRoot() const { return _assetsRoot; }
+        /// The folder of the project's generated data (.import/): the cooked shaders of the user shaders are under shaders/<uuid>/
+        std::filesystem::path GetMetadataRoot() const { return _metadataRoot; }
         /// Where user:// paths resolve (see Initialize); empty before Initialize
         std::filesystem::path GetUserDataRoot() const { return _userDataRoot; }
         

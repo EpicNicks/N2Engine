@@ -1,8 +1,13 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
+#include <initializer_list>
+#include <map>
 #include <memory>
+#include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 
@@ -10,6 +15,7 @@
 
 #include "engine/base/Asset.hpp"
 #include "engine/common/Color.hpp"
+#include "engine/rendering/Shader.hpp"
 #include "engine/rendering/Texture.hpp"
 
 namespace Renderer::Common
@@ -19,6 +25,14 @@ namespace Renderer::Common
 
 namespace N2Engine::Rendering
 {
+    /// The value of one shader parameter a Material holds: the components of a number, vector or colour (a bool or int: the value
+    /// cast), or the texture of a texture parameter (null: none, the shader's default)
+    struct MaterialParamValue
+    {
+        std::array<float, 4> value{};
+        std::shared_ptr<Texture> texture;
+    };
+
     /// How a material is lit: which of the renderer's standard shaders draws it
     enum class ShadingModel : std::uint8_t
     {
@@ -186,6 +200,31 @@ namespace N2Engine::Rendering
         void SetMetallicRoughnessTexture(std::shared_ptr<Texture> texture);
 
         /// Blend: drawn in the Transparent queue, blended
+        /// The user shader this material is drawn with (a `.n2shader` Shader asset), or null: the standard unlit or lit shader of the
+        /// shading model, which is the whole of what a built-in material is. With a shader the shading model, emissive, normal,
+        /// occlusion and metallic-roughness fields are not used (the shader declares what it reads); the base colour and base colour
+        /// texture reach the shader through its reserved baseColor and baseColorTexture parameters, and the alpha mode, double-sided
+        /// flag and render queue work as for any material. Changing the shader makes a new GPU material, and forgets the parameter values
+        /// of the old one
+        [[nodiscard]] const std::shared_ptr<Shader> &GetShader() const { return _shader; }
+        void SetShader(std::shared_ptr<Shader> shader);
+        /// Sets a declared parameter of the shader. False, with one warning per name, when there is no shader, the shader declares no such
+        /// parameter or the setter does not fit its type (SetInt takes an int or a bool, SetVec4 and SetColor a vec4 or a color). A
+        /// number is clamped to the parameter's min and max when it declares them. Only SetTexture makes a new GPU material (a texture is
+        /// part of what one is made from); the others are uniforms, set on every draw, so setting one every frame costs nothing extra
+        bool SetFloat(std::string_view name, float value);
+        bool SetInt(std::string_view name, int value);
+        bool SetVec2(std::string_view name, float x, float y);
+        bool SetVec3(std::string_view name, float x, float y, float z);
+        bool SetVec4(std::string_view name, float x, float y, float z, float w);
+        bool SetColor(std::string_view name, const Common::Color &color);
+        /// A texture parameter; null clears it (the shader's default). The texture must be loaded
+        bool SetTexture(std::string_view name, std::shared_ptr<Texture> texture);
+        /// What a parameter holds now: the value set, else the shader's default; nullopt for a name the shader does not declare
+        [[nodiscard]] std::optional<MaterialParamValue> GetParam(std::string_view name) const;
+        /// The values set so far (not the defaults), by parameter name
+        [[nodiscard]] const std::map<std::string, MaterialParamValue> &GetParams() const { return _params; }
+
         [[nodiscard]] bool IsBlended() const { return _alphaMode == AlphaMode::Blend; }
         /// Goes up by one on every change; 1 for a new material, made at runtime or loaded
         [[nodiscard]] std::uint64_t GetVersion() const { return _version; }
@@ -207,6 +246,10 @@ namespace N2Engine::Rendering
          * by several users (or given a per-draw tint) always draws with the right values.
          */
         void ApplyUniforms(Renderer::Common::IMaterial &target, const Common::Color &tint = Common::Color::White) const;
+        /// A material that has a shader: when `target` is a user-shader material the shader's declared parameters are written
+        /// instead (the set value, else the default; baseColor and baseColorTexture default to the material's own), and none of the
+        /// standard uniforms, which a user program does not have. When `target` is a standard one (the shader could not be drawn)
+        /// the unlit uniforms are written, in flat magenta if RenderSettings says so
 
     private:
         /// Bumps the version, and the GPU version too for a change to the shader or texture
@@ -221,6 +264,14 @@ namespace N2Engine::Rendering
         /// Reads the keys of a .mat object into this material (see FromJson)
         void ReadJson(const nlohmann::json &json, const std::filesystem::path &baseDirectory, std::string_view debugName);
 
+        /// The parameter `name` of the shader if it accepts `setter` (one of the types in `accepted`), else null after one warning
+        const ShaderParam *MatchParam(std::string_view name, std::initializer_list<ShaderParamType> accepted, const char *setter);
+        /// The user-shader half of ApplyUniforms
+        void ApplyShaderParams(Renderer::Common::IMaterial &target, const Common::Color &tint) const;
+
+        std::shared_ptr<Shader> _shader;
+        std::map<std::string, MaterialParamValue> _params; // the values set; a parameter not here has its default
+        mutable std::set<std::string> _warnedParams;
         ShadingModel _shading = ShadingModel::Lit;
         Common::Color _baseColor{Common::Color::White};
         std::shared_ptr<Texture> _baseColorTexture;

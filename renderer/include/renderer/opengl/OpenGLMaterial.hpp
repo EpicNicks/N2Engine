@@ -40,6 +40,7 @@ namespace Renderer::OpenGL
         void SetColor(const std::string &name, float r, float g, float b, float a) override;
 
         bool IsValid() const override { return _shader && _shader->IsValid(); }
+        [[nodiscard]] bool IsUserShaderMaterial() const override { return IsUserShader(); }
 
         // Internal use by renderer
         void Apply(); // Binds shader and applies all properties

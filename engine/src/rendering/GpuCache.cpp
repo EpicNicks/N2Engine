@@ -1,14 +1,20 @@
 #include "engine/rendering/GpuCache.hpp"
 
+#include <array>
+#include <format>
 #include <map>
+#include <set>
+#include <string>
 #include <tuple>
 #include <utility>
 
 #include <renderer/common/TextureOptions.hpp>
 
+#include "engine/Logger.hpp"
 #include "engine/rendering/Material.hpp"
 #include "engine/rendering/Mesh.hpp"
 #include "engine/rendering/RenderSettings.hpp"
+#include "engine/rendering/Shader.hpp"
 #include "engine/rendering/Texture.hpp"
 #include "engine/text/Font.hpp"
 
@@ -59,6 +65,9 @@ namespace N2Engine::Rendering
                 break;
             case GpuCache::ResourceKind::Material:
                 renderer.DestroyMaterial(static_cast<IMaterial *>(resource));
+                break;
+            case GpuCache::ResourceKind::Shader:
+                renderer.DestroyShaderProgram(static_cast<IShader *>(resource));
                 break;
             }
         }
@@ -115,6 +124,11 @@ namespace N2Engine::Rendering
     IMaterial *GpuCache::Handle::GetMaterial() const
     {
         return _kind == ResourceKind::Material ? static_cast<IMaterial *>(_resource) : nullptr;
+    }
+
+    IShader *GpuCache::Handle::GetShader() const
+    {
+        return _kind == ResourceKind::Shader ? static_cast<IShader *>(_resource) : nullptr;
     }
 
     bool GpuCache::Handle::Holds(const IRenderer *renderer) const
@@ -233,7 +247,8 @@ namespace N2Engine::Rendering
         /// A lit material in linear lighting: its colour textures are sRGB textures
         bool UsesSrgbTextures(const Material &material)
         {
-            return material.GetShading() != ShadingModel::Unlit &&
+            // A user shader reads its textures as they are
+            return material.GetShading() != ShadingModel::Unlit && !material.GetShader() &&
                    RenderSettings::GetColorSpace() == ColorSpace::Linear;
         }
     }
@@ -241,7 +256,63 @@ namespace N2Engine::Rendering
     std::uint64_t GpuCache::MaterialVersion(const Material &material)
     {
         constexpr std::uint64_t srgbBit = std::uint64_t{1} << 62;
-        return material.GetGpuVersion() | (UsesSrgbTextures(material) ? srgbBit : 0);
+        std::uint64_t version = material.GetGpuVersion() | (UsesSrgbTextures(material) ? srgbBit : 0);
+        if (const auto &shader = material.GetShader())
+        {
+            // 30 bits of the shader's version above the material's own 32: a reloaded shader is a new GPU material
+            version |= (shader->GetVersion() & 0x3FFFFFFFull) << 32;
+        }
+        return version;
+    }
+
+    namespace
+    {
+        /// A line for the log once per (shader, version, message): a shader that cannot be drawn is asked for on every material that
+        /// uses it, and each ask would otherwise log
+        void LogShaderProblemOnce(const Shader &shader, const std::string &message)
+        {
+            static auto *logged = new std::set<std::pair<const void *, std::string>>(); // leaked on purpose, like the cache
+            const std::string label = shader.GetSourcePath().empty() ? shader.GetName() : shader.GetSourcePath();
+            const std::string line = std::format("Shader {}: {}", label, message);
+            if (logged->insert({&shader, line + "#" + std::to_string(shader.GetVersion())}).second)
+            {
+                Logger::Error(line);
+            }
+        }
+    }
+
+    GpuCache::Handle GpuCache::AcquireUserShader(IRenderer &renderer, const std::shared_ptr<const Shader> &shader)
+    {
+        if (!shader)
+        {
+            return {};
+        }
+        return Acquire(renderer, ResourceKind::Shader, shader->GetVersion(), shader,
+                       [&shader](IRenderer &target, std::vector<Handle> &) -> void *
+        {
+            const auto userTarget = target.GetUserShaderTarget();
+            if (!userTarget)
+            {
+                LogShaderProblemOnce(*shader, std::format("the {} cannot draw user shaders: materials that use it are drawn with the "
+                                                          "built-in unlit shader instead",
+                                                          target.GetRendererName()));
+                return nullptr;
+            }
+            std::string error;
+            const auto blob = shader->MakeBlob(*userTarget, error);
+            if (!blob)
+            {
+                LogShaderProblemOnce(*shader, error + "; its materials are drawn with the fallback instead");
+                return nullptr;
+            }
+            IShader *made = target.CreateUserShader(*blob);
+            if (!made)
+            {
+                LogShaderProblemOnce(*shader, std::string("the renderer refused it (see the message above it); its materials are drawn "
+                                                          "with the fallback instead"));
+            }
+            return made;
+        });
     }
 
     GpuCache::Handle GpuCache::AcquireFontAtlas(IRenderer &renderer, const std::shared_ptr<const Text::Font> &font)
@@ -328,9 +399,10 @@ namespace N2Engine::Rendering
         return Acquire(renderer, ResourceKind::Material, MaterialVersion(*material), material,
                        [&material, sRgbTextures](IRenderer &target, std::vector<Handle> &dependencies) -> void *
         {
+            // A material with a user shader is, where the shader cannot be drawn, an unlit one (the fallback)
+            const ShadingModel shading = material->GetShader() ? ShadingModel::Unlit : material->GetShading();
             // Lit and Pbr are both the standard lit shader (uPbr picks the model)
-            IShader *shader = material->GetShading() != ShadingModel::Unlit ? target.GetStandardLitShader()
-                                                                             : target.GetStandardUnlitShader();
+            IShader *shader = shading != ShadingModel::Unlit ? target.GetStandardLitShader() : target.GetStandardUnlitShader();
             if (!shader)
             {
                 return nullptr;
@@ -352,12 +424,59 @@ namespace N2Engine::Rendering
                 }
                 return texture;
             };
-            ITexture *texture = acquire(material->GetBaseColorTexture(), true);
+            if (const std::shared_ptr<Shader> &userShader = material->GetShader())
+            {
+                Handle shaderHandle = AcquireUserShader(target, userShader);
+                if (IShader *gpuShader = shaderHandle.GetShader())
+                {
+                    // Each texture parameter into the slot the cook gave it (0 is the base texture); baseColorTexture takes the material's own
+                    // base colour texture unless the .mat sets that parameter. User textures are read as they are (never sRGB-decoded)
+                    std::array<ITexture *, Renderer::Common::kUserShaderTextureSlots> slots{};
+                    for (const ShaderParam &param : userShader->GetParams())
+                    {
+                        if (param.type != ShaderParamType::Texture || param.slot < 0 ||
+                            param.slot >= static_cast<int>(slots.size()))
+                        {
+                            continue;
+                        }
+                        std::shared_ptr<Texture> source;
+                        const auto set = material->GetParams().find(param.name);
+                        if (set != material->GetParams().end())
+                        {
+                            source = set->second.texture;
+                        }
+                        else if (param.name == "baseColorTexture")
+                        {
+                            source = material->GetBaseColorTexture();
+                        }
+                        slots[static_cast<std::size_t>(param.slot)] = acquire(source, false);
+                    }
+                    if (IMaterial *userMaterial = target.CreateUserMaterial(gpuShader, slots[0]))
+                    {
+                        for (std::size_t slot = 1; slot < slots.size(); ++slot)
+                        {
+                            if (slots[slot])
+                            {
+                                userMaterial->SetTextureSlot(static_cast<unsigned>(slot), slots[slot]);
+                            }
+                        }
+                        // The material's entry holds the shader: released after the material, so the renderer's material goes first
+                        dependencies.push_back(std::move(shaderHandle));
+                        material->ApplyUniforms(*userMaterial);
+                        return userMaterial;
+                    }
+                    shaderHandle.Release(true); // the shader was made for nothing
+                }
+                // Fall through: the unlit fallback
+            }
+            const bool magenta = material->GetShader() &&
+                                 RenderSettings::GetUserShaderErrorStyle() == UserShaderErrorStyle::Magenta;
+            ITexture *texture = magenta ? nullptr : acquire(material->GetBaseColorTexture(), true);
             IMaterial *created = target.CreateMaterial(shader, texture);
             if (created)
             {
                 // Only the lit shader reads them
-                if (material->GetShading() != ShadingModel::Unlit)
+                if (shading != ShadingModel::Unlit)
                 {
                     created->SetAuxTexture(Renderer::Common::AuxTexture::Emissive, acquire(material->GetEmissiveTexture(), true));
                     created->SetAuxTexture(Renderer::Common::AuxTexture::Occlusion, acquire(material->GetOcclusionTexture(), false));

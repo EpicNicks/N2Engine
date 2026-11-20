@@ -20,6 +20,7 @@ namespace N2Engine::Rendering
 {
     class Material;
     class Mesh;
+    class Shader;
     class Texture;
 
     /**
@@ -54,7 +55,8 @@ namespace N2Engine::Rendering
         {
             Texture,
             Mesh,
-            Material
+            Material,
+            Shader ///< a user shader (IRenderer::CreateUserShader), one per (renderer, Shader asset, its version)
         };
 
         /// One user's share of a cache entry: move-only, released when it is destroyed (without calling the
@@ -83,6 +85,8 @@ namespace N2Engine::Rendering
             [[nodiscard]] Renderer::Common::IMesh *GetMesh() const;
             /// The material, for a Material handle (nullptr otherwise, or when empty)
             [[nodiscard]] Renderer::Common::IMaterial *GetMaterial() const;
+            /// The user shader, for a Shader handle (nullptr otherwise, or when empty)
+            [[nodiscard]] Renderer::Common::IShader *GetShader() const;
             /// The version the entry is keyed by: GpuCache::MaterialVersion (the GPU version, plus a flag for linear
             /// lighting) for a Material handle, 1 for an sRGB texture, 0 for the other kinds (a mesh entry follows
             /// its mesh's versions, see SyncMesh)
@@ -120,8 +124,17 @@ namespace N2Engine::Rendering
 
         /// The version a Material's GPU material is keyed by (and a handle reports as GetVersion): its
         /// GetGpuVersion, plus a flag bit for a lit material in linear lighting, whose colour textures are sRGB
-        /// textures then. Switching the colour space therefore makes the users acquire a new GPU material.
+        /// textures then, plus (bits 32-61) the version of its user shader, so a reloaded shader makes the materials that use it new GPU
+        /// materials. Switching the colour space therefore makes the users acquire a new GPU material.
         [[nodiscard]] static std::uint64_t MaterialVersion(const Material &material);
+
+        /// A share of the user shader `shader` on `renderer` (IRenderer::CreateUserShader of the cooked payload for the renderer's backend,
+        /// Shader::MakeBlob), made on first use and shared by every material of the shader there; released with the last of them, which
+        /// destroys it on the renderer. Empty, with the reason logged once per shader version, for a null shader, a renderer without user
+        /// shaders (the software renderer), a shader that is not cooked, is stale or has no payload for the backend, or one the
+        /// renderer refuses (a compile error)
+        [[nodiscard]] static Handle AcquireUserShader(Renderer::Common::IRenderer &renderer,
+                                                      const std::shared_ptr<const Shader> &shader);
 
         /// A share of `font`'s SDF atlas texture on `renderer` (single channel, TextureOptions::SdfAtlas()),
         /// created on first use. Empty for a null or unloaded font, an empty atlas, or if the renderer can't
@@ -159,6 +172,13 @@ namespace N2Engine::Rendering
          * last user. Its other fields are uniforms and render state, set per draw, so changing them makes nothing
          * new. Empty for a null material, or if the renderer has no such shader or can't create the material. A
          * base colour texture the renderer can't create is left out.
+         *
+         * A material that has a user shader (Material::GetShader) gets a user-shader material of it (CreateUserMaterial: the shader's
+         * texture parameters by slot, the base colour texture where the shader declares baseColorTexture), the shader a dependency held by
+         * the material's entry. When that cannot be made (AcquireUserShader is empty, or the renderer refuses the material) it gets the
+         * unlit fallback: the standard unlit shader with the base colour texture, or, where RenderSettings says Magenta, with none (flat
+         * magenta, see Material::ApplyUniforms), and Material::ApplyUniforms writes the unlit uniforms. A material without a shader never
+         * touches any of this.
          */
         [[nodiscard]] static Handle AcquireMaterial(Renderer::Common::IRenderer &renderer,
                                                     const std::shared_ptr<const Material> &material);

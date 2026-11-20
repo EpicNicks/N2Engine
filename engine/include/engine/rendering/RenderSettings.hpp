@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string_view>
 
@@ -8,6 +9,14 @@
 namespace N2Engine::Rendering
 {
     using Renderer::Common::ColorSpace;
+
+    /// What a Material that has a user shader is drawn with when its shader cannot be (not cooked, stale, a compile error, or a backend
+    /// without user shaders such as the software renderer): the editor wants it obvious, a shipped game wants nothing flashing
+    enum class UserShaderErrorStyle : std::uint8_t
+    {
+        Unlit,   ///< the built-in unlit shader with the material's base colour and texture (the default: players)
+        Magenta, ///< the built-in unlit shader in flat magenta (the editor host that edits)
+    };
 
     /**
      * Engine-wide rendering settings, read by the lit shaders through Scene::CollectLighting. They come from a
@@ -32,6 +41,10 @@ namespace N2Engine::Rendering
         /// reports the wrong encoding; off by default. The project setting is rendering.forceShaderEncode.
         [[nodiscard]] static bool GetForceShaderEncode();
         static void SetForceShaderEncode(bool force);
+
+        /// How a material whose user shader cannot be drawn looks (UserShaderErrorStyle); Unlit until a host sets Magenta
+        [[nodiscard]] static UserShaderErrorStyle GetUserShaderErrorStyle();
+        static void SetUserShaderErrorStyle(UserShaderErrorStyle style);
 
         /// "gamma" or "linear" (case-insensitive); nullopt for anything else
         [[nodiscard]] static std::optional<ColorSpace> ParseColorSpace(std::string_view name);

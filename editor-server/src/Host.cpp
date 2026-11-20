@@ -22,6 +22,7 @@
 #include "engine/io/ProjectFile.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourceUUID.hpp"
+#include "engine/rendering/RenderSettings.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
@@ -335,6 +336,11 @@ namespace N2Engine::Editor
             Scripting::LuaRuntime::SetExecutionPolicy(options.playScene.empty()
                                                           ? Scripting::LuaExecutionPolicy::DeclarationsOnly
                                                           : Scripting::LuaExecutionPolicy::Run);
+
+            // A material whose user shader cannot be drawn (not cooked, a compile error, a backend without user shaders) shows flat magenta
+            // in a host that edits, so the failure is obvious; a running game (--play) draws the built-in unlit fallback instead
+            Rendering::RenderSettings::SetUserShaderErrorStyle(options.playScene.empty() ? Rendering::UserShaderErrorStyle::Magenta
+                                                                                          : Rendering::UserShaderErrorStyle::Unlit);
 
             auto &app = Application::GetInstance();
             const EngineHealth health = app.Init({

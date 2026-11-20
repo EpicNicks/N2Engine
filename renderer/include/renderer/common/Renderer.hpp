@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include <glad/glad.h>
@@ -238,6 +239,11 @@ namespace Renderer::Common
             static_cast<void>(texture);
             return nullptr;
         }
+
+        /// The cooked payload of a `.n2shader` this backend takes (UserShaderBlob: fragmentSpirv for Vulkan, fragmentWgsl for
+        /// WebGPU, fragmentGlsl for OpenGL), or nothing when it has no user shaders (the default, and the software renderer): the
+        /// engine then draws a Material that has a shader with a fallback instead of asking for one
+        [[nodiscard]] virtual std::optional<UserShaderTarget> GetUserShaderTarget() const { return std::nullopt; }
 
         /**
          * Copies the last frame into `buffer` (width * height * 4 bytes): RGBA8, rows bottom to top (row 0 is

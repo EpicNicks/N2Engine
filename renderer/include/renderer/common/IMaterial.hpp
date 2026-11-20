@@ -59,6 +59,11 @@ namespace Renderer::Common
             }
         }
 
+        /// Whether this material is of a USER shader (IRenderer::CreateUserMaterial): its values are the shader's declared
+        /// parameters, not the standard shaders' uniforms (uAlbedo ...). The engine's Material writes the one set or the other
+        /// (Material::ApplyUniforms), so a material that fell back to a standard shader gets the standard uniforms. False by default
+        [[nodiscard]] virtual bool IsUserShaderMaterial() const { return false; }
+
         [[nodiscard]] virtual IShader* GetShader() const = 0;
         [[nodiscard]] virtual ITexture* GetTexture() const = 0;
         [[nodiscard]] virtual bool IsValid() const = 0;

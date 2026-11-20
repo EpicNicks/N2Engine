@@ -270,6 +270,7 @@ namespace Renderer
             /// built-in shaders, or when the driver rejects the module
             Common::IShader* CreateUserShader(const Common::UserShaderBlob& blob) override;
             Common::IMaterial* CreateUserMaterial(Common::IShader* shader, Common::ITexture* texture) override;
+            [[nodiscard]] std::optional<Common::UserShaderTarget> GetUserShaderTarget() const override { return Common::UserShaderTarget::Vulkan; }
 
             /// The row-major view and projection of the draws that follow (until the next call): each draw copies the
             /// values current when it is made. Null arguments are ignored. Identity until set

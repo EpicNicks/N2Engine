@@ -98,6 +98,7 @@ namespace Renderer::Gpu
         [[nodiscard]] Common::IShader* GetShader() const override { return shader; }
         [[nodiscard]] Common::ITexture* GetTexture() const override;
         [[nodiscard]] bool IsValid() const override { return shader != nullptr; }
+        [[nodiscard]] bool IsUserShaderMaterial() const override { return IsUserShader(); }
 
         /// What a draw takes: the block bytes (`blockBytes` of them are the material's range: 128 for a built-in shader,
         /// the layout's for a user shader; the rest of the array is zero) and the five textures (base, then AuxTexture

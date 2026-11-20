@@ -1,0 +1,119 @@
+#pragma once
+
+#include <array>
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include <nlohmann/json.hpp>
+
+#include <renderer/common/UserShader.hpp>
+
+#include "engine/base/Asset.hpp"
+
+namespace N2Engine::Rendering
+{
+    /// The type of a declared shader parameter (the `.n2shader` header's "type", orchestrator/proposals/user-shaders.md section 3.2)
+    enum class ShaderParamType : std::uint8_t
+    {
+        Float,
+        Int,
+        Bool,
+        Vec2,
+        Vec3,
+        Vec4,
+        Color, ///< a vec4 with an editor colour picker
+        Texture,
+    };
+
+    /// One declared parameter. The reserved names bind to the standard Material fields: a `color` named baseColor takes the
+    /// material's base colour (times the draw's tint) and a `texture` named baseColorTexture its base colour texture, unless the
+    /// `.mat` sets them
+    struct ShaderParam
+    {
+        std::string name;
+        ShaderParamType type = ShaderParamType::Float;
+        std::array<float, 4> defaultValue{};  ///< a non-texture default (a bool or int: the value cast)
+        std::string defaultTexture = "white"; ///< a texture's default: white, black, normal or none
+        int slot = -1;                        ///< a texture's slot 0-4 (the cook's rule: baseColorTexture first, then declaration order)
+        /// The editor's hints (ignored by the runtime)
+        std::string label;
+        std::optional<float> min, max;
+    };
+
+    /// The header's "state": hints that supply a material's defaults (a value the `.mat` sets wins). Empty when absent
+    struct ShaderStateHints
+    {
+        std::optional<std::string> blend;      ///< none, alpha or additive
+        std::optional<std::string> cull;       ///< back, front or none
+        std::optional<bool> depthWrite;
+        std::optional<std::string> queue;
+    };
+
+    /**
+     * A user shader (`"Shader"`, a `.n2shader` file; orchestrator/proposals/user-shaders.md). The asset holds what the file's header
+     * declares (name, parameters, whether it reads the scene lighting, state hints) and, when asked for a backend, the COOKED payload
+     * for it: tools/n2shader writes it under `.import/shaders/<uuid>/` (manifest.json and one payload per target), and the engine
+     * builds the Renderer::Common::UserShaderBlob a backend takes from it (MakeBlob). A shader with no cooked payload, a stale one
+     * (its parameters differ from the header's), or none for the renderer's backend cannot be drawn: GpuCache then gives the Material
+     * a fallback and logs why, once.
+     *
+     * Every successful Load bumps GetVersion, which a Material mixes into its GPU version, so a reloaded shader remakes the GPU
+     * materials that use it on their next draw.
+     */
+    class Shader final : public Base::Asset
+    {
+    public:
+        Shader() = default;
+
+        /// A shader from the text of a `.n2shader` (the header, a line that is exactly `#stage fragment`, the GLSL). nullptr, with an
+        /// error naming `debugName` and the line, when the header is not valid
+        [[nodiscard]] static std::shared_ptr<Shader> FromSource(std::string_view text, std::string_view debugName = "shader");
+
+        static void RegisterLoader();
+        bool Load(const std::filesystem::path &path) override;
+        static constexpr std::string_view ResourceTypeName = "Shader";
+        static constexpr std::string_view Extension = ".n2shader";
+        [[nodiscard]] std::string GetResourceType() const override { return std::string(ResourceTypeName); }
+
+        [[nodiscard]] const std::string &GetName() const { return _name; }
+        [[nodiscard]] const std::vector<ShaderParam> &GetParams() const { return _params; }
+        [[nodiscard]] const ShaderParam *FindParam(std::string_view name) const;
+        [[nodiscard]] bool UsesLighting() const { return _usesLighting; }
+        [[nodiscard]] const ShaderStateHints &GetStateHints() const { return _state; }
+        /// The file it was loaded from (empty for one made with FromSource)
+        [[nodiscard]] const std::string &GetSourcePath() const { return _sourcePath; }
+        /// Goes up by one on every Load; 1 for a new shader
+        [[nodiscard]] std::uint64_t GetVersion() const { return _version; }
+
+        /// Reads the cooked payload for `target` from `directory` (a folder holding manifest.json and the payloads) instead of from
+        /// `.import/shaders/<uuid>/`: for tests and for a mod that ships its own. An empty path goes back to the default
+        void SetCookedDirectory(std::filesystem::path directory);
+        /// The folder the cooked payload is read from: the one SetCookedDirectory gave, else the project's `.import/shaders/<uuid>/`
+        [[nodiscard]] std::filesystem::path GetCookedDirectory() const;
+
+        /// The blob for `target`: the cooked manifest and that target's payload, checked against the header (the parameters must be
+        /// the same names and types, in the same order). nullopt, with `error` set to why (not cooked, stale, no payload for the
+        /// target, unreadable), otherwise. The blob is the backend's to validate (ValidateUserShaderBlob) before it touches a driver
+        [[nodiscard]] std::optional<Renderer::Common::UserShaderBlob> MakeBlob(Renderer::Common::UserShaderTarget target,
+                                                                               std::string &error) const;
+
+    private:
+        bool Parse(std::string_view text, std::string_view debugName);
+
+        std::string _name;
+        std::vector<ShaderParam> _params;
+        bool _usesLighting = false;
+        ShaderStateHints _state;
+        std::string _sourcePath;
+        std::uint64_t _version = 1;
+        std::filesystem::path _cookedDirectory;
+    };
+
+    /// The loader registered for .n2shader
+    std::shared_ptr<Base::Asset> LoadShaderFromFile(const std::filesystem::path &path);
+}
