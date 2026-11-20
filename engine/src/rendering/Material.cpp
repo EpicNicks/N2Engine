@@ -244,6 +244,13 @@ namespace N2Engine::Rendering
         return material;
     }
 
+    std::shared_ptr<Material> Material::Clone() const
+    {
+        auto copy = std::make_shared<Material>(*this);
+        copy->_warnedParams.clear();
+        return copy;
+    }
+
     std::shared_ptr<const Material> Material::GetDefault()
     {
         // Leaked on purpose, like the built-in meshes: a component kept alive by Lua can be destroyed after

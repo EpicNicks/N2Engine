@@ -86,6 +86,11 @@ namespace N2Engine::Rendering
     public:
         Material() = default;
 
+        /// A copy of this material for one user (a Lua material instance): every field, the shader and its parameter values, the
+        /// textures shared. It keeps this material's UUID, resource path and source path, so a scene that saves the object saves the same
+        /// .mat reference as before (the changes made to the copy are runtime only and never serialized)
+        [[nodiscard]] std::shared_ptr<Material> Clone() const;
+
         /// A new material at runtime: white, opaque, single-sided, with the given shading
         [[nodiscard]] static std::shared_ptr<Material> Create(ShadingModel shading = ShadingModel::Lit);
 

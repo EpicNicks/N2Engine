@@ -912,6 +912,10 @@ function CubeRenderer:SetMaterial(path) end
 ---@return string|nil path nil without a material
 function CubeRenderer:GetMaterial() end
 
+---The material as a copy-on-write runtime handle (see MeshRenderer:GetMaterialInstance); SphereRenderer and QuadRenderer have it too
+---@return MaterialInstance|nil instance nil without a material
+function CubeRenderer:GetMaterialInstance() end
+
 ---A sphere of diameter 1 (the built-in "Sphere" mesh at the default subdivision), unlit in its colour unless it
 ---has a material
 ---@class SphereRenderer : Component
@@ -990,6 +994,13 @@ function MeshRenderer:SetMaterial(index, path) end
 ---@param index integer 1-based
 ---@return string|nil path nil for an empty slot
 function MeshRenderer:GetMaterial(index) end
+
+---Slot `index`'s material as a handle you can change at runtime (a user shader's parameters). Copy-on-write: your first change
+---clones the .mat's material into this slot, so no other object that uses the same .mat changes. Runtime only: nothing you set is
+---saved, replicated, or part of any state hash.
+---@param index integer 1-based
+---@return MaterialInstance|nil instance nil for an empty slot
+function MeshRenderer:GetMaterialInstance(index) end
 
 ---The mesh's bounds in its own space (before the object's transform)
 ---@return BoundingBox|nil nil without a mesh
@@ -1282,6 +1293,57 @@ function SoftBody:SetSelfCollision(enabled) end
 
 ---@return boolean
 function SoftBody:GetSelfCollision() end
+
+---A material's values at runtime. `Material.Load(path)` is the shared asset: a change through it shows on every object that uses the .mat. For one
+---object's own values use `renderer:GetMaterialInstance(slot)`, which copies on the first change. The names are the parameters the .mat's
+---`.n2shader` declares; a name or setter that doesn't fit logs one warning and returns false. Changes are runtime only.
+---@class MaterialInstance
+MaterialInstance = {}
+
+---@param name string
+---@param value number
+---@return boolean ok
+function MaterialInstance:SetFloat(name, value) end
+
+---@param name string
+---@param value integer an int parameter, or a bool one (nonzero is true)
+---@return boolean ok
+function MaterialInstance:SetInt(name, value) end
+
+---@return boolean ok
+function MaterialInstance:SetVec2(name, x, y) end
+
+---@return boolean ok
+function MaterialInstance:SetVec3(name, x, y, z) end
+
+---@return boolean ok
+function MaterialInstance:SetVec4(name, x, y, z, w) end
+
+---@param name string
+---@param color Color
+---@return boolean ok
+function MaterialInstance:SetColor(name, color) end
+
+---A texture parameter; nil clears it (the shader's default). Raises an error if the texture doesn't load.
+---@param name string
+---@param path string|nil e.g. "res://textures/noise.png"
+---@return boolean ok
+function MaterialInstance:SetTexture(name, path) end
+
+---@param name string
+---@return number|nil value nil for a name the shader doesn't declare or a texture parameter
+function MaterialInstance:GetFloat(name) end
+
+---@return string|nil path the .mat's path
+function MaterialInstance:GetPath() end
+
+---@class MaterialStatic
+Material = {}
+
+---The shared material of a .mat file (a model's "res://models/robot.glb#material/Paint" works too). Raises an error if it doesn't load.
+---@param path string
+---@return MaterialInstance
+function Material.Load(path) end
 
 ---3D model files (.glb, .gltf; .fbx and .obj when the engine is built with N2ENGINE_MODEL_UFBX): see docs/meshes.html#models
 Model = {}

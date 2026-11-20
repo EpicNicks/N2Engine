@@ -282,6 +282,42 @@ namespace N2Engine::Scripting::Bindings
             return AssetPathForLua(*material, material->GetSourcePath());
         }
 
+        /// A Lua material handle (the `MaterialInstance` type). Material.Load gives one on the SHARED asset (a write changes every user of
+        /// the .mat, as Unity's sharedMaterial does); renderer:GetMaterialInstance gives one that is copy-on-write per renderer slot: its
+        /// first write clones the asset's Material, puts the clone in the slot, and writes there, so one object's change never recolours
+        /// the others. Runtime only: nothing here is serialized, replicated, snapshotted for rollback or hashed (rendering is not
+        /// simulation state; the Material's values live on the render side and no state hash reads them)
+        struct LuaMaterialHandle
+        {
+            std::shared_ptr<Rendering::Material> material;
+            /// Puts a clone into the slot this handle came from (empty for a handle on the shared asset)
+            std::function<void(std::shared_ptr<Rendering::Material>)> adopt;
+            bool owned = false;
+
+            /// The material a write goes to: the clone, made on the first write of an instance
+            Rendering::Material &ForWrite()
+            {
+                if (adopt && !owned)
+                {
+                    material = material->Clone();
+                    adopt(material);
+                    owned = true;
+                }
+                return *material;
+            }
+        };
+
+        /// A slot's material as an instance handle, or nil for an empty slot
+        sol::object MaterialInstanceFor(sol::this_state state, std::shared_ptr<Rendering::Material> material,
+                                        std::function<void(std::shared_ptr<Rendering::Material>)> adopt)
+        {
+            if (!material)
+            {
+                return sol::make_object(state, sol::lua_nil);
+            }
+            return sol::make_object(state, LuaMaterialHandle{std::move(material), std::move(adopt), false});
+        }
+
         /// The Lua methods every built-in shape has, on its handle type
         template <typename Ref>
         auto ShapeSetMaterial()
@@ -303,6 +339,19 @@ namespace N2Engine::Scripting::Bindings
         auto ShapeGetMaterial()
         {
             return [](const Ref &c) { return MaterialPathOrNil(c.Pin()->GetMaterial()); };
+        }
+
+        template <typename Ref>
+        auto ShapeGetMaterialInstance()
+        {
+            return [](const Ref &c, sol::this_state state)
+            {
+                const auto shape = c.Pin();
+                // The shape keeps drawing with the clone its handle put in; the handle holds the shape's own pointer weakly through the
+                // component ref, so it never keeps the object alive
+                return MaterialInstanceFor(state, shape->GetMaterial(),
+                                           [c](std::shared_ptr<Rendering::Material> clone) { c.Pin()->SetMaterial(std::move(clone)); });
+            };
         }
     }
 
@@ -501,6 +550,7 @@ namespace N2Engine::Scripting::Bindings
             "GetColor", Forward<CubeRendererRef, &Example::CubeRenderer::GetColor>(),
             "SetSize", Forward<CubeRendererRef, &Example::CubeRenderer::SetSize>(),
             "GetSize", Forward<CubeRendererRef, &Example::CubeRenderer::GetSize>(),
+            "GetMaterialInstance", ShapeGetMaterialInstance<CubeRendererRef>(),
             "SetMaterial", ShapeSetMaterial<CubeRendererRef>(),
             "GetMaterial", ShapeGetMaterial<CubeRendererRef>()
         );
@@ -513,6 +563,7 @@ namespace N2Engine::Scripting::Bindings
             "SetRadius", Forward<SphereRendererRef, &Example::SphereRenderer::SetRadius>(),
             "GetRadius", Forward<SphereRendererRef, &Example::SphereRenderer::GetRadius>(),
             "SetSubdivision", Forward<SphereRendererRef, &Example::SphereRenderer::SetSubdivision>(),
+            "GetMaterialInstance", ShapeGetMaterialInstance<SphereRendererRef>(),
             "SetMaterial", ShapeSetMaterial<SphereRendererRef>(),
             "GetMaterial", ShapeGetMaterial<SphereRendererRef>()
         );
@@ -524,6 +575,7 @@ namespace N2Engine::Scripting::Bindings
             "GetColor", Forward<QuadRendererRef, &Example::QuadRenderer::GetColor>(),
             "SetSize", Forward<QuadRendererRef, &Example::QuadRenderer::SetSize>(),
             "GetSize", Forward<QuadRendererRef, &Example::QuadRenderer::GetSize>(),
+            "GetMaterialInstance", ShapeGetMaterialInstance<QuadRendererRef>(),
             "SetMaterial", ShapeSetMaterial<QuadRendererRef>(),
             "GetMaterial", ShapeGetMaterial<QuadRendererRef>()
         );
@@ -676,6 +728,13 @@ namespace N2Engine::Scripting::Bindings
                     return;
                 }
                 renderer->SetMaterial(slot, LoadMaterialOrThrow(*path, "MeshRenderer:SetMaterial"));
+            },
+            // Slot i's material as an instance handle (copy-on-write, runtime only), or nil for an empty slot
+            "GetMaterialInstance", [](const MeshRendererRef &c, const std::int64_t index, sol::this_state state)
+            {
+                const std::size_t slot = MaterialSlot(index, "MeshRenderer:GetMaterialInstance");
+                return MaterialInstanceFor(state, c.Pin()->GetMaterial(slot),
+                                           [c, slot](std::shared_ptr<Rendering::Material> clone) { c.Pin()->SetMaterial(slot, std::move(clone)); });
             },
             // Slot i's material path (1-based), or nil for an empty slot
             "GetMaterial", [](const MeshRendererRef &c, const std::int64_t index) -> sol::optional<std::string>
@@ -1053,6 +1112,53 @@ namespace N2Engine::Scripting::Bindings
         lua.new_usertype<ScriptCoroutineHandle>("ScriptCoroutine", sol::no_constructor,
             "Stop", &ScriptCoroutineHandle::Stop,
             "IsRunning", &ScriptCoroutineHandle::IsRunning);
+
+        // ===== Material (global) and MaterialInstance: a .mat's values at runtime (user shaders, stage 5b) =====
+        // Setters return true, or false with one warning when the name is not a parameter of the material's shader or the setter does not fit
+        // its type (the same rule as the C++ Material). SetTexture takes a texture path (nil clears it) and raises an error if it does not load.
+        lua.new_usertype<LuaMaterialHandle>("MaterialInstance", sol::no_constructor,
+            "SetFloat", [](LuaMaterialHandle &h, const std::string &name, const double v)
+            { return h.ForWrite().SetFloat(name, static_cast<float>(v)); },
+            "SetInt", [](LuaMaterialHandle &h, const std::string &name, const std::int64_t v)
+            { return h.ForWrite().SetInt(name, static_cast<int>(v)); },
+            "SetVec2", [](LuaMaterialHandle &h, const std::string &name, const double x, const double y)
+            { return h.ForWrite().SetVec2(name, static_cast<float>(x), static_cast<float>(y)); },
+            "SetVec3", [](LuaMaterialHandle &h, const std::string &name, const double x, const double y, const double z)
+            { return h.ForWrite().SetVec3(name, static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)); },
+            "SetVec4", [](LuaMaterialHandle &h, const std::string &name, const double x, const double y, const double z, const double w)
+            { return h.ForWrite().SetVec4(name, static_cast<float>(x), static_cast<float>(y), static_cast<float>(z), static_cast<float>(w)); },
+            "SetColor", [](LuaMaterialHandle &h, const std::string &name, const Common::Color &color)
+            { return h.ForWrite().SetColor(name, color); },
+            "SetTexture", [](LuaMaterialHandle &h, const std::string &name, sol::optional<std::string> path)
+            {
+                std::shared_ptr<Rendering::Texture> texture;
+                if (path)
+                {
+                    texture = IO::Resources::Instance().Load<Rendering::Texture>(std::filesystem::path(*path));
+                    if (!texture || !texture->IsLoaded())
+                    {
+                        throw std::runtime_error(std::format("MaterialInstance:SetTexture: can't load texture '{}'", *path));
+                    }
+                }
+                return h.ForWrite().SetTexture(name, std::move(texture));
+            },
+            "GetFloat", [](const LuaMaterialHandle &h, const std::string &name) -> sol::optional<double>
+            {
+                const auto param = h.material->GetParam(name);
+                const auto *declared = h.material->GetShader() ? h.material->GetShader()->FindParam(name) : nullptr;
+                if (!param || !declared || declared->type == Rendering::ShaderParamType::Texture)
+                {
+                    return sol::nullopt;
+                }
+                return static_cast<double>(param->value[0]);
+            },
+            "GetPath", [](const LuaMaterialHandle &h) { return MaterialPathOrNil(h.material); });
+        lua["Material"] = lua.create_table_with(
+            "Load", [](const std::string &path, sol::this_state state)
+            {
+                return sol::make_object(state, LuaMaterialHandle{LoadMaterialOrThrow(path, "Material.Load"), {}, false});
+            }
+        );
 
         // ===== Model (global): a model file's GameObject hierarchy =====
         // Model.Instantiate(path [, parent]): the root object of a new instance. Under `parent` when given (at its
