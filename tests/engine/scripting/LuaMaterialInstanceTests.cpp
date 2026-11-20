@@ -10,18 +10,22 @@
 
 #include <math/UUID.hpp>
 
+#ifdef N2ENGINE_NETWORK_ENABLED
 #include "../network/NetworkTestSupport.hpp"
+#endif
 #include "engine/GameObjectScene.hpp"
 #include "engine/example/renderers/QuadRenderer.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourcePath.hpp"
 #include "engine/io/ResourceUUID.hpp"
 #include "engine/io/Resources.hpp"
+#ifdef N2ENGINE_NETWORK_ENABLED
 #include "engine/network/NetworkObject.hpp"
 #include "engine/network/NetworkWorld.hpp"
 #include "engine/network/ReplicationLayout.hpp"
 #include "engine/network/StateHash.hpp"
 #include "engine/network/n2net/HashTree.hpp"
+#endif
 #include "engine/rendering/Material.hpp"
 #include "engine/rendering/Mesh.hpp"
 #include "engine/rendering/MeshRenderer.hpp"
@@ -38,9 +42,11 @@
 
 using namespace N2Engine;
 using namespace N2Engine::Scripting;
+#ifdef N2ENGINE_NETWORK_ENABLED
 using namespace N2Engine::Network;
 using namespace N2Engine::Network::Testing;
 using N2Engine::N2Net::HashTree;
+#endif
 using MeshTestSupport::WarningCapture;
 namespace fs = std::filesystem;
 
@@ -261,6 +267,7 @@ TEST_F(LuaMaterialInstanceTest, AnEmptySlotHasNoInstanceAndTheShapesHaveOne)
     EXPECT_NE(drawn, IO::Resources::Instance().Load<Rendering::Material>(fs::path("res://materials/a.mat")));
 }
 
+#ifdef N2ENGINE_NETWORK_ENABLED
 // ---- determinism: Lua material state is not simulation state -----------------------------------------------------------------
 
 namespace
@@ -338,3 +345,4 @@ TEST_F(LuaMaterialInstanceTest, SettingAParameterEveryFrameLeavesTheStateHashTre
     EXPECT_NE(written.renderers[0]->GetMaterial(0), plain.renderers[0]->GetMaterial(0));
     Run("lua_inst = nil; lua_renderer = nil");
 }
+#endif // N2ENGINE_NETWORK_ENABLED
