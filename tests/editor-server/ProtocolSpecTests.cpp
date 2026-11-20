@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <fstream>
 #include <functional>
@@ -105,6 +106,7 @@ namespace
             {"RescanAssets", CommandType::RescanAssets},
             {"ListAssets", CommandType::ListAssets},
             {"GetAssetInfo", CommandType::GetAssetInfo},
+            {"GetShaderInfo", CommandType::GetShaderInfo},
             {"SetImportSettings", CommandType::SetImportSettings},
             {"ReadTextAsset", CommandType::ReadTextAsset},
             {"WriteTextAsset", CommandType::WriteTextAsset},
@@ -186,6 +188,7 @@ namespace
             {"PlayState", ResponseType::PlayState},
             {"AssetList", ResponseType::AssetList},
             {"AssetDetail", ResponseType::AssetDetail},
+            {"ShaderInfo", ResponseType::ShaderInfo},
             {"TextData", ResponseType::TextData},
             {"AssetCreated", ResponseType::AssetCreated},
             {"EditorExtensions", ResponseType::EditorExtensions},
@@ -219,6 +222,7 @@ namespace
             {"GetEntityBounds", [](BufferReader &r) { (void)GetEntityBoundsCmd::Deserialize(r); }},
             {"ListAssets", [](BufferReader &r) { (void)ListAssetsCmd::Deserialize(r); }},
             {"GetAssetInfo", [](BufferReader &r) { (void)GetAssetInfoCmd::Deserialize(r); }},
+            {"GetShaderInfo", [](BufferReader &r) { (void)GetShaderInfoCmd::Deserialize(r); }},
             {"SetImportSettings", [](BufferReader &r) { (void)SetImportSettingsCmd::Deserialize(r); }},
             {"ReadTextAsset", [](BufferReader &r) { (void)ReadTextAssetCmd::Deserialize(r); }},
             {"WriteTextAsset", [](BufferReader &r) { (void)WriteTextAssetCmd::Deserialize(r); }},
@@ -421,6 +425,24 @@ TEST(ProtocolSpecTest, TheProtocolIsAtLeast1_31_0AndFieldSchemaHasVisibleWhen)
     EXPECT_EQ(fieldSchema.at("visibleWhen?").get<std::string>(), "FieldCondition[]");
     EXPECT_EQ(spec.at("jsonTypes").at("FieldCondition").at("field").get<std::string>(), "string");
     EXPECT_EQ(spec.at("jsonTypes").at("FieldCondition").at("equals").get<std::string>(), "json[]");
+}
+
+TEST(ProtocolSpecTest, TheProtocolIsAtLeast1_32_0AndHasGetShaderInfo)
+{
+    const auto version = ParseProtocolVersion(ProtocolVersion);
+    ASSERT_TRUE(version.has_value());
+    EXPECT_TRUE(version->majorVersion > 1 || (version->majorVersion == 1 && version->minorVersion >= 32)) << ProtocolVersion;
+
+    const spec_json spec = LoadSpec();
+    const spec_json &command = spec.at("commands").at("GetShaderInfo");
+    EXPECT_EQ(command.at("id").get<std::string>(), "0xB5");
+    EXPECT_EQ(command.at("response").at("type").get<std::string>(), "ShaderInfo");
+    EXPECT_EQ(spec.at("responses").at("ShaderInfo").get<std::string>(), "0x28");
+    // The cook state a client branches on, and the capability Hello lists
+    EXPECT_EQ(spec.at("jsonTypes").at("ShaderInfo").at("cook").get<std::string>(), "ShaderCookInfo");
+    EXPECT_EQ(spec.at("jsonTypes").at("ShaderCookInfo").at("status").get<std::string>(), "string");
+    const auto capabilities = EditorServer::Capabilities();
+    EXPECT_NE(std::ranges::find(capabilities, "shaders"), capabilities.end());
 }
 
 TEST(ProtocolSpecTest, EveryFieldTypeIsDocumentedInTheSpec)
@@ -723,6 +745,8 @@ TEST(ProtocolSpecTest, EveryCommandIsClassifiedForAPlayHost)
         {"SendInput", false}, {"Shutdown", false},
         // 1.28.0: host stats, a read that both kinds of host answer
         {"GetEngineStats", false},
+        // 1.32.0: one shader's header and cook state, a read
+        {"GetShaderInfo", false},
         // A play host runs no editor extension: the lists answer (nothing is loaded there), the reload and the invocation
         // are refused
         {"ListEditorExtensions", false}, {"GetEditorUi", false}, {"ReloadEditorExtensions", true},

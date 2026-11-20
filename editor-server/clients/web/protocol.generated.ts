@@ -1,7 +1,7 @@
 // Auto-generated from protocol.json by generate_typescript.py - do not edit
 
 /** protocol.json's version (major.minor.patch); Hello sends it, and the server answers with its own */
-export const PROTOCOL_VERSION = "1.31.0";
+export const PROTOCOL_VERSION = "1.32.0";
 
 // ==================== Types ====================
 
@@ -535,6 +535,40 @@ export interface EngineStats {
   process?: EngineProcessStats;
 }
 
+export interface ShaderParamInfo {
+  name: string;
+  type: string;
+  default: unknown;
+  slot?: number;
+  label?: string;
+  min?: number;
+  max?: number;
+}
+
+export interface ShaderStateInfo {
+  blend?: string;
+  cull?: string;
+  depthWrite?: boolean;
+  queue?: string;
+}
+
+export interface ShaderCookInfo {
+  status: string;
+  message?: string;
+  targets: string[];
+  diagnostics: string[];
+}
+
+export interface ShaderInfo {
+  path: string;
+  uuid: string;
+  name: string;
+  usesLighting: boolean;
+  state: ShaderStateInfo;
+  params: ShaderParamInfo[];
+  cook: ShaderCookInfo;
+}
+
 // ==================== Ids ====================
 
 export const CommandType = {
@@ -632,6 +666,7 @@ export const CommandType = {
   ClosePrefabStage: 0x2D,
   GetPrefabStage: 0x2E,
   GetEngineStats: 0x54,
+  GetShaderInfo: 0xB5,
 } as const;
 
 export type CommandType = typeof CommandType[keyof typeof CommandType];
@@ -685,6 +720,7 @@ export const ResponseType = {
   AssetsMoved: 0xA5,
   PrefabStageInfo: 0x26,
   EngineStats: 0x27,
+  ShaderInfo: 0x28,
 } as const;
 
 export type ResponseType = typeof ResponseType[keyof typeof ResponseType];
@@ -785,6 +821,7 @@ export const CommandResponse = {
   ClosePrefabStage: "PrefabStageInfo",
   GetPrefabStage: "PrefabStageInfo",
   GetEngineStats: "EngineStats",
+  GetShaderInfo: "ShaderInfo",
 } as const;
 
 // ==================== Messages ====================
@@ -1111,6 +1148,10 @@ export interface GetEngineStatsRequest {
   sinceFrame: number;
 }
 
+export interface GetShaderInfoRequest {
+  uuidOrPath: string;
+}
+
 /** Ok has no payload */
 export type OkResponse = Record<string, never>;
 
@@ -1359,6 +1400,10 @@ export interface PrefabStageInfoResponse {
 
 export interface EngineStatsResponse {
   stats: EngineStats;
+}
+
+export interface ShaderInfoResponse {
+  info: ShaderInfo;
 }
 
 export interface ErrorCodedResponse {
@@ -2686,6 +2731,20 @@ export function decodeGetEngineStatsRequest(payload: Uint8Array): GetEngineStats
   return { sinceFrame };
 }
 
+/** GetShaderInfo's request payload (without the frame header) */
+export function encodeGetShaderInfoRequest(value: GetShaderInfoRequest): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.string(value.uuidOrPath);
+  return writer.finish();
+}
+
+/** Reads GetShaderInfo's request payload; bytes after the last field are ignored */
+export function decodeGetShaderInfoRequest(payload: Uint8Array): GetShaderInfoRequest {
+  const reader = new ProtocolReader(payload);
+  const uuidOrPath = reader.string();
+  return { uuidOrPath };
+}
+
 /** Ok's (empty) payload */
 export function encodeOkResponse(_value: OkResponse): Uint8Array {
   const writer = new ProtocolWriter();
@@ -3461,6 +3520,20 @@ export function decodeEngineStatsResponse(payload: Uint8Array): EngineStatsRespo
   return { stats };
 }
 
+/** ShaderInfo's payload (without the frame header) */
+export function encodeShaderInfoResponse(value: ShaderInfoResponse): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.json(value.info);
+  return writer.finish();
+}
+
+/** Reads ShaderInfo's payload; bytes after the last field are ignored */
+export function decodeShaderInfoResponse(payload: Uint8Array): ShaderInfoResponse {
+  const reader = new ProtocolReader(payload);
+  const info = reader.json() as ShaderInfo;
+  return { info };
+}
+
 /** ErrorCoded's payload (without the frame header) */
 export function encodeErrorCodedResponse(value: ErrorCodedResponse): Uint8Array {
   const writer = new ProtocolWriter();
@@ -3544,6 +3617,7 @@ export const RequestCodecs = {
   SetPrefabStageMode: { encode: encodeSetPrefabStageModeRequest, decode: decodeSetPrefabStageModeRequest },
   ClosePrefabStage: { encode: encodeClosePrefabStageRequest, decode: decodeClosePrefabStageRequest },
   GetEngineStats: { encode: encodeGetEngineStatsRequest, decode: decodeGetEngineStatsRequest },
+  GetShaderInfo: { encode: encodeGetShaderInfoRequest, decode: decodeGetShaderInfoRequest },
 } as const;
 
 /** Each response's codecs */
@@ -3595,5 +3669,6 @@ export const ResponseCodecs = {
   AssetsMoved: { encode: encodeAssetsMovedResponse, decode: decodeAssetsMovedResponse },
   PrefabStageInfo: { encode: encodePrefabStageInfoResponse, decode: decodePrefabStageInfoResponse },
   EngineStats: { encode: encodeEngineStatsResponse, decode: decodeEngineStatsResponse },
+  ShaderInfo: { encode: encodeShaderInfoResponse, decode: decodeShaderInfoResponse },
   ErrorCoded: { encode: encodeErrorCodedResponse, decode: decodeErrorCodedResponse },
 } as const;

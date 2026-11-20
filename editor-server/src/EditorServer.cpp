@@ -49,6 +49,7 @@
 #include "engine/prefabs/PrefabManager.hpp"
 #include "engine/rendering/Light.hpp"
 #include "engine/rendering/Mesh.hpp"
+#include "engine/rendering/Shader.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/scripting/LuaComponent.hpp"
@@ -243,9 +244,9 @@ namespace N2Engine::Editor
         // ==================== Assets ====================
 
         /// The extensions ReadTextAsset and WriteTextAsset handle (see EditorServer::IsTextAssetPath), lower case
-        constexpr std::array<std::string_view, 17> TextAssetExtensions = {
+        constexpr std::array<std::string_view, 18> TextAssetExtensions = {
             ".lua", ".mat", ".scene", ".json", ".txt", ".md", ".csv", ".xml", ".yaml",
-            ".yml", ".toml", ".ini", ".cfg", ".glsl", ".vert", ".frag", ".shader"};
+            ".yml", ".toml", ".ini", ".cfg", ".glsl", ".vert", ".frag", ".shader", ".n2shader"};
 
         std::string LowerAscii(const std::string_view text)
         {
@@ -2889,7 +2890,7 @@ namespace N2Engine::Editor
     std::vector<std::string> EditorServer::Capabilities()
     {
         return {"editorExtensions","editorTooling","luaSyntax","assetPreviews","entityClipboard","prefabAssets","physicsBackends","networkPanel","prefabFields",
-                "prefabStage","prefabStageContext","engineStats","buildTargets","buildSettings"};
+                "prefabStage","prefabStageContext","engineStats","buildTargets","buildSettings","shaders"};
     }
 
     bool EditorServer::EnableEditorExtensions(std::filesystem::path projectRoot)
@@ -4342,6 +4343,7 @@ namespace N2Engine::Editor
         {CommandType::GetPrefabStage, "GetPrefabStage", EditorServer::CommandClass::Read},
         // Host stats (1.28.0): counts and timings, no file or object named
         {CommandType::GetEngineStats, "GetEngineStats", EditorServer::CommandClass::Read},
+        {CommandType::GetShaderInfo, "GetShaderInfo", EditorServer::CommandClass::Read},
         // The extension lists answer from what was captured at load: they run no Lua. InvokeMenuItem (0x82) and
         // InvokeInspectorAction (0x83) run extension code, so they are Writes below.
         {CommandType::ListEditorExtensions, "ListEditorExtensions", EditorServer::CommandClass::Read},
@@ -4487,6 +4489,7 @@ namespace N2Engine::Editor
         case CommandType::SendInput:          // the play viewport: every key and pointer event
         case CommandType::ListAssets:         // the asset panel, whenever assetsChanged arrives
         case CommandType::GetAssetInfo:       // the asset panel's details, for the selected asset
+        case CommandType::GetShaderInfo:      // the shader's inspector, whenever assetsChanged lists its file
         case CommandType::ReadTextAsset:      // the script editor, whenever assetsChanged lists its file
         case CommandType::GetAudio:           // every ~25 ms while audio plays
         case CommandType::PollEvents:         // every ~100 ms; a line logged per poll would be an event every poll
@@ -4827,6 +4830,9 @@ namespace N2Engine::Editor
             break;
         case CommandType::GetAssetInfo:
             HandleGetAssetInfo(clientSocket, payload);
+            break;
+        case CommandType::GetShaderInfo:
+            HandleGetShaderInfo(clientSocket, payload);
             break;
         case CommandType::SetImportSettings:
             HandleSetImportSettings(clientSocket, payload);
@@ -8029,6 +8035,16 @@ namespace N2Engine::Editor
                 Scripting::LuaRuntime::Instance().ReloadModule(path, script.get());
                 return;
             }
+            if (const auto shader = std::dynamic_pointer_cast<Rendering::Shader>(held))
+            {
+                // In place, like a script: the Materials that use it hold this object, and a successful Load bumps its version,
+                // which remakes their GPU materials on the next draw (the new cooked payload is read then)
+                if (!shader->Load(loader.Resolve(path)))
+                {
+                    ServerLog::PublicWarn("Can't reload " + path.ToString() + ": its header is not valid");
+                }
+                return;
+            }
             (void)loader.Reload(path);
         }
         catch (const std::exception &e)
@@ -8047,6 +8063,8 @@ namespace N2Engine::Editor
         {
             return;
         }
+        // A .n2shader is cooked before the assets are reloaded, so the reload reads its new payload
+        CookChangedShaders(changes);
         for (const IO::ResourcePath &path : changes.modified)
         {
             ReloadLoadedAsset(path);
@@ -8323,6 +8341,248 @@ namespace N2Engine::Editor
 
         BufferWriter response;
         WriteAssetDetail(response, info);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    // ==================== User shaders (1.32.0) ====================
+
+    void EditorServer::CookChangedShaders(const IO::ResourceLoader::RescanResult &changes)
+    {
+        for (const auto *list : {&changes.added, &changes.modified})
+        {
+            for (const IO::ResourcePath &path : *list)
+            {
+                if (LowerAscii(path.GetExtension()) == ".n2shader")
+                {
+                    CookShaderAsset(path);
+                }
+            }
+        }
+    }
+
+    void EditorServer::CookShaderAsset(const IO::ResourcePath &path)
+    {
+        if (!_project)
+        {
+            return;
+        }
+        auto &loader = IO::ResourceLoader::Instance();
+        const IO::AssetMetadata *meta = loader.GetMetadata(path);
+        if (meta == nullptr || meta->resourceType != Rendering::Shader::ResourceTypeName)
+        {
+            return;
+        }
+        if (!_shaderTooling)
+        {
+            _shaderTooling = ShaderCook::FindTooling({_project->root, std::filesystem::current_path()});
+        }
+        // The payload of the renderer this host draws with; without one (a headless host, the software renderer) the file is only
+        // checked, so its errors still show
+        std::string targets = "vulkan";
+        bool write = false;
+        if (Renderer::Common::IRenderer *renderer = Application::GetInstance().GetWindow().GetRenderer(); renderer != nullptr)
+        {
+            if (const auto target = renderer->GetUserShaderTarget())
+            {
+                targets = *target == Renderer::Common::UserShaderTarget::Vulkan   ? "vulkan"
+                          : *target == Renderer::Common::UserShaderTarget::WebGpu ? "webgpu"
+                                                                                   : "gl";
+                write = true;
+            }
+        }
+        const std::string shown = SanitizeForLog(path.ToString());
+        const std::string assetPath = "assets/" + path.GetPath();
+        const std::filesystem::path outDir =
+            write ? loader.GetMetadataRoot() / "shaders" / meta->uuid.ToString() : std::filesystem::path();
+        ShaderCook::CookResult result = ShaderCook::Cook(*_shaderTooling, _project->root, assetPath, targets, outDir);
+        if (result.ok)
+        {
+            ServerLog::Info((write ? "Cooked " : "Checked ") + shown + " for " + targets);
+        }
+        else
+        {
+            ServerLog::PublicWarn("The shader " + shown + " did not cook: " + SanitizeForLog(result.summary, 400));
+        }
+        ShaderCookState &state = _shaderCooks[meta->uuid.ToString()];
+        state.ran = result.ran;
+        state.ok = result.ok;
+        state.lines = std::move(result.lines);
+        state.summary = std::move(result.summary);
+    }
+
+    void EditorServer::HandleGetShaderInfo(const int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const GetShaderInfoCmd cmd = GetShaderInfoCmd::Deserialize(reader);
+        if (!_project)
+        {
+            SendNoProject(clientSocket);
+            return;
+        }
+        auto &loader = IO::ResourceLoader::Instance();
+        const IO::AssetMetadata *meta = nullptr;
+        if (cmd.uuidOrPath.starts_with("res://"))
+        {
+            const auto resolved = ResolveAssetPath(_project->root / "assets", cmd.uuidOrPath);
+            if (!resolved)
+            {
+                SendError(clientSocket, resolved.error());
+                return;
+            }
+            meta = loader.GetMetadata(resolved->resourcePath);
+        }
+        else if (const auto uuid = Math::UUID::FromString(cmd.uuidOrPath); uuid.has_value())
+        {
+            meta = loader.GetMetadata(uuid.value());
+        }
+        else
+        {
+            SendError(clientSocket, "Expected a res:// path or an asset UUID: " + SanitizeForLog(cmd.uuidOrPath));
+            return;
+        }
+        if (meta == nullptr || meta->resourceType != Rendering::Shader::ResourceTypeName)
+        {
+            SendError(clientSocket, "Not a shader asset: " + SanitizeForLog(cmd.uuidOrPath));
+            return;
+        }
+
+        nlohmann::json info{{"path", meta->resourcePath.ToString()}, {"uuid", meta->uuid.ToString()}};
+        nlohmann::json cook{{"targets", nlohmann::json::array()}, {"diagnostics", nlohmann::json::array()}};
+        std::string status = "not-cooked";
+        std::string message;
+
+        // The header: the asset as the engine holds it (loaded for this answer when nothing has used it yet)
+        std::shared_ptr<Rendering::Shader> shader;
+        try
+        {
+            shader = loader.Load<Rendering::Shader>(meta->resourcePath);
+        }
+        catch (const std::exception &e)
+        {
+            message = SanitizeForLog(e.what(), 400);
+        }
+        if (!shader)
+        {
+            info["name"] = meta->resourcePath.GetStem();
+            info["usesLighting"] = false;
+            info["state"] = nlohmann::json::object();
+            info["params"] = nlohmann::json::array();
+            status = "failed";
+            if (message.empty())
+            {
+                message = "the shader's header could not be read (see the host log)";
+            }
+        }
+        else
+        {
+            using Rendering::ShaderParamType;
+            static constexpr std::array<std::string_view, 8> typeNames{"float", "int", "bool", "vec2", "vec3", "vec4", "color", "texture"};
+            info["name"] = shader->GetName();
+            info["usesLighting"] = shader->UsesLighting();
+            nlohmann::json state = nlohmann::json::object();
+            const Rendering::ShaderStateHints &hints = shader->GetStateHints();
+            if (hints.blend) state["blend"] = *hints.blend;
+            if (hints.cull) state["cull"] = *hints.cull;
+            if (hints.depthWrite) state["depthWrite"] = *hints.depthWrite;
+            if (hints.queue) state["queue"] = *hints.queue;
+            info["state"] = std::move(state);
+            nlohmann::json params = nlohmann::json::array();
+            for (const Rendering::ShaderParam &param : shader->GetParams())
+            {
+                nlohmann::json entry{{"name", param.name}, {"type", typeNames[static_cast<std::size_t>(param.type)]}};
+                switch (param.type)
+                {
+                case ShaderParamType::Float: entry["default"] = param.defaultValue[0]; break;
+                case ShaderParamType::Int: entry["default"] = static_cast<int>(param.defaultValue[0]); break;
+                case ShaderParamType::Bool: entry["default"] = param.defaultValue[0] != 0.0f; break;
+                case ShaderParamType::Vec2: entry["default"] = std::vector<float>{param.defaultValue[0], param.defaultValue[1]}; break;
+                case ShaderParamType::Vec3:
+                    entry["default"] = std::vector<float>{param.defaultValue[0], param.defaultValue[1], param.defaultValue[2]};
+                    break;
+                case ShaderParamType::Vec4:
+                case ShaderParamType::Color: entry["default"] = param.defaultValue; break;
+                case ShaderParamType::Texture:
+                    entry["default"] = param.defaultTexture;
+                    entry["slot"] = param.slot;
+                    break;
+                }
+                if (!param.label.empty()) entry["label"] = param.label;
+                if (param.min) entry["min"] = *param.min;
+                if (param.max) entry["max"] = *param.max;
+                params.push_back(std::move(entry));
+            }
+            info["params"] = std::move(params);
+
+            // The cooked data: which payloads the manifest has, and whether the host's renderer could use them
+            const std::filesystem::path directory = shader->GetCookedDirectory();
+            if (const auto manifestText = IO::Vfs::Instance().ReadText(directory / "manifest.json"))
+            {
+                try
+                {
+                    const nlohmann::json manifest = nlohmann::json::parse(*manifestText);
+                    for (const auto &[name, value] : manifest.at("payloads").items())
+                    {
+                        cook["targets"].push_back(name);
+                    }
+                }
+                catch (const std::exception &)
+                {
+                    message = "the cooked manifest is not valid JSON";
+                }
+            }
+            if (Renderer::Common::IRenderer *renderer = Application::GetInstance().GetWindow().GetRenderer(); renderer != nullptr)
+            {
+                if (const auto target = renderer->GetUserShaderTarget())
+                {
+                    std::string reason;
+                    if (shader->MakeBlob(*target, reason))
+                    {
+                        status = "cooked";
+                    }
+                    else
+                    {
+                        status = reason.find("stale") != std::string::npos ? "stale" : "not-cooked";
+                        message = SanitizeForLog(reason, 400);
+                    }
+                }
+            }
+            else if (!cook["targets"].empty())
+            {
+                status = "cooked";
+            }
+        }
+
+        // The last cook this host ran decides over a stale or missing payload: its diagnostics are what the author fixes
+        if (const auto last = _shaderCooks.find(meta->uuid.ToString()); last != _shaderCooks.end())
+        {
+            const ShaderCookState &state = last->second;
+            for (const std::string &line : state.lines)
+            {
+                cook["diagnostics"].push_back(SanitizeForLog(line, 600));
+            }
+            if (!state.ran)
+            {
+                if (status != "cooked")
+                {
+                    status = "unavailable";
+                    message = SanitizeForLog(state.summary, 400);
+                }
+            }
+            else if (!state.ok)
+            {
+                status = "failed";
+                message = SanitizeForLog(state.summary, 400);
+            }
+        }
+        cook["status"] = status;
+        if (!message.empty())
+        {
+            cook["message"] = message;
+        }
+        info["cook"] = std::move(cook);
+
+        BufferWriter response;
+        WriteShaderInfo(response, info);
         SendResponse(clientSocket, response.Release());
     }
 

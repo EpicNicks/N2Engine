@@ -396,6 +396,17 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    struct GetShaderInfoCmd
+    {
+        /// A res:// path or the UUID string of a Shader asset
+        std::string uuidOrPath;
+
+        static GetShaderInfoCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
     struct SetImportSettingsCmd
     {
         /// A res:// path to an indexed asset
@@ -1249,6 +1260,17 @@ namespace N2Engine::Editor::Protocol
         WriteJson(payload, info);
 
         w.WriteU8(static_cast<uint8_t>(ResponseType::AssetDetail));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// GetShaderInfo's response (since 1.32.0): one ShaderInfo object
+    inline void WriteShaderInfo(BufferWriter &w, const nlohmann::json &info)
+    {
+        BufferWriter payload;
+        WriteJson(payload, info);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::ShaderInfo));
         w.WriteU32(static_cast<uint32_t>(payload.Size()));
         w.WriteBytes(payload.Data());
     }

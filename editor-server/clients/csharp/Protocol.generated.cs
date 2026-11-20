@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.31.0";
+        public const string ProtocolVersion = "1.32.0";
     }
 
     public enum CommandType : byte
@@ -108,6 +108,7 @@ namespace N2Engine.Editor.Protocol
         ClosePrefabStage = 0x2D,
         GetPrefabStage = 0x2E,
         GetEngineStats = 0x54,
+        GetShaderInfo = 0xB5,
     }
 
     public enum ResponseType : byte
@@ -160,6 +161,7 @@ namespace N2Engine.Editor.Protocol
         AssetsMoved = 0xA5,
         PrefabStageInfo = 0x26,
         EngineStats = 0x27,
+        ShaderInfo = 0x28,
     }
 
     public struct Vec3
@@ -1078,6 +1080,66 @@ namespace N2Engine.Editor.Protocol
         public EngineProcessStats? Process { get; set; }
     }
 
+    public class ShaderParamInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("name")]
+        public string Name { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("type")]
+        public string Type { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("default")]
+        public System.Text.Json.JsonElement Default { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("slot")]
+        public double? Slot { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("label")]
+        public string? Label { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("min")]
+        public double? Min { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("max")]
+        public double? Max { get; set; }
+    }
+
+    public class ShaderStateInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("blend")]
+        public string? Blend { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("cull")]
+        public string? Cull { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("depthWrite")]
+        public bool? DepthWrite { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("queue")]
+        public string? Queue { get; set; }
+    }
+
+    public class ShaderCookInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("status")]
+        public string Status { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("message")]
+        public string? Message { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("targets")]
+        public string[] Targets { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("diagnostics")]
+        public string[] Diagnostics { get; set; }
+    }
+
+    public class ShaderInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("path")]
+        public string Path { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("uuid")]
+        public string Uuid { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("name")]
+        public string Name { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("usesLighting")]
+        public bool UsesLighting { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("state")]
+        public ShaderStateInfo State { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("params")]
+        public ShaderParamInfo[] Params { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("cook")]
+        public ShaderCookInfo Cook { get; set; }
+    }
+
     public struct SetViewportSizeRequest
     {
         public int Width;
@@ -1482,6 +1544,11 @@ namespace N2Engine.Editor.Protocol
         public uint SinceFrame;
     }
 
+    public struct GetShaderInfoRequest
+    {
+        public string UuidOrPath;
+    }
+
     public struct FrameDataResponse
     {
         public uint Width;
@@ -1799,6 +1866,12 @@ namespace N2Engine.Editor.Protocol
     {
         /// <summary>JSON text: EngineStats</summary>
         public string Stats;
+    }
+
+    public struct ShaderInfoResponse
+    {
+        /// <summary>JSON text: ShaderInfo</summary>
+        public string Info;
     }
 
     public struct ErrorCodedResponse

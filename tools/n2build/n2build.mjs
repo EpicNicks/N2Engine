@@ -35,6 +35,9 @@ import { checkPushed, dispatchAndFollow, gitState, workflowInputs, workflowTempl
 import { cmakeInstallDir, gradleInvocation, packageAndroid, planAndroid, prepareGradleTree } from './lib/android.mjs';
 import { resolveStrictFp, scanProject, strictFpWarning } from '../../scripts/project-modules.mjs';
 import { PACK_EXTENSION, cookPack, findSevenZip } from './lib/cook.mjs';
+import { findShaderSources, shaderTargetsFor } from './lib/shaders.mjs';
+import { cachedTint, installTint } from './lib/tint.mjs';
+import { findTool } from '../n2shader/lib/tools.mjs';
 import { PACK_KINDS } from './lib/descriptors.mjs';
 import { findTarget, loadDescriptors, readUserSettings, userSettingsFile } from './lib/descriptors.mjs';
 import { BuildError, Reporter } from './lib/report.mjs';
@@ -46,7 +49,7 @@ export const ENGINE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.u
 const COMMANDS = ['list', 'doctor', 'build', 'run', 'cook', 'apple-workflow'];
 const VALUE_OPTIONS = new Set(['--target', '--project', '--config', '--out', '--build-dir', '--archive', '--jobs', '--frames', '--port', '--targets-dir', '--pack',
   '--signing', '--device', '--seconds']);
-const FLAG_OPTIONS = new Set(['--json', '--dry-run', '--no-build', '--help']);
+const FLAG_OPTIONS = new Set(['--json', '--dry-run', '--no-build', '--help', '--strip-shader-sources']);
 
 export const USAGE = `Usage: n2build <command> [options]
   list                         the targets, and which build on this machine
@@ -55,7 +58,7 @@ export const USAGE = `Usage: n2build <command> [options]
          [--archive zip|7z] [--jobs N] [--dry-run]
   run    --target T --project DIR [--config debug|release] [--no-build] [--frames N] [--port N]
          [--device SERIAL] [--seconds N]   (android: the device, and how long to follow the game's log)
-  cook   --target T --project DIR [--out FILE] [--pack zip|stored|7z]
+  cook   --target T --project DIR [--out FILE] [--pack zip|stored|7z] [--strip-shader-sources]
   apple-workflow --project DIR   writes .github/workflows/n2build-apple.yml into the game's repository (iOS and
          macOS build there when this machine is not a Mac; docs/apple.html#remote)
          build also takes --pack zip|stored|7z|folder (how the game's files are packaged)
@@ -240,9 +243,10 @@ async function build(descriptor, options, ctx, reporter) {
   const cmake = findOnPath('cmake', toolchains.env, ctx) ?? 'cmake';
   // The web package preloads the pack (N2ENGINE_WEB_PACK) and the iOS app bundles it, so it is cooked before CMake runs
   if (packBeforeConfigure(descriptor) && gamePack) {
+    await prepareShaderTools({ descriptor, projectDir, env: toolchains.env, reporter });
     reporter.step('cook', `Packing the game (${packFormat}) into ${gamePack}`);
     fs.mkdirSync(plan.treeDir, { recursive: true });
-    cookPack({ projectDir, outFile: gamePack, format: packFormat, target: descriptor.name, game: project.name, sevenZip, env: toolchains.env });
+    cookPack({ projectDir, outFile: gamePack, format: packFormat, target: descriptor.name, game: project.name, sevenZip, env: toolchains.env, ...shaderOptions(descriptor, project, options), log: (line) => reporter.log('stdout', line) });
   }
   if (needsConfigure(plan.treeDir, plan.configureArgs)) {
     reporter.step('configure', `Configuring ${descriptor.displayName} (${config}) in ${plan.treeDir}`);
@@ -255,10 +259,11 @@ async function build(descriptor, options, ctx, reporter) {
   if (code !== 0) throw new BuildError(`The ${descriptor.name} build failed (exit code ${code}; see the log above)`);
 
   reporter.step('package', `Packaging into ${plan.packageDir}`);
+  if (descriptor.package.kind === 'desktop') await prepareShaderTools({ descriptor, projectDir, env: toolchains.env, reporter });
   preparePackageDir(plan.packageDir);
   const entry = descriptor.package.kind === 'desktop'
     ? packageDesktop({ treeDir: plan.treeDir, descriptor, projectDir, packageDir: plan.packageDir, gameName: project.name, platform: ctx.platform,
-      pack: { format: packFormat, sevenZip, env: toolchains.env },
+      pack: { format: packFormat, sevenZip, env: toolchains.env, ...shaderOptions(descriptor, project, options), log: (line) => reporter.log('stdout', line) },
       physicsGpu: project.project.settings?.physics?.gpu,
       onLeftOut: (left) => reporter.log('stdout', `Not packaged: ${left.join(', ')} (the project's physics.gpu is off; set it to on or auto for GPU physics)`) })
     : descriptor.package.kind === 'ios'
@@ -355,7 +360,8 @@ async function buildAndroid({ descriptor, options, ctx, reporter, project, proje
   }
   reporter.step('cook', `Packing the game (${packFormat}) into ${plan.packFile}`);
   prepareGradleTree(plan);
-  cookPack({ projectDir, outFile: plan.packFile, format: packFormat, target: descriptor.name, game: project.name, sevenZip, env: toolchains.env });
+  await prepareShaderTools({ descriptor, projectDir, env: toolchains.env, reporter });
+  cookPack({ projectDir, outFile: plan.packFile, format: packFormat, target: descriptor.name, game: project.name, sevenZip, env: toolchains.env, ...shaderOptions(descriptor, project, options), log: (line) => reporter.log('stdout', line) });
 
   reporter.step('compile', `Building the ${plan.aab ? 'APK and AAB' : 'APK'} with Gradle (${config}; the engine for ${plan.properties.abis})`);
   const invocation = gradleInvocation(gradle, plan.gradleArgs, ctx.platform);
@@ -383,6 +389,23 @@ async function buildAndroid({ descriptor, options, ctx, reporter, project, proje
   return { ok: true, output: plan.packageDir, entry, ...(files.aab ? { bundle: files.aab } : {}), ...(archive ? { archive } : {}) };
 }
 
+/** What the cook needs to know about shaders: the payloads this target's renderers use, and whether sources are left out */
+export function shaderOptions(descriptor, project, options) {
+  return { shaderTargets: shaderTargetsFor(descriptor), stripShaderSources: options.stripShaderSources === true || project.settings?.stripShaderSources === true };
+}
+
+/**
+ * The shader cook needs Tint for a web target. When the project has shaders and no Tint is found (TINT, PATH, the copy n2build
+ * keeps), the pinned one is downloaded once: only that binary, hash-checked (lib/tint.mjs). Sets TINT in env.
+ */
+export async function prepareShaderTools({ descriptor, projectDir, env, reporter, install = installTint }) {
+  if (findShaderSources(projectDir).length === 0 || !shaderTargetsFor(descriptor).includes('webgpu')) return;
+  if (findTool('tint', { env })) return;
+  const cached = cachedTint({ env });
+  if (cached) { env.TINT = cached; return; }
+  env.TINT = await install({ env, log: (line) => reporter.log('stdout', line) });
+}
+
 /** n2build cook: the game's pack alone (what build puts in a package), with its manifest beside it */
 async function cook(descriptor, options, ctx, reporter) {
   const projectDir = path.resolve(options.project);
@@ -391,7 +414,9 @@ async function cook(descriptor, options, ctx, reporter) {
   if (format === 'folder') throw new BuildError(`The ${descriptor.name} target packages the project folder as it is; choose --pack zip, stored or 7z`);
   const outFile = path.resolve(options.out ?? path.join(projectDir, '.n2', 'out', `${descriptor.name}-game${PACK_EXTENSION}`));
   reporter.step('cook', `Packing the game (${format}) into ${outFile}`);
-  const manifest = cookPack({ projectDir, outFile, format, target: descriptor.name, game: project.name, sevenZip: findSevenZip(ctx.env, ctx), env: ctx.env });
+  const env = { ...ctx.env };
+  await prepareShaderTools({ descriptor, projectDir, env, reporter });
+  const manifest = cookPack({ projectDir, outFile, format, target: descriptor.name, game: project.name, sevenZip: findSevenZip(ctx.env, ctx), env, ...shaderOptions(descriptor, project, options), log: (line) => reporter.log('stdout', line) });
   return { ok: true, output: outFile, files: manifest.fileCount, size: fs.statSync(outFile).size, uncompressedSize: manifest.totalSize };
 }
 
