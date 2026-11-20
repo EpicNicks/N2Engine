@@ -275,7 +275,7 @@ build\bin\Release\engine_tests.exe --gtest_filter=PhysXGpuParticlesGoldenTest.*<
 <h2 id="play-mode">Play mode, pause and saving <span class="badge">PR #125</span></h2>
 <ul>
 <li><strong>Only while playing.</strong> The system starts in <code>OnAttach</code>, which a scene runs when it plays. A scene opened for editing never attaches its components, so nothing is simulated or drawn in edit mode (there is no editor preview).</li>
-<li><strong>Never saved.</strong> The scene file holds the fields above and nothing else; a reflection test pins that the saved keys are exactly the fields. A scene saved and loaded gives a system with the same settings and no particles.</li>
+<li><strong>Never saved</strong> (apart from a <a href="user-shaders.html#use">user shader</a>, saved as <code>shaderState</code> only when one is set). The scene file holds the fields above and nothing else; a reflection test pins that the saved keys are exactly the fields. A scene saved and loaded gives a system with the same settings and no particles.</li>
 <li><strong>Exit clears.</strong> Leaving play mode replaces the scene, which destroys its components: <code>OnDestroy</code> destroys the backend system and the GPU mesh, so nothing outlives play.</li>
 <li><strong>Pause freezes.</strong> A time scale of 0 runs no fixed step (<a href="application.html">Application</a>), so nothing is emitted or moved, and the frozen particles are still drawn.</li>
 </ul>

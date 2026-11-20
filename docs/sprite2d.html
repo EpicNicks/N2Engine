@@ -180,7 +180,7 @@ local ring = AddTextureOutline(player, body, 2, Color(1, 0.9, 0.2, 1))</code></p
 <ul>
 <li><strong>Saturation and flash are not applied</strong> through a shader: they are the built-in shader's uniforms.</li>
 <li><strong>On the software renderer</strong> (no user shaders) the sprite draws the built-in unlit shader with its colour and texture, <em>with the cut-out kept</em>, and one logged error; in the editor host it is flat magenta.</li>
-<li><strong>Runtime only.</strong> The shader and its values are not scene fields (a scene file reads and writes exactly what it did, a test pins it), not in prefabs and not in any state hash. Set them from a script, for example in <code>Start</code>.</li>
+<li><strong>Saved per object, only when set.</strong> A sprite with a shader saves a <code>shaderState</code> key (<code>{"shader": &lt;the asset's UUID&gt;, "params": {...}}</code>, the values set, as a <code>.mat</code> writes them) in its scene or prefab file; a sprite without one saves exactly what it always did, so no existing file changes. Every instance holds its own values, so the instances of a prefab can differ. It is not a field an inspector, a script's field list or the network knows (it is in no schema and is never replicated), and so it is in no rollback snapshot, replication payload or replay hash. There is no inspector widget for it yet: set it from a script (for example in <code>Start</code>), or write the key in the file.</li>
 </ul>
 <p>Tests: <code>Sprite2DShaderTest</code> and <code>UserShaderSlotTest</code> (<code>tests/engine/rendering/UserShaderComponentsTests.cpp</code>). Source: <code>engine/src/rendering/Sprite2D.cpp</code> (<code>EnsureMaterial</code>), <code>UserShaderSlot.cpp</code>.</p>
 

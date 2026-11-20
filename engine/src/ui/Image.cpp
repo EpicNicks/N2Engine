@@ -14,6 +14,8 @@ namespace N2Engine::UI
         RegisterAssetRef("sprite", _sprite);
         RegisterMember("saturation", _saturation).Range(0.0, Renderer::Common::ColorEffects::MaxSaturation);
         RegisterMember("flash", _flash);
+        // A user shader and its values, only when one is set (stage 9g): an image without one saves what it always did
+        RegisterOptionalState("shaderState", [this] { return _shaderSlot.Save(); }, [this](const nlohmann::json &json) { _shaderSlot.Load(json); });
     }
 
     void Image::SetSprite(std::shared_ptr<Rendering::Texture> sprite)

@@ -71,6 +71,45 @@ namespace N2Engine::Rendering
         return _material && _material->SetTexture(name, std::move(texture));
     }
 
+    nlohmann::json UserShaderSlot::Save() const
+    {
+        if (!_shader || !_material)
+        {
+            return nullptr;
+        }
+        nlohmann::json json;
+        json["shader"] = _shader->GetUUID().ToString();
+        const nlohmann::json material = _material->ToJson();
+        if (const auto it = material.find("params"); it != material.end() && it->is_object() && !it->empty())
+        {
+            json["params"] = *it;
+        }
+        return json;
+    }
+
+    void UserShaderSlot::Load(const nlohmann::json &json)
+    {
+        if (!json.is_object() || !json.contains("shader"))
+        {
+            SetShader(nullptr);
+            return;
+        }
+        // The Material's own reader resolves the shader and the values (and warns about what it cannot use), as for a .mat file
+        nlohmann::json materialJson{{"shader", json["shader"]}};
+        if (json.contains("params"))
+        {
+            materialJson["params"] = json["params"];
+        }
+        const std::shared_ptr<Material> loaded = Material::FromJson(materialJson, {}, "a component's shader");
+        if (!loaded || !loaded->GetShader())
+        {
+            SetShader(nullptr);
+            return;
+        }
+        SetShader(loaded->GetShader());
+        _material->AdoptParams(*loaded);
+    }
+
     void UserShaderSlot::Sync(const std::shared_ptr<Texture> &baseColorTexture, const float blendDiscardBelow)
     {
         if (!_material)

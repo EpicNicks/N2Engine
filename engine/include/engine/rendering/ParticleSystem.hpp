@@ -226,7 +226,7 @@ namespace N2Engine::Rendering
         /// forgets the parameter values). All the system's billboards are one mesh drawn in one call, so one Material serves them all: the
         /// per-particle colour (the start-to-end fade) reaches the shader as the varying n2_Color, the texture as the reserved
         /// baseColorTexture, and the blend mode (alpha or additive) stays the system's. The system keeps a Material of its own for it
-        /// (UserShaderSlot). Runtime only: not a serialized field
+        /// (UserShaderSlot). Saved as `shaderState` when set (UserShaderSlot::Save)
         void SetShader(std::shared_ptr<Shader> shader) { _shaderSlot.SetShader(std::move(shader)); }
         [[nodiscard]] const std::shared_ptr<Shader> &GetShader() const { return _shaderSlot.GetShader(); }
         /// Sets a parameter the shader declares; false (with one warning) without a shader, for an unknown name or a wrong type

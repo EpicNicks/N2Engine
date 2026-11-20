@@ -30,6 +30,8 @@ namespace N2Engine::Rendering
         RegisterMember(NAMEOF(_flipY), _flipY);
         RegisterMember(NAMEOF(_pivot), _pivot);
         RegisterMember(NAMEOF(_sortingOrder), _sortingOrder);
+        // A user shader and its values, only when one is set (stage 9g): a sprite without one saves what it always did
+        RegisterOptionalState("shaderState", [this] { return _shaderSlot.Save(); }, [this](const nlohmann::json &json) { _shaderSlot.Load(json); });
     }
 
     Sprite2D::~Sprite2D()

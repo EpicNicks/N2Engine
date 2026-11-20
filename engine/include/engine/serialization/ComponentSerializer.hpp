@@ -53,6 +53,9 @@ namespace N2Engine
         FieldInfo info;
         ForgetFunc forget;
         ForgetObjectFunc forgetObject;
+        /// Saved and loaded like any member but not listed by DescribeFields (RegisterOptionalState): it is not a field an editor, a script
+        /// or the network knows, so it is in no schema, no field fingerprint and no replication
+        bool unlisted = false;
 
         MemberSerializer(std::string name, SerializeFunc s, DeserializeFunc d, FieldInfo fieldInfo = {})
             : name(std::move(name)), serialize(std::move(s)), deserialize(std::move(d)), info(std::move(fieldInfo))
@@ -441,6 +444,38 @@ namespace N2Engine
         }
 
         /**
+         * Register state that most components do not have and a file should not mention then (user shaders on a Sprite2D, an Image or a
+         * particle system, stage 9g): `save` returns the JSON to write, or null for none, and then the key is absent, so a component without
+         * it saves exactly what it did before the member existed; `load` gets the key's value, or null when the key is missing (clear it).
+         * The member is not listed by DescribeFields, so no schema, inspector, script or replication knows it (a component's described fields
+         * are still exactly its saved keys when it has none of this state).
+         */
+        FieldBuilder RegisterOptionalState(const std::string &name, std::function<nlohmann::json()> save,
+                                           std::function<void(const nlohmann::json &)> load)
+        {
+            FieldInfo info;
+            info.kind = FieldKind::Json;
+            info.typeName = "json";
+            _members.emplace_back(
+                name,
+                [save = std::move(save), name](nlohmann::json &j)
+                {
+                    nlohmann::json value = save();
+                    if (!value.is_null())
+                    {
+                        j[name] = std::move(value);
+                    }
+                },
+                [load = std::move(load), name](const nlohmann::json &j, ReferenceResolver *)
+                {
+                    load(j.contains(name) ? j[name] : nlohmann::json());
+                },
+                std::move(info));
+            _members.back().unlisted = true;
+            return FieldBuilder(_members, _members.size() - 1);
+        }
+
+        /**
          * Register a list of Asset references (a MeshRenderer's materials, one per submesh), saved as an array of
          * UUIDs where an empty slot is null. Each is resolved as RegisterAssetRef resolves one; a slot whose asset
          * isn't found (warned about) loads empty, so later slots keep their positions. A missing key or a value
@@ -523,7 +558,10 @@ namespace N2Engine
             fields.reserve(_members.size());
             for (const MemberSerializer &member : _members)
             {
-                fields.push_back(member.info);
+                if (!member.unlisted)
+                {
+                    fields.push_back(member.info);
+                }
             }
             return fields;
         }
