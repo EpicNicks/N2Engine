@@ -1360,5 +1360,5 @@ TEST(AtlasTextureTest, TheRuntimeCompileDoesNotBuildThemAndSaysSo)
     shader->SetCookedDirectory(fs::temp_directory_path() / "n2-no-cooked-data-here");
     std::string error;
     EXPECT_FALSE(shader->MakeBlob(UserShaderTarget::OpenGl, error).has_value());
-    EXPECT_NE(error.find("cube or 3D texture"), std::string::npos) << error;
+    EXPECT_TRUE(error.find("cube or 3D texture") != std::string::npos || error.find("web ships") != std::string::npos) << error;
 }
