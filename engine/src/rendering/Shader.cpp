@@ -17,7 +17,9 @@
 #include "engine/io/Resources.hpp"
 #include "engine/io/Vfs.hpp"
 #include "engine/rendering/RenderSettings.hpp"
+#if !defined(__EMSCRIPTEN__)
 #include "engine/rendering/UserShaderCompiler.hpp"
+#endif
 
 namespace N2Engine::Rendering
 {
@@ -692,6 +694,7 @@ namespace N2Engine::Rendering
     }
     // ===== compiling here =====
 
+#if !defined(__EMSCRIPTEN__)
     namespace
     {
         constexpr std::size_t kMaxCacheEntries = 256;
@@ -759,9 +762,16 @@ namespace N2Engine::Rendering
         }
     }
 
+#endif
+
     std::optional<Renderer::Common::UserShaderBlob> Shader::MakeRuntimeBlob(const Renderer::Common::UserShaderTarget target,
                                                                             std::string &why) const
     {
+#if defined(__EMSCRIPTEN__)
+        (void)target;
+        why = "the web ships cooked payloads (the C++ twin of the cook is not in the web build)";
+        return std::nullopt;
+#else
         using Renderer::Common::UserShaderTarget;
         if (target == UserShaderTarget::WebGpu)
         {
@@ -858,5 +868,6 @@ namespace N2Engine::Rendering
         }
         why = "what was compiled here does not fit the header: " + manifestError;
         return std::nullopt;
+#endif
     }
 }

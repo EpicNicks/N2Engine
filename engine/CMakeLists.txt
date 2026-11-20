@@ -142,6 +142,12 @@ if (N2ENGINE_PLATFORM_WEB OR N2ENGINE_PLATFORM_ANDROID OR N2ENGINE_PLATFORM_IOS)
     list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/input/GlfwInputDevice\.cpp$")
 endif ()
 
+# The C++ twin of the shader cook (UserShaderCompiler: user shaders, stage 7) is for desktop builds: the web ships cooked WGSL (and its
+# size budget is tight), Shader::MakeRuntimeBlob says so there
+if (N2ENGINE_PLATFORM_WEB)
+    list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/rendering/UserShaderCompiler\.cpp$")
+endif ()
+
 add_library(engine STATIC
     ${ENGINE_SOURCES}
 )

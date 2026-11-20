@@ -16,6 +16,8 @@ if(N2ENGINE_PLATFORM_WEB)
         # is tested by tests/web/WebAudioTests.cpp (the no-device path under node) and by the manual browser checklist
         audio/AudioTests.cpp
         audio/LoopbackAudioTests.cpp
+        # The C++ twin of the shader cook is a desktop feature: the web ships cooked WGSL and does not build UserShaderCompiler.cpp
+        rendering/UserShaderCompilerTests.cpp
     )
     foreach(_excluded IN LISTS N2ENGINE_WEB_EXCLUDED_ENGINE_TESTS)
         if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_excluded}")
