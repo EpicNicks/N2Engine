@@ -1,0 +1,10 @@
+{ "n2shader": 1, "name": "NanChecks" }
+#stage fragment
+// Stage 9b: isnan and isinf work on every target. WGSL has no NaN or infinity, so the cook adds shims (prelude/nan-shims.glsl) that test
+// the bit pattern; the built-in names are macros for them. A value that is NaN or infinite shows magenta, a finite one its own value.
+void main() {
+    float value = n2_UV.x / n2_UV.y;
+    vec2 pair = vec2(value, 1.0 / n2_UV.x);
+    bool bad = isnan(value) || isinf(value) || any(isnan(pair)) || any(isinf(vec3(pair, value))) || any(isnan(vec4(pair, pair)));
+    n2_FragColor = bad ? vec4(1.0, 0.0, 1.0, 1.0) : vec4(vec3(value), 1.0);
+}

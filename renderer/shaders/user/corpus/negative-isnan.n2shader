@@ -1,8 +1,0 @@
-{ "n2shader": 1, "name": "NegativeIsnan" }
-#stage fragment
-// Known failure 1 (proposal 1.2): isnan is unsupported by both translators (WGSL cannot represent NaN). The lint says so
-// first; with the lint off, Tint is the stage that rejects it.
-void main() {
-    float value = n2_UV.x / n2_UV.y;
-    n2_FragColor = isnan(value) ? vec4(1.0, 0.0, 1.0, 1.0) : vec4(vec3(value), 1.0);
-}
