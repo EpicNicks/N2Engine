@@ -31,7 +31,22 @@ namespace N2Engine::Rendering::MeshDrawing
         {
             state.cull = state.cull == CullMode::Back ? CullMode::Front : CullMode::Back;
         }
+        ApplyBlendMode(state, material);
         return state;
+    }
+
+    void ApplyBlendMode(Renderer::Common::RenderState &state, const Material &material)
+    {
+        if (!material.IsBlended() || !state.blend)
+        {
+            return;
+        }
+        using Renderer::Common::BlendVariant;
+        const BlendMode mode = material.GetBlendMode();
+        state.additive = mode == BlendMode::Additive;
+        state.variant = mode == BlendMode::Premultiplied ? BlendVariant::Premultiplied
+            : mode == BlendMode::Multiply                ? BlendVariant::Multiply
+                                                          : BlendVariant::Alpha;
     }
 
     // ===== DrawResources =====

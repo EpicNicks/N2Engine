@@ -744,12 +744,30 @@ void OpenGLRenderer::ApplyRenderState(const Common::RenderState &state)
             glCullFace(state.cull == Common::CullMode::Front ? GL_FRONT : GL_BACK);
         }
     }
-    if (all || state.blend != m_appliedState.blend || state.additive != m_appliedState.additive)
+    if (all || state.blend != m_appliedState.blend || state.additive != m_appliedState.additive ||
+        state.variant != m_appliedState.variant)
     {
         if (state.blend)
         {
             glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, state.additive ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
+            const Common::BlendFunc func = Common::BlendFuncFor(state.additive, state.variant);
+            const auto factor = [](const Common::BlendFactor f) -> GLenum {
+                switch (f)
+                {
+                case Common::BlendFactor::Zero:
+                    return GL_ZERO;
+                case Common::BlendFactor::One:
+                    return GL_ONE;
+                case Common::BlendFactor::SrcAlpha:
+                    return GL_SRC_ALPHA;
+                case Common::BlendFactor::OneMinusSrcAlpha:
+                    return GL_ONE_MINUS_SRC_ALPHA;
+                case Common::BlendFactor::DstColor:
+                    return GL_DST_COLOR;
+                }
+                return GL_ONE;
+            };
+            glBlendFuncSeparate(factor(func.srcColor), factor(func.dstColor), factor(func.srcAlpha), factor(func.dstAlpha));
         }
         else
         {

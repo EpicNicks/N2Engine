@@ -36,6 +36,11 @@ namespace N2Engine::Rendering::MeshDrawing
     [[nodiscard]] Renderer::Common::RenderState StateFor(const Material &material,
                                                          const Renderer::Common::RenderState &queueState, bool mirrored);
 
+    /// Gives a blended draw's `state` the material's blend mode (additive, premultiplied or multiply instead of plain alpha). Nothing
+    /// changes for a material that is not Blend or a state that does not blend. StateFor does it; a component that builds its own
+    /// state for a Material (the UI Image, a particle system) calls it
+    void ApplyBlendMode(Renderer::Common::RenderState &state, const Material &material);
+
     /**
      * One mesh component's GPU resources on one renderer: a share of its mesh's GPU mesh and of each submesh's GPU
      * material, all from the GpuCache (one per renderer and asset, shared by every component), never made or

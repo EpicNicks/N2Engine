@@ -149,6 +149,32 @@ TEST_F(VulkanDrawTest, BlendAndAdditiveAreAPartOfThePipelineKey)
     EXPECT_EQ(R().GetPipelineCountForTest(), 3u) << "an equal key is the same pipeline";
 }
 
+TEST_F(VulkanDrawTest, PremultipliedAndMultiplyAreOwnPipelinesAndAdditiveWinsOverThem)
+{
+    RenderState premultiplied = RenderState::Transparent();
+    premultiplied.variant = Renderer::Common::BlendVariant::Premultiplied;
+    RenderState multiply = RenderState::Transparent();
+    multiply.variant = Renderer::Common::BlendVariant::Multiply;
+    RenderState additiveMultiply = multiply;
+    additiveMultiply.additive = true;
+    RenderState additive = RenderState::Transparent();
+    additive.additive = true;
+    ASSERT_TRUE(R().CreatePipelineForTest(BuiltInShader::Unlit, RenderState::Transparent(), false));
+    ASSERT_TRUE(R().CreatePipelineForTest(BuiltInShader::Unlit, premultiplied, false));
+    ASSERT_TRUE(R().CreatePipelineForTest(BuiltInShader::Unlit, multiply, false));
+    EXPECT_EQ(R().GetPipelineCountForTest(), 3u);
+    // Additive wins over the variant, so the two share a pipeline
+    ASSERT_TRUE(R().CreatePipelineForTest(BuiltInShader::Unlit, additive, false));
+    ASSERT_TRUE(R().CreatePipelineForTest(BuiltInShader::Unlit, additiveMultiply, false));
+    EXPECT_EQ(R().GetPipelineCountForTest(), 4u);
+    // Without blend the variant changes nothing: an opaque draw
+    RenderState opaqueMultiply = RenderState::Opaque();
+    opaqueMultiply.variant = Renderer::Common::BlendVariant::Multiply;
+    ASSERT_TRUE(R().CreatePipelineForTest(BuiltInShader::Unlit, RenderState::Opaque(), false));
+    ASSERT_TRUE(R().CreatePipelineForTest(BuiltInShader::Unlit, opaqueMultiply, false));
+    EXPECT_EQ(R().GetPipelineCountForTest(), 5u);
+}
+
 TEST_F(VulkanDrawTest, ThousandsOfDrawsMakeOnlyThePipelinesTheirStatesNeed)
 {
     IMaterial* red = Colour(1.0f, 0.0f, 0.0f);
