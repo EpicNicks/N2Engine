@@ -114,6 +114,12 @@ namespace N2Engine::Rendering
 
     const std::shared_ptr<Material> &Sprite2D::EnsureMaterial(const Renderer::Common::IRenderer &renderer)
     {
+        if (_shaderSlot.HasShader())
+        {
+            // A user shader: the slot's own Material, with the sprite's texture and the cut-out. The built-in path below is not touched
+            _shaderSlot.Sync(_texture, Renderer::Common::BlendCutOutBelow(_texture != nullptr, renderer.SupportsBlending(), _color.a));
+            return _shaderSlot.GetMaterial();
+        }
         if (!_material)
         {
             _material = Material::Create(ShadingModel::Unlit);

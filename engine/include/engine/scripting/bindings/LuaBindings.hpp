@@ -19,6 +19,7 @@ namespace N2Engine::Rendering
 {
     class Material;
     class Mesh;
+    class Shader;
     class Texture;
 }
 
@@ -108,6 +109,14 @@ namespace N2Engine::Scripting
         /// A .mat file through Resources, e.g. "res://materials/crate.mat"; throws "<caller>: can't load material
         /// ..." if it doesn't load
         std::shared_ptr<Rendering::Material> LoadMaterialOrThrow(const std::string& path, std::string_view caller);
+        /// A .n2shader file through Resources, e.g. "res://shaders/dissolve.n2shader"; throws "<caller>: can't load shader ..." if it
+        /// doesn't load
+        std::shared_ptr<Rendering::Shader> LoadShaderOrThrow(const std::string& path, std::string_view caller);
+        /// What scripts see as a shader: its res:// path, else the file it was loaded from, else ""
+        std::string ShaderPathForLua(const Rendering::Shader& shader);
+        /// A MaterialInstance handle on a component's PRIVATE material (Sprite2D, Image or ParticleSystem with a shader): its writes go
+        /// straight to it. nil for null (the component has no shader). See MaterialInstance in engine-api.lua
+        sol::object PrivateMaterialInstance(sol::this_state state, std::shared_ptr<Rendering::Material> material);
         /// A built-in mesh by name ("Cube", "Sphere", "Quad"), else a mesh asset through Resources by path; throws
         /// "<caller>: can't load mesh ..." if neither
         std::shared_ptr<Rendering::Mesh> LoadMeshOrThrow(const std::string& nameOrPath, std::string_view caller);

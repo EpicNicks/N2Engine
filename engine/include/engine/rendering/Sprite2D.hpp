@@ -14,6 +14,7 @@
 #include "engine/rendering/MeshDrawing.hpp"
 #include "engine/rendering/ShapeMesh2D.hpp"
 #include "engine/rendering/Texture.hpp"
+#include "engine/rendering/UserShaderSlot.hpp"
 #include "engine/serialization/ComponentSerializer.hpp"
 
 namespace N2Engine::Rendering
@@ -83,6 +84,21 @@ namespace N2Engine::Rendering
         /// An image asset; null for a plain colour
         void SetTexture(std::shared_ptr<Texture> texture);
         [[nodiscard]] const std::shared_ptr<Texture> &GetTexture() const { return _texture; }
+        /// A user shader (`.n2shader`, a Shader asset) to draw with instead of the built-in unlit one; null goes back (and forgets the
+        /// parameter values). The sprite keeps a Material of its own for it, so one sprite's values never reach another's. Its texture
+        /// reaches the shader as the reserved baseColorTexture, its colour as baseColor, and the cut-out on a renderer that cannot blend
+        /// stays; the saturation and flash are the built-in shader's and are not applied. Runtime only: not a scene or prefab field (a
+        /// scene's per-instance shader values are for a later stage), set it from a script or code. See UserShaderSlot
+        void SetShader(std::shared_ptr<Shader> shader) { _shaderSlot.SetShader(std::move(shader)); }
+        [[nodiscard]] const std::shared_ptr<Shader> &GetShader() const { return _shaderSlot.GetShader(); }
+        /// Sets a parameter the shader declares; false (with one warning) without a shader, for an unknown name or a wrong type
+        template <typename Value>
+        bool SetShaderParam(std::string_view name, Value &&value) { return _shaderSlot.SetParam(name, std::forward<Value>(value)); }
+        bool SetShaderInt(std::string_view name, int value) { return _shaderSlot.SetParamInt(name, value); }
+        bool SetShaderVec4(std::string_view name, float x, float y, float z, float w) { return _shaderSlot.SetParamVec4(name, x, y, z, w); }
+        /// The sprite's private Material when it has a shader (Material::GetParam reads the values), else null
+        [[nodiscard]] const std::shared_ptr<Material> &GetShaderMaterial() const { return _shaderSlot.GetMaterial(); }
+
         /// The part of the texture shown, in uv with v up: its lower-left corner and its size. (0, 0) and (1, 1) is all of it.
         void SetRegion(const Math::Vector2 &offset, const Math::Vector2 &size)
         {
@@ -137,6 +153,7 @@ namespace N2Engine::Rendering
         ShapeDesc2D _meshDesc; // what _mesh was made from
         bool _meshMade = false;
         std::shared_ptr<Material> _material;
+        UserShaderSlot _shaderSlot;
         MeshDrawing::DrawResources _resources;
     };
 }

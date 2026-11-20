@@ -22,6 +22,7 @@
 #include "engine/particles/ParticleEmitter.hpp"
 #include "engine/physics/IParticleBackend.hpp"
 #include "engine/rendering/GpuCache.hpp"
+#include "engine/rendering/UserShaderSlot.hpp"
 #include "engine/rendering/Texture.hpp"
 
 namespace N2Engine::Rendering
@@ -218,5 +219,22 @@ namespace N2Engine::Rendering
         Renderer::Common::IMesh *_mesh = nullptr;
         Renderer::Common::IMaterial *_material = nullptr;
         GpuCache::Handle _textureHandle;
+        UserShaderSlot _shaderSlot; // the particle material's user shader, when one is set
+
+    public:
+        /// A user shader (`.n2shader`, a Shader asset) for the particle quads instead of the standard unlit shader; null goes back (and
+        /// forgets the parameter values). All the system's billboards are one mesh drawn in one call, so one Material serves them all: the
+        /// per-particle colour (the start-to-end fade) reaches the shader as the varying n2_Color, the texture as the reserved
+        /// baseColorTexture, and the blend mode (alpha or additive) stays the system's. The system keeps a Material of its own for it
+        /// (UserShaderSlot). Runtime only: not a serialized field
+        void SetShader(std::shared_ptr<Shader> shader) { _shaderSlot.SetShader(std::move(shader)); }
+        [[nodiscard]] const std::shared_ptr<Shader> &GetShader() const { return _shaderSlot.GetShader(); }
+        /// Sets a parameter the shader declares; false (with one warning) without a shader, for an unknown name or a wrong type
+        template <typename Value>
+        bool SetShaderParam(std::string_view name, Value &&value) { return _shaderSlot.SetParam(name, std::forward<Value>(value)); }
+        bool SetShaderInt(std::string_view name, int value) { return _shaderSlot.SetParamInt(name, value); }
+        bool SetShaderVec4(std::string_view name, float x, float y, float z, float w) { return _shaderSlot.SetParamVec4(name, x, y, z, w); }
+        /// The system's private Material when it has a shader (Material::GetParam reads the values), else null
+        [[nodiscard]] const std::shared_ptr<Material> &GetShaderMaterial() const { return _shaderSlot.GetMaterial(); }
     };
 }

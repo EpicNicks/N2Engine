@@ -41,6 +41,7 @@
 <li><a href="ui.html" aria-current="page">UI</a></li>
 <li><a href="meshes.html">Meshes, models &amp; textures</a></li>
 <li><a href="sprite2d.html">Sprites &amp; 2D shapes</a></li>
+<li><a href="user-shaders.html">User shaders</a></li>
 <li><a href="particles.html">Particles</a></li>
 <li><a href="soft-bodies.html">Soft bodies</a></li>
 <li><a href="resources.html">Resources &amp; paths</a></li>
@@ -229,6 +230,9 @@ rect     = (pivotPos - pivot * size, size)
 </ul>
 <p><code>SetTexture(ITexture*)</code> still takes a raw texture made with <code>IRenderer::CreateTexture</code>, for textures created at runtime on one renderer. The first row of the pixel data (v = 0) is drawn at the <em>bottom</em> of the rect, so image data stored top row first must be flipped before <code>CreateTexture</code> to show upright. The <code>Image</code> neither owns nor saves a raw texture. Whoever made it keeps it alive while the <code>Image</code> uses it, and calls <code>SetTexture(nullptr)</code> before destroying it.</p>
 <p class="src">Source: <code>engine/src/ui/Image.cpp</code> — <code>Image::RenderUI</code>, <code>Image::EnsureResources</code>, <code>Image::EnsureSpriteTexture</code>, <code>Image::SetSprite</code>; <code>engine/src/ui/UIGraphic.cpp</code> — <code>UIGraphic::GetDrawColor</code>; tests: <code>UIPassTest.ImageCreatesItsQuadOnceAndReleasesItOnDestroy</code>, <code>ImageSpriteTest.*</code> (<code>tests/engine/rendering/GpuCacheTests.cpp</code>), <code>SoftwareImageGoldenTest.ASpriteFromAnImageFileShowsUpright</code>, <code>TextureAssetTest.AnImagesSpriteSurvivesASceneSaveAndLoad</code></p>
+
+<h3 id="image-shader">A user shader <span class="badge">user shaders, stage 8</span></h3>
+<p><code>Image::SetShader(shader)</code> (Lua: <code>image:SetShader('res://shaders/x.n2shader')</code>, <code>nil</code> goes back) draws the image with a <a href="user-shaders.html">user shader</a>. The Image keeps a private Material for it (<code>UserShaderSlot</code>): its sprite is the shader's <code>baseColorTexture</code>, its colour (with a Button's tint) the <code>baseColor</code>, and the cut-out on a renderer that cannot blend stays; parameters are set with <code>SetShaderParam</code>, <code>SetShaderInt</code> and <code>SetShaderVec4</code>, or on <code>image:GetMaterialInstance()</code> in Lua. The standard unlit path is not touched when no shader is set, so every existing Image draws and every UI golden stays as it was. Saturation and flash are not applied through a shader, and a raw <code>SetTexture</code> texture (not an asset a Material can hold) still draws with the standard shader. Runtime only: not a serialized field. Tests: <code>ImageShaderTest</code> (<code>tests/engine/rendering/UserShaderImageTests.cpp</code>).</p>
 
 <h3 id="image-effects">Colour effects <span class="badge">PR #327</span></h3>
 <p><code>SetSaturation(float)</code> and <code>SetFlash(Color)</code> work as on <a href="sprite2d.html#effects"><code>Sprite2D</code></a>: saturation 1 (the default) draws the colour as it is and 0 as its grey, and the flash colour is mixed over the image by its own alpha, after the saturation, without changing the image's alpha. They are applied after the colour, tint and sprite, on every renderer. The setters store the values clamped (saturation 0..4, a value that is not finite as 1; each flash component 0..1), so the getters return what is drawn and a scene always saves numbers. For a greyed-out locked button, set <code>saturation</code> to 0.</p>

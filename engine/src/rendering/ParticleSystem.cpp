@@ -567,6 +567,7 @@ namespace N2Engine::Rendering
             }
         }
         _textureHandle.Release(callRenderer);
+        _shaderSlot.Release(callRenderer);
         _mesh = nullptr;
         _material = nullptr;
         _renderer = nullptr;
@@ -695,7 +696,18 @@ namespace N2Engine::Rendering
         Renderer::Common::RenderState drawState = state;
         drawState.cull = Renderer::Common::CullMode::None;
         drawState.additive = blendMode == ParticleBlend::Additive;
-        renderer->DrawMesh(_mesh, kIdentity, _material, drawState);
+        // A user shader: the slot's own Material (the texture as the reserved baseColorTexture, the same cut of fully faded quads). The
+        // standard material is the fallback when the renderer cannot make the shader's, and the only one when there is no shader
+        Renderer::Common::IMaterial *drawMaterial = _material;
+        if (_shaderSlot.HasShader())
+        {
+            _shaderSlot.Sync(texture, 0.01f);
+            if (Renderer::Common::IMaterial *userMaterial = _shaderSlot.Prepare(*renderer, Common::Color::White))
+            {
+                drawMaterial = userMaterial;
+            }
+        }
+        renderer->DrawMesh(_mesh, kIdentity, drawMaterial, drawState);
     }
 #endif
 }

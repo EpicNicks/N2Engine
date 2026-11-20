@@ -67,6 +67,7 @@ set(N2ENGINE_AUDIO_TESTS
 set(N2ENGINE_UI_TESTS
     rendering/SoftwareImageGoldenTests.cpp
     rendering/SoftwareWorldCanvasGoldenTests.cpp
+    rendering/UserShaderImageTests.cpp
     scripting/LuaImageSpriteTests.cpp
     scripting/LuaUITests.cpp
     ui/ButtonTests.cpp
