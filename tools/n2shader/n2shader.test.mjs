@@ -658,7 +658,7 @@ test('corpus: a negative that fails at another stage or for another reason fails
 
 test('cli: argument parsing', () => {
   assert.deepEqual(parseArguments(['cook', 'a.n2shader', '--out', 'x', '--targets', 'vulkan,gl', '--relaxed']), {
-    command: 'cook', positional: ['a.n2shader'], out: 'x', targets: ['vulkan', 'gl'], relaxed: true, lint: true, requireTools: false, target: null,
+    command: 'cook', positional: ['a.n2shader'], out: 'x', targets: ['vulkan', 'gl'], relaxed: true, lint: true, requireTools: false, requirePayload: false, cite: null, target: null,
   });
   assert.throws(() => parseArguments(['cook', '--targets', 'metal']), /unknown target/);
   assert.throws(() => parseArguments(['cook', '--bogus']), /unknown option/);

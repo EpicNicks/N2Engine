@@ -3,7 +3,7 @@
 // (JSON header + GLSL fragment stage) into SPIR-V (Vulkan), WGSL (WebGPU, through Tint) and GLSL 330 text (OpenGL), checked
 // by glslang, spirv-val, a reflection self-check, Tint and naga, with a deterministic manifest.
 //
-//   node tools/n2shader/n2shader.mjs cook <file.n2shader> [--out <dir>] [--targets vulkan,webgpu,gl] [--relaxed] [--no-lint] [--require-tools]
+//   node tools/n2shader/n2shader.mjs cook <file.n2shader> [--out <dir>] [--targets vulkan,webgpu,gl] [--relaxed] [--no-lint] [--require-tools] [--require-payload] [--cite <path>]
 //   node tools/n2shader/n2shader.mjs check <file.n2shader> [same options]      (cook without writing)
 //   node tools/n2shader/n2shader.mjs prelude <file.n2shader> --target <vulkan|webgpu|gl>   (print the generated GLSL)
 //   node tools/n2shader/n2shader.mjs corpus <dir> [--require-tools]            (the conformance corpus, expect.json)
@@ -24,7 +24,7 @@ import { discoverTools, toolVersion, TOOL_NAMES } from './lib/tools.mjs';
 class UsageError extends Error {}
 
 export function parseArguments(argv) {
-  const options = { command: null, positional: [], out: null, targets: TARGETS, relaxed: false, lint: true, requireTools: false, target: null };
+  const options = { command: null, positional: [], out: null, targets: TARGETS, relaxed: false, lint: true, requireTools: false, requirePayload: false, cite: null, target: null };
   const args = [...argv];
   const value = (flag) => {
     const next = args.shift();
@@ -43,6 +43,8 @@ export function parseArguments(argv) {
     } else if (arg === '--relaxed') options.relaxed = true;
     else if (arg === '--no-lint') options.lint = false;
     else if (arg === '--require-tools') options.requireTools = true;
+    else if (arg === '--require-payload') options.requirePayload = true;
+    else if (arg === '--cite') options.cite = value(arg);
     else if (arg === '--help' || arg === '-h') options.command = 'help';
     else if (arg.startsWith('--')) throw new UsageError(`unknown option ${arg}`);
     else if (options.command === null) options.command = arg;
@@ -63,7 +65,7 @@ export function main(argv, { stdout = (text) => process.stdout.write(text), stde
         need(1, `n2shader ${options.command} <file.n2shader> [options]`);
         const file = options.positional[0];
         const result = cookShader(fs.readFileSync(file, 'utf8'), {
-          path: file.replace(/\\/g, '/'), targets: options.targets, strict: !options.relaxed, lint: options.lint, requireTools: options.requireTools,
+          path: (options.cite ?? file).replace(/\\/g, '/'), targets: options.targets, strict: !options.relaxed, lint: options.lint, requireTools: options.requireTools, requirePayload: options.requirePayload,
         });
         for (const diagnostic of result.diagnostics) (diagnostic.severity === 'error' ? stderr : stdout)(`${formatDiagnostic(diagnostic)}\n`);
         for (const skipped of result.skipped) out(`note: ${skipped.reason}`);

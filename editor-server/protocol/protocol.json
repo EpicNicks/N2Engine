@@ -1,5 +1,5 @@
 {
-  "version": "1.31.0",
+  "version": "1.32.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -505,7 +505,7 @@
     },
     "ListAssets": {
       "id": "0xA0",
-      "description": "The assets in a folder of the project (since 1.9.0): the files the engine indexes (those whose extension has a loader: scripts, textures, fonts, audio, materials, models, scenes), each with its UUID, which is its .meta's. folder is a res:// path (\"res://\" or empty for the whole assets folder, \"res://scenes\"); it must be an existing folder, else an Error. A path is \"res://\" then a path inside the project's assets folder (\"res://scripts/Player.lua\"); a path with \"..\", a drive or root, a name Windows can't hold (a character of <>:\"|?*, a control character, a name ending in a dot or space, a device name such as CON) or one that leaves the folder through a symbolic link is an Error. recursive false lists the folder's own files and subfolders, true everything below it. folders is a JSON array of the subfolders' res:// paths (without a trailing slash), found by walking the file system, because the metadata doesn't know empty folders (symbolic links to folders are left out); assets is a JSON array of AssetInfo: {path, uuid, type, size, modified, subAssets?}. type is the resource type (\"LuaScript\", \"Texture\", \"Font\", \"AudioClip\", \"Material\", \"Model\", \"Scene\", and, since 1.19.0, \"Prefab\"), size the file's bytes, modified its modification time in Unix milliseconds, both as the last scan saw them (the watcher scans about once a second while a client is connected, and an assetsChanged event follows a change). subAssets, only on a file that has them (a model's meshes, materials and textures), lists {key, uuid, type} for each, as the .meta's index recorded them when the model last loaded; a model never loaded has none yet. Both arrays are sorted by path; the answer isn't paged. Pure: it changes nothing and never logs. Error without a project.",
+      "description": "The assets in a folder of the project (since 1.9.0): the files the engine indexes (those whose extension has a loader: scripts, textures, fonts, audio, materials, models, scenes, and since 1.32.0 user shaders, type \"Shader\"), each with its UUID, which is its .meta's. folder is a res:// path (\"res://\" or empty for the whole assets folder, \"res://scenes\"); it must be an existing folder, else an Error. A path is \"res://\" then a path inside the project's assets folder (\"res://scripts/Player.lua\"); a path with \"..\", a drive or root, a name Windows can't hold (a character of <>:\"|?*, a control character, a name ending in a dot or space, a device name such as CON) or one that leaves the folder through a symbolic link is an Error. recursive false lists the folder's own files and subfolders, true everything below it. folders is a JSON array of the subfolders' res:// paths (without a trailing slash), found by walking the file system, because the metadata doesn't know empty folders (symbolic links to folders are left out); assets is a JSON array of AssetInfo: {path, uuid, type, size, modified, subAssets?}. type is the resource type (\"LuaScript\", \"Texture\", \"Font\", \"AudioClip\", \"Material\", \"Model\", \"Scene\", and, since 1.19.0, \"Prefab\"), size the file's bytes, modified its modification time in Unix milliseconds, both as the last scan saw them (the watcher scans about once a second while a client is connected, and an assetsChanged event follows a change). subAssets, only on a file that has them (a model's meshes, materials and textures), lists {key, uuid, type} for each, as the .meta's index recorded them when the model last loaded; a model never loaded has none yet. Both arrays are sorted by path; the answer isn't paged. Pure: it changes nothing and never logs. Error without a project.",
       "request": {
         "folder": "string",
         "recursive": "bool"
@@ -542,7 +542,7 @@
     },
     "ReadTextAsset": {
       "id": "0xA3",
-      "description": "Reads a text file of the project (since 1.9.0), for the script editor. path is a res:// path to an existing file whose extension is one of .lua, .mat, .scene, .json, .txt, .md, .csv, .xml, .yaml, .yml, .toml, .ini, .cfg, .glsl, .vert, .frag, .shader (any case); another extension is an Error, so a binary asset is never sent as text. The file must be at most 4194304 bytes and valid UTF-8 (a byte order mark is kept: it is part of the text), else an Error. text is the file's content as it is, line endings included. Pure: it never logs. Error without a project.",
+      "description": "Reads a text file of the project (since 1.9.0), for the script editor. path is a res:// path to an existing file whose extension is one of .lua, .mat, .scene, .json, .txt, .md, .csv, .xml, .yaml, .yml, .toml, .ini, .cfg, .glsl, .vert, .frag, .shader, .n2shader (any case; .n2shader since 1.32.0); another extension is an Error, so a binary asset is never sent as text. The file must be at most 4194304 bytes and valid UTF-8 (a byte order mark is kept: it is part of the text), else an Error. text is the file's content as it is, line endings included. Pure: it never logs. Error without a project.",
       "request": {
         "path": "string"
       },
@@ -1202,6 +1202,19 @@
           "stats": "json:EngineStats"
         }
       }
+    },
+    "GetShaderInfo": {
+      "id": "0xB5",
+      "description": "Since 1.32.0 (Hello lists the capability \"shaders\"). Read command (a viewer may call it; not offered to editor extensions). One user shader (a .n2shader asset, ListAssets type \"Shader\"): uuidOrPath is a res:// path or the asset's UUID, as in GetAssetInfo; an Error for anything that is not an indexed Shader asset and without a project. info is a ShaderInfo: what the file's header declares (name, params, usesLighting, state hints; the params are what the inspector draws for a Material that names this shader) and cook, how the cooked data stands: status is \"cooked\" (a payload for the host's renderer is there and fits the header), \"not-cooked\" (no cooked data yet), \"stale\" (the data was cooked from a different header), \"failed\" (the last cook, run by the host when the file was saved, was rejected: diagnostics holds the tool's lines, \"assets/x.n2shader:12: error: [glslang] ...\") or \"unavailable\" (the host cannot run the cook: message says what to install or set). targets are the payloads in the cooked manifest (vulkan, webgpu, gl); message is the reason a Material would draw the fallback (absent when none). The host cooks a .n2shader when WriteTextAsset or the file watcher reports it new or changed, for the host's own renderer, and the shader is reloaded afterwards, so a Material that uses it is remade on its next draw. Shaders are render-only: nothing here is part of a scene, a snapshot or the state hash. Pure: it never logs.",
+      "request": {
+        "uuidOrPath": "string"
+      },
+      "response": {
+        "type": "ShaderInfo",
+        "fields": {
+          "info": "json:ShaderInfo"
+        }
+      }
     }
   },
   "types": {
@@ -1670,6 +1683,36 @@
       "lua?": "EngineLuaStats",
       "physics?": "EnginePhysicsStats",
       "process?": "EngineProcessStats"
+    },
+    "ShaderParamInfo": {
+      "name": "string",
+      "type": "string",
+      "default": "json",
+      "slot?": "number",
+      "label?": "string",
+      "min?": "number",
+      "max?": "number"
+    },
+    "ShaderStateInfo": {
+      "blend?": "string",
+      "cull?": "string",
+      "depthWrite?": "bool",
+      "queue?": "string"
+    },
+    "ShaderCookInfo": {
+      "status": "string",
+      "message?": "string",
+      "targets": "string[]",
+      "diagnostics": "string[]"
+    },
+    "ShaderInfo": {
+      "path": "string",
+      "uuid": "string",
+      "name": "string",
+      "usesLighting": "bool",
+      "state": "ShaderStateInfo",
+      "params": "ShaderParamInfo[]",
+      "cook": "ShaderCookInfo"
     }
   },
   "responses": {
@@ -1720,7 +1763,8 @@
     "NetworkValidation": "0x25",
     "AssetsMoved": "0xA5",
     "PrefabStageInfo": "0x26",
-    "EngineStats": "0x27"
+    "EngineStats": "0x27",
+    "ShaderInfo": "0x28"
   },
   "extraResponses": {
     "ErrorCoded": {

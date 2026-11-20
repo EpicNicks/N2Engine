@@ -69,12 +69,14 @@ const hasWarning = (log) => /(?:^|[\s:])warning:/im.test(log);
  * @param {boolean} [options.strict] the strict lint mode (default true; false = --relaxed: while/do loops allowed)
  * @param {boolean} [options.lint] run the lint (default true)
  * @param {boolean} [options.requireTools] a missing tool is an error instead of a skipped stage
+ * @param {boolean} [options.requirePayload] like requireTools, except for naga (a second opinion that makes no payload): a cook
+ *   that would leave a payload out is an error (the editor host's and n2build's way)
  * @param {string} [options.preludeDir] the prelude templates (default renderer/shaders/user/prelude)
  * @returns {{ ok: boolean, failedStage: string|null, diagnostics: object[], skipped: object[], outputs: object, manifest: object|null }}
  */
 export function cookShader(text, options = {}) {
   const {
-    path: file = 'shader.n2shader', targets = TARGETS, strict = true, lint = true, requireTools = false, preludeDir = PRELUDE_DIR,
+    path: file = 'shader.n2shader', targets = TARGETS, strict = true, lint = true, requireTools = false, requirePayload = false, preludeDir = PRELUDE_DIR,
   } = options;
   const tools = options.tools ?? discoverTools();
   const result = { ok: false, failedStage: null, diagnostics: [], skipped: [], outputs: {}, manifest: null };
@@ -105,7 +107,7 @@ export function cookShader(text, options = {}) {
   const passed = {};
   const skip = (stage, target, tool) => {
     const reason = `${stage} skipped for ${target}: ${tool} is not installed`;
-    if (requireTools) add({ stage: 'tools', severity: 'error', file: null, line: null, message: reason });
+    if (requireTools || (requirePayload && stage !== 'naga')) add({ stage: 'tools', severity: 'error', file: null, line: null, message: reason });
     else result.skipped.push({ stage, target, reason });
   };
 

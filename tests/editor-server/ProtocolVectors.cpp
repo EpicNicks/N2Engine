@@ -157,6 +157,7 @@ namespace ProtocolVectors
                 return json{{"folder", cmd.folder}, {"recursive", cmd.recursive}};
             }},
             {"GetAssetInfo", [](BufferReader &r) { return json{{"uuidOrPath", GetAssetInfoCmd::Deserialize(r).uuidOrPath}}; }},
+            {"GetShaderInfo", [](BufferReader &r) { return json{{"uuidOrPath", GetShaderInfoCmd::Deserialize(r).uuidOrPath}}; }},
             {"SetImportSettings", [](BufferReader &r)
             {
                 const auto cmd = SetImportSettingsCmd::Deserialize(r);
@@ -406,6 +407,7 @@ namespace ProtocolVectors
             {"NetworkValidation", [](BufferWriter &w, const json &f) { WriteNetworkValidation(w, f.at("report")); }},
             {"AssetPreview",[](BufferWriter &w,const json &f){const auto pixels=FromHex(StringField(f,"pixels"));WriteAssetPreview(w,f.at("info"),pixels);}},
             {"AssetDetail", [](BufferWriter &w, const json &f) { WriteAssetDetail(w, f.at("info")); }},
+            {"ShaderInfo", [](BufferWriter &w, const json &f) { WriteShaderInfo(w, f.at("info")); }},
             {"TextData", [](BufferWriter &w, const json &f) { WriteTextData(w, StringField(f, "text")); }},
             {"AssetCreated", [](BufferWriter &w, const json &f)
             {

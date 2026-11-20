@@ -16,6 +16,7 @@
 #include <editor-server/Commands.hpp>
 #include <editor-server/EditorServer.hpp>
 #include <editor-server/Protocol.hpp>
+#include <editor-server/ShaderCook.hpp>
 #include <engine/GameObjectScene.hpp>
 #include <engine/Logger.hpp>
 #include <engine/base/Asset.hpp>
@@ -23,6 +24,7 @@
 #include <engine/io/ResourceLoader.hpp>
 #include <engine/io/ResourcePath.hpp>
 #include <engine/io/ResourceUUID.hpp>
+#include <engine/rendering/Shader.hpp>
 #include <engine/sceneManagement/Scene.hpp>
 #include <engine/sceneManagement/SceneManager.hpp>
 #include <engine/scripting/LuaComponent.hpp>
@@ -48,6 +50,7 @@ namespace
     constexpr uint8_t AssetDetailType = static_cast<uint8_t>(ResponseType::AssetDetail);
     constexpr uint8_t TextDataType = static_cast<uint8_t>(ResponseType::TextData);
     constexpr uint8_t AssetCreatedType = static_cast<uint8_t>(ResponseType::AssetCreated);
+    constexpr uint8_t ShaderInfoType = static_cast<uint8_t>(ResponseType::ShaderInfo);
 
     struct Frame
     {
@@ -1120,4 +1123,147 @@ TEST_F(EditorAssetsTest, ThePollerWithoutAProjectDoesNothing)
     noProject.SetClientConnected(true);
     EXPECT_FALSE(noProject.PollAssets());
     EXPECT_FALSE(noProject.PollAssetsIfDue());
+}
+
+// ==================== User shaders (protocol 1.32.0) ====================
+
+namespace
+{
+    const std::string TintShader =
+        "{ \"n2shader\": 1, \"name\": \"Tint\",\n"
+        "  \"params\": [\n"
+        "    { \"name\": \"u_Color\", \"type\": \"color\", \"default\": [1, 0.5, 0, 1], \"label\": \"Colour\" },\n"
+        "    { \"name\": \"u_Gain\", \"type\": \"float\", \"default\": 2, \"min\": 0, \"max\": 4 },\n"
+        "    { \"name\": \"u_On\", \"type\": \"bool\", \"default\": true },\n"
+        "    { \"name\": \"u_Mask\", \"type\": \"texture\", \"default\": \"black\" }\n"
+        "  ],\n"
+        "  \"state\": { \"blend\": \"alpha\", \"cull\": \"none\" } }\n"
+        "#stage fragment\n"
+        "void main() { n2_FragColor = (u_On != 0) ? u_Color * u_Gain *  n2_texture(u_Mask, n2_UV) : vec4(0.0); }\n";
+
+    json DecodeShaderInfo(const Frame &frame)
+    {
+        EXPECT_EQ(frame.type, ShaderInfoType) << frame.Text();
+        if (frame.type != ShaderInfoType)
+            return json::object();
+        BufferReader r(frame.payload);
+        json info = ReadJson(r);
+        EXPECT_FALSE(r.HasData()) << "trailing bytes after ShaderInfo";
+        return info;
+    }
+}
+
+TEST_F(EditorAssetsTest, ANshaderIsATextAssetOfTypeShader)
+{
+    ASSERT_EQ(Folder("res://fx").type, OkType);
+    EXPECT_EQ(Write("res://fx/tint.n2shader", TintShader).type, OkType);
+    EXPECT_EQ(DecodeTextData(Read("res://fx/tint.n2shader")), TintShader);
+    const AssetListResult list = List("res://fx", false);
+    ASSERT_EQ(list.Paths(), (std::vector<std::string>{"res://fx/tint.n2shader"}));
+    EXPECT_EQ(list.assets.at(0).at("type"), "Shader");
+}
+
+TEST_F(EditorAssetsTest, GetShaderInfoReportsTheHeaderAndTheCookState)
+{
+    ASSERT_EQ(Folder("res://fx").type, OkType);
+    ASSERT_EQ(Write("res://fx/tint.n2shader", TintShader).type, OkType);
+
+    const json info = DecodeShaderInfo(Execute(server, CommandType::GetShaderInfo, Strings({"res://fx/tint.n2shader"})));
+    EXPECT_EQ(info.at("path"), "res://fx/tint.n2shader");
+    EXPECT_EQ(info.at("name"), "Tint");
+    EXPECT_FALSE(info.at("usesLighting").get<bool>());
+    EXPECT_EQ(info.at("state"), (json{{"blend", "alpha"}, {"cull", "none"}}));
+    const json &params = info.at("params");
+    ASSERT_EQ(params.size(), 4u);
+    EXPECT_EQ(params.at(0), (json{{"name", "u_Color"}, {"type", "color"}, {"default", json::array({1.0, 0.5, 0.0, 1.0})}, {"label", "Colour"}}));
+    EXPECT_EQ(params.at(1).at("type"), "float");
+    EXPECT_EQ(params.at(1).at("default"), 2.0);
+    EXPECT_EQ(params.at(1).at("min"), 0.0);
+    EXPECT_EQ(params.at(1).at("max"), 4.0);
+    EXPECT_EQ(params.at(2).at("default"), true);
+    EXPECT_EQ(params.at(3).at("type"), "texture");
+    EXPECT_EQ(params.at(3).at("default"), "black");
+    EXPECT_EQ(params.at(3).at("slot"), 0) << "slots follow declaration order (baseColorTexture would take 0)";
+
+    // The host cooked the file when it was written: without Node and the tool (or the tools they need) there is nothing to read
+    // back, and no renderer is attached here, so no payload is expected either way
+    const json &cook = info.at("cook");
+    const std::string status = cook.at("status");
+    EXPECT_TRUE(status == "not-cooked" || status == "unavailable" || status == "failed") << status;
+    EXPECT_TRUE(cook.at("targets").is_array());
+    EXPECT_TRUE(cook.at("diagnostics").is_array());
+    if (status == "unavailable")
+        EXPECT_TRUE(cook.contains("message"));
+
+    // by UUID as well
+    const json byUuid = DecodeShaderInfo(Execute(server, CommandType::GetShaderInfo, Strings({info.at("uuid").get<std::string>()})));
+    EXPECT_EQ(byUuid.at("path"), info.at("path"));
+}
+
+TEST_F(EditorAssetsTest, AShaderThatDoesNotCookReportsItsDiagnostics)
+{
+    ASSERT_EQ(Write("res://bad.n2shader",
+                    "{ \"n2shader\": 1, \"name\": \"Bad\" }\n#stage fragment\nvoid main() { n2_FragColor = vec4(oops); }\n")
+                  .type,
+              OkType);
+    const json cook = DecodeShaderInfo(Execute(server, CommandType::GetShaderInfo, Strings({"res://bad.n2shader"}))).at("cook");
+    const bool tooling = ShaderCook::FindTooling({_root, fs::current_path()}).Available();
+    if (tooling)
+    {
+        EXPECT_EQ(cook.at("status"), "failed") << cook.dump();
+        ASSERT_FALSE(cook.at("diagnostics").empty());
+        EXPECT_TRUE(cook.contains("message"));
+    }
+    else
+    {
+        EXPECT_EQ(cook.at("status"), "unavailable");
+        EXPECT_FALSE(cook.at("message").get<std::string>().empty());
+    }
+}
+
+TEST_F(EditorAssetsTest, GetShaderInfoRefusesWhatIsNotAShader)
+{
+    WriteAsset("a.txt", "x");
+    EXPECT_EQ(Execute(server, CommandType::GetShaderInfo, Strings({"res://scripts/Example.lua"})).type, ErrorType);
+    EXPECT_EQ(Execute(server, CommandType::GetShaderInfo, Strings({"res://missing.n2shader"})).type, ErrorType);
+    EXPECT_EQ(Execute(server, CommandType::GetShaderInfo, Strings({"res://../x.n2shader"})).type, ErrorType);
+    EXPECT_EQ(Execute(server, CommandType::GetShaderInfo, Strings({"not a path"})).type, ErrorType);
+    EditorServer noProject;
+    EXPECT_EQ(Execute(noProject, CommandType::GetShaderInfo, Strings({"res://a.n2shader"})).type, ErrorType);
+}
+
+TEST_F(EditorAssetsTest, ASavedShaderIsReloadedInPlaceSoItsMaterialsAreRemade)
+{
+    ASSERT_EQ(Write("res://fx.n2shader", TintShader).type, OkType);
+    const auto shader = Loader().Load<Rendering::Shader>(IO::ResourcePath("res://fx.n2shader"));
+    ASSERT_NE(shader, nullptr);
+    const std::uint64_t before = shader->GetVersion();
+    std::string changed = TintShader;
+    changed.replace(changed.find("\"u_Gain\""), 8, "\"u_Boost\"");
+    ASSERT_EQ(Write("res://fx.n2shader", changed).type, OkType);
+    EXPECT_EQ(Loader().Load<Rendering::Shader>(IO::ResourcePath("res://fx.n2shader")), shader) << "the same object stays in the cache";
+    EXPECT_GT(shader->GetVersion(), before);
+    ASSERT_NE(shader->FindParam("u_Boost"), nullptr);
+    EXPECT_EQ(shader->FindParam("u_Gain"), nullptr);
+}
+
+TEST(ShaderCookTest, RunProcessCapturesOutputAndTheExitCode)
+{
+    const auto tooling = ShaderCook::FindTooling({});
+    if (tooling.node.empty())
+        GTEST_SKIP() << "Node is not installed: " << tooling.unavailable;
+    std::string error;
+    const auto ok = ShaderCook::RunProcess(tooling.node, {"-e", "console.log('out'); console.error('err')"}, std::chrono::seconds(30), error);
+    ASSERT_TRUE(ok.has_value()) << error;
+    EXPECT_EQ(ok->exitCode, 0);
+    EXPECT_NE(ok->output.find("out"), std::string::npos);
+    EXPECT_NE(ok->output.find("err"), std::string::npos);
+    const auto failed = ShaderCook::RunProcess(tooling.node, {"-e", "process.exit(3)"}, std::chrono::seconds(30), error);
+    ASSERT_TRUE(failed.has_value());
+    EXPECT_EQ(failed->exitCode, 3);
+    const auto slow = ShaderCook::RunProcess(tooling.node, {"-e", "setTimeout(() => {}, 60000)"}, std::chrono::milliseconds(300), error);
+    ASSERT_TRUE(slow.has_value());
+    EXPECT_TRUE(slow->timedOut);
+    EXPECT_FALSE(ShaderCook::RunProcess("/no/such/program", {}, std::chrono::seconds(5), error).has_value());
+    EXPECT_FALSE(error.empty());
 }

@@ -8,6 +8,7 @@
 #include <expected>
 #include <functional>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -35,6 +36,7 @@
 #include "editor-server/LogCoalescer.hpp"
 #include "editor-server/PreAuthSlots.hpp"
 #include "editor-server/RateLimiter.hpp"
+#include "editor-server/ShaderCook.hpp"
 #include "editor-server/SessionArbiter.hpp"
 #include "editor-server/TokenBucket.hpp"
 #include "editor-server/TokenTable.hpp"
@@ -656,7 +658,7 @@ namespace N2Engine::Editor
         /// not a Windows device name (CON, NUL, COM1, ...), with or without an extension
         [[nodiscard]] static bool IsValidAssetName(std::string_view name);
         /// Whether ReadTextAsset and WriteTextAsset handle files with this path's extension (any case): .lua, .mat,
-        /// .scene, .json, .txt, .md, .csv, .xml, .yaml, .yml, .toml, .ini, .cfg, .glsl, .vert, .frag, .shader
+        /// .scene, .json, .txt, .md, .csv, .xml, .yaml, .yml, .toml, .ini, .cfg, .glsl, .vert, .frag, .shader, .n2shader
         [[nodiscard]] static bool IsTextAssetPath(std::string_view path);
         /// Whether text is well-formed UTF-8 (no overlong forms, surrogates, or values above U+10FFFF)
         [[nodiscard]] static bool IsValidUtf8(std::string_view text);
@@ -1162,6 +1164,7 @@ namespace N2Engine::Editor
         void HandleRescanAssets(int clientSocket);
         void HandleListAssets(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetAssetInfo(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleGetShaderInfo(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleSetImportSettings(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleReadTextAsset(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleWriteTextAsset(int clientSocket, const std::vector<uint8_t> &payload);
@@ -1602,6 +1605,21 @@ namespace N2Engine::Editor
         std::optional<std::chrono::steady_clock::time_point> _lastAssetPoll;
         AssetPollClock _assetPollClock;
         bool _assetPollFailureLogged{false};
+
+        // User shaders (1.32.0): a .n2shader that is new or changed is cooked by the host (tools/n2shader, run through Node) for the
+        // renderer it draws with, and reloaded; what the cook said is kept by asset UUID for GetShaderInfo
+        struct ShaderCookState
+        {
+            bool ran = false;
+            bool ok = false;
+            std::vector<std::string> lines;
+            std::string summary;
+        };
+        std::map<std::string, ShaderCookState> _shaderCooks;
+        std::optional<ShaderCook::Tooling> _shaderTooling;
+        /// Cooks every Shader asset among the added and modified paths (before ReloadLoadedAsset reads the result)
+        void CookChangedShaders(const IO::ResourceLoader::RescanResult &changes);
+        void CookShaderAsset(const IO::ResourcePath &path);
         /// SetMoveRenameForTest's stand-in for the rename MoveAsset does; empty: the real one
         MoveRenameFunction _moveRename;
         // The editor/ watcher (--editor-extensions-watch): off by default

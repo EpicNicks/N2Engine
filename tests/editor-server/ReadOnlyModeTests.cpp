@@ -69,6 +69,7 @@ namespace
             {"ClosePrefabStage", Class::Write}, {"GetPrefabStage", Class::Read},
             // Host stats (since 1.28.0): counts and timings
             {"GetEngineStats", Class::Read},
+            {"GetShaderInfo", Class::Read},
             // The Network panel (since 1.21.0): the two reads, and the change that saves the project file
             {"GetNetworkSettings", Class::Read}, {"GetNetworkValidation", Class::Read},
             {"SetNetworkSettings", Class::Write},

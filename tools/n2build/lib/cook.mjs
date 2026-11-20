@@ -15,6 +15,7 @@ import zlib from 'node:zlib';
 
 import { findConflicts, scanProject } from '../../../scripts/project-modules.mjs';
 import { BuildError } from './report.mjs';
+import { cookProjectShaders, SHADER_PACK_FOLDER } from './shaders.mjs';
 import { findOnPath } from './toolchains.mjs';
 
 export const PACK_FORMATS = ['zip', 'stored', '7z'];
@@ -182,7 +183,8 @@ export function writeSevenZip(entries, outFile, { sevenZip, env = process.env })
  * Cooks projectDir into outFile. format: zip, stored or 7z. target: for the module check (the target's own list) and the
  * manifest. Returns the manifest.
  */
-export function cookPack({ projectDir, outFile, format, target, game, sevenZip, env = process.env, skipModuleCheck = false }) {
+export function cookPack({ projectDir, outFile, format, target, game, sevenZip, env = process.env, skipModuleCheck = false,
+  shaderTargets = ['vulkan', 'gl', 'webgpu'], stripShaderSources = false, shaderTools = null, log = () => {} }) {
   if (!PACK_FORMATS.includes(format)) throw new BuildError(`Unknown pack format '${format}' (${PACK_FORMATS.join(', ')})`);
   if (!skipModuleCheck) {
     let scan;
@@ -196,7 +198,14 @@ export function cookPack({ projectDir, outFile, format, target, game, sevenZip, 
       throw new BuildError(`The engine modules do not fit the project:\n${conflicts.map((c) => `  ${c}`).join('\n')}`);
     }
   }
-  const files = packFiles(projectDir).map(({ name, file }) => ({ name, data: fs.readFileSync(file) }));
+  let files = packFiles(projectDir).map(({ name, file }) => ({ name, data: fs.readFileSync(file) }));
+  // Shaders: the cooked payloads of this target replace whatever .import/shaders/ holds on disk (the editor's cook is for the editor)
+  const shaders = cookProjectShaders({ projectDir, targets: shaderTargets, strip: stripShaderSources, env, tools: shaderTools, log });
+  if (shaders.count > 0) {
+    files = files.filter((f) => !f.name.startsWith(`${SHADER_PACK_FOLDER}/`)).map((f) => (shaders.replaced.has(f.name) ? { name: f.name, data: shaders.replaced.get(f.name) } : f));
+    files.push(...shaders.entries);
+    files.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  }
   if (!files.some((f) => f.name === 'project.n2proj')) throw new BuildError(`${projectDir} has no project.n2proj`);
   const manifest = makeManifest(files, { target, format, game });
   const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);

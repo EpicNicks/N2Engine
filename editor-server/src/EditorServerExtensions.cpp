@@ -171,6 +171,8 @@ namespace N2Engine::Editor
             {CommandType::GetEngineHealth, false},
             // Host stats (1.28.0): the Profiler's, not an extension's (and it turns the frame timers on)
             {CommandType::GetEngineStats, false},
+            // Shaders (1.32.0): the inspector's read
+            {CommandType::GetShaderInfo, false},
         };
     }
 

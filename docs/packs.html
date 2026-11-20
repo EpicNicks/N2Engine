@@ -122,14 +122,33 @@
 <p>A solid 7z still reads: its block is decoded once and kept until another block is asked for, only slower and with more memory. The web player reads zip packs only, so the 7z decoder is never in the web binary; n2build refuses <code>--pack 7z</code> for the web target.</p>
 
 <h2 id="cook">The cook step</h2>
-<pre class="lang-shell"><code>node tools/n2build/n2build.mjs cook --target linux --project path/to/game [--out game.n2pack] [--pack zip|stored|7z]</code></pre>
+<pre class="lang-shell"><code>node tools/n2build/n2build.mjs cook --target linux --project path/to/game [--out game.n2pack] [--pack zip|stored|7z] [--strip-shader-sources]</code></pre>
 <ol>
 <li>The module-list check for the target (<a href="project-modules.html#per-target">the target's own list</a>): a game that uses a module its list leaves out is refused, naming the file and line.</li>
 <li>The files a game needs: <code>project.n2proj</code>, <code>assets/</code> and <code>.import/</code>. Not <code>.n2/</code>, <code>editor/</code> (editor extensions), sources or tools.</li>
 <li>A manifest of every file's size and SHA-256, <code>n2pack-manifest.json</code> inside the pack and <code>&lt;pack&gt;.manifest.json</code> beside it.</li>
+<li><a href="#shaders">The shaders</a>: each <code>.n2shader</code> is cooked into <code>.import/shaders/&lt;uuid&gt;/</code> for the target's renderers.</li>
 <li>The pack. A zip is written by n2build itself, in name order with a fixed time, so the same project always makes the same bytes.</li>
 </ol>
 <p><code>n2build build</code> cooks as part of packaging, with the same command line as before: a desktop package holds the player, its libraries and <code>game.n2pack</code>; the web package's <code>index.data</code> holds <code>/game.n2pack</code> instead of the project folder (n2build passes <code>-DN2ENGINE_WEB_PACK</code>; a CMake build without it preloads the folder as before).</p>
+
+<h2 id="shaders">Shaders in a pack <span class="badge">user shaders, stage 6</span></h2>
+<p>A project's <code>.n2shader</code> files (user shaders, <code>orchestrator/proposals/user-shaders.md</code>) are cooked by the same step. For each one under <code>assets/</code> n2build runs <code>tools/n2shader</code> and writes <code>.import/shaders/&lt;uuid&gt;/</code>, the folder the engine's <code>Shader::MakeBlob</code> reads: <code>manifest.json</code> and one payload per renderer the target uses, byte for byte what <code>node tools/n2shader/n2shader.mjs cook</code> writes. The <code>&lt;uuid&gt;</code> is the asset's, from its <code>.meta</code> (a shader that was never opened in the editor has none: n2build says so and stops). Names are sorted and nothing is time-stamped, so the same project and tools make the same pack. Whatever <code>.import/shaders/</code> held on disk (the editor's cook is for the editor's own renderer) is replaced by what is cooked for the target.</p>
+<table>
+<thead><tr><th>Package kind</th><th>Payloads</th></tr></thead>
+<tbody>
+<tr><td>desktop (Windows, Linux, macOS)</td><td><code>vulkan</code> (SPIR-V) and <code>gl</code> (GLSL 330 text)</td></tr>
+<tr><td>web</td><td><code>webgpu</code> (WGSL, through Tint) only</td></tr>
+<tr><td>android, ios</td><td><code>vulkan</code> only</td></tr>
+</tbody>
+</table>
+<p>A target descriptor may name its own list with <code>shaderTargets</code>. A <code>--pack folder</code> build copies the project folder as it is, so it holds whatever the editor cooked.</p>
+<ul>
+<li><strong>Tools.</strong> The cook needs <code>glslangValidator</code>, <code>spirv-val</code>, <code>spirv-dis</code> and <code>spirv-cross</code> (the Vulkan SDK, or <code>glslang-tools</code>, <code>spirv-tools</code> and <code>spirv-cross</code> from apt); a project with shaders and a missing tool is refused with what to install. The web target also needs <strong>Tint</strong>. n2build finds it through <code>TINT</code>, <code>PATH</code>, then its own copy, and otherwise <strong>downloads it once</strong>: the pinned Dawn release (the one the CI job takes Tint from), read as a stream, keeping only <code>bin/tint</code> (the Windows archive is 119 MB for a 7.6 MB <code>tint.exe</code>), and used only when its SHA-256 is the pinned one. It is kept in <code>%APPDATA%\N2Engine\tools</code> (or <code>~/.local/share/n2engine/tools</code>). It is a build tool: it is never in a pack, a player or the editor (<code>THIRD_PARTY_NOTICES.md</code>, "Not shipped").</li>
+<li><strong>Strip sources.</strong> <code>n2build cook --strip-shader-sources</code> (or <code>"stripShaderSources": true</code> in <code>build.targets.&lt;target&gt;</code> of <code>project.n2proj</code>) leaves each <code>.n2shader</code>'s header in the pack but not its GLSL, and leaves out the OpenGL payload (it is readable source), for a studio that does not want its shader code shipped. Such a pack cannot recompile a shader, and an OpenGL player draws the fallback for it (the built-in unlit shader, with one logged error naming the shader).</li>
+<li><strong>Nothing about shaders is game state.</strong> The cooked data is render-only: it is not in rollback snapshots, replication or the golden-replay hashes.</li>
+</ul>
+<p>Tests: <code>tools/n2build/shaders.test.mjs</code> (the pack's shader files and their order, the same bytes as <code>n2shader cook</code>, the strip option, the Tint pin and download against a fake server).</p>
 
 <h2 id="players">How a player finds its game</h2>
 <p>The desktop player (<code>players/desktop</code>, <code>Player::ResolveGame</code>):</p>

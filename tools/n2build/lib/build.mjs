@@ -78,6 +78,9 @@ export function readTargetSettings(project, target) {
   if (settings.config !== undefined && !['debug', 'release'].includes(settings.config)) {
     throw new Error(`${where}.config must be "debug" or "release"`);
   }
+  if (settings.stripShaderSources !== undefined && typeof settings.stripShaderSources !== 'boolean') {
+    throw new Error(`${where}.stripShaderSources must be true or false`);
+  }
   if (settings.pack !== undefined && !PACK_KINDS.includes(settings.pack)) {
     throw new Error(`${where}.pack must be one of ${PACK_KINDS.join(', ')}`);
   }
@@ -294,7 +297,8 @@ export function packageDesktop({ treeDir, descriptor, projectDir, packageDir, ga
   // The game: one pack beside the player (it mounts game.n2pack where the game folder would be), or the folder as it is
   if (pack && pack.format !== 'folder') {
     cookPack({ projectDir, outFile: path.join(packageDir, `game${PACK_EXTENSION}`), format: pack.format, target: descriptor.name,
-      game: gameName, sevenZip: pack.sevenZip, env: pack.env, skipModuleCheck: pack.skipModuleCheck });
+      game: gameName, sevenZip: pack.sevenZip, env: pack.env, skipModuleCheck: pack.skipModuleCheck,
+      shaderTargets: pack.shaderTargets, stripShaderSources: pack.stripShaderSources, log: pack.log });
   } else {
     copyGameData(projectDir, path.join(packageDir, 'game'));
   }

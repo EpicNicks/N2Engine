@@ -723,7 +723,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends gcc-14 g++-14 cmake ninja-build libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev xvfb xauth libgl1-mesa-dri
 
       - name: n2build unit tests
-        run: node --test tools/n2build/n2build.test.mjs
+        run: node --test tools/n2build/n2build.test.mjs tools/n2build/shaders.test.mjs
 
       # The user-shader cook tool (stage 1 of orchestrator/proposals/user-shaders.md): no glslang, Tint or naga on this leg, so
       # the stages that need them are skipped; the "wgsl (Tint, naga)" job runs them all
@@ -2367,7 +2367,7 @@ jobs:
         run: |
           set -e
           export TINT="$HOME/wgsl-validators/tint/bin/tint" NAGA="$HOME/wgsl-validators/naga/bin/naga"
-          node --test tools/n2shader/n2shader.test.mjs
+          node --test tools/n2shader/n2shader.test.mjs tools/n2build/shaders.test.mjs
 
   # WebGPU backend, stage G2 (#155): the native test harness. The WebGPU renderer (renderer/src/webgpu/, built only with
   # N2ENGINE_RENDERER_WEBGPU=ON, never selectable at run time) runs on the pinned prebuilt Dawn (cmake/DawnPrebuilt.cmake, the

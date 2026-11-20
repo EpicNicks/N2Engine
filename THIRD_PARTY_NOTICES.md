@@ -132,7 +132,7 @@ Tint and naga validate the WebGPU shaders (`renderer/shaders/webgpu/*.wgsl`) in 
 only: nothing of them is vendored, fetched at configure time, linked into or shipped with the engine. Tint is the `bin/tint`
 of Dawn's prebuilt release archive (tag `v20261016.190333`, commit `67d4d6e64b0755d638f76549794692badfdbc8ab`, downloaded by
 `scripts/install-wgsl-validators.sh` and checked against a pinned SHA-256; the same archive the WebGPU CI harness links Dawn from,
-see "Dawn (WebGPU CI harness)" above); Dawn and Tint are BSD 3-Clause, Copyright The Dawn & Tint Authors, and the prebuilt binary
+see "Dawn (WebGPU CI harness)" above); n2build's shader cook also takes Tint from the same release, as a build tool on the developer's machine: `tools/n2build/lib/tint.mjs` downloads only `bin/tint` of the archive for the host's platform (the Windows archive is 119 MB for a 7.6 MB `tint.exe`), once, and keeps it only when its SHA-256 is the pinned one; it is never in a pack, a player or the editor. Dawn and Tint are BSD 3-Clause, Copyright The Dawn & Tint Authors, and the prebuilt binary
 links Dawn's own dependencies (for example SPIRV-Tools and Abseil, under their own licences; not verified one by one). naga is naga-cli 30.0.1 (the wgpu project), built in the job from its crates.io source package, whose
 SHA-256 is pinned, with `cargo install --locked`; MIT or Apache-2.0 (the `license` field of its `Cargo.toml`), and its dependencies
 come from the package's own `Cargo.lock`.
