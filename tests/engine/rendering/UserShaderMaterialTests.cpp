@@ -1263,6 +1263,7 @@ TEST(ShaderVertexStageTest, TheRuntimeCompileDoesNotBuildAVertexStageAndSaysSo)
     for (const UserShaderTarget target : {UserShaderTarget::Vulkan, UserShaderTarget::OpenGl})
     {
         EXPECT_FALSE(shader->MakeBlob(target, error).has_value());
-        EXPECT_NE(error.find("custom vertex stage"), std::string::npos) << error;
+        // The web build has no runtime compile at all and says that first
+        EXPECT_TRUE(error.find("custom vertex stage") != std::string::npos || error.find("web ships") != std::string::npos) << error;
     }
 }
