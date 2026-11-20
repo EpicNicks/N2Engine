@@ -398,6 +398,42 @@ namespace N2Engine::Rendering
         return true;
     }
 
+    namespace
+    {
+        void StoreMatrix(MaterialParamValue &stored, const float *values, const std::size_t count)
+        {
+            stored.matrix = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+            for (std::size_t i = 0; i < count; ++i)
+            {
+                stored.matrix[i] = std::isfinite(values[i]) ? values[i] : 0.0f;
+            }
+        }
+    }
+
+    bool Material::SetMat3(const std::string_view name, const std::span<const float, 9> values)
+    {
+        const ShaderParam *param = MatchParam(name, {ShaderParamType::Mat3}, "SetMat3");
+        if (!param)
+        {
+            return false;
+        }
+        StoreMatrix(_params[param->name], values.data(), 9);
+        Changed();
+        return true;
+    }
+
+    bool Material::SetMat4(const std::string_view name, const std::span<const float, 16> values)
+    {
+        const ShaderParam *param = MatchParam(name, {ShaderParamType::Mat4}, "SetMat4");
+        if (!param)
+        {
+            return false;
+        }
+        StoreMatrix(_params[param->name], values.data(), 16);
+        Changed();
+        return true;
+    }
+
     bool Material::SetTexture(const std::string_view name, std::shared_ptr<Texture> texture)
     {
         const ShaderParam *param = MatchParam(name, {ShaderParamType::Texture}, "SetTexture");
@@ -561,6 +597,14 @@ namespace N2Engine::Rendering
             case ShaderParamType::Vec3: target.SetVec3(param.name, v[0], v[1], v[2]); break;
             case ShaderParamType::Vec4: target.SetVec4(param.name, v[0], v[1], v[2], v[3]); break;
             case ShaderParamType::Color: target.SetColor(param.name, v[0], v[1], v[2], v[3]); break;
+            case ShaderParamType::Mat3:
+            case ShaderParamType::Mat4:
+            {
+                const std::array<float, 16> identity{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+                const std::array<float, 16> &matrix = set != _params.end() ? set->second.matrix : identity;
+                target.SetMatrix(param.name, matrix.data(), param.type == ShaderParamType::Mat3 ? 3u : 4u);
+                break;
+            }
             case ShaderParamType::Texture: break;
             }
         }
@@ -847,6 +891,25 @@ namespace N2Engine::Rendering
                             ok = true;
                         }
                         break;
+                    case ShaderParamType::Mat3:
+                    case ShaderParamType::Mat4:
+                    {
+                        const std::size_t count = param->type == ShaderParamType::Mat3 ? 9 : 16;
+                        bool numbers = value.is_array() && value.size() == count;
+                        for (std::size_t i = 0; numbers && i < count; ++i)
+                            numbers = value[i].is_number() && std::isfinite(value[i].get<double>());
+                        if (numbers)
+                        {
+                            for (std::size_t i = 0; i < count; ++i)
+                                stored.matrix[i] = value[i].get<float>();
+                            ok = true;
+                        }
+                        else
+                        {
+                            Warn(debugName, name, value, std::format("an array of {} numbers, row by row", count));
+                        }
+                        break;
+                    }
                     case ShaderParamType::Texture:
                         if (auto texture = ReadTexture(value, baseDirectory, debugName, name))
                         {
@@ -923,6 +986,16 @@ namespace N2Engine::Rendering
                 case ShaderParamType::Vec4:
                 case ShaderParamType::Color:
                     params[name] = nlohmann::json::array({stored.value[0], stored.value[1], stored.value[2], stored.value[3]});
+                    break;
+                case ShaderParamType::Mat3:
+                    params[name] = nlohmann::json::array();
+                    for (std::size_t i = 0; i < 9; ++i)
+                        params[name].push_back(stored.matrix[i]);
+                    break;
+                case ShaderParamType::Mat4:
+                    params[name] = nlohmann::json::array();
+                    for (std::size_t i = 0; i < 16; ++i)
+                        params[name].push_back(stored.matrix[i]);
                     break;
                 case ShaderParamType::Texture: params[name] = TextureJson(stored.texture); break;
                 }

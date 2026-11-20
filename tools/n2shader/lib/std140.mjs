@@ -11,6 +11,10 @@ const TYPES = Object.freeze({
   vec3: { size: 12, align: 16, glsl: 'vec3' },
   vec4: { size: 16, align: 16, glsl: 'vec4' },
   color: { size: 16, align: 16, glsl: 'vec4' },
+  // Matrices are row_major in the block (the engine's matrices are row-major, as in the per-draw block): a mat3 is three rows
+  // of a vec4's stride (48 bytes), a mat4 four rows (64). `qualifier` is what the SPIR-V targets declare it with
+  mat3: { size: 48, align: 16, glsl: 'mat3', qualifier: 'layout(row_major) ' },
+  mat4: { size: 64, align: 16, glsl: 'mat4', qualifier: 'layout(row_major) ' },
 });
 
 export const alignUp = (value, alignment) => Math.ceil(value / alignment) * alignment;
@@ -35,7 +39,7 @@ export function layoutBlock(params) {
     const info = TYPES[param.type];
     if (!info) continue; // a texture is not in the block
     const offset = alignUp(cursor, info.align);
-    members.push({ name: param.name, type: param.type, glsl: info.glsl, offset, size: info.size });
+    members.push({ name: param.name, type: param.type, glsl: info.glsl, offset, size: info.size, qualifier: info.qualifier ?? '' });
     cursor = offset + info.size;
   }
   return { members, size: members.length === 0 ? 0 : alignUp(cursor, 16) };

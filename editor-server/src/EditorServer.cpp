@@ -8476,7 +8476,7 @@ namespace N2Engine::Editor
         else
         {
             using Rendering::ShaderParamType;
-            static constexpr std::array<std::string_view, 8> typeNames{"float", "int", "bool", "vec2", "vec3", "vec4", "color", "texture"};
+            static constexpr std::array<std::string_view, 10> typeNames{"float", "int", "bool", "vec2", "vec3", "vec4", "color", "texture", "mat3", "mat4"};
             info["name"] = shader->GetName();
             info["usesLighting"] = shader->UsesLighting();
             nlohmann::json state = nlohmann::json::object();
@@ -8505,6 +8505,8 @@ namespace N2Engine::Editor
                     entry["default"] = param.defaultTexture;
                     entry["slot"] = param.slot;
                     break;
+                case ShaderParamType::Mat3: entry["default"] = std::vector<float>{1, 0, 0, 0, 1, 0, 0, 0, 1}; break;
+                case ShaderParamType::Mat4: entry["default"] = std::vector<float>{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}; break;
                 }
                 if (!param.label.empty()) entry["label"] = param.label;
                 if (param.min) entry["min"] = *param.min;

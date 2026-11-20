@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <span>
 #include <cstdint>
 #include <filesystem>
 #include <initializer_list>
@@ -30,6 +31,8 @@ namespace N2Engine::Rendering
     struct MaterialParamValue
     {
         std::array<float, 4> value{};
+        /// A mat3 parameter's nine values or a mat4's sixteen, ROW-major (row 0 first); the identity for a value nothing has set
+        std::array<float, 16> matrix{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
         std::shared_ptr<Texture> texture;
     };
 
@@ -223,6 +226,10 @@ namespace N2Engine::Rendering
         bool SetVec3(std::string_view name, float x, float y, float z);
         bool SetVec4(std::string_view name, float x, float y, float z, float w);
         bool SetColor(std::string_view name, const Common::Color &color);
+        /// A mat3 parameter from nine numbers, or a mat4 from sixteen, row-major (the first row first; the matrix `m` of `m * v` with a
+        /// column vector). A value that is not finite is zero. False, with one warning, for a count that does not fit the parameter's type
+        bool SetMat3(std::string_view name, std::span<const float, 9> values);
+        bool SetMat4(std::string_view name, std::span<const float, 16> values);
         /// A texture parameter; null clears it (the shader's default). The texture must be loaded
         bool SetTexture(std::string_view name, std::shared_ptr<Texture> texture);
         /// What a parameter holds now: the value set, else the shader's default; nullopt for a name the shader does not declare

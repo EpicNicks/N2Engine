@@ -59,6 +59,7 @@ namespace Renderer::Gpu::ShaderInterface
         Vec2,
         Vec3,
         Vec4,
+        Mat3,   // a user shader's row_major mat3 parameter (three rows of 16 bytes)
         Mat4,
         Struct, // an array of light structs (the lighting block): checked by offset and size only
     };

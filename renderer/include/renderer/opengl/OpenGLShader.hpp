@@ -47,6 +47,8 @@ namespace Renderer::OpenGL
         void SetVec3(const std::string &name, const N2Engine::Math::Vector3 &value) override;
         void SetVec4(const std::string &name, const N2Engine::Math::Vector4 &value) override;
         void SetMat4(const std::string &name, const N2Engine::Math::Matrix<float, 4, 4> &value) override;
+        /// A user shader's mat3 (`dimension` 3, 9 values) or mat4 (16) uniform from row-major values (uploaded transposed, as SetMat4 does)
+        void SetMatrixRowMajor(const std::string &name, const float *values, unsigned dimension);
 
         // convenience methods
         void SetVec2(const std::string &name, float x, float y);

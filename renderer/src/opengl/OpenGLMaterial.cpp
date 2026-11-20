@@ -38,7 +38,9 @@ OpenGLMaterial::OpenGLMaterial(std::shared_ptr<OpenGLShader> shader, Common::ITe
         case UniformType::Vec2: _vec2s[name] = {v[0], v[1]}; break;
         case UniformType::Vec3: _vec3s[name] = {v[0], v[1], v[2]}; break;
         case UniformType::Vec4: _vec4s[name] = {v[0], v[1], v[2], v[3]}; break;
-        default: break; // a user parameter is never a matrix
+        case UniformType::Mat3: _mat3s[name] = {1, 0, 0, 0, 1, 0, 0, 0, 1}; break;
+        case UniformType::Mat4: _mat4s[name] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}; break;
+        default: break;
         }
     }
 }
@@ -121,6 +123,23 @@ void OpenGLMaterial::SetVec4(const std::string &name, N2Engine::Math::Vector4 &v
 void Renderer::OpenGL::OpenGLMaterial::SetColor(const std::string &name, float r, float g, float b, float a)
 {
     SetVec4(name, r, g, b, a);
+}
+
+void OpenGLMaterial::SetMatrix(const std::string &name, const float *rowMajor, const unsigned dimension)
+{
+    if (!_layout || rowMajor == nullptr || (dimension != 3 && dimension != 4))
+    {
+        return; // only a user shader has matrix parameters
+    }
+    if (dimension == 3)
+    {
+        if (AcceptUser(name, Gpu::ShaderInterface::UniformType::Mat3, "SetMat3"))
+            std::copy(rowMajor, rowMajor + 9, _mat3s[name].begin());
+    }
+    else if (AcceptUser(name, Gpu::ShaderInterface::UniformType::Mat4, "SetMat4"))
+    {
+        std::copy(rowMajor, rowMajor + 16, _mat4s[name].begin());
+    }
 }
 void OpenGLMaterial::SetTexture(Renderer::Common::ITexture *texture)
 {
@@ -207,6 +226,16 @@ void OpenGLMaterial::Apply()
     for (const auto &[name, value] : _vec4s)
     {
         _shader->SetVec4(name, value[0], value[1], value[2], value[3]);
+    }
+
+    for (const auto &[name, value] : _mat3s)
+    {
+        _shader->SetMatrixRowMajor(name, value.data(), 3);
+    }
+
+    for (const auto &[name, value] : _mat4s)
+    {
+        _shader->SetMatrixRowMajor(name, value.data(), 4);
     }
 
     // A user program's samplers: slot N reads texture unit N (the base colour texture is unit 0, the AuxTexture slots 1-4)

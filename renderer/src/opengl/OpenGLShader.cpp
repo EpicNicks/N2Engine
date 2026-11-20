@@ -116,6 +116,18 @@ void OpenGLShader::SetMat4(const std::string &name, const N2Engine::Math::Matrix
     glUniformMatrix4fv(GetUniformLocation(name), 1, GL_TRUE, value.Data());
 }
 
+void OpenGLShader::SetMatrixRowMajor(const std::string &name, const float *values, const unsigned dimension)
+{
+    if (dimension == 3)
+    {
+        glUniformMatrix3fv(GetUniformLocation(name), 1, GL_TRUE, values);
+    }
+    else if (dimension == 4)
+    {
+        glUniformMatrix4fv(GetUniformLocation(name), 1, GL_TRUE, values);
+    }
+}
+
 void OpenGLShader::SetVec2(const std::string &name, float x, float y)
 {
     glUniform2f(GetUniformLocation(name), x, y);

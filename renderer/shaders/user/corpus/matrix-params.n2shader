@@ -1,0 +1,14 @@
+{ "n2shader": 1, "name": "MatrixParams", "params": [
+  { "name": "u_Tint", "type": "color", "default": [1, 1, 1, 1] },
+  { "name": "u_UvTransform", "type": "mat3" },
+  { "name": "u_Xform", "type": "mat4" },
+  { "name": "u_Gain", "type": "float", "default": 1 }
+] }
+#stage fragment
+// Stage 9c: mat3 and mat4 parameters. Each is row_major in the Material block, so the 9 or 16 numbers a Material holds are a row-major
+// matrix and `m * v` is the usual column-vector product. A new Material starts them as the identity.
+void main() {
+    vec2 uv = (u_UvTransform * vec3(n2_UV, 1.0)).xy;
+    vec4 moved = u_Xform * vec4(uv, 0.0, 1.0);
+    n2_FragColor = u_Tint * vec4(moved.xyz * u_Gain, 1.0);
+}

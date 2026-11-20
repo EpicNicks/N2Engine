@@ -91,6 +91,7 @@ namespace Renderer::Gpu
         void SetVec4(const std::string& name, float x, float y, float z, float w) override;
         void SetVec4(const std::string& name, N2Engine::Math::Vector4& value) override;
         void SetColor(const std::string& name, float r, float g, float b, float a) override;
+        void SetMatrix(const std::string& name, const float* rowMajor, unsigned dimension) override;
         void SetTexture(Common::ITexture* texture) override;
         void SetAuxTexture(Common::AuxTexture which, Common::ITexture* texture) override;
         [[nodiscard]] Common::ITexture* GetAuxTexture(Common::AuxTexture which) const override;

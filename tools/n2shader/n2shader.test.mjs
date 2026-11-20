@@ -122,7 +122,7 @@ const headerRejections = [
 for (const [name, text, pattern] of headerRejections) test(`parse rejects: ${name}`, () => rejects(text, pattern));
 
 const paramRejections = [
-  ['a bad type', [param('u_A', 'mat4')], /type must be one of/],
+  ['a bad type', [param('u_A', 'mat2')], /type must be one of/],
   ['a duplicate name', [param('u_A', 'float'), param('u_A', 'int')], /declared twice/],
   ['an n2_ name', [param('n2_Model', 'float')], /reserved/],
   ['a gl_ name', [param('gl_X', 'float')], /reserved/],
@@ -144,6 +144,28 @@ const paramRejections = [
   ['65 params', Array.from({ length: 65 }, (_, i) => param(`u_P${i}`, 'bool')), /at most 64 parameters/],
 ];
 for (const [name, params, pattern] of paramRejections) test(`header rejects: ${name}`, () => rejects(shader(header({ params })), pattern));
+
+test('header: mat3 and mat4 are row_major std140 members and take no default (stage 9c)', () => {
+  const params = [param('u_F', 'float'), param('u_Uv', 'mat3'), param('u_X', 'mat4'), param('u_G', 'float')];
+  const { header: h } = parseN2Shader(shader(header({ params })));
+  const { members, size } = layoutBlock(h.params);
+  assert.deepEqual(members.map((m) => [m.name, m.offset, m.size]), [['u_F', 0, 4], ['u_Uv', 16, 48], ['u_X', 64, 64], ['u_G', 128, 4]]);
+  assert.equal(size, 144);
+  assert.deepEqual(h.params[1].default, [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+  assert.equal(h.params[2].default.length, 16);
+  rejects(shader(header({ params: [param('u_M', 'mat4', { default: [1] })] })), /identity matrix and takes no "default"/);
+  rejects(shader(header({ params: [param('u_M', 'mat3', { min: 0 })] })), /float and int only/);
+  // the SPIR-V targets declare them row_major (the rows the engine writes), the GL text as plain uniforms
+  const parsed = parseN2Shader(shader(header({ params }), 'void main() { n2_FragColor = vec4(1.0); }'));
+  for (const target of ['vulkan', 'webgpu']) {
+    const text = buildTargetSource(target, parsed).text;
+    assert.match(text, /layout\(row_major\) mat3 u_Uv;/, target);
+    assert.match(text, /layout\(row_major\) mat4 u_X;/, target);
+  }
+  const gl = buildTargetSource('gl', parsed).text;
+  assert.match(gl, /uniform mat3 u_Uv;/);
+  assert.match(gl, /uniform mat4 u_X;/);
+});
 
 test('header accepts exactly 256 bytes of block and exactly 5 textures', () => {
   const params = [...Array.from({ length: 16 }, (_, i) => param(`u_V${i}`, 'vec4')), ...Array.from({ length: 5 }, (_, i) => param(`u_T${i}`, 'texture'))];

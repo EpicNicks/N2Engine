@@ -24,6 +24,8 @@ namespace Renderer::Common
         Vec3,
         Vec4,
         Color,   ///< a vec4 with an editor colour picker
+        Mat3,    ///< a row_major mat3 in the block: three rows, each a vec4's stride (48 bytes); a new material holds the identity
+        Mat4,    ///< a row_major mat4 in the block: four rows (64 bytes); a new material holds the identity
         Texture, ///< one of the five 2D texture slots; not in the block
     };
 

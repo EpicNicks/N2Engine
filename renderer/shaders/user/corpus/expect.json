@@ -11,7 +11,8 @@
     { "file": "frag-coord.n2shader" },
     { "file": "uint-hash.n2shader" },
     { "file": "while-loop.n2shader", "relaxed": true },
-    { "file": "lighting.n2shader" }
+    { "file": "lighting.n2shader" },
+    { "file": "matrix-params.n2shader" }
   ],
   "negative": [
     { "file": "negative-isnan.n2shader", "expect": [

@@ -1328,6 +1328,18 @@ function MaterialInstance:SetVec3(name, x, y, z) end
 ---@return boolean ok
 function MaterialInstance:SetVec4(name, x, y, z, w) end
 
+---A mat3 parameter from nine numbers, row by row (row 0 first). The parameter starts as the identity matrix.
+---@param name string
+---@param rows number[] 9 numbers
+---@return boolean ok
+function MaterialInstance:SetMat3(name, rows) end
+
+---A mat4 parameter from sixteen numbers, row by row (row 0 first). The parameter starts as the identity matrix.
+---@param name string
+---@param rows number[] 16 numbers
+---@return boolean ok
+function MaterialInstance:SetMat4(name, rows) end
+
 ---@param name string
 ---@param color Color
 ---@return boolean ok
