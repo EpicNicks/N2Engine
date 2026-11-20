@@ -449,6 +449,12 @@ namespace N2Engine::Rendering
         Changed();
     }
 
+    void Material::SetBlendMode(const BlendMode mode)
+    {
+        _blendMode = mode;
+        Changed();
+    }
+
     void Material::SetAlphaCutoff(const float cutoff)
     {
         _alphaCutoff = std::isfinite(cutoff) ? std::clamp(cutoff, 0.0f, 1.0f) : 0.5f;
@@ -689,6 +695,20 @@ namespace N2Engine::Rendering
                 else
                     Warn(debugName, key, value, "\"opaque\", \"mask\" or \"blend\"");
             }
+            else if (key == "blendMode")
+            {
+                const std::string name = value.is_string() ? Lowercase(value.get<std::string>()) : std::string{};
+                if (name == "alpha")
+                    _blendMode = BlendMode::Alpha;
+                else if (name == "additive")
+                    _blendMode = BlendMode::Additive;
+                else if (name == "premultiplied")
+                    _blendMode = BlendMode::Premultiplied;
+                else if (name == "multiply")
+                    _blendMode = BlendMode::Multiply;
+                else
+                    Warn(debugName, key, value, "\"alpha\", \"additive\", \"premultiplied\" or \"multiply\"");
+            }
             else if (key == "alphaCutoff")
             {
                 if (const auto number = ReadUnitFloat(value, debugName, key))
@@ -766,8 +786,22 @@ namespace N2Engine::Rendering
         {
             // The shader's state hints are the defaults of what the .mat does not say (a value it sets wins)
             const ShaderStateHints &hints = _shader->GetStateHints();
-            if (!json.contains("alphaMode") && hints.blend && (*hints.blend == "alpha" || *hints.blend == "additive"))
-                _alphaMode = AlphaMode::Blend;
+            if (hints.blend)
+            {
+                const std::string &blend = *hints.blend;
+                const bool known = blend == "alpha" || blend == "additive" || blend == "premultiplied" || blend == "multiply";
+                if (!json.contains("alphaMode") && known)
+                    _alphaMode = AlphaMode::Blend;
+                if (!json.contains("blendMode"))
+                {
+                    if (blend == "additive")
+                        _blendMode = BlendMode::Additive;
+                    else if (blend == "premultiplied")
+                        _blendMode = BlendMode::Premultiplied;
+                    else if (blend == "multiply")
+                        _blendMode = BlendMode::Multiply;
+                }
+            }
             if (!json.contains("doubleSided") && hints.cull && *hints.cull == "none")
                 _doubleSided = true;
         }
@@ -890,6 +924,20 @@ namespace N2Engine::Rendering
             break;
         case AlphaMode::Blend:
             json["alphaMode"] = "blend";
+            break;
+        }
+        switch (_blendMode)
+        {
+        case BlendMode::Alpha:
+            break; // the default is not written: a .mat without the key is unchanged on a round trip
+        case BlendMode::Additive:
+            json["blendMode"] = "additive";
+            break;
+        case BlendMode::Premultiplied:
+            json["blendMode"] = "premultiplied";
+            break;
+        case BlendMode::Multiply:
+            json["blendMode"] = "multiply";
             break;
         }
         json["alphaCutoff"] = _alphaCutoff;

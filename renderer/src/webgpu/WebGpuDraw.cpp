@@ -497,6 +497,7 @@ namespace Renderer::WebGpu
         key.cull = static_cast<std::uint8_t>(renderState.cull);
         key.blend = renderState.blend;
         key.additive = renderState.blend && renderState.additive; // additive without blend is an opaque draw, as in GL
+        key.variant = (renderState.blend && !renderState.additive) ? static_cast<std::uint8_t>(renderState.variant) : 0;
         const std::uint32_t packed = key.Pack();
         if (const auto it = state.pipelines.find(packed); it != state.pipelines.end())
         {
@@ -556,13 +557,30 @@ namespace Renderer::WebGpu
         // Blending exactly as OpenGL's ApplyRenderState (and Vulkan's pipeline): SRC_ALPHA with ONE_MINUS_SRC_ALPHA (additive:
         // ONE), the same factors for colour and alpha, equation ADD
         WGPUBlendState blendState = WGPU_BLEND_STATE_INIT;
-        const WGPUBlendFactor destinationFactor = key.additive ? WGPUBlendFactor_One : WGPUBlendFactor_OneMinusSrcAlpha;
+        const Renderer::Common::BlendFunc func =
+            Renderer::Common::BlendFuncFor(key.additive, static_cast<Renderer::Common::BlendVariant>(key.variant));
+        const auto factor = [](const Renderer::Common::BlendFactor f) {
+            switch (f)
+            {
+            case Renderer::Common::BlendFactor::Zero:
+                return WGPUBlendFactor_Zero;
+            case Renderer::Common::BlendFactor::One:
+                return WGPUBlendFactor_One;
+            case Renderer::Common::BlendFactor::SrcAlpha:
+                return WGPUBlendFactor_SrcAlpha;
+            case Renderer::Common::BlendFactor::OneMinusSrcAlpha:
+                return WGPUBlendFactor_OneMinusSrcAlpha;
+            case Renderer::Common::BlendFactor::DstColor:
+                return WGPUBlendFactor_Dst;
+            }
+            return WGPUBlendFactor_One;
+        };
         blendState.color.operation = WGPUBlendOperation_Add;
-        blendState.color.srcFactor = WGPUBlendFactor_SrcAlpha;
-        blendState.color.dstFactor = destinationFactor;
+        blendState.color.srcFactor = factor(func.srcColor);
+        blendState.color.dstFactor = factor(func.dstColor);
         blendState.alpha.operation = WGPUBlendOperation_Add;
-        blendState.alpha.srcFactor = WGPUBlendFactor_SrcAlpha;
-        blendState.alpha.dstFactor = destinationFactor;
+        blendState.alpha.srcFactor = factor(func.srcAlpha);
+        blendState.alpha.dstFactor = factor(func.dstAlpha);
 
         WGPUColorTargetState target = WGPU_COLOR_TARGET_STATE_INIT;
         target.format = GetColorFormat();
@@ -1268,6 +1286,7 @@ namespace Renderer::WebGpu
         key.cull = static_cast<std::uint8_t>(renderState.cull);
         key.blend = renderState.blend;
         key.additive = renderState.blend && renderState.additive;
+        key.variant = (renderState.blend && !renderState.additive) ? static_cast<std::uint8_t>(renderState.variant) : 0;
         return key.Pack();
     }
 
