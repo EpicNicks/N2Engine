@@ -510,6 +510,16 @@ protected:
             "shader": "../shaders/textured.n2shader",
             "params": { "u_Tex": null }
         })");
+        // Stage 9a: one shader per blend hint with a .mat for each, and one .mat that overrides the hint
+        for (const std::string hint : {"premultiplied", "multiply", "additive", "alpha"})
+        {
+            WriteText("shaders/blend_" + hint + ".n2shader",
+                      "{ \"n2shader\": 1, \"name\": \"B\", \"state\": { \"blend\": \"" + hint + "\" } }\n" +
+                          "#stage fragment\nvoid main() { n2_FragColor = vec4(1.0); }\n");
+            WriteText("materials/blend_" + hint + ".mat", "{\"shader\": \"../shaders/blend_" + hint + ".n2shader\"}");
+        }
+        WriteText("materials/blend_override.mat",
+                  "{\"shader\": \"../shaders/blend_multiply.n2shader\", \"blendMode\": \"additive\", \"alphaMode\": \"opaque\"}");
 
         IO::ResourceUUID::Initialize(Math::UUID::GenerateNameBased(Math::UUID::ZERO, "ShaderMatAssetTest"));
         IO::ResourceLoader::Instance().ClearCache();
@@ -1035,15 +1045,6 @@ TEST(BlendModeTest, ADrawStateTakesTheMaterialsModeOnlyForABlendMaterialInABlend
 
 TEST_F(ShaderMatAssetTest, AShadersBlendHintSetsTheMaterialsModeUnlessTheMatSaysOtherwise)
 {
-    for (const std::string hint : {"premultiplied", "multiply", "additive", "alpha"})
-    {
-        WriteText("shaders/blend_" + hint + ".n2shader",
-                  "{ \"n2shader\": 1, \"name\": \"B\", \"state\": { \"blend\": \"" + hint + "\" } }\n" +
-                      "#stage fragment\nvoid main() { n2_FragColor = vec4(1.0); }\n");
-        WriteText("materials/blend_" + hint + ".mat", "{\"shader\": \"../shaders/blend_" + hint + ".n2shader\"}");
-    }
-    WriteText("materials/blend_override.mat",
-              "{\"shader\": \"../shaders/blend_multiply.n2shader\", \"blendMode\": \"additive\", \"alphaMode\": \"opaque\"}");
     const auto load = [](const std::string &name)
     { return IO::Resources::Instance().Load<Material>(fs::path("res://materials/" + name + ".mat")); };
 
