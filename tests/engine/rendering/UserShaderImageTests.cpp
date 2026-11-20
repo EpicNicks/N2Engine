@@ -10,13 +10,14 @@
 #include <renderer/common/TextureOptions.hpp>
 #include <renderer/software/SoftwareRenderer.hpp>
 
+#include "engine/GameObject.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/common/Color.hpp"
 #include "engine/rendering/RenderSettings.hpp"
 #include "engine/rendering/Shader.hpp"
 #include "engine/rendering/Texture.hpp"
 #include "engine/ui/Image.hpp"
-#include "engine/ui/RectTransform.hpp"
+#include "engine/ui/Rect.hpp"
 #include "engine/ui/UISystem.hpp"
 
 // User shaders, stage 8: the UI Image drawn through a user shader (UserShaderSlot), on the software renderer, which has no user shaders and so
@@ -91,7 +92,10 @@ void main() { n2_FragColor = n2_texture(baseColorTexture, n2_UV) * u_Gain; }
 
 namespace
 {
-    /// A full-screen Image drawn by the UI pass alone on a software renderer (as Application::Render runs it after the scene), read back
+    constexpr float Identity[16]{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+
+    /// A full-target Image (identity view and projection, so its rect is clip space) drawn on a software renderer cleared to black
+    /// and read back; `setup` runs on the Image first
     Frame DrawImage(const std::function<void(UI::Image &)> &setup)
     {
         SoftwareRenderer renderer;
@@ -99,22 +103,15 @@ namespace
         renderer.Clear(0.0f, 0.0f, 0.0f, 1.0f);
         Frame frame;
         frame.rgba.resize(static_cast<std::size_t>(Size) * Size * 4);
-        {
-            auto scene = Scene::Create("ShaderImage");
-            const auto canvas = UI::UISystem::CreateCanvas("Canvas");
-            scene->AddRootGameObject(canvas);
-            const auto element = UI::UISystem::CreateElement("Image");
-            element->GetComponent<UI::RectTransform>()->StretchToParent();
-            auto *image = element->AddComponent<UI::Image>();
-            setup(*image);
-            canvas->AddChild(element, false);
-            renderer.BeginFrame();
-            UI::UISystem::Render(*scene, &renderer, Vector2i{Size, Size});
-            renderer.EndFrame();
-            renderer.Present();
-            renderer.ReadFramebuffer(frame.rgba.data(), Size, Size);
-            scene.reset();
-        }
+        const auto go = GameObject::Create("Image");
+        auto *image = go->AddComponent<UI::Image>();
+        setup(*image);
+        renderer.BeginFrame();
+        renderer.SetViewProjection(Identity, Identity);
+        image->RenderUI(&renderer, UI::Rect{-1.0f, -1.0f, 2.0f, 2.0f}, UI::UISystem::OverlayState());
+        renderer.EndFrame();
+        renderer.ReadFramebuffer(frame.rgba.data(), Size, Size);
+        image->OnDestroy(); // its quad, material and texture share, before the renderer goes
         renderer.Shutdown();
         return frame;
     }
