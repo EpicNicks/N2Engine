@@ -1155,6 +1155,7 @@ namespace
 
 TEST_F(EditorAssetsTest, ANshaderIsATextAssetOfTypeShader)
 {
+    ASSERT_EQ(Folder("res://fx").type, OkType);
     EXPECT_EQ(Write("res://fx/tint.n2shader", TintShader).type, OkType);
     EXPECT_EQ(DecodeTextData(Read("res://fx/tint.n2shader")), TintShader);
     const AssetListResult list = List("res://fx", false);
