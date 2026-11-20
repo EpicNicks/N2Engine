@@ -402,7 +402,8 @@ namespace N2Engine::Rendering
     {
         void StoreMatrix(MaterialParamValue &stored, const float *values, const std::size_t count)
         {
-            stored.matrix = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+            stored.matrix = count == 9 ? std::array<float, 16>{1, 0, 0, 0, 1, 0, 0, 0, 1}
+                                       : std::array<float, 16>{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
             for (std::size_t i = 0; i < count; ++i)
             {
                 stored.matrix[i] = std::isfinite(values[i]) ? values[i] : 0.0f;
@@ -474,6 +475,10 @@ namespace N2Engine::Rendering
         }
         MaterialParamValue value;
         value.value = param->defaultValue;
+        if (param->type == ShaderParamType::Mat3)
+        {
+            value.matrix = {1, 0, 0, 0, 1, 0, 0, 0, 1}; // the 3x3 identity, nine values (the rest is unused)
+        }
         return value;
     }
 
@@ -616,8 +621,10 @@ namespace N2Engine::Rendering
             case ShaderParamType::Mat3:
             case ShaderParamType::Mat4:
             {
-                const std::array<float, 16> identity{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-                const std::array<float, 16> &matrix = set != _params.end() ? set->second.matrix : identity;
+                const std::array<float, 16> identity4{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+                const std::array<float, 16> identity3{1, 0, 0, 0, 1, 0, 0, 0, 1};
+                const std::array<float, 16> &matrix =
+                    set != _params.end() ? set->second.matrix : (param.type == ShaderParamType::Mat3 ? identity3 : identity4);
                 target.SetMatrix(param.name, matrix.data(), param.type == ShaderParamType::Mat3 ? 3u : 4u);
                 break;
             }

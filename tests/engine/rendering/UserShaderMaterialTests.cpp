@@ -1154,7 +1154,7 @@ TEST(MatrixParamTest, TheMatKeyIsAnArrayOfNineOrSixteenNumbersAndRoundTrips)
 
     // Read back through the Material that names the shader (a .mat names it by path; here it is the same asset)
     auto again = Material::Create(ShadingModel::Unlit);
-    again->SetShader(MatrixShader());
+    again->SetShader(material->GetShader()); // the same shader asset: a .mat names it
     WarningCapture capture;
     again->SetMat3("u_Uv", uv);
     EXPECT_EQ(again->ToJson(), saved);
@@ -1173,6 +1173,12 @@ TEST(MatrixParamTest, ApplyUniformsGivesTheBackendTheMatricesRowMajorAndTheIdent
     material->ApplyUniforms(target, Common::Color::White);
     ASSERT_EQ(target.mats.count("u_Uv"), 1u);
     EXPECT_EQ(target.mats["u_Uv"], std::vector<float>(uv.begin(), uv.end()));
+    // An unset mat3 is the 3x3 identity (nine values), not the first nine of a 4x4's
+    auto fresh = Material::Create(ShadingModel::Unlit);
+    fresh->SetShader(material->GetShader());
+    FakeUserMaterial untouched(&softwareShader);
+    fresh->ApplyUniforms(untouched, Common::Color::White);
+    EXPECT_EQ(untouched.mats["u_Uv"], std::vector<float>(kIdentity3.begin(), kIdentity3.end()));
     ASSERT_EQ(target.mats.count("u_Xform"), 1u) << "an unset matrix is still given: the identity";
     EXPECT_EQ(target.mats["u_Xform"], std::vector<float>(kIdentity4.begin(), kIdentity4.end()));
     EXPECT_EQ(target.floats["u_Gain"], 1.0f);
