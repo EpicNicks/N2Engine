@@ -59,7 +59,10 @@ namespace N2Engine
      *               `only` names rendering) removed, means the default, gamma. "forceShaderEncode": true makes
      *               OpenGL's lit shader encode its own output in linear lighting (an escape hatch for a driver that
      *               reports the wrong framebuffer encoding); absent, null or removed means false, a non-boolean is
-     *               refused; a bad value is refused and changes nothing
+     *               refused; a bad value is refused and changes nothing. "runtimeShaderCompile": true or false lets
+     *               the engine compile a user shader (.n2shader) on the machine when it has no usable cooked payload
+     *               (Vulkan, in a build with N2ENGINE_RUNTIME_SHADER_COMPILER); absent or null leaves what the host
+     *               chose (the editor host: on; a player: off), a non-boolean is refused
      *
      * Other blocks (window, and keys this version doesn't know) are left to whoever reads them: an editor
      * host has no window to size. A missing or null block changes nothing (except rendering when `only` names it, above). Call it after Application::Init (which
@@ -142,6 +145,7 @@ namespace N2Engine
         std::optional<Math::Vector3> gravity;
         Renderer::Common::ColorSpace colorSpace = Renderer::Common::ColorSpace::Gamma;
         bool forceShaderEncode = false;
+        bool runtimeShaderCompile = false;
 
         [[nodiscard]] static ProjectSettingsSnapshot Capture();
         /// Puts the captured state back

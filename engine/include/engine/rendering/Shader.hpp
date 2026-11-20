@@ -2,7 +2,9 @@
 
 #include <array>
 #include <cstdint>
+#include <expected>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -98,12 +100,33 @@ namespace N2Engine::Rendering
 
         /// The blob for `target`: the cooked manifest and that target's payload, checked against the header (the parameters must be
         /// the same names and types, in the same order). nullopt, with `error` set to why (not cooked, stale, no payload for the
-        /// target, unreadable), otherwise. The blob is the backend's to validate (ValidateUserShaderBlob) before it touches a driver
+        /// target, unreadable), otherwise. The blob is the backend's to validate (ValidateUserShaderBlob) before it touches a driver.
+        /// MakeCookedBlob reads only the cooked data; this one then, for Vulkan with RenderSettings::GetRuntimeShaderCompile() and a
+        /// linked glslang, or for OpenGL, builds the payload from the .n2shader's own text (UserShaderCompiler), through the shader
+        /// cache when RenderSettings has a folder for it. A pack whose sources were stripped has no text to build from
         [[nodiscard]] std::optional<Renderer::Common::UserShaderBlob> MakeBlob(Renderer::Common::UserShaderTarget target,
                                                                                std::string &error) const;
+        [[nodiscard]] std::optional<Renderer::Common::UserShaderBlob> MakeCookedBlob(Renderer::Common::UserShaderTarget target,
+                                                                                     std::string &error) const;
+
+        /// The file's text as it was loaded: LF line ends, no byte order mark (empty for a shader that failed to load)
+        [[nodiscard]] const std::string &GetFileText() const { return _text; }
+        /// The fragment stage (every line after the exact `#stage fragment` line, joined with LF) and the file line number of its first
+        /// line, as the cook's parser reads them. False when there is no such line
+        [[nodiscard]] bool GetStage(std::string &source, int &firstLine) const;
 
     private:
         bool Parse(std::string_view text, std::string_view debugName);
+        using PayloadReader = std::function<std::expected<std::vector<std::uint8_t>, std::string>(const std::string &file)>;
+        /// The blob from a manifest and the payload file it names (read through `readPayload`), checked against the header
+        [[nodiscard]] std::optional<Renderer::Common::UserShaderBlob> BlobFromManifest(const nlohmann::json &manifest,
+                                                                                       const PayloadReader &readPayload,
+                                                                                       Renderer::Common::UserShaderTarget target,
+                                                                                       std::string &error) const;
+        /// Compiles (or reads from the shader cache) the payload of `target` from the file's text; nullopt, with `why`, when it can't
+        [[nodiscard]] std::optional<Renderer::Common::UserShaderBlob> MakeRuntimeBlob(Renderer::Common::UserShaderTarget target,
+                                                                                      std::string &why) const;
+        std::string _text;
 
         std::string _name;
         std::vector<ShaderParam> _params;

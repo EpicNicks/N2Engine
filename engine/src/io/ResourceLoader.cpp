@@ -7,6 +7,8 @@
 #include "engine/io/Vfs.hpp"
 #include "engine/rendering/Material.hpp"
 #include "engine/rendering/Model.hpp"
+#include "engine/rendering/RenderSettings.hpp"
+#include <renderer/common/PipelineCache.hpp>
 #include "engine/rendering/Texture.hpp"
 #include "engine/prefabs/PrefabFile.hpp"
 #include "engine/sceneManagement/SceneFile.hpp"
@@ -111,6 +113,13 @@ namespace N2Engine::IO
         _assetsRoot = projectRoot / "assets";
         _metadataRoot = projectRoot / ".import";
         _userDataRoot = userDataRoot.empty() ? ProjectFile::UserDataBase() : userDataRoot;
+        // Where compiled user shaders are kept (RenderSettings; the shader cache of UserShaderCompiler): advisory, so a missing
+        // or unwritable folder only means they are compiled again
+        if (!_userDataRoot.empty())
+        {
+            Rendering::RenderSettings::SetShaderCacheDirectory(_userDataRoot / "cache" / "shaders");
+            Renderer::Common::PipelineCacheFile::SetDirectory(_userDataRoot / "cache"); // the Vulkan renderer's VkPipelineCache file
+        }
 
         // A project in a pack is read from the pack, never written (IsReadOnly)
         _packed = Vfs::Instance().IsMounted(projectRoot);
