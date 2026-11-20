@@ -23,6 +23,7 @@ namespace
         case UniformType::Vec2: return "vec2";
         case UniformType::Vec3: return "vec3";
         case UniformType::Vec4: return "vec4";
+        case UniformType::Mat3: return "mat3";
         case UniformType::Mat4: return "mat4";
         case UniformType::Struct: return "struct";
         }
@@ -103,6 +104,8 @@ std::shared_ptr<const MaterialLayout> MaterialLayout::FromUserShader(const Commo
         case Common::UserParamType::Vec3: type = UniformType::Vec3; break;
         case Common::UserParamType::Vec4:
         case Common::UserParamType::Color: type = UniformType::Vec4; break;
+        case Common::UserParamType::Mat3: type = UniformType::Mat3; break;
+        case Common::UserParamType::Mat4: type = UniformType::Mat4; break;
         case Common::UserParamType::Texture: break;
         }
         layout->names.push_back(param.name);
@@ -129,6 +132,17 @@ BlockMaterial::BlockMaterial(std::shared_ptr<const MaterialLayout> layout, IShad
         {
             const auto value = static_cast<std::int32_t>(entry.values[0]);
             std::memcpy(_block.data() + uniform.offset, &value, sizeof(value));
+        }
+        else if (uniform.type == UniformType::Mat3 || uniform.type == UniformType::Mat4)
+        {
+            // The identity, row by row: a row is a vec4's 16 bytes (a mat3's fourth float is padding)
+            const unsigned dimension = uniform.type == UniformType::Mat3 ? 3u : 4u;
+            for (unsigned row = 0; row < dimension; ++row)
+            {
+                float rowValues[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                rowValues[row] = 1.0f;
+                WriteFloats(uniform.offset + row * 16u, rowValues, 4);
+            }
         }
         else
         {
@@ -246,6 +260,23 @@ void BlockMaterial::SetVec4(const std::string& name, const float x, const float 
 void BlockMaterial::SetVec4(const std::string& name, N2Engine::Math::Vector4& value)
 {
     SetVec4(name, value.x, value.y, value.z, value.w);
+}
+
+void BlockMaterial::SetMatrix(const std::string& name, const float* rowMajor, const unsigned dimension)
+{
+    if (rowMajor == nullptr || (dimension != 3 && dimension != 4))
+    {
+        return;
+    }
+    std::lock_guard lock(_mutex);
+    if (const Uniform* uniform = Find(name, dimension == 3 ? UniformType::Mat3 : UniformType::Mat4, dimension == 3 ? "SetMat3" : "SetMat4"))
+    {
+        // The block holds the rows one after the other, each at a vec4's stride (a mat3's row is three floats and a pad)
+        for (unsigned row = 0; row < dimension; ++row)
+        {
+            WriteFloats(uniform->offset + row * 16u, rowMajor + row * dimension, dimension);
+        }
+    }
 }
 
 void BlockMaterial::SetColor(const std::string& name, const float r, const float g, const float b, const float a)

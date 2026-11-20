@@ -176,6 +176,7 @@ namespace N2Engine::Rendering::UserShaderCompiler
         {
             const ShaderParam *param = nullptr;
             const char *glsl = "";
+            const char *qualifier = ""; ///< what the SPIR-V targets put before the type: a matrix is row_major
             std::uint32_t offset = 0;
             std::uint32_t size = 0;
         };
@@ -210,6 +211,8 @@ namespace N2Engine::Rendering::UserShaderCompiler
                 case ShaderParamType::Vec3: member.glsl = "vec3"; member.size = 12; align = 16; break;
                 case ShaderParamType::Vec4:
                 case ShaderParamType::Color: member.glsl = "vec4"; member.size = 16; align = 16; break;
+                case ShaderParamType::Mat3: member.glsl = "mat3"; member.qualifier = "layout(row_major) "; member.size = 48; align = 16; break;
+                case ShaderParamType::Mat4: member.glsl = "mat4"; member.qualifier = "layout(row_major) "; member.size = 64; align = 16; break;
                 case ShaderParamType::Texture: continue; // a texture is not in the block
                 }
                 member.offset = AlignUp(cursor, align);
@@ -223,7 +226,7 @@ namespace N2Engine::Rendering::UserShaderCompiler
 
         const char *TypeName(const ShaderParamType type)
         {
-            static constexpr std::array<const char *, 8> names{"float", "int", "bool", "vec2", "vec3", "vec4", "color", "texture"};
+            static constexpr std::array<const char *, 10> names{"float", "int", "bool", "vec2", "vec3", "vec4", "color", "texture", "mat3", "mat4"};
             return names[static_cast<std::size_t>(type)];
         }
 
@@ -393,7 +396,7 @@ namespace N2Engine::Rendering::UserShaderCompiler
                     text += "layout(set = 1, binding = 0, std140) uniform Material {\n";
                     for (const Member &member : layout.members)
                     {
-                        text += std::format("    {} {};\n", member.glsl, member.param->name);
+                        text += std::format("    {}{} {};\n", member.qualifier, member.glsl, member.param->name);
                     }
                     text += "};\n";
                 }

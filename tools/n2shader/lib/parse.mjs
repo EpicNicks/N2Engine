@@ -44,6 +44,8 @@ function defaultFor(type) {
     case 'vec3': return [0, 0, 0];
     case 'vec4': return [0, 0, 0, 0];
     case 'color': return [1, 1, 1, 1];
+    case 'mat3': return [1, 0, 0, 0, 1, 0, 0, 0, 1];
+    case 'mat4': return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
     default: return 'white';
   }
 }
@@ -60,6 +62,9 @@ function checkDefault(param, fail) {
     if (!Array.isArray(value) || value.length !== VECTOR_SIZES[type] || !value.every(isNumber)) {
       fail(`parameter "${param.name}": a ${type} default must be an array of ${VECTOR_SIZES[type]} numbers`);
     }
+  }
+  if ((type === 'mat3' || type === 'mat4') && param.hasDefault) {
+    fail(`parameter "${param.name}": a ${type} starts as the identity matrix and takes no "default" (set it from a Material, a .mat file or a script)`);
   }
   if (type === 'texture' && !TEXTURE_DEFAULTS.includes(value)) {
     fail(`parameter "${param.name}": a texture default must be one of ${TEXTURE_DEFAULTS.join(', ')}`);
@@ -105,7 +110,9 @@ export function validateHeader(raw, fail) {
       fail(`parameter "${name}" is reserved for the standard Material field and must be a ${RESERVED_PARAMS[name]}`);
     }
     const param = { name, type, default: entry.default === undefined ? defaultFor(type) : entry.default };
+    param.hasDefault = entry.default !== undefined;
     checkDefault(param, fail);
+    delete param.hasDefault;
     for (const key of ['min', 'max', 'step']) {
       if (entry[key] === undefined) continue;
       if (type !== 'float' && type !== 'int') fail(`parameter "${name}": "${key}" applies to float and int only`);

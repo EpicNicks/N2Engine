@@ -30,6 +30,8 @@ namespace
         case UserParamType::Vec3: return {16, 12, true};
         case UserParamType::Vec4:
         case UserParamType::Color: return {16, 16, true};
+        case UserParamType::Mat3: return {16, 48, true};
+        case UserParamType::Mat4: return {16, 64, true};
         case UserParamType::Texture: return {0, 0, false};
         }
         return {0, 0, false};

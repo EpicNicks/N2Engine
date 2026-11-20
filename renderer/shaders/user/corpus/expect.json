@@ -12,6 +12,7 @@
     { "file": "uint-hash.n2shader" },
     { "file": "while-loop.n2shader", "relaxed": true },
     { "file": "lighting.n2shader" },
+    { "file": "matrix-params.n2shader" },
     { "file": "nan-checks.n2shader" }
   ],
   "negative": [

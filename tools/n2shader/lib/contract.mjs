@@ -56,7 +56,7 @@ export const USES = Object.freeze(['lighting']);
 /** The attributes the engine's vertex stage supplies (fragment-only v1: the lit attribute set) */
 export const VERTEX_ATTRIBUTES = Object.freeze(['aPos', 'aNormal', 'aTexCoord', 'aColor', 'aTangent']);
 
-export const PARAM_TYPES = Object.freeze(['float', 'int', 'bool', 'vec2', 'vec3', 'vec4', 'color', 'texture']);
+export const PARAM_TYPES = Object.freeze(['float', 'int', 'bool', 'vec2', 'vec3', 'vec4', 'color', 'mat3', 'mat4', 'texture']);
 export const TEXTURE_DEFAULTS = Object.freeze(['white', 'black', 'normal', 'none']);
 export const BLEND_MODES = Object.freeze(['none', 'alpha', 'additive', 'premultiplied', 'multiply']);
 export const CULL_MODES = Object.freeze(['none', 'back']);

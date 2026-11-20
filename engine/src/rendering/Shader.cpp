@@ -63,6 +63,8 @@ namespace N2Engine::Rendering
             if (name == "vec4") return ShaderParamType::Vec4;
             if (name == "color") return ShaderParamType::Color;
             if (name == "texture") return ShaderParamType::Texture;
+            if (name == "mat3") return ShaderParamType::Mat3;
+            if (name == "mat4") return ShaderParamType::Mat4;
             return std::nullopt;
         }
 
@@ -78,6 +80,8 @@ namespace N2Engine::Rendering
             case ShaderParamType::Vec4: return "vec4";
             case ShaderParamType::Color: return "color";
             case ShaderParamType::Texture: return "texture";
+            case ShaderParamType::Mat3: return "mat3";
+            case ShaderParamType::Mat4: return "mat4";
             }
             return "float";
         }
@@ -137,6 +141,10 @@ namespace N2Engine::Rendering
                 param.defaultValue[0] = param.type == ShaderParamType::Int ? static_cast<float>(std::trunc(value.get<double>()))
                                                                             : static_cast<float>(value.get<double>());
                 return true;
+            case ShaderParamType::Mat3:
+            case ShaderParamType::Mat4:
+                why = std::format("a {} starts as the identity matrix and takes no default", ParamTypeName(param.type));
+                return false;
             default:
             {
                 const std::size_t count = ComponentCount(param.type);
@@ -624,6 +632,8 @@ namespace N2Engine::Rendering
                 case ShaderParamType::Vec4: param.type = UserParamType::Vec4; break;
                 case ShaderParamType::Color: param.type = UserParamType::Color; break;
                 case ShaderParamType::Texture: param.type = UserParamType::Texture; break;
+                case ShaderParamType::Mat3: param.type = UserParamType::Mat3; break;
+                case ShaderParamType::Mat4: param.type = UserParamType::Mat4; break;
                 }
                 if (declared.type == ShaderParamType::Texture)
                 {

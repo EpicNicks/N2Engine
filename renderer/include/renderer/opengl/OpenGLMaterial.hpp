@@ -38,6 +38,7 @@ namespace Renderer::OpenGL
         void SetVec4(const std::string &name, float x, float y, float z, float w) override;
         void SetVec4(const std::string &name, N2Engine::Math::Vector4 &value) override;
         void SetColor(const std::string &name, float r, float g, float b, float a) override;
+        void SetMatrix(const std::string &name, const float *rowMajor, unsigned dimension) override;
 
         bool IsValid() const override { return _shader && _shader->IsValid(); }
         [[nodiscard]] bool IsUserShaderMaterial() const override { return IsUserShader(); }
@@ -74,5 +75,7 @@ namespace Renderer::OpenGL
         std::unordered_map<std::string, std::array<float, 2>> _vec2s;
         std::unordered_map<std::string, std::array<float, 3>> _vec3s;
         std::unordered_map<std::string, std::array<float, 4>> _vec4s;
+        std::unordered_map<std::string, std::array<float, 9>> _mat3s; // a user shader's mat3 parameters, row-major
+        std::unordered_map<std::string, std::array<float, 16>> _mat4s; // and mat4
     };
 }

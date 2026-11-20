@@ -122,6 +122,9 @@ export function checkCapabilities(disassembly, target) {
 function wgslTypeInfo(type) {
   const trimmed = type.trim();
   if (/^(?:f32|i32|u32)$/.test(trimmed)) return { size: 4, align: 4 };
+  // a row_major mat3 or mat4 in the SPIR-V is the transposed WGSL matrix of the same size: 48 bytes and 64, 16-aligned
+  if (/^mat3x3(?:<\s*f32\s*>|f)$/.test(trimmed)) return { size: 48, align: 16 };
+  if (/^mat4x4(?:<\s*f32\s*>|f)$/.test(trimmed)) return { size: 64, align: 16 };
   const vector = /^vec([234])<\s*(?:f32|i32|u32)\s*>$/.exec(trimmed) ?? /^vec([234])(?:f|i|u)$/.exec(trimmed);
   if (vector) {
     const count = Number(vector[1]);

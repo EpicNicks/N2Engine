@@ -1172,6 +1172,33 @@ namespace N2Engine::Scripting::Bindings
             { return h.ForWrite().SetVec4(name, static_cast<float>(x), static_cast<float>(y), static_cast<float>(z), static_cast<float>(w)); },
             "SetColor", [](LuaMaterialHandle &h, const std::string &name, const Common::Color &color)
             { return h.ForWrite().SetColor(name, color); },
+            // A mat3 (nine numbers) or mat4 (sixteen), row by row: Lua's table or a list of numbers. Anything else is an error
+            "SetMat3", [](LuaMaterialHandle &h, const std::string &name, const sol::table &rows)
+            {
+                std::array<float, 9> values{};
+                if (rows.size() != 9)
+                {
+                    throw std::runtime_error("MaterialInstance:SetMat3 needs a table of 9 numbers, row by row");
+                }
+                for (std::size_t i = 0; i < 9; ++i)
+                {
+                    values[i] = rows.get<sol::optional<float>>(i + 1).value_or(0.0f);
+                }
+                return h.ForWrite().SetMat3(name, values);
+            },
+            "SetMat4", [](LuaMaterialHandle &h, const std::string &name, const sol::table &rows)
+            {
+                std::array<float, 16> values{};
+                if (rows.size() != 16)
+                {
+                    throw std::runtime_error("MaterialInstance:SetMat4 needs a table of 16 numbers, row by row");
+                }
+                for (std::size_t i = 0; i < 16; ++i)
+                {
+                    values[i] = rows.get<sol::optional<float>>(i + 1).value_or(0.0f);
+                }
+                return h.ForWrite().SetMat4(name, values);
+            },
             "SetTexture", [](LuaMaterialHandle &h, const std::string &name, sol::optional<std::string> path)
             {
                 std::shared_ptr<Rendering::Texture> texture;

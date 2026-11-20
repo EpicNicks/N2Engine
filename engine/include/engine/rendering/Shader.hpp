@@ -30,6 +30,8 @@ namespace N2Engine::Rendering
         Vec4,
         Color, ///< a vec4 with an editor colour picker
         Texture,
+        Mat3, ///< a 3x3 matrix, row-major, the identity until set (no default is declared)
+        Mat4, ///< a 4x4 matrix, row-major, the identity until set
     };
 
     /// One declared parameter. The reserved names bind to the standard Material fields: a `color` named baseColor takes the

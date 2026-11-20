@@ -39,6 +39,15 @@ namespace Renderer::Common
         virtual void SetVec4(const std::string &name, N2Engine::Math::Vector4 &value) = 0;
         virtual void SetColor(const std::string &name, float r, float g, float b, float a) = 0;
         virtual void SetTexture(ITexture *texture) = 0;
+        /// Sets a user shader's mat3 (`dimension` 3, 9 values) or mat4 (`dimension` 4, 16 values) parameter, the values ROW-major
+        /// (row 0 first). The parameter must be declared with that dimension; otherwise the call is ignored with one warning. The
+        /// default does nothing, for a backend or a test fake that has no user shaders
+        virtual void SetMatrix(const std::string &name, const float *rowMajor, unsigned dimension)
+        {
+            static_cast<void>(name);
+            static_cast<void>(rowMajor);
+            static_cast<void>(dimension);
+        }
         /// Sets (or, with null, clears) one of the extra textures. The default does nothing, for a backend or a
         /// test fake without them; GetAuxTexture then reads null.
         virtual void SetAuxTexture(AuxTexture, ITexture *) {}

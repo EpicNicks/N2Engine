@@ -63,7 +63,7 @@ export function materialSection(target, header) {
       for (const member of members) lines.push(`uniform ${member.glsl} ${member.name};`);
     } else {
       lines.push('layout(set = 1, binding = 0, std140) uniform Material {');
-      for (const member of members) lines.push(`    ${member.glsl} ${member.name};`);
+      for (const member of members) lines.push(`    ${member.qualifier}${member.glsl} ${member.name};`);
       lines.push('};');
     }
   }

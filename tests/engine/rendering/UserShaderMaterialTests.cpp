@@ -112,6 +112,11 @@ namespace
         void SetVec3(const std::string &n, float x, float y, float z) override { names.insert(n); vecs[n] = {x, y, z, 0}; }
         void SetVec4(const std::string &n, float x, float y, float z, float w) override { names.insert(n); vecs[n] = {x, y, z, w}; }
         void SetColor(const std::string &n, float r, float g, float b, float a) override { names.insert(n); vecs[n] = {r, g, b, a}; }
+        void SetMatrix(const std::string &n, const float *rowMajor, unsigned dimension) override
+        {
+            names.insert(n);
+            mats[n] = std::vector<float>(rowMajor, rowMajor + dimension * dimension);
+        }
         void SetAuxTexture(Renderer::Common::AuxTexture which, Renderer::Common::ITexture *t) override
         {
             slots[1 + static_cast<std::size_t>(which)] = t;
@@ -122,6 +127,7 @@ namespace
         std::map<std::string, int> ints;
         std::map<std::string, float> floats;
         std::map<std::string, std::array<float, 4>> vecs;
+        std::map<std::string, std::vector<float>> mats; ///< a mat3's nine values or a mat4's sixteen, row-major, as SetMatrix got them
         std::array<Renderer::Common::ITexture *, 5> slots{};
     };
 
@@ -260,7 +266,7 @@ void main() {}
 #stage fragment
 void main() {}
 )", "n2_");
-    refused(R"({ "n2shader": 1, "params": [ {"name": "a", "type": "mat4"} ] }
+    refused(R"({ "n2shader": 1, "params": [ {"name": "a", "type": "mat2"} ] }
 #stage fragment
 void main() {}
 )", "unknown type");
@@ -1069,3 +1075,112 @@ TEST_F(ShaderMatAssetTest, AShadersBlendHintSetsTheMaterialsModeUnlessTheMatSays
     slot.SetShader(load("blend_alpha")->GetShader());
     EXPECT_EQ(slot.GetMaterial()->GetBlendMode(), Rendering::BlendMode::Alpha);
 }
+// ===== Stage 9c: mat3 and mat4 parameters =====
+
+namespace
+{
+    std::shared_ptr<Shader> MatrixShader()
+    {
+        auto shader = Shader::FromSource(
+            "{ \"n2shader\": 1, \"name\": \"Mats\", \"params\": [\n"
+            "  { \"name\": \"u_Gain\", \"type\": \"float\", \"default\": 1 },\n"
+            "  { \"name\": \"u_Uv\", \"type\": \"mat3\" },\n"
+            "  { \"name\": \"u_Xform\", \"type\": \"mat4\" } ] }\n"
+            "#stage fragment\nvoid main() { n2_FragColor = vec4(1.0); }\n",
+            "mats.n2shader");
+        EXPECT_NE(shader, nullptr);
+        return shader;
+    }
+
+    constexpr std::array<float, 9> kIdentity3{1, 0, 0, 0, 1, 0, 0, 0, 1};
+    constexpr std::array<float, 16> kIdentity4{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+}
+
+TEST(MatrixParamTest, TheHeaderDeclaresThemAndTakesNoDefault)
+{
+    const auto shader = MatrixShader();
+    ASSERT_NE(shader, nullptr);
+    EXPECT_EQ(shader->FindParam("u_Uv")->type, ShaderParamType::Mat3);
+    EXPECT_EQ(shader->FindParam("u_Xform")->type, ShaderParamType::Mat4);
+    WarningCapture capture;
+    EXPECT_EQ(Shader::FromSource("{ \"n2shader\": 1, \"name\": \"M\", \"params\": [ { \"name\": \"u_M\", \"type\": \"mat4\", \"default\": [1] } ] }\n"
+                                 "#stage fragment\nvoid main() {}\n", "bad.n2shader"),
+              nullptr);
+}
+
+TEST(MatrixParamTest, AMaterialHoldsThemRowMajorAndTheyStartAsTheIdentity)
+{
+    auto material = Material::Create(ShadingModel::Unlit);
+    material->SetShader(MatrixShader());
+    EXPECT_TRUE(std::equal(kIdentity3.begin(), kIdentity3.end(), material->GetParam("u_Uv")->matrix.begin()));
+    EXPECT_EQ(material->GetParam("u_Xform")->matrix, kIdentity4);
+    EXPECT_TRUE(material->GetParams().empty());
+
+    WarningCapture capture;
+    const std::array<float, 9> uv{2, 0, 0.5f, 0, 3, 0.25f, 0, 0, 1};
+    EXPECT_TRUE(material->SetMat3("u_Uv", uv));
+    std::array<float, 16> xform{};
+    for (std::size_t i = 0; i < 16; ++i)
+    {
+        xform[i] = static_cast<float>(i + 1);
+    }
+    xform[5] = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_TRUE(material->SetMat4("u_Xform", xform));
+    EXPECT_TRUE(capture.messages.empty());
+    EXPECT_TRUE(std::equal(uv.begin(), uv.end(), material->GetParam("u_Uv")->matrix.begin()));
+    EXPECT_EQ(material->GetParam("u_Xform")->matrix[4], 5.0f);
+    EXPECT_EQ(material->GetParam("u_Xform")->matrix[5], 0.0f) << "a value that is not finite is zero";
+
+    // The wrong setter and the wrong name are refused, as for every other type
+    EXPECT_FALSE(material->SetMat4("u_Uv", xform));
+    EXPECT_FALSE(material->SetMat3("u_Xform", uv));
+    EXPECT_FALSE(material->SetMat3("u_Gain", uv));
+    EXPECT_FALSE(material->SetVec4("u_Xform", 1, 2, 3, 4));
+    EXPECT_FALSE(material->SetMat4("nope", xform));
+    EXPECT_FALSE(capture.messages.empty());
+}
+
+TEST(MatrixParamTest, TheMatKeyIsAnArrayOfNineOrSixteenNumbersAndRoundTrips)
+{
+    auto material = Material::Create(ShadingModel::Unlit);
+    material->SetShader(MatrixShader());
+    const std::array<float, 9> uv{2, 0, 0.5f, 0, 3, 0.25f, 0, 0, 1};
+    ASSERT_TRUE(material->SetMat3("u_Uv", uv));
+    const json saved = material->ToJson();
+    ASSERT_TRUE(saved.at("params").contains("u_Uv"));
+    EXPECT_EQ(saved.at("params").at("u_Uv").size(), 9u);
+    EXPECT_EQ(saved.at("params").at("u_Uv")[2], 0.5f);
+    EXPECT_FALSE(saved.at("params").contains("u_Xform")) << "an unset matrix is not written";
+
+    // Read back through the Material that names the shader (a .mat names it by path; here it is the same asset)
+    auto again = Material::Create(ShadingModel::Unlit);
+    again->SetShader(material->GetShader()); // the same shader asset: a .mat names it
+    WarningCapture capture;
+    again->SetMat3("u_Uv", uv);
+    EXPECT_EQ(again->ToJson(), saved);
+    EXPECT_TRUE(capture.messages.empty());
+}
+
+TEST(MatrixParamTest, ApplyUniformsGivesTheBackendTheMatricesRowMajorAndTheIdentityForAnUnsetOne)
+{
+    auto material = Material::Create(ShadingModel::Unlit);
+    material->SetShader(MatrixShader());
+    const std::array<float, 9> uv{2, 0, 0.5f, 0, 3, 0.25f, 0, 0, 1};
+    ASSERT_TRUE(material->SetMat3("u_Uv", uv));
+
+    Renderer::Software::SWShader softwareShader(Renderer::Software::SWShaderType::Unlit);
+    FakeUserMaterial target(&softwareShader);
+    material->ApplyUniforms(target, Common::Color::White);
+    ASSERT_EQ(target.mats.count("u_Uv"), 1u);
+    EXPECT_EQ(target.mats["u_Uv"], std::vector<float>(uv.begin(), uv.end()));
+    // An unset mat3 is the 3x3 identity (nine values), not the first nine of a 4x4's
+    auto fresh = Material::Create(ShadingModel::Unlit);
+    fresh->SetShader(material->GetShader());
+    FakeUserMaterial untouched(&softwareShader);
+    fresh->ApplyUniforms(untouched, Common::Color::White);
+    EXPECT_EQ(untouched.mats["u_Uv"], std::vector<float>(kIdentity3.begin(), kIdentity3.end()));
+    ASSERT_EQ(target.mats.count("u_Xform"), 1u) << "an unset matrix is still given: the identity";
+    EXPECT_EQ(target.mats["u_Xform"], std::vector<float>(kIdentity4.begin(), kIdentity4.end()));
+    EXPECT_EQ(target.floats["u_Gain"], 1.0f);
+}
+

@@ -364,3 +364,83 @@ TEST(UserShaderBlobTest, TheMaterialOutlivesTheShaderLayoutItWasMadeFrom)
     EXPECT_TRUE(owner.warnings.empty());
     EXPECT_EQ(FloatAt(material->TakeSnapshot(), 16), 2.0f);
 }
+
+// ===== Stage 9c: mat3 and mat4 parameters =====
+
+TEST(UserShaderBlobTest, AMatrixParameterIsRowMajorStd140WithVec4StridedRows)
+{
+    UserShaderBlob blob;
+    blob.name = "Mats";
+    blob.blockSize = 144;
+    blob.params = {
+        {"u_Gain", UserParamType::Float, 0, 4, 0, {1, 0, 0, 0}, UserTextureDefault::White},
+        {"u_Uv", UserParamType::Mat3, 16, 48, 0, {}, UserTextureDefault::White},
+        {"u_Xform", UserParamType::Mat4, 64, 64, 0, {}, UserTextureDefault::White},
+    };
+    EXPECT_TRUE(Renderer::Common::ValidateUserShaderParams(blob).empty()) << Renderer::Common::ValidateUserShaderParams(blob);
+    blob.params[1].size = 36; // a mat3 is 48 bytes in std140
+    EXPECT_FALSE(Renderer::Common::ValidateUserShaderParams(blob).empty());
+    blob.params[1].size = 48;
+    blob.params[1].offset = 8; // and 16-aligned
+    EXPECT_FALSE(Renderer::Common::ValidateUserShaderParams(blob).empty());
+    blob.params[1].offset = 16;
+
+    const auto layout = MaterialLayout::FromUserShader(blob);
+    ASSERT_NE(layout, nullptr);
+    BlockMaterial material(layout, nullptr, nullptr, {}, {});
+    const float uv[9] = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+    material.SetMatrix("u_Uv", uv, 3);
+    const float xform[16] = {11, 12, 13, 14, 21, 22, 23, 24, 31, 32, 33, 34, 41, 42, 43, 44};
+    material.SetMatrix("u_Xform", xform, 4);
+    material.SetMatrix("u_Uv", xform, 4); // the wrong dimension for the parameter: ignored
+    const auto snapshot = material.TakeSnapshot();
+    const auto at = [&](const std::size_t offset)
+    {
+        float value;
+        std::memcpy(&value, snapshot.block.data() + offset, sizeof(value));
+        return value;
+    };
+    // a mat3's rows are 16 bytes apart (three floats and a pad), a mat4's four floats each
+    EXPECT_EQ(at(16), 1.0f);
+    EXPECT_EQ(at(24), 3.0f);
+    EXPECT_EQ(at(28), 0.0f) << "the padding of a mat3's row";
+    EXPECT_EQ(at(32), 4.0f);
+    EXPECT_EQ(at(48), 7.0f);
+    EXPECT_EQ(at(56), 9.0f);
+    EXPECT_EQ(at(64), 11.0f);
+    EXPECT_EQ(at(76), 14.0f);
+    EXPECT_EQ(at(80), 21.0f);
+    EXPECT_EQ(at(124), 44.0f);
+    EXPECT_EQ(at(0), 1.0f) << "the float default is untouched";
+}
+
+TEST(UserShaderBlobTest, ANewMaterialHoldsTheIdentityForItsMatrices)
+{
+    UserShaderBlob blob;
+    blob.name = "Mats";
+    blob.blockSize = 112;
+    blob.params = {
+        {"u_Uv", UserParamType::Mat3, 0, 48, 0, {}, UserTextureDefault::White},
+        {"u_Xform", UserParamType::Mat4, 48, 64, 0, {}, UserTextureDefault::White},
+    };
+    const auto layout = MaterialLayout::FromUserShader(blob);
+    ASSERT_NE(layout, nullptr);
+    BlockMaterial material(layout, nullptr, nullptr, {}, {});
+    const auto snapshot = material.TakeSnapshot();
+    const auto at = [&](const std::size_t offset)
+    {
+        float value;
+        std::memcpy(&value, snapshot.block.data() + offset, sizeof(value));
+        return value;
+    };
+    EXPECT_EQ(at(0), 1.0f);
+    EXPECT_EQ(at(4), 0.0f);
+    EXPECT_EQ(at(16), 0.0f);
+    EXPECT_EQ(at(20), 1.0f);
+    EXPECT_EQ(at(40), 1.0f);
+    EXPECT_EQ(at(48), 1.0f);
+    EXPECT_EQ(at(52), 0.0f);
+    EXPECT_EQ(at(68), 1.0f);
+    EXPECT_EQ(at(88), 1.0f);
+    EXPECT_EQ(at(108), 1.0f);
+}
