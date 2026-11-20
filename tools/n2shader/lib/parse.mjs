@@ -158,13 +158,14 @@ export function validateHeader(raw, fail) {
 
   const targetsRaw = raw.targets ?? {};
   if (targetsRaw === null || typeof targetsRaw !== 'object' || Array.isArray(targetsRaw)) fail('"targets" must be an object');
+  let webgpu = 'generated';
   for (const [target, mode] of Object.entries(targetsRaw)) {
     if (target !== 'webgpu') fail(`unknown target "${target}" in "targets"`);
-    if (mode === 'authored') fail('"targets": {"webgpu": "authored"} is not supported in v1: the cook generates the WGSL (no authored-WGSL override)');
-    if (mode !== 'generated') fail('"targets": {"webgpu"} must be "generated"');
+    if (mode !== 'generated' && mode !== 'authored') fail('"targets": {"webgpu"} must be "generated" or "authored"');
+    webgpu = mode;
   }
 
-  return { name: raw.name, params, uses, state, targets: { webgpu: 'generated' } };
+  return { name: raw.name, params, uses, state, targets: { webgpu } };
 }
 
 /**
@@ -185,10 +186,12 @@ export function parseN2Shader(text, { path = 'shader.n2shader' } = {}) {
 
   const stageIndex = lines.findIndex((line) => line === '#stage fragment');
   if (stageIndex < 0) fail('no "#stage fragment" line (the header must be followed by a line that is exactly #stage fragment)');
+  let wgslIndex = -1; // the optional "#stage wgsl" (authored WebGPU), after the fragment stage
   for (let index = 0; index < lines.length; index += 1) {
     if (index === stageIndex || !/^\s*#\s*stage\b/.test(lines[index])) continue;
     if (index < stageIndex) fail('"#stage" inside the header', index + 1);
     if (/^\s*#\s*stage\s+vertex\b/.test(lines[index])) fail('"#stage vertex" is reserved: v1 supplies the vertex stage', index + 1);
+    if (lines[index] === '#stage wgsl' && wgslIndex < 0) { wgslIndex = index; continue; }
     fail(`unknown or repeated stage line ${JSON.stringify(lines[index].trim())}`, index + 1);
   }
 
@@ -201,7 +204,15 @@ export function parseN2Shader(text, { path = 'shader.n2shader' } = {}) {
     fail(`the header is not valid JSON: ${error.message}`, 1);
   }
   const header = validateHeader(raw, (message) => fail(message, 1));
-  const source = lines.slice(stageIndex + 1).join('\n');
+  const authored = header.targets.webgpu === 'authored';
+  if (authored && wgslIndex < 0) fail('"targets": {"webgpu": "authored"} needs a "#stage wgsl" block after the fragment stage', stageIndex + 1);
+  if (!authored && wgslIndex >= 0) fail('a "#stage wgsl" block needs "targets": {"webgpu": "authored"} in the header (otherwise the WGSL is generated)', wgslIndex + 1);
+  const source = lines.slice(stageIndex + 1, wgslIndex < 0 ? undefined : wgslIndex).join('\n');
   if (source.trim() === '') fail('the fragment stage is empty', stageIndex + 1);
-  return { header, source, firstLine: stageIndex + 2, lines: lines.length };
+  const parsed = { header, source, firstLine: stageIndex + 2, lines: lines.length };
+  if (wgslIndex >= 0) {
+    parsed.wgsl = lines.slice(wgslIndex + 1).join('\n');
+    parsed.wgslFirstLine = wgslIndex + 2;
+  }
+  return parsed;
 }

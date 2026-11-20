@@ -1,0 +1,20 @@
+{ "n2shader": 1, "name": "AuthoredWgsl",
+  "params": [ { "name": "u_Color", "type": "color", "default": [1, 0.5, 0, 1] } ],
+  "targets": { "webgpu": "authored" } }
+#stage fragment
+// Vulkan and OpenGL compile this GLSL as for any shader; the WebGPU build uses the #stage wgsl block below instead of the WGSL Tint would
+// make from it (stage 9f). The two are the author's to keep equal.
+void main() {
+    n2_FragColor = u_Color * n2_Color * vec4(n2_UV.x, 1.0, 1.0, 1.0);
+}
+#stage wgsl
+struct Material {
+  u_Color : vec4<f32>,
+}
+
+@group(1) @binding(0) var<uniform> material : Material;
+
+@fragment
+fn main(@location(0) n2_UV : vec2<f32>, @location(1) n2_Color : vec4<f32>) -> @location(0) vec4<f32> {
+  return material.u_Color * n2_Color * vec4<f32>(n2_UV.x, 1.0, 1.0, 1.0);
+}

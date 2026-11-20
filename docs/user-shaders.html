@@ -171,6 +171,25 @@ void main() {
 </ul>
 <p>The conformance corpus in <code>renderer/shaders/user/corpus</code> has a working example of each of these and a refused one of the rest.</p>
 
+<h2 id="authored-wgsl">Authored WGSL for the web</h2>
+<p>By default the WebGPU build runs the WGSL that Tint makes from your GLSL, so one source drives every backend. When that translation gets in the way (a feature WGSL has and GLSL does not, a hand-tuned loop), a shader can supply its own WGSL for the web only. Set <code>"targets": { "webgpu": "authored" }</code> in the header and add a <code>#stage wgsl</code> block after the fragment stage:</p>
+<pre><code>{ "n2shader": 1, "name": "Tint", "params": [ { "name": "u_Color", "type": "color", "default": [1, 0.5, 0, 1] } ],
+  "targets": { "webgpu": "authored" } }
+#stage fragment
+void main() { n2_FragColor = u_Color * n2_Color; }     // Vulkan and OpenGL
+#stage wgsl
+struct Material { u_Color : vec4&lt;f32&gt;, }
+@group(1) @binding(0) var&lt;uniform&gt; material : Material;
+@fragment
+fn main(@location(1) n2_Color : vec4&lt;f32&gt;) -&gt; @location(0) vec4&lt;f32&gt; { return material.u_Color * n2_Color; }</code></pre>
+<p>The GLSL still feeds Vulkan and OpenGL (and the runtime compiler); keeping the two equal is yours. To start from the generated WGSL, cook the shader without the <code>targets</code> line and copy <code>shader.webgpu.wgsl</code>. The cook still holds the module to the contract, and tells you the file and line:</p>
+<ul>
+<li>One <code>@fragment fn main</code>, its inputs written as parameters (<code>@location(0)</code> <code>n2_UV</code> <code>vec2&lt;f32&gt;</code>, <code>1</code> <code>n2_Color</code> <code>vec4&lt;f32&gt;</code>, <code>2</code> <code>n2_WorldPos</code> <code>vec3&lt;f32&gt;</code>, <code>3</code> <code>n2_Normal</code> <code>vec3&lt;f32&gt;</code>, <code>4</code> <code>n2_Tangent</code> <code>vec4&lt;f32&gt;</code>, any subset), returning <code>@location(0) vec4&lt;f32&gt;</code>. No <code>@vertex</code>, no <code>@compute</code>, no <code>enable</code>, <code>requires</code> or <code>diagnostic</code> directive.</li>
+<li>Only the contract's resources: <code>@group(0) @binding(0)</code> the per-draw block with the contract's members in its order (only if you use it), <code>@group(0) @binding(1)</code> the lighting block with <code>"uses": ["lighting"]</code>, <code>@group(1) @binding(0)</code> the Material struct laid out as the header says (same member names, order and offsets), and for each texture parameter <code>texture_2d&lt;f32&gt;</code> <code>n2_tex<em>N</em></code> at binding <code>1 + slot</code> and <code>sampler</code> <code>n2_samp<em>N</em></code> at <code>6 + slot</code>.</li>
+<li>Tint and naga both read it (and Tint writes it back to SPIR-V), as for a generated module. At most 256 KiB.</li>
+</ul>
+<p>The player validates the module again with the browser's own WGSL compiler, so a module that slips past the cook makes the shader draw as the <a href="#fallback">fallback</a>, never crash. The manifest of an authored shader lists <code>"authored": ["webgpu"]</code>.</p>
+
 <h2 id="use">Using a shader</h2>
 <ul>
 <li><strong>On a Material:</strong> set <code>"shader": "res://shaders/dissolve.n2shader"</code> and <code>"params": {...}</code> in the <code>.mat</code> (or <code>Material::SetShader</code> and the typed setters), and every user of the Material draws with it. In Lua, <code>Material.Load</code> gives the shared asset and <code>renderer:GetMaterialInstance(slot)</code> a copy that is yours alone (<a href="meshes.html#materials">Materials</a>).</li>
