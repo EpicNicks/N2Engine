@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <mutex>
 #include <string>
 
 namespace N2Engine::Rendering
@@ -32,6 +33,49 @@ namespace N2Engine::Rendering
             static std::atomic<UserShaderErrorStyle> style{UserShaderErrorStyle::Unlit};
             return style;
         }
+    }
+
+    namespace
+    {
+        std::atomic<bool> &RuntimeCompile()
+        {
+            static std::atomic<bool> enabled{false};
+            return enabled;
+        }
+
+        std::mutex &CacheMutex()
+        {
+            static std::mutex mutex;
+            return mutex;
+        }
+
+        std::filesystem::path &CacheDirectory()
+        {
+            static std::filesystem::path directory;
+            return directory;
+        }
+    }
+
+    bool RenderSettings::GetRuntimeShaderCompile()
+    {
+        return RuntimeCompile().load();
+    }
+
+    void RenderSettings::SetRuntimeShaderCompile(const bool enabled)
+    {
+        RuntimeCompile().store(enabled);
+    }
+
+    std::filesystem::path RenderSettings::GetShaderCacheDirectory()
+    {
+        const std::lock_guard lock(CacheMutex());
+        return CacheDirectory();
+    }
+
+    void RenderSettings::SetShaderCacheDirectory(std::filesystem::path directory)
+    {
+        const std::lock_guard lock(CacheMutex());
+        CacheDirectory() = std::move(directory);
     }
 
     UserShaderErrorStyle RenderSettings::GetUserShaderErrorStyle()

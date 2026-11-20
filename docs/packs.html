@@ -151,6 +151,24 @@
 </ul>
 <p>Tests: <code>tools/n2build/shaders.test.mjs</code> (the pack's shader files and their order, the same bytes as <code>n2shader cook</code>, the strip option, the Tint pin and download against a fake server).</p>
 
+<h2 id="shaders-device">Compiling shaders on the device <span class="badge">user shaders, stage 7</span></h2>
+<p>A shipped game always carries the cooked payloads (and its sources, unless stripped). When a payload is missing, stale (the header or the contract changed since the cook) or is for another backend, the engine can build it from the <code>.n2shader</code> itself, once, and keep the result. <code>Shader::MakeBlob</code> tries the cooked data first (<code>MakeCookedBlob</code>) and then this:</p>
+<table>
+<thead><tr><th>Backend</th><th>On the device</th></tr></thead>
+<tbody>
+<tr><td>OpenGL (desktop)</td><td><strong>Always.</strong> The payload is the generated text (the prelude, the Material block, the author's stage behind a <code>#line</code>); the driver compiles it. No compiler of ours is involved, so no option is needed.</td></tr>
+<tr><td>Vulkan (desktop)</td><td><strong>With glslang linked and the setting on.</strong> Build with <code>-DN2ENGINE_RUNTIME_SHADER_COMPILER=ON</code> (off by default; it pulls the pinned glslang 15.3.0 from <code>cmake/Glslang.cmake</code>, SHA-256 checked, and adds about 4&ndash;5 MB to a binary) and turn on <code>RenderSettings::SetRuntimeShaderCompile</code> (the editor host does; a player's project setting is <code>rendering.runtimeShaderCompile</code>, false by default). The result is what <code>glslangValidator -V --target-env vulkan1.1</code> makes: the same flags, so the same SPIR-V bytes when the glslang is the same version.</td></tr>
+<tr><td>WebGPU, Android, iOS</td><td>Never: the web ships cooked WGSL (the browser compiles it), and the mobile players ship cooked SPIR-V.</td></tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Same text as the cook.</strong> <code>UserShaderCompiler::BuildSource</code> is the C++ twin of <code>tools/n2shader/lib/prelude.mjs</code>: the prelude templates of <code>renderer/shaders/user/prelude</code> are embedded at configure time (<code>engine/CMakeLists.txt</code>), the Material block is laid out as std140 the same way, and glslang's own reflection of the compiled <code>Material</code> block (size and each member's offset) is checked against that layout before the module is used. <code>UserShaderCompilerTest</code> compares the OpenGL text and, in a build with glslang, the SPIR-V with the cook's committed output (<code>tests/renderer/fixtures/user-shaders</code>).</li>
+<li><strong>Not done on the device:</strong> the cook's lint (an authoring aid; what protects a player is the size limits and <code>ValidateUserShaderBlob</code>'s SPIR-V allow-list) and WGSL (Tint is not linked). A compile error is a refusal with the cook's form of diagnostic, <code>file:line: ...</code>, logged once with the Material's fallback; it never stops a frame. A pack made with stripped sources has nothing to compile.</li>
+<li><strong>The shader cache.</strong> <code>user://cache/shaders/&lt;key&gt;/</code> holds the manifest and the payload; the key is the SHA-256 of the file's text, the prelude templates, the contract, the compiler (<code>Glslang Version: 11:15.3.0</code>) and the target, so a changed engine, prelude or glslang is a different key. An entry is used only when its payload is the one its manifest hashed, written through a temporary file and renamed, and the folder is pruned past 256 entries (oldest first). A missing or damaged entry only means compiling again.</li>
+<li><strong>The Vulkan pipeline cache.</strong> The renderer keeps one <code>VkPipelineCache</code>, made on the first pipeline, so a pipeline is built once per driver rather than every run: saved at shutdown to <code>user://cache/vk-pipelines-&lt;vendor&gt;-&lt;device&gt;.bin</code> and read back only when the header names this vendor, device and driver build (<code>pipelineCacheUUID</code>), at most 64 MiB. Pipelines are still made on first use; pre-warming a Material's likely states at load is not done yet.</li>
+<li><strong>Not isolated.</strong> glslang runs on the calling thread (the first draw of a Material), not in a worker or another process, and has no time limit: it is the opt-in, hostile-input surface of proposal section 8, which is why it is off in players. Untrusted mods should ship cooked payloads.</li>
+</ul>
+
 <h2 id="players">How a player finds its game</h2>
 <p>The desktop player (<code>players/desktop</code>, <code>Player::ResolveGame</code>):</p>
 <ul>

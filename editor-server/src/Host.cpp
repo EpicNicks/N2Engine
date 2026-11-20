@@ -342,6 +342,10 @@ namespace N2Engine::Editor
             Rendering::RenderSettings::SetUserShaderErrorStyle(options.playScene.empty() ? Rendering::UserShaderErrorStyle::Magenta
                                                                                           : Rendering::UserShaderErrorStyle::Unlit);
 
+            // The editor host may compile a user shader it has no cooked payload for (needs a build with N2ENGINE_RUNTIME_SHADER_COMPILER;
+            // the project's rendering.runtimeShaderCompile can still turn it off); a player leaves it off
+            Rendering::RenderSettings::SetRuntimeShaderCompile(true);
+
             auto &app = Application::GetInstance();
             const EngineHealth health = app.Init({
                 .projectPath = projectDir.string(),

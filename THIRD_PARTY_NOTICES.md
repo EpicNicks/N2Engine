@@ -38,6 +38,7 @@ configure time into the build tree). This file is a record of what the repositor
 | OpenAL Soft 1.24.0 (kcat/openal-soft tag `1.24.0`, unmodified; source: <https://github.com/kcat/openal-soft/tree/1.24.0>) | `FetchContent` in the root `CMakeLists.txt` | GNU LGPL (see `COPYING` in its source tree); see "OpenAL Soft (LGPL)" below |
 | NVIDIA PhysX 5.6.1 (libraries and DLLs; Copyright (c) 2008-2025 NVIDIA Corporation) | Downloaded from this repository's `physx-dependencies-windows-5.6.1` release (Windows: the slim `physx-windows-x86_64-5.6.1-slim.zip`, derived from the original `bin.zip` whose build recipe is unknown, SHA256 pinned in `cmake/PhysXWindowsHashes.cmake`) or `physx-dependencies-linux-5.6.1` release (Linux: static libraries built from the PhysX 107.3-omni-and-physx-5.6.1 tag, SHA256 pinned in `cmake/PhysXLinuxHashes.cmake`; each archive carries PhysX's `LICENSE.md`) into `external/PhysX/` when `N2ENGINE_USE_PHYSX` is ON (the headers are vendored in `external/PhysX/physx/include/`, see above), or, for the web (Emscripten) build, compiled from source by `scripts/web-build-physx.sh` (see "PhysX on the web" below). Any third-party notices shipped inside the native PhysX archives have not been verified | BSD 3-Clause |
 | FreeType 2.13.3 (optional) | `FetchContent` in `text/CMakeLists.txt` when `N2ENGINE_TEXT_FREETYPE` is ON | FreeType License (FTL), chosen from FreeType's FTL / GPLv2 dual licence; credit below |
+| glslang 15.3.0 (optional: only with `N2ENGINE_RUNTIME_SHADER_COMPILER`, off by default; the editor host and players that opt in to compiling user shaders on the device) | Downloaded by `cmake/Glslang.cmake` (the GitHub release source archive, checked against a pinned SHA-256) and built with the engine as static libraries `glslang`, `SPIRV` and `glslang-default-resource-limits` (no SPIRV-Tools, no HLSL, no tools); see "glslang (runtime shader compiler)" below | BSD 3-Clause (Copyright The Khronos Group Inc. and others), with the notices below |
 | GoogleTest 1.17.0 (tests only, not shipped) | `FetchContent` in the root `CMakeLists.txt` when `N2ENGINE_BUILD_TESTS` is ON | BSD 3-Clause |
 | Dawn (prebuilt `libwebgpu_dawn.a` and headers, release `v20261016.190333`, commit `67d4d6e64b0755d638f76549794692badfdbc8ab`; the WebGPU CI harness only, not shipped) | Downloaded by `cmake/DawnPrebuilt.cmake` when `N2ENGINE_RENDERER_WEBGPU` is ON (OFF by default, Linux x86_64 only), checked against a pinned SHA-256; see "Dawn (WebGPU CI harness)" below | BSD 3-Clause (Copyright The Dawn & Tint Authors), with the licences of the dependencies linked into the library |
 
@@ -120,6 +121,21 @@ OpenGL ES and Null backends (compiled in, not used); Tint, Dawn's shader compile
 and Vulkan-Headers and the Khronos EGL headers it was compiled against (header-only: Apache 2.0, MIT or a Khronos licence, as each
 header says). The archive has no Direct3D, Metal or Windows code. At run time Dawn loads `libvulkan` (the system's loader) and, in
 CI, Mesa lavapipe (MIT) as the driver: CI tools, not shipped (see below).
+
+## glslang (runtime shader compiler)
+
+User shaders (`.n2shader`, orchestrator/proposals/user-shaders.md) are normally cooked at build time (`tools/n2shader`). A build with
+`N2ENGINE_RUNTIME_SHADER_COMPILER=ON` also links glslang 15.3.0 (<https://github.com/KhronosGroup/glslang/releases/tag/15.3.0>, the source
+archive pinned by SHA-256 in `cmake/Glslang.cmake`, nothing vendored or patched) so the engine can compile the GLSL of a user shader to
+SPIR-V on the machine: only the `glslang`, `SPIRV` and `glslang-default-resource-limits` libraries are built (`ENABLE_OPT=OFF`: the
+SPIRV-Tools optimizer is not used, so none of it is linked). The option is off by default and in every shipped configuration; when it is
+on, a binary that links it carries glslang and must carry these notices. glslang's own `LICENSE.txt` is a collection: its main code is
+BSD 3-Clause (Copyright 2002-2005 3Dlabs Inc., Ltd.; Copyright 2012-2013 NVIDIA Corporation; Copyright (C) 2013-2016 LunarG, Inc.;
+Copyright (C) 2015-2020 Google, Inc.; Copyright (C) 2017, 2022-2024 Arm Limited; and others as the files say); the parts that reach a
+build with these options are the GLSL front end (`glslang/`), the SPIR-V back end (`SPIRV/`, MIT-style notices of The Khronos Group Inc.
+in its headers: the SPIR-V grammar headers) and the default resource limits (`glslang/ResourceLimits/`). Its Apache-2.0, MIT and
+BSD-2-Clause parts (the GLSL test files, the `Test/` and `External/` folders and the build scripts) are not built here. The licence text
+shipped with a binary that links it is glslang's `LICENSE.txt` of the pinned release.
 
 ## Not shipped
 

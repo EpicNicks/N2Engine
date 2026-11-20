@@ -404,6 +404,14 @@ if(N2ENGINE_USE_BOX2D)
     add_subdirectory(cmake/box2d)
 endif()
 
+# == Runtime shader compiler (user shaders, stage 7) ==
+# ON links a pinned glslang (cmake/Glslang.cmake) into the engine, so a .n2shader with no usable cooked payload can be compiled for Vulkan
+# on this machine (UserShaderCompiler; RenderSettings::SetRuntimeShaderCompile, the project setting rendering.runtimeShaderCompile).
+# OFF by default: a player ships cooked payloads and needs none of it. Turn it on for the editor host, and for a player that opts in
+# (mods, user-generated content); it adds about 4-5 MB per binary [M] and the hostile-input surface of the compiler (proposal section
+# 8). Native desktop builds only: the web, Android and iOS players ship cooked payloads.
+option(N2ENGINE_RUNTIME_SHADER_COMPILER "Link glslang into the engine so user shaders can be compiled on the device (desktop; off in players by default)" OFF)
+
 # == Mbed TLS (vendored; native builds only) ==
 # n2_mbedcrypto (crypto only) for every native build: the netcode's handshake and packet sealing, and the token hashes
 # (n2security). With N2ENGINE_EDITOR_TLS also n2_mbedtls_tls (X.509 and TLS) for the editor host's --tls. The web build
