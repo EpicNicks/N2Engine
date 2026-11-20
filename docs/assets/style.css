@@ -23,6 +23,9 @@
   --badge-bg: #e4e0f5;
   --badge-fg: #47358f;
 
+  --design-bg: #f5f2fc;
+  --design-border: #6b4fc4;
+
   /* Syntax highlighting (assets/highlight.js) */
   --tok-c: #6a717a;
   --tok-kw: #b0215f;
@@ -64,6 +67,9 @@
 
     --badge-bg: #2d2650;
     --badge-fg: #c9bdff;
+
+    --design-bg: #211c35;
+    --design-border: #a58cf0;
 
     --tok-c: #8b949e;
     --tok-kw: #ff7b9c;
@@ -311,6 +317,33 @@ th { background: var(--bg-sidebar); font-weight: 600; }
 .callout.open-question .callout-title { color: var(--open-border); }
 .callout.warning { border-color: var(--warn-border); background: var(--warn-bg); }
 .callout.warning .callout-title { color: var(--warn-border); }
+
+/* Design decisions: a full card with a header band, so each one reads as its
+   own section and not as another inline note. Matches every callout whose id
+   starts with "design-". */
+.callout[id^="design-"] {
+  border: 1px solid var(--design-border);
+  border-left-width: 6px;
+  border-radius: 8px;
+  background: var(--design-bg);
+  padding: 0 1.1rem 0.8rem;
+  margin: 2rem 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+}
+.callout[id^="design-"] .callout-title {
+  display: block;
+  margin: 0 -1.1rem 0.8rem;
+  padding: 0.55rem 1.1rem;
+  font-size: 0.9rem;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--design-border) 18%, transparent);
+  border-bottom: 1px solid var(--design-border);
+}
+.callout[id^="design-"] > .callout-title:first-child { margin-top: 0; }
+.callout[id^="design-"]:target { outline: 3px solid var(--design-border); outline-offset: 2px; }
 
 /* ---------- Small elements ---------- */
 
