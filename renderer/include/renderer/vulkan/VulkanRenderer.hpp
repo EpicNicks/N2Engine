@@ -514,6 +514,10 @@ namespace Renderer
             // Stage B (VulkanDraw.cpp)
             bool CreateDrawResources();
             void DestroyDrawResources();
+            /// The VkPipelineCache: made on the first pipeline (from the file PipelineCacheFile::GetDirectory() names, when its header
+            /// matches this device and driver), saved and destroyed at shutdown. Called with the mutex held
+            void EnsurePipelineCacheLocked();
+            void SaveAndDestroyPipelineCacheLocked();
             void BeginDrawFrame(uint32_t slot);
             void EndDrawFrame(uint32_t slot);
             VkPipeline GetPipelineLocked(ShaderInterface::BuiltInShader shader, const Common::RenderState& state,
@@ -596,6 +600,8 @@ namespace Renderer
 
             // The offscreen target
             VkRenderPass _renderPass = VK_NULL_HANDLE;
+            VkPipelineCache _pipelineCache = VK_NULL_HANDLE;
+            bool _pipelineCacheTried = false;
             VulkanImage _color;
             VulkanImage _depth;
             VkFramebuffer _framebuffer = VK_NULL_HANDLE;

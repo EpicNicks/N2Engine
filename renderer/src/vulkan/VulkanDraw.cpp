@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <iterator>
 #include <utility>
@@ -10,6 +11,7 @@
 #include <vector>
 
 #include "renderer/vulkan/VulkanRenderer.hpp"
+#include "renderer/common/PipelineCache.hpp"
 
 #include "VulkanDraw.hpp"
 #include "VulkanResources.hpp"
@@ -314,6 +316,65 @@ bool VulkanRenderer::CreateDrawResources()
         frame = {};
     }
     return true;
+}
+
+void VulkanRenderer::EnsurePipelineCacheLocked()
+{
+    if (_pipelineCacheTried || _device == VK_NULL_HANDLE)
+    {
+        return;
+    }
+    _pipelineCacheTried = true;
+    VkPipelineCacheCreateInfo info{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    std::vector<std::uint8_t> saved;
+    if (const std::filesystem::path folder = Common::PipelineCacheFile::GetDirectory(); !folder.empty())
+    {
+        // Only data whose header names this vendor, device and driver build (pipelineCacheUUID) is handed to the driver
+        if (auto bytes = Common::PipelineCacheFile::Load(
+                folder / Common::PipelineCacheFile::FileName(_deviceProperties.vendorID, _deviceProperties.deviceID),
+                _deviceProperties.vendorID, _deviceProperties.deviceID, _deviceProperties.pipelineCacheUUID))
+        {
+            saved = std::move(*bytes);
+            info.initialDataSize = saved.size();
+            info.pInitialData = saved.data();
+        }
+    }
+    if (vkCreatePipelineCache(_device, &info, nullptr, &_pipelineCache) != VK_SUCCESS && info.initialDataSize != 0)
+    {
+        // A file the driver refused: start empty (it is overwritten at shutdown)
+        info.initialDataSize = 0;
+        info.pInitialData = nullptr;
+        if (vkCreatePipelineCache(_device, &info, nullptr, &_pipelineCache) != VK_SUCCESS)
+        {
+            _pipelineCache = VK_NULL_HANDLE;
+        }
+    }
+}
+
+void VulkanRenderer::SaveAndDestroyPipelineCacheLocked()
+{
+    if (_pipelineCache == VK_NULL_HANDLE)
+    {
+        _pipelineCacheTried = false;
+        return;
+    }
+    if (const std::filesystem::path folder = Common::PipelineCacheFile::GetDirectory(); !folder.empty())
+    {
+        std::size_t size = 0;
+        if (vkGetPipelineCacheData(_device, _pipelineCache, &size, nullptr) == VK_SUCCESS && size > 0 &&
+            size <= Common::PipelineCacheFile::MaxBytes)
+        {
+            std::vector<std::uint8_t> data(size);
+            if (vkGetPipelineCacheData(_device, _pipelineCache, &size, data.data()) == VK_SUCCESS)
+            {
+                (void)Common::PipelineCacheFile::Save(
+                    folder / Common::PipelineCacheFile::FileName(_deviceProperties.vendorID, _deviceProperties.deviceID), data.data(), size);
+            }
+        }
+    }
+    vkDestroyPipelineCache(_device, _pipelineCache, nullptr);
+    _pipelineCache = VK_NULL_HANDLE;
+    _pipelineCacheTried = false;
 }
 
 void VulkanRenderer::DestroyDrawResources()
@@ -750,11 +811,12 @@ VkPipeline VulkanRenderer::GetPipelineLocked(const VulkanShader& shaderRef, cons
     info.renderPass = _renderPass;
     info.subpass = 0;
 
+    EnsurePipelineCacheLocked();
     VkPipeline pipeline = VK_NULL_HANDLE;
     ++draw.pipelineCreateAttempts;
     const VkResult result = draw.failPipelineCreationForTest
         ? VK_ERROR_INITIALIZATION_FAILED
-        : vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline);
+        : vkCreateGraphicsPipelines(_device, _pipelineCache, 1, &info, nullptr, &pipeline);
     if (result != VK_SUCCESS)
     {
         // Remember the failure (a negative cache entry) so every later draw with this key skips quietly instead of

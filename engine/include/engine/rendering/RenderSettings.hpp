@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <string_view>
 
@@ -45,6 +46,17 @@ namespace N2Engine::Rendering
         /// How a material whose user shader cannot be drawn looks (UserShaderErrorStyle); Unlit until a host sets Magenta
         [[nodiscard]] static UserShaderErrorStyle GetUserShaderErrorStyle();
         static void SetUserShaderErrorStyle(UserShaderErrorStyle style);
+
+        /// Whether a user shader may be compiled here when it has no usable cooked payload (stage 7 of user shaders). Off until a
+        /// host or the project turns it on (the editor host does; a player's project setting is rendering.runtimeShaderCompile). It
+        /// only matters for Vulkan, which needs the glslang of N2ENGINE_RUNTIME_SHADER_COMPILER: the OpenGL text needs no compiler
+        [[nodiscard]] static bool GetRuntimeShaderCompile();
+        static void SetRuntimeShaderCompile(bool enabled);
+
+        /// The folder compiled shaders are kept in (one folder per key; see UserShaderCompiler). Empty (the default): not kept,
+        /// compiled again whenever a Material needs it
+        [[nodiscard]] static std::filesystem::path GetShaderCacheDirectory();
+        static void SetShaderCacheDirectory(std::filesystem::path directory);
 
         /// "gamma" or "linear" (case-insensitive); nullopt for anything else
         [[nodiscard]] static std::optional<ColorSpace> ParseColorSpace(std::string_view name);

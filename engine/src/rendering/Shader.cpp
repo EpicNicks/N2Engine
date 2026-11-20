@@ -4,6 +4,8 @@
 #include <cctype>
 #include <cmath>
 #include <exception>
+#include <fstream>
+#include <iterator>
 #include <format>
 #include <mutex>
 #include <set>
@@ -14,6 +16,8 @@
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/Resources.hpp"
 #include "engine/io/Vfs.hpp"
+#include "engine/rendering/RenderSettings.hpp"
+#include "engine/rendering/UserShaderCompiler.hpp"
 
 namespace N2Engine::Rendering
 {
@@ -367,7 +371,48 @@ namespace N2Engine::Rendering
         _params = std::move(params);
         _usesLighting = usesLighting;
         _state = std::move(state);
+        // The text the runtime compile and the cache key read: what the cook's parser sees (no byte order mark, LF line ends)
+        _text.clear();
+        _text.reserve(text.size());
+        std::string_view rest = text;
+        if (rest.starts_with("\xEF\xBB\xBF"))
+        {
+            rest.remove_prefix(3);
+        }
+        for (std::size_t i = 0; i < rest.size(); ++i)
+        {
+            if (rest[i] == '\r' && (i + 1 == rest.size() || rest[i + 1] == '\n'))
+            {
+                continue;
+            }
+            _text.push_back(rest[i]);
+        }
         return true;
+    }
+
+    bool Shader::GetStage(std::string &source, int &firstLine) const
+    {
+        std::size_t begin = 0;
+        int line = 1;
+        while (begin <= _text.size())
+        {
+            const std::size_t end = _text.find('\n', begin);
+            const std::string_view lineText = std::string_view(_text).substr(
+                begin, end == std::string::npos ? std::string::npos : end - begin);
+            if (lineText == "#stage fragment")
+            {
+                firstLine = line + 1;
+                source = end == std::string::npos ? std::string() : _text.substr(end + 1);
+                return true;
+            }
+            if (end == std::string::npos)
+            {
+                break;
+            }
+            begin = end + 1;
+            ++line;
+        }
+        return false;
     }
 
     const ShaderParam *Shader::FindParam(const std::string_view name) const
@@ -450,6 +495,23 @@ namespace N2Engine::Rendering
     std::optional<Renderer::Common::UserShaderBlob> Shader::MakeBlob(const Renderer::Common::UserShaderTarget target,
                                                                      std::string &error) const
     {
+        std::string cookedError;
+        if (auto blob = MakeCookedBlob(target, cookedError))
+        {
+            return blob;
+        }
+        std::string why;
+        if (auto blob = MakeRuntimeBlob(target, why))
+        {
+            return blob;
+        }
+        error = why.empty() ? cookedError : cookedError + "; " + why;
+        return std::nullopt;
+    }
+
+    std::optional<Renderer::Common::UserShaderBlob> Shader::MakeCookedBlob(const Renderer::Common::UserShaderTarget target,
+                                                                           std::string &error) const
+    {
         using Renderer::Common::UserParam;
         using Renderer::Common::UserParamType;
         using Renderer::Common::UserShaderBlob;
@@ -479,6 +541,30 @@ namespace N2Engine::Rendering
             error = std::format("the cooked manifest is not valid JSON: {}", e.what());
             return std::nullopt;
         }
+
+        return BlobFromManifest(
+            manifest,
+            [&](const std::string &file) -> std::expected<std::vector<std::uint8_t>, std::string>
+            {
+                auto bytes = IO::Vfs::Instance().ReadBytes(directory / file);
+                if (!bytes)
+                {
+                    return std::unexpected(bytes.error());
+                }
+                return std::move(*bytes);
+            },
+            target, error);
+    }
+
+    std::optional<Renderer::Common::UserShaderBlob> Shader::BlobFromManifest(const nlohmann::json &manifest, const PayloadReader &readPayload,
+                                                                             const Renderer::Common::UserShaderTarget target,
+                                                                             std::string &error) const
+    {
+        using Renderer::Common::UserParam;
+        using Renderer::Common::UserParamType;
+        using Renderer::Common::UserShaderBlob;
+        using Renderer::Common::UserShaderTarget;
+        using Renderer::Common::UserTextureDefault;
 
         try
         {
@@ -562,7 +648,7 @@ namespace N2Engine::Rendering
                                     [&] { std::string list; for (const auto &[name, value] : payloads.items()) { list += (list.empty() ? "" : ", ") + name; } return list; }());
                 return std::nullopt;
             }
-            const auto payload = IO::Vfs::Instance().ReadBytes(directory / payloads.at(key).at("file").get<std::string>());
+            const auto payload = readPayload(payloads.at(key).at("file").get<std::string>());
             if (!payload)
             {
                 error = std::format("the cooked {} payload cannot be read: {}", key, payload.error());
@@ -603,5 +689,174 @@ namespace N2Engine::Rendering
             error = std::format("the cooked manifest is malformed: {}", e.what());
             return std::nullopt;
         }
+    }
+    // ===== compiling here =====
+
+    namespace
+    {
+        constexpr std::size_t kMaxCacheEntries = 256;
+
+        std::optional<std::vector<std::uint8_t>> ReadFileBytes(const std::filesystem::path &file)
+        {
+            std::ifstream in(file, std::ios::binary);
+            if (!in)
+            {
+                return std::nullopt;
+            }
+            std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            return bytes;
+        }
+
+        /// Through a temporary file renamed over the target, so a crash never leaves half an entry
+        bool WriteFileAtomically(const std::filesystem::path &file, const void *data, const std::size_t size)
+        {
+            std::filesystem::path temporary = file;
+            temporary += ".tmp";
+            {
+                std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+                if (!out)
+                {
+                    return false;
+                }
+                out.write(static_cast<const char *>(data), static_cast<std::streamsize>(size));
+                if (!out)
+                {
+                    return false;
+                }
+            }
+            std::error_code error;
+            std::filesystem::rename(temporary, file, error);
+            if (error)
+            {
+                std::filesystem::remove(temporary, error);
+                return false;
+            }
+            return true;
+        }
+
+        /// Keeps the cache bounded: past kMaxCacheEntries folders the least recently written go (an entry is advisory: gone means
+        /// compiled again)
+        void PruneCache(const std::filesystem::path &cache)
+        {
+            std::error_code error;
+            std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> entries;
+            for (const auto &entry : std::filesystem::directory_iterator(cache, error))
+            {
+                if (entry.is_directory(error))
+                {
+                    entries.emplace_back(entry.last_write_time(error), entry.path());
+                }
+            }
+            if (entries.size() <= kMaxCacheEntries)
+            {
+                return;
+            }
+            std::ranges::sort(entries);
+            for (std::size_t i = 0; i + kMaxCacheEntries < entries.size(); ++i)
+            {
+                std::filesystem::remove_all(entries[i].second, error);
+            }
+        }
+    }
+
+    std::optional<Renderer::Common::UserShaderBlob> Shader::MakeRuntimeBlob(const Renderer::Common::UserShaderTarget target,
+                                                                            std::string &why) const
+    {
+        using Renderer::Common::UserShaderTarget;
+        if (target == UserShaderTarget::WebGpu)
+        {
+            why = "WGSL is made by the cook (Tint is not linked into the engine): the web ships cooked WGSL";
+            return std::nullopt;
+        }
+        if (target == UserShaderTarget::Vulkan)
+        {
+            if (!UserShaderCompiler::IsAvailable())
+            {
+                why = "it cannot be compiled here: this build has no glslang (N2ENGINE_RUNTIME_SHADER_COMPILER)";
+                return std::nullopt;
+            }
+            if (!RenderSettings::GetRuntimeShaderCompile())
+            {
+                why = "compiling shaders on the device is off (the project setting rendering.runtimeShaderCompile)";
+                return std::nullopt;
+            }
+        }
+        std::string stage;
+        int firstLine = 0;
+        if (!GetStage(stage, firstLine) || Trimmed(stage).empty())
+        {
+            why = "its source is not here (a pack made with stripped shader sources), so it cannot be compiled on this machine";
+            return std::nullopt;
+        }
+
+        const char *payloadKey = target == UserShaderTarget::Vulkan ? "vulkan" : "gl";
+        const std::filesystem::path cache = RenderSettings::GetShaderCacheDirectory();
+        const std::string key = UserShaderCompiler::CacheKey(target, *this);
+        const std::filesystem::path entry = cache.empty() ? std::filesystem::path() : cache / key;
+
+        // The cache first: an entry is used only when the payload is the one its manifest hashed
+        if (!entry.empty())
+        {
+            std::string ignored;
+            if (const auto manifestBytes = ReadFileBytes(entry / "manifest.json"))
+            {
+                try
+                {
+                    const nlohmann::json manifest = nlohmann::json::parse(manifestBytes->begin(), manifestBytes->end());
+                    const nlohmann::json &payload = manifest.at("payloads").at(payloadKey);
+                    const auto bytes = ReadFileBytes(entry / payload.at("file").get<std::string>());
+                    if (bytes && UserShaderCompiler::Sha256Hex(bytes->data(), bytes->size()) == payload.at("sha256").get<std::string>())
+                    {
+                        auto blob = BlobFromManifest(
+                            manifest, [&](const std::string &) -> std::expected<std::vector<std::uint8_t>, std::string> { return *bytes; },
+                            target, ignored);
+                        if (blob)
+                        {
+                            return blob;
+                        }
+                    }
+                }
+                catch (const std::exception &)
+                {
+                    // a damaged entry is compiled again (and overwritten below)
+                }
+            }
+        }
+
+        const std::string cite = std::filesystem::path(_sourcePath).filename().generic_string();
+        auto compiled = UserShaderCompiler::Compile(target, *this, cite.empty() ? "shader.n2shader" : cite);
+        if (!compiled)
+        {
+            why = "compiling it here failed:\n" + compiled.error();
+            return std::nullopt;
+        }
+        if (!entry.empty())
+        {
+            std::error_code error;
+            std::filesystem::create_directories(entry, error);
+            if (!error && WriteFileAtomically(entry / compiled->payloadFile, compiled->payload.data(), compiled->payload.size()) &&
+                WriteFileAtomically(entry / "manifest.json", compiled->manifest.data(), compiled->manifest.size()))
+            {
+                PruneCache(cache);
+            }
+        }
+        std::string manifestError;
+        try
+        {
+            const nlohmann::json manifest = nlohmann::json::parse(compiled->manifest);
+            auto blob = BlobFromManifest(
+                manifest, [&](const std::string &) -> std::expected<std::vector<std::uint8_t>, std::string> { return compiled->payload; },
+                target, manifestError);
+            if (blob)
+            {
+                return blob;
+            }
+        }
+        catch (const std::exception &e)
+        {
+            manifestError = e.what();
+        }
+        why = "what was compiled here does not fit the header: " + manifestError;
+        return std::nullopt;
     }
 }

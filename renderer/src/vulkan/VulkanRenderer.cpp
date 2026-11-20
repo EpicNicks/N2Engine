@@ -1379,6 +1379,7 @@ void VulkanRenderer::ShutdownLocked()
         DestroySwapchainLocked(); // the swapchain and its images' semaphores: before the device
         DestroyPresentResources(); // the present slots' semaphores and fences (their command buffers go with the pool)
         DestroyDrawResources(); // pipelines, layouts, pools, rings, default textures: before the allocator and the render pass
+        SaveAndDestroyPipelineCacheLocked(); // after the pipelines made from it, before the device
         DestroyAllResources(); // meshes, textures, samplers and everything retired: before the allocator that made them
         DestroyTargets();
         if (_renderPass != VK_NULL_HANDLE)

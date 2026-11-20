@@ -195,6 +195,21 @@ namespace N2Engine
             {
                 Rendering::RenderSettings::SetForceShaderEncode(force->get<bool>());
             }
+            // runtimeShaderCompile: a boolean, whether a user shader may be compiled on this machine when it has no usable cooked
+            // payload (RenderSettings::SetRuntimeShaderCompile). Absent or null leaves what the host chose (the editor host: on, a
+            // player: off); a wrong type is refused, changing nothing
+            const auto runtimeCompile = rendering.find("runtimeShaderCompile");
+            if (runtimeCompile != rendering.end() && !runtimeCompile->is_null())
+            {
+                if (runtimeCompile->is_boolean())
+                {
+                    Rendering::RenderSettings::SetRuntimeShaderCompile(runtimeCompile->get<bool>());
+                }
+                else
+                {
+                    problems.push_back(std::format("rendering.runtimeShaderCompile: {} is not true or false", runtimeCompile->dump()));
+                }
+            }
             const auto space = rendering.find("colorSpace");
             if (space == rendering.end() || space->is_null())
             {
@@ -606,6 +621,7 @@ namespace N2Engine
         snapshot.fixedTimestep = Time::GetFixedTimestep();
         snapshot.colorSpace = Rendering::RenderSettings::GetColorSpace();
         snapshot.forceShaderEncode = Rendering::RenderSettings::GetForceShaderEncode();
+        snapshot.runtimeShaderCompile = Rendering::RenderSettings::GetRuntimeShaderCompile();
         if (const Physics::IPhysicsBackend *backend = Application::GetInstance().Get3DPhysicsBackend())
         {
             snapshot.gravity = backend->GetGravity();
@@ -626,6 +642,7 @@ namespace N2Engine
         (void)Time::SetFixedTimestep(fixedTimestep);
         Rendering::RenderSettings::SetColorSpace(colorSpace);
         Rendering::RenderSettings::SetForceShaderEncode(forceShaderEncode);
+        Rendering::RenderSettings::SetRuntimeShaderCompile(runtimeShaderCompile);
         if (gravity)
         {
             if (Physics::IPhysicsBackend *backend = Application::GetInstance().Get3DPhysicsBackend())
