@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstring>
 #include <format>
 #include <mutex>
@@ -422,6 +423,25 @@ namespace N2Engine::Rendering::UserShaderCompiler
             return out;
         }
 
+        /// Whether `source` names isnan or isinf as a whole word (the cook's usesNanChecks)
+        bool UsesNanChecks(const std::string_view source)
+        {
+            const auto isWord = [](const char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; };
+            for (const std::string_view word : {std::string_view("isnan"), std::string_view("isinf")})
+            {
+                for (std::size_t at = source.find(word); at != std::string_view::npos; at = source.find(word, at + 1))
+                {
+                    const bool before = at > 0 && isWord(source[at - 1]);
+                    const bool after = at + word.size() < source.size() && isWord(source[at + word.size()]);
+                    if (!before && !after)
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
         /// The digest of every embedded template: a changed prelude is a different cache key without anyone bumping a number
         const std::string &PreludeDigest()
         {
@@ -485,8 +505,10 @@ namespace N2Engine::Rendering::UserShaderCompiler
             ? std::format("#line {} 1\n", firstLine)
             : std::format("#line {} \"{}\"\n", firstLine, LinePath(citePath));
         const BlockLayout layout = LayoutBlock(shader.GetParams());
-        return std::format("{}// n2shader contract {}, target {}\n{}{}{}{}\n", head, Renderer::Common::kUserShaderContractVersion,
-                           TargetName(target), prelude, MaterialSection(target, layout, shader.GetParams()), lineDirective, source);
+        // The NaN shims follow the prelude when the stage names isnan or isinf (the cook's usesNanChecks: a plain word search)
+        const std::string nanShims = UsesNanChecks(source) ? ReadTemplate("nan-shims.glsl").value_or("") : std::string();
+        return std::format("{}// n2shader contract {}, target {}\n{}{}{}{}{}\n", head, Renderer::Common::kUserShaderContractVersion,
+                           TargetName(target), prelude, nanShims, MaterialSection(target, layout, shader.GetParams()), lineDirective, source);
     }
 
     std::string CacheKey(const UserShaderTarget target, const Shader &shader)

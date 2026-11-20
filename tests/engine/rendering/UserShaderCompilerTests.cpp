@@ -147,6 +147,36 @@ TEST(UserShaderCompilerTest, TheVulkanAndWebGpuTextsShareTheUserCodeAndTheBlock)
     EXPECT_EQ(after(*vulkan).substr(after(*vulkan).find('\n')), after(*webgpu).substr(after(*webgpu).find('\n')));
 }
 
+TEST(UserShaderCompilerTest, TheNanShimsFollowThePreludeOnlyWhenTheStageNamesIsnanOrIsinf)
+{
+    const auto header = std::string("{ \"n2shader\": 1, \"name\": \"Nan\" }\n#stage fragment\n");
+    const auto withNan = Shader::FromSource(header + "void main() { n2_FragColor = vec4(isnan(n2_UV.x) ? 1.0 : 0.0); }\n", "nan.n2shader");
+    const auto withInf = Shader::FromSource(header + "void main() { n2_FragColor = vec4(any(isinf(n2_UV)) ? 1.0 : 0.0); }\n", "inf.n2shader");
+    const auto plain = Shader::FromSource(header + "void main() { n2_FragColor = vec4(1.0); }\n", "plain.n2shader");
+    const auto lookalike = Shader::FromSource(header + "void main() { float isnanish = 1.0; n2_FragColor = vec4(isnanish); }\n", "like.n2shader");
+    ASSERT_TRUE(withNan && withInf && plain && lookalike);
+    for (const UserShaderTarget target : {UserShaderTarget::Vulkan, UserShaderTarget::WebGpu, UserShaderTarget::OpenGl})
+    {
+        std::string error;
+        for (const auto &shader : {withNan, withInf})
+        {
+            const auto text = BuildSource(target, *shader, "s.n2shader", error);
+            ASSERT_TRUE(text.has_value()) << error;
+            const std::size_t shim = text->find("bool n2_isnan(float x)");
+            ASSERT_NE(shim, std::string::npos);
+            EXPECT_NE(text->find("#define isnan(x) n2_isnan(x)\n"), std::string::npos);
+            EXPECT_NE(text->find("#define isinf(x) n2_isinf(x)\n"), std::string::npos);
+            EXPECT_LT(shim, text->find("#line ")) << "the shims are the engine's text, before the author's first line";
+        }
+        for (const auto &shader : {plain, lookalike})
+        {
+            const auto text = BuildSource(target, *shader, "s.n2shader", error);
+            ASSERT_TRUE(text.has_value()) << error;
+            EXPECT_EQ(text->find("n2_isnan"), std::string::npos) << "a shader that does not use them gets the text it always got";
+        }
+    }
+}
+
 TEST(UserShaderCompilerTest, TheCacheKeyChangesWithTheSourceAndTheTarget)
 {
     using N2Engine::Rendering::UserShaderCompiler::CacheKey;

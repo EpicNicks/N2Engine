@@ -13,7 +13,7 @@ import { cookShader, manifestBytes, parseGlslangOutput, writeOutputs } from './l
 import { runCorpus } from './lib/corpus.mjs';
 import { lintStage, stripComments } from './lib/lint.mjs';
 import { ShaderError, parseN2Shader } from './lib/parse.mjs';
-import { buildTargetSource, expandTemplate, materialSection, PRELUDE_DIR } from './lib/prelude.mjs';
+import { buildTargetSource, expandTemplate, materialSection, PRELUDE_DIR, usesNanChecks } from './lib/prelude.mjs';
 import { checkCapabilities, checkGlUniforms, checkReflection, checkWgslLayout } from './lib/reflect.mjs';
 import { layoutBlock } from './lib/std140.mjs';
 import { discoverTools, findTool, TOOL_NAMES } from './lib/tools.mjs';
@@ -182,8 +182,6 @@ test('lint: a clean shader has no diagnostics, and lines are the file lines', ()
 });
 
 for (const [name, body, rule, line] of [
-  ['isnan', 'void main() {\n  bool b = isnan(1.0);\n}', 'banned-builtin', 11],
-  ['isinf', 'void main() {\n\n  bool b = isinf(1.0);\n}', 'banned-builtin', 12],
   ['gl_Position', 'void main() { gl_Position = vec4(0); }', 'banned-builtin', 10],
   ['gl_VertexID', 'void main() { int i = gl_VertexID; }', 'banned-builtin', 10],
   ['raw gl_FragCoord', 'void main() { vec4 p = gl_FragCoord; }', 'banned-builtin', 10],
@@ -526,7 +524,7 @@ test('cook: --require-tools turns a missing tool into an error', () => {
 });
 
 test('cook: parse and lint failures stop before any tool, with file:line', () => {
-  const lintFail = cookShader(shader(header(), 'void main() {\n  bool b = isnan(1.0);\n}'), { path: 'a.n2shader', tools: noTools });
+  const lintFail = cookShader(shader(header(), 'void main() {\n  bool b = gl_FrontFacing;\n}'), { path: 'a.n2shader', tools: noTools });
   assert.equal(lintFail.failedStage, 'lint');
   assert.deepEqual([lintFail.diagnostics[0].file, lintFail.diagnostics[0].line], ['a.n2shader', 4]);
   const parseFail = cookShader('{ "n2shader": 1 }\n#stage fragment\nvoid main() {}\n', { path: 'b.n2shader', tools: noTools });
@@ -602,9 +600,33 @@ test('cook: WebGPU through Tint keeps the contract bindings and the std140 layou
   assert.ok(result.manifest.validated.webgpu.includes('wgsl-layout'));
 });
 
+test('cook: isnan and isinf are accepted (the shims, stage 9b) and reach every target as bit tests', () => {
+  const nan = shader(header(), 'void main() {\n  bool b = isnan(n2_UV.x) || isinf(n2_UV.y) || any(isnan(n2_UV));\n  n2_FragColor = vec4(b ? 1.0 : 0.0);\n}');
+  assert.deepEqual(lint('void main() { bool b = isnan(1.0) || isinf(2.0); }'), []);
+  for (const target of ['vulkan', 'webgpu', 'gl']) {
+    const generated = buildTargetSource(target, parseN2Shader(nan));
+    assert.match(generated.text, /bool n2_isnan\(float x\)/, target);
+    assert.match(generated.text, /#define isnan\(x\) n2_isnan\(x\)/, target);
+    // the author's first line is still where #line says it is
+    assert.equal(generated.text.split('\n')[generated.userLine - 1], 'void main() {', target);
+  }
+  // a shader that names neither gets exactly the text it got before the shims
+  const plain = shader(header(), 'void main() { n2_FragColor = vec4(1.0); }');
+  for (const target of ['vulkan', 'webgpu', 'gl']) {
+    assert.ok(!buildTargetSource(target, parseN2Shader(plain)).text.includes('n2_isnan'), target);
+  }
+  // a word that only contains the name is not a use
+  assert.equal(usesNanChecks('float isnanish = 1.0; float my_isinf = 2.0;'), false);
+  assert.equal(usesNanChecks('bool b = isnan(x);'), true);
+});
+
+test('cook: a stage with isnan cooks to valid WGSL where Tint is installed', needs([haveSpirv, realTools.tint], 'glslang, spirv-cross and tint'), () => {
+  const text = fs.readFileSync(path.join(corpusDir, 'nan-checks.n2shader'), 'utf8');
+  const result = cookShader(text, { path: 'n.n2shader', tools: realTools });
+  assert.equal(result.ok, true, JSON.stringify(result.diagnostics));
+});
+
 test('cook: the Tint-only negatives are rejected by Tint', needs([haveSpirv, realTools.tint], 'glslang, spirv-cross and tint'), () => {
-  const isnan = fs.readFileSync(path.join(corpusDir, 'negative-isnan.n2shader'), 'utf8');
-  assert.equal(cookShader(isnan, { path: 'n.n2shader', tools: realTools, lint: false }).failedStage, 'tint');
   const sample = fs.readFileSync(path.join(corpusDir, 'negative-non-uniform-sample.n2shader'), 'utf8');
   const result = cookShader(sample, { path: 'n.n2shader', tools: realTools });
   assert.equal(result.failedStage, 'tint');
@@ -645,9 +667,9 @@ test('corpus: an unlisted file and a wrongly accepted negative fail the run', ()
 
 test('corpus: a negative that fails at another stage or for another reason fails the run', () => {
   const dir = tmp('n2shader-corpus-');
-  fs.writeFileSync(path.join(dir, 'a.n2shader'), shader(header(), 'void main() { bool b = isnan(1.0); }'));
+  fs.writeFileSync(path.join(dir, 'a.n2shader'), shader(header(), 'void main() { bool b = gl_FrontFacing; }'));
   fs.writeFileSync(path.join(dir, 'expect.json'), JSON.stringify({ negative: [
-    { file: 'a.n2shader', expect: [{ stage: 'tint', match: 'isnan' }] },
+    { file: 'a.n2shader', expect: [{ stage: 'tint', match: 'gl_FrontFacing' }] },
     { file: 'a.n2shader', expect: [{ stage: 'lint', match: 'no such text' }] },
   ] }));
   const result = runCorpus(dir, { tools: noTools });
