@@ -51,7 +51,7 @@ namespace UserShaderTesting
         if (text == "color") return UserParamType::Color;
         if (text == "mat3") return UserParamType::Mat3;
         if (text == "mat4") return UserParamType::Mat4;
-        if (text == "texture") return UserParamType::Texture;
+        if (text == "texture" || text == "cube" || text == "texture3d") return UserParamType::Texture; // a cube and a 3D texture are atlases: one texture slot (stage 9e)
         throw std::runtime_error("unknown parameter type " + text);
     }
 
