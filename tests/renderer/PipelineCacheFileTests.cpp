@@ -12,7 +12,7 @@
 // the size cap and the atomic save. The renderer itself is exercised by the Vulkan tests (every pipeline is made through the cache).
 namespace
 {
-    namespace Cache = N2Engine::Renderer::Common::PipelineCacheFile;
+    namespace Cache = Renderer::Common::PipelineCacheFile;
 
     std::vector<std::uint8_t> Header(const std::uint32_t vendor, const std::uint32_t device, const std::uint8_t (&uuid)[16],
                                      const std::uint32_t headerSize = 32, const std::uint32_t version = 1, const std::size_t total = 48)

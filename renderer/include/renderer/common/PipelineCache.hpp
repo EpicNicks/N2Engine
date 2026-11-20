@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace N2Engine::Renderer::Common::PipelineCacheFile
+namespace Renderer::Common::PipelineCacheFile
 {
     /// The folder the Vulkan renderer keeps its serialised VkPipelineCache in (one file per vendor and device, see FileName), set by
     /// the engine to `user://cache`. Empty (the default): the cache lives for the session only. Advisory: a missing, unreadable,
