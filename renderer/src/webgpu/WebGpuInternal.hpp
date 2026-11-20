@@ -288,12 +288,14 @@ namespace Renderer::WebGpu
         std::uint8_t cull = 0;
         bool blend = false;
         bool additive = false;
+        std::uint8_t variant = 0; // Common::BlendVariant (0 with additive, which wins)
 
         [[nodiscard]] std::uint32_t Pack() const
         {
             return static_cast<std::uint32_t>(shader) | (static_cast<std::uint32_t>(vertexLayout) << 16) |
                 (depthTest ? 1u << 20 : 0u) | (depthWrite ? 1u << 21 : 0u) | (static_cast<std::uint32_t>(cull) << 22) |
-                (blend ? 1u << 24 : 0u) | (additive ? 1u << 25 : 0u);
+                (blend ? 1u << 24 : 0u) | (additive ? 1u << 25 : 0u) |
+                (static_cast<std::uint32_t>(variant) << 26);
         }
         /// The shader id of a packed key
         [[nodiscard]] static std::uint16_t ShaderOf(const std::uint32_t packed) { return static_cast<std::uint16_t>(packed & 0xFFFFu); }

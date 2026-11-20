@@ -24,6 +24,16 @@ namespace N2Engine::Rendering
             _material->SetDoubleSided(true);
         }
         _material->SetShader(_shader); // forgets the values of the old shader
+        // The shader's blend hint (premultiplied, multiply, additive; alpha otherwise) is how the component's draws blend
+        BlendMode mode = BlendMode::Alpha;
+        if (const auto &hint = _shader->GetStateHints().blend)
+        {
+            mode = *hint == "additive" ? BlendMode::Additive
+                : *hint == "premultiplied" ? BlendMode::Premultiplied
+                : *hint == "multiply"      ? BlendMode::Multiply
+                                           : BlendMode::Alpha;
+        }
+        _material->SetBlendMode(mode);
     }
 
     bool UserShaderSlot::SetFloat(const std::string_view name, const float value)

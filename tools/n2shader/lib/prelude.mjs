@@ -73,6 +73,11 @@ export function materialSection(target, header) {
   return `${lines.join('\n')}\n`;
 }
 
+/** Whether the author's stage names isnan or isinf: then the NaN shims (nan-shims.glsl) follow the prelude. Plain word search, the C++ twin's rule */
+export function usesNanChecks(source) {
+  return /\b(?:isnan|isinf)\b/.test(source);
+}
+
 const linePath = (file) => file.replace(/\\/g, '/').replace(/["\r\n]/g, '_');
 
 /**
@@ -87,10 +92,11 @@ export function buildTargetSource(target, parsed, { path: file = 'shader.n2shade
   const { header } = parsed;
   const slots = header.params.filter((param) => param.type === 'texture').map((param) => param.slot).sort((a, b) => a - b);
   const prelude = expandTemplate(readTemplate(TEMPLATE_FILES[target], dir), { lighting: header.uses.includes('lighting'), slots, dir });
+  const nanShims = usesNanChecks(parsed.source) ? readTemplate('nan-shims.glsl', dir) : '';
   const head = target === 'gl'
     ? '#version 330 core\n'
     : '#version 450\n#extension GL_GOOGLE_cpp_style_line_directive : enable\n#extension GL_EXT_samplerless_texture_functions : enable\n';
   const lineDirective = target === 'gl' ? `#line ${parsed.firstLine} 1\n` : `#line ${parsed.firstLine} "${linePath(file)}"\n`;
-  const before = `${head}// n2shader contract ${CONTRACT_VERSION}, target ${target}\n${prelude}${materialSection(target, header)}${lineDirective}`;
+  const before = `${head}// n2shader contract ${CONTRACT_VERSION}, target ${target}\n${prelude}${nanShims}${materialSection(target, header)}${lineDirective}`;
   return { text: `${before}${parsed.source}\n`, userLine: before.split('\n').length };
 }

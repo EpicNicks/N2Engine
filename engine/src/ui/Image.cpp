@@ -5,6 +5,8 @@
 #include <renderer/common/BlendCutOut.hpp>
 #include <renderer/common/RenderTypes.hpp>
 
+#include "engine/rendering/MeshDrawing.hpp"
+
 namespace N2Engine::UI
 {
     Image::Image(GameObject &gameObject) : UIGraphic(gameObject)
@@ -166,7 +168,9 @@ namespace N2Engine::UI
             _shaderSlot.Sync(_sprite, Renderer::Common::BlendCutOutBelow(_sprite != nullptr, renderer->SupportsBlending(), shaderColor.a));
             if (Renderer::Common::IMaterial *gpu = _shaderSlot.Prepare(*renderer, shaderColor))
             {
-                renderer->DrawMesh(_mesh, ComposeModel(canvasToWorld, ModelMatrixFor(rect)).Data(), gpu, state);
+                Renderer::Common::RenderState shaderState = state;
+                Rendering::MeshDrawing::ApplyBlendMode(shaderState, *_shaderSlot.GetMaterial());
+                renderer->DrawMesh(_mesh, ComposeModel(canvasToWorld, ModelMatrixFor(rect)).Data(), gpu, shaderState);
             }
             return;
         }

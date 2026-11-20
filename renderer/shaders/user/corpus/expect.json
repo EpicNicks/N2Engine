@@ -12,13 +12,10 @@
     { "file": "uint-hash.n2shader" },
     { "file": "while-loop.n2shader", "relaxed": true },
     { "file": "lighting.n2shader" },
-    { "file": "matrix-params.n2shader" }
+    { "file": "matrix-params.n2shader" },
+    { "file": "nan-checks.n2shader" }
   ],
   "negative": [
-    { "file": "negative-isnan.n2shader", "expect": [
-      { "options": {}, "stage": "lint", "match": "isnan" },
-      { "options": { "lint": false }, "stage": "tint", "match": "IsNan|NaN" }
-    ] },
     { "file": "negative-non-uniform-sample.n2shader", "expect": [
       { "options": {}, "stage": "tint", "match": "uniform" }
     ] },

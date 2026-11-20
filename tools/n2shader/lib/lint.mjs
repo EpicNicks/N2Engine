@@ -34,8 +34,7 @@ export function stripComments(source) {
 
 // builtins and names the contract does not offer: [pattern, message]
 const BANNED = [
-  [/\bisnan\b/, 'isnan() is not supported: WGSL cannot represent NaN, so Tint and naga both reject it'],
-  [/\bisinf\b/, 'isinf() is not supported: WGSL cannot represent infinities, so Tint and naga both reject it; compare against a large finite value instead'],
+  // isnan and isinf are allowed since stage 9b: the cook adds shims that test the bit pattern (renderer/shaders/user/prelude/nan-shims.glsl)
   [/\bgl_Position\b/, 'gl_Position is not available: v1 supplies the vertex stage (a custom vertex stage comes later with n2_SetPosition)'],
   [/\bgl_(?:VertexID|InstanceID|VertexIndex|InstanceIndex)\b/, 'gl_VertexID and gl_InstanceID are not available in v1 (the fragment stage has no such input)'],
   [/\bgl_FragCoord\b/, 'raw gl_FragCoord differs between OpenGL (bottom-left origin) and Vulkan/WebGPU (top-left): use n2_FragCoord(), which counts rows from the top on every target'],

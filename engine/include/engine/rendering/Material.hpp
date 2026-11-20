@@ -55,6 +55,16 @@ namespace N2Engine::Rendering
         Blend   ///< blended over what is behind (SRC_ALPHA, ONE_MINUS_SRC_ALPHA) in the Transparent queue
     };
 
+    /// How a Blend material mixes with what is behind it (a user shader's `state.blend`; the `.mat` key "blendMode"). Only a Blend material
+    /// (AlphaMode::Blend) uses it. Built-in materials stay Alpha
+    enum class BlendMode : std::uint8_t
+    {
+        Alpha,         ///< SRC_ALPHA, ONE_MINUS_SRC_ALPHA
+        Additive,      ///< SRC_ALPHA, ONE
+        Premultiplied, ///< ONE, ONE_MINUS_SRC_ALPHA: the shader's colour is already multiplied by its alpha
+        Multiply       ///< DST_COLOR, ZERO: the target colour times the shader's colour (its alpha is not used)
+    };
+
     /**
      * A surface description (`"Material"`): what a MeshRenderer draws each submesh with. CPU data only; each
      * renderer gets one GPU material per Material and version through the engine's GPU cache
@@ -144,6 +154,9 @@ namespace N2Engine::Rendering
         void SetBaseColorTexture(std::shared_ptr<Texture> texture);
         [[nodiscard]] AlphaMode GetAlphaMode() const { return _alphaMode; }
         void SetAlphaMode(AlphaMode mode);
+        /// Blend only: how the draw mixes with what is behind it (Alpha by default). Saved in .mat files only when it is not Alpha
+        [[nodiscard]] BlendMode GetBlendMode() const { return _blendMode; }
+        void SetBlendMode(BlendMode mode);
         /// Mask only: pixels with alpha below it are discarded. 0.5 by default; clamped to 0..1.
         [[nodiscard]] float GetAlphaCutoff() const { return _alphaCutoff; }
         void SetAlphaCutoff(float cutoff);
@@ -288,6 +301,7 @@ namespace N2Engine::Rendering
         Common::Color _baseColor{Common::Color::White};
         std::shared_ptr<Texture> _baseColorTexture;
         AlphaMode _alphaMode = AlphaMode::Opaque;
+        BlendMode _blendMode = BlendMode::Alpha;
         float _blendDiscardBelow = 0.0f;
         float _saturation = 1.0f;
         Common::Color _flash{Common::Color::Transparent};

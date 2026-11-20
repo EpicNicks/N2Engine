@@ -122,12 +122,13 @@ namespace Renderer::Vulkan
         bool blend = false;
         bool additive = false;
         bool wireframe = false;
+        std::uint8_t variant = 0; // Common::BlendVariant (0 with additive, which wins)
 
         [[nodiscard]] std::uint32_t Pack() const
         {
             return static_cast<std::uint32_t>(shader) | (depthTest ? 1u << 16 : 0u) | (depthWrite ? 1u << 17 : 0u) |
                 (static_cast<std::uint32_t>(cull) << 18) | (blend ? 1u << 20 : 0u) | (additive ? 1u << 21 : 0u) |
-                (wireframe ? 1u << 22 : 0u);
+                (wireframe ? 1u << 22 : 0u) | (static_cast<std::uint32_t>(variant) << 23);
         }
         /// The shader id a packed key holds
         [[nodiscard]] static std::uint16_t ShaderOf(const std::uint32_t packed)
