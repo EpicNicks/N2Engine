@@ -1429,6 +1429,7 @@ namespace
         ASSERT_TRUE(world->SaveState(saved));
         const std::uint64_t deepAtSave = world->HashState();
         const Vector3 offAtSave = PositionOf(off);
+        const Math::Quaternion offRotationAtSave = off->GetPositionable()->GetRotation();
 
         Step(30);
         off->SetActive(true);
@@ -1438,7 +1439,7 @@ namespace
         // The game state at the saved instant is put back first (the object was inactive), then the world
         // (a disabled body's transform is the game's to put back, as a networked object's replicated transform is)
         off->SetActive(false);
-        off->GetPositionable()->SetPosition(offAtSave);
+        off->GetPositionable()->SetPositionAndRotation(offAtSave, offRotationAtSave);
         ASSERT_TRUE(world->RestoreState(saved));
         EXPECT_EQ(world->HashState(), deepAtSave);
         Step(30);
