@@ -13,6 +13,7 @@
 #include "engine/Logger.hpp"
 #include "engine/prefabs/PrefabManager.hpp"
 #include "engine/prefabs/Prefab.hpp"
+#include "engine/prefabs/PrefabNesting.hpp"
 #include "engine/serialization/JsonLimits.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
 
@@ -48,53 +49,91 @@ namespace
         return std::nullopt;
     }
 
-    // Gives every GameObject and component id in the prefab's GameObject JSON a fresh UUID (old -> new). Walked with
-    // a stack on the heap, not recursion: prefab data can nest as deep as JsonLimits::MaxSceneJsonDepth.
-    void CollectIds(const nlohmann::json &root, UUIDMap &ids)
+    // Gives every GameObject and component id in the prefab's GameObject JSON a new UUID (old -> new): a random one,
+    // except inside an expanded prefab link (docs/serialization.html, "Prefab links"), where an object's or component's
+    // id is PrefabNesting::DeriveId(new id of its link root, its prefabSource), so a copy is exactly what expanding
+    // its links with the copy's own link ids gives. Marks that name a link root outside the copy (a part of an
+    // instance pasted on its own) are dropped: the copy is plain objects. Walked parents first, with a stack on the
+    // heap, not recursion: prefab data can nest as deep as JsonLimits::MaxSceneJsonDepth.
+    void CollectIds(nlohmann::json &root, UUIDMap &ids)
     {
-        auto addId = [&ids](const nlohmann::json &owner)
+        auto canonicalKey = [](const nlohmann::json &owner, const char *key) -> std::optional<std::string>
         {
             if (!owner.is_object())
             {
+                return std::nullopt;
+            }
+            const auto it = owner.find(key);
+            return it == owner.end() ? std::nullopt : CanonicalUUID(*it);
+        };
+        auto assign = [&ids](const std::optional<std::string> &old, const std::optional<std::string> &link,
+                             const std::optional<std::string> &source)
+        {
+            if (!old || *old == Math::UUID::ZERO.ToString())
+            {
                 return;
             }
-            if (const auto it = owner.find("uuid"); it != owner.end())
+            if (link && source)
             {
-                if (auto old = CanonicalUUID(*it); old && *old != Math::UUID::ZERO.ToString())
+                if (const auto it = ids.find(*link); it != ids.end())
                 {
-                    ids.try_emplace(std::move(*old), Math::UUID::Random().ToString());
+                    ids.try_emplace(*old, PrefabNesting::DeriveId(*Math::UUID::FromString(it->second),
+                                                                  *Math::UUID::FromString(*source)).ToString());
+                    return;
                 }
             }
+            ids.try_emplace(*old, Math::UUID::Random().ToString());
         };
-        std::vector<const nlohmann::json *> pending{&root};
+        std::vector<nlohmann::json *> pending{&root};
         while (!pending.empty())
         {
-            const nlohmann::json &gameObject = *pending.back();
+            nlohmann::json &gameObject = *pending.back();
             pending.pop_back();
             if (!gameObject.is_object())
             {
                 continue;
             }
-            addId(gameObject);
+            const auto id = canonicalKey(gameObject, "uuid");
+            auto link = canonicalKey(gameObject, "prefabLink");
+            auto source = canonicalKey(gameObject, "prefabSource");
+            if (link && !ids.contains(*link))
+            {
+                gameObject.erase("prefabLink"); // its link root is not in the copy
+                gameObject.erase("prefabSource");
+                link.reset();
+                source.reset();
+            }
+            assign(id, link, source);
+            const auto linkedIt = gameObject.find("prefabLinked");
+            const bool linkedRoot = linkedIt != gameObject.end() && linkedIt->is_boolean() && linkedIt->get<bool>();
+            // The link this object's components came from: itself when it is a link root, else its own link
+            const std::optional<std::string> componentLink = linkedRoot ? id : link;
             if (const auto components = gameObject.find("components");
                 components != gameObject.end() && components->is_array())
             {
-                for (const auto &component : *components)
+                for (auto &component : *components)
                 {
-                    if (component.is_object())
+                    if (!component.is_object())
                     {
-                        if (const auto data = component.find("data"); data != component.end())
+                        continue;
+                    }
+                    if (const auto data = component.find("data"); data != component.end())
+                    {
+                        auto componentSource = canonicalKey(component, "prefabSource");
+                        if (componentSource && !componentLink)
                         {
-                            addId(*data);
+                            component.erase("prefabSource");
+                            componentSource.reset();
                         }
+                        assign(canonicalKey(*data, "uuid"), componentLink, componentSource);
                     }
                 }
             }
             if (const auto children = gameObject.find("children"); children != gameObject.end() && children->is_array())
             {
-                for (const auto &child : *children)
+                for (auto it = children->rbegin(); it != children->rend(); ++it)
                 {
-                    pending.push_back(&child);
+                    pending.push_back(&*it);
                 }
             }
         }
@@ -127,6 +166,7 @@ namespace
             }
             if (value.is_object())
             {
+                // A prefab link's prefabSource names an id in the linked prefab, not in this copy: never renumbered
                 if (const auto ref = value.find("$ref"); ref != value.end() && ref->is_string() && !keepOutsideRefs)
                 {
                     const auto canonical = CanonicalUUID(*ref);
@@ -138,7 +178,10 @@ namespace
                 }
                 for (auto &item : value.items())
                 {
-                    pending.push_back(&item.value());
+                    if (item.key() != "prefabSource")
+                    {
+                        pending.push_back(&item.value());
+                    }
                 }
                 continue;
             }
@@ -244,6 +287,11 @@ std::vector<std::shared_ptr<GameObject>> InstantiateMany(const std::vector<const
         for (const nlohmann::json *rootJson : rootJsons)
         {
             copies.push_back(JsonLimits::IterativeCopy(*rootJson));
+            // Prefab links (nested prefabs) are expanded first, so the copy's ids derive from its own link ids
+            if (PrefabNesting::ContainsLinks(copies.back()))
+            {
+                PrefabNesting::Expand(copies.back(), "InstantiatePrefab");
+            }
             CollectIds(copies.back(), ids);
         }
         for (nlohmann::json &data : copies)

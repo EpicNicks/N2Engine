@@ -950,6 +950,18 @@ json GameObject::SerializeSelf() const
     {
         j["prefabReference"] = _prefabReference->ToString();
     }
+    if (_prefabLinked)
+    {
+        j["prefabLinked"] = true;
+    }
+    if (_prefabLink.has_value())
+    {
+        j["prefabLink"] = _prefabLink->ToString();
+    }
+    if (_prefabSource.has_value())
+    {
+        j["prefabSource"] = _prefabSource->ToString();
+    }
 
     // Positionable (optional)
     if (HasPositionable())
@@ -964,6 +976,10 @@ json GameObject::SerializeSelf() const
         json compJson;
         compJson["type"] = component->GetTypeName();
         compJson["data"] = component->Serialize();
+        if (const auto &source = component->GetPrefabSource(); source.has_value())
+        {
+            compJson["prefabSource"] = source->ToString();
+        }
         components.push_back(std::move(compJson));
     }
     // Moved, not copied: a copy recurses once per JSON level, and a component's data can nest deep
@@ -1047,6 +1063,19 @@ GameObject::Ptr GameObject::DeserializeSelf(const json &j, ReferenceResolver *re
     {
         go->_prefabReference = j["prefabReference"].get<Math::UUID>();
     }
+    // Nested prefab marks (PrefabNesting::Expand writes them); optional, a malformed one is dropped
+    if (const auto linked = j.find("prefabLinked"); linked != j.end() && linked->is_boolean())
+    {
+        go->_prefabLinked = linked->get<bool>();
+    }
+    if (const auto link = j.find("prefabLink"); link != j.end() && link->is_string())
+    {
+        go->_prefabLink = Math::UUID::FromString(link->get<std::string>());
+    }
+    if (const auto source = j.find("prefabSource"); source != j.end() && source->is_string())
+    {
+        go->_prefabSource = Math::UUID::FromString(source->get<std::string>());
+    }
 
     // Deserialize Positionable
     if (j.contains("positionable"))
@@ -1072,6 +1101,10 @@ GameObject::Ptr GameObject::DeserializeSelf(const json &j, ReferenceResolver *re
                 }
 
                 component->Deserialize(data, resolver);
+                if (const auto source = compJson.find("prefabSource"); source != compJson.end() && source->is_string())
+                {
+                    component->SetPrefabSource(Math::UUID::FromString(source->get<std::string>()));
+                }
 
                 auto *rawPtr = component.get();
                 std::type_index typeIdx(typeid(*rawPtr));

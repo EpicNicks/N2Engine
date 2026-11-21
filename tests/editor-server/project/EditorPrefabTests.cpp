@@ -997,3 +997,40 @@ TEST_F(EditorPrefabTest, HelloAdvertisesPrefabAssets)
     const auto capabilities = EditorServer::Capabilities();
     EXPECT_NE(std::find(capabilities.begin(), capabilities.end(), "prefabAssets"), capabilities.end());
 }
+
+// ==================== Prefab links (nested prefabs) ====================
+
+TEST_F(EditorPrefabTest, AFileWithPrefabLinksOpensExpandedAndIsNotSavedOverItsLinks)
+{
+    const std::string crate = Create("Crate");
+    (void)Create("Lid", crate);
+    const std::string crateUuid = CreatePrefab(crate, "res://Crate.prefab");
+    ASSERT_FALSE(crateUuid.empty());
+
+    // A scene and a prefab that link to Crate (as a converter or a newer host writes them)
+    const std::string linkId = Math::UUID::Random().ToString();
+    const json link = {{"uuid", linkId}, {"name", "My crate"}, {"prefabInstance", {{"prefab", crateUuid}}}};
+    const std::string sceneText = json{{"name", "Linked"}, {"rootGameObjects", json::array({link})}}.dump(2) + "\n";
+    WriteAsset("scenes/Linked.scene", sceneText);
+    const json nest = {{"uuid", Math::UUID::Random().ToString()}, {"name", "Nest"}, {"children", json::array({link})}};
+    WriteAsset("Nest.prefab", json{{"name", "Nest"}, {"rootObject", nest}}.dump(2) + "\n");
+    IO::ResourceLoader::Instance().RescanAssets();
+
+    ASSERT_EQ(Execute(server, CommandType::OpenScene, Strings({"res://scenes/Linked.scene"})).type, SceneInfoType);
+    EXPECT_EQ(Names(), (std::vector<std::string>{"My crate", "Lid"})) << "the link is expanded";
+    EXPECT_EQ(Node(linkId).at("prefab"), crateUuid);
+
+    const Frame saved = Execute(server, CommandType::SaveSceneToFile, Strings({"res://scenes/Linked.scene"}));
+    EXPECT_NE(saved.type, SceneInfoType);
+    EXPECT_NE(saved.Text().find("nested prefabs"), std::string::npos) << saved.Text();
+    EXPECT_EQ(ReadFile(Assets() / "scenes" / "Linked.scene"), sceneText) << "the file keeps its link";
+
+    // An instance of a prefab holding a link is expanded too, and making a prefab of it is refused
+    const std::string instance = Instantiate("res://Nest.prefab");
+    ASSERT_FALSE(instance.empty());
+    EXPECT_EQ(Names(), (std::vector<std::string>{"My crate", "Lid", "Nest", "My crate", "Lid"}));
+    const Frame created = CreatePrefabFrame(instance, "res://Copy.prefab");
+    EXPECT_NE(created.type, AssetCreatedType);
+    EXPECT_NE(created.Text().find("nested prefabs"), std::string::npos) << created.Text();
+    EXPECT_FALSE(fs::exists(Assets() / "Copy.prefab"));
+}

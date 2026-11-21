@@ -241,6 +241,49 @@ namespace N2Engine::Editor
             return JsonLimits::IterativeDump(scene, 2, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
         }
 
+        /// Whether scene or prefab JSON holds objects expanded from a prefab link (nested prefabs,
+        /// docs/serialization.html "Prefab links"). Until this host collapses them back into links
+        /// (orchestrator/proposals/prefab-nesting.md, PR 2), it refuses to write such data to a project file: the
+        /// file would get copies in place of its links. Walks rootGameObjects, rootObject and children, iteratively.
+        bool HoldsPrefabLinks(const nlohmann::json &data)
+        {
+            std::vector<const nlohmann::json *> pending{&data};
+            while (!pending.empty())
+            {
+                const nlohmann::json &value = *pending.back();
+                pending.pop_back();
+                if (value.is_array())
+                {
+                    for (const auto &item : value)
+                    {
+                        pending.push_back(&item);
+                    }
+                    continue;
+                }
+                if (!value.is_object())
+                {
+                    continue;
+                }
+                if (value.contains("prefabLink") || value.contains("prefabInstance") ||
+                    (value.contains("prefabLinked") && value["prefabLinked"] == true))
+                {
+                    return true;
+                }
+                for (const char *key : {"rootGameObjects", "rootObject", "children"})
+                {
+                    if (const auto it = value.find(key); it != value.end())
+                    {
+                        pending.push_back(&*it);
+                    }
+                }
+            }
+            return false;
+        }
+
+        constexpr const char *PrefabLinksRefusal =
+            "This holds instances of nested prefabs (prefab links), which this editor host can't save yet: the file would "
+            "get copies in place of its links";
+
         // ==================== Assets ====================
 
         /// The extensions ReadTextAsset and WriteTextAsset handle (see EditorServer::IsTextAssetPath), lower case
@@ -9588,7 +9631,13 @@ namespace N2Engine::Editor
             }
         }
 
-        const std::string text = SceneFileText(PrefabJsonOf(entity, std::nullopt, std::nullopt));
+        const nlohmann::json created = PrefabJsonOf(entity, std::nullopt, std::nullopt);
+        if (HoldsPrefabLinks(created))
+        {
+            SendError(clientSocket, PrefabLinksRefusal);
+            return;
+        }
+        const std::string text = SceneFileText(created);
         if (text.size() > MaxClipboardBytes)
         {
             SendError(clientSocket, std::format("The prefab would be larger than {} MiB as text and can't be saved",
@@ -9798,7 +9847,13 @@ namespace N2Engine::Editor
                 rootName = name->get<std::string>();
             }
         }
-        const std::string text = SceneFileText(PrefabJsonOf(entity, prefabName, rootName));
+        const nlohmann::json applied = PrefabJsonOf(entity, prefabName, rootName);
+        if (HoldsPrefabLinks(applied))
+        {
+            SendError(clientSocket, PrefabLinksRefusal);
+            return;
+        }
+        const std::string text = SceneFileText(applied);
         if (text.size() > MaxClipboardBytes)
         {
             SendError(clientSocket, std::format("The prefab would be larger than {} MiB as text and can't be saved",
@@ -10407,6 +10462,11 @@ namespace N2Engine::Editor
         {
             prefabJson = PrefabJsonOf(root, _stage->name, std::nullopt);
         }
+        if (HoldsPrefabLinks(prefabJson))
+        {
+            SendError(clientSocket, PrefabLinksRefusal);
+            return;
+        }
         const std::string text = SceneFileText(prefabJson);
         if (text.size() > MaxClipboardBytes)
         {
@@ -10985,7 +11045,18 @@ namespace N2Engine::Editor
         _lastAutosave = now;
         std::error_code error;
         std::filesystem::create_directories(file.parent_path(), error);
-        const auto written = IO::WriteTextFileAtomically(file, SceneFileText(scene->Serialize()));
+        const nlohmann::json autosaved = scene->Serialize();
+        if (HoldsPrefabLinks(autosaved))
+        {
+            // Not written (it would hold copies in place of links); once, as for a folder that can't be written
+            if (!_autosaveWarned)
+            {
+                _autosaveWarned = true;
+                ServerLog::Warn(std::string("No autosave: ") + PrefabLinksRefusal);
+            }
+            return;
+        }
+        const auto written = IO::WriteTextFileAtomically(file, SceneFileText(autosaved));
         if (!written && !_autosaveWarned)
         {
             // Once: a folder that can't be written would otherwise log after every edit
@@ -11386,7 +11457,12 @@ namespace N2Engine::Editor
             // Written before the switch: a file that can't be written leaves the loaded scene as it is
             std::error_code error;
             std::filesystem::create_directories(resolved->file.parent_path(), error);
-            if (auto written = IO::WriteTextFileAtomically(resolved->file, SceneFileText(scene->Serialize())); !written)
+            const nlohmann::json created = scene->Serialize();
+            if (HoldsPrefabLinks(created))
+            {
+                return std::unexpected(std::string(PrefabLinksRefusal));
+            }
+            if (auto written = IO::WriteTextFileAtomically(resolved->file, SceneFileText(created)); !written)
             {
                 return std::unexpected(ClientText::Failure("Couldn't write " + SanitizeForLog(resolved->resourcePath.ToString()),
                                                            "the file could not be written", written.error()));
@@ -11432,6 +11508,10 @@ namespace N2Engine::Editor
         }
 
         nlohmann::json sceneJson = scene->Serialize();
+        if (HoldsPrefabLinks(sceneJson))
+        {
+            return std::unexpected(std::string(PrefabLinksRefusal));
+        }
         // The autosave of the scene as it was named before this save, which may be another file
         const std::filesystem::path previousAutosave = GetAutosaveFile();
         std::error_code error;

@@ -6,6 +6,7 @@
 
 #include <math/UUID.hpp>
 
+#include "engine/prefabs/PrefabNesting.hpp"
 #include "engine/physics2d/Physics2DWorld.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/scheduling/CoroutineScheduler.hpp"
@@ -751,11 +752,22 @@ void Scene::Deserialize(const json &j)
     // Create reference resolver for this scene
     ReferenceResolver resolver;
 
+    // Prefab links (nested prefabs, docs/serialization.html "Prefab links") are expanded before anything is built,
+    // so every player, the server and the editor see the linked prefabs' objects. Data with no link is used as is.
+    json expanded;
+    const json *roots = j.contains("rootGameObjects") ? &j["rootGameObjects"] : nullptr;
+    if (roots != nullptr && PrefabNesting::ContainsLinks(*roots))
+    {
+        expanded = JsonLimits::IterativeCopy(*roots);
+        PrefabNesting::Expand(expanded, "Scene load");
+        roots = &expanded;
+    }
+
     // Phase 1: Deserialize all GameObjects and Components
     // This creates all objects and registers them with the resolver
-    if (j.contains("rootGameObjects"))
+    if (roots != nullptr)
     {
-        for (const auto &rootJson : j["rootGameObjects"])
+        for (const auto &rootJson : *roots)
         {
             auto root = GameObject::Deserialize(rootJson, &resolver);
             _rootGameObjects.push_back(root);

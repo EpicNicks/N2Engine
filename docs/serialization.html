@@ -97,6 +97,7 @@
 <li><a href="#failure-handling">Failure handling</a></li>
 <li><a href="#prefabs">Prefabs</a></li>
 <li><a href="#instantiate-prefab">Instantiating and registering prefabs</a></li>
+<li><a href="#prefab-links">Prefab links (nested prefabs)</a></li>
 <li><a href="#other-formats">Input, layers and Lua data</a></li>
 </ol>
 </div>
@@ -506,9 +507,46 @@ scene.AddRootGameObjects({first, second});
 </div>
 <div class="callout note" id="design-prefab-uuids">
 <p class="callout-title">Design decision: a prefab instance is a new object tree</p>
-<p>A UUID identifies one object: it keys reference resolution, the editor's entity ids and <code>FindGameObjectByUUID</code>. An instance that kept the prefab's UUIDs would collide with every other instance in the same scene. References are stored as UUID strings, some of them (Lua <code>$ref</code> fields) never become pointers, so the instance is renumbered in its data, before it is built: then the live objects, their pointer references and their saved form all agree. References leaving the prefab cannot be kept: the prefab is a template that may be instantiated into any scene, and the objects it pointed at need not exist there. Prefab links (<code>prefabReference</code>, overrides, nested prefabs) are not implemented; <code>prefabReference</code> still only round-trips.</p>
+<p>A UUID identifies one object: it keys reference resolution, the editor's entity ids and <code>FindGameObjectByUUID</code>. An instance that kept the prefab's UUIDs would collide with every other instance in the same scene. References are stored as UUID strings, some of them (Lua <code>$ref</code> fields) never become pointers, so the instance is renumbered in its data, before it is built: then the live objects, their pointer references and their saved form all agree. References leaving the prefab cannot be kept: the prefab is a template that may be instantiated into any scene, and the objects it pointed at need not exist there. Inside a <a href="#prefab-links">prefab link</a> the new ids are not random: they derive from the copy's own link id, so the copy is exactly what expanding its links again would build.</p>
 </div>
 <p class="src">Source: <code>engine/include/engine/prefabs/Prefab.hpp</code>, <code>engine/include/engine/prefabs/PrefabManager.hpp</code>, <code>engine/src/prefabs/Prefab.cpp</code>, <code>engine/src/prefabs/PrefabManager.cpp</code>; tests: <code>PrefabSerializationTest.*</code> (e.g. <code>MissingName_Deserialize</code>, <code>NullRootObject_Deserialize</code>, <code>UUIDsPreserved_RoundTrip</code>), <code>PrefabParseErrorTest.AllErrorsHaveStrings</code>, <code>PrefabInstantiateTest.*</code>, <code>PrefabRegistryTest.*</code>, <code>PrefabDeserializeErrorTest.*</code></p>
+
+<h3 id="prefab-links">Prefab links (nested prefabs)</h3>
+<p>An object in scene or prefab JSON can be a <strong>link</strong> to a prefab instead of a full object: the prefab's tree with this instance's changes. A prefab can hold links to other prefabs (nested prefabs), and a prefab whose root is a link is a <strong>variant</strong>. Changing a prefab changes every instance the next time its file is loaded, in every scene and prefab, with no file rewritten. Design and decisions: <code>orchestrator/proposals/prefab-nesting.md</code>.</p>
+<pre class="lang-json"><code>{
+  "uuid": "a1...",
+  "name": "Crate (big)",
+  "positionable": { "localPosition": { ... }, "localRotation": { ... } },
+  "prefabInstance": {
+    "prefab": "f3c1...",
+    "overrides": [
+      { "source": "b2...", "path": "positionable.localScale", "value": { "x": 2, "y": 2, "z": 1 } },
+      { "source": "b2...", "component": "c4...", "path": "_halfExtents", "value": { "x": 1, "y": 1 } },
+      { "source": "b5.../d4...", "component": "b5.../c9...", "path": "scriptData.speed", "value": 4 }
+    ],
+    "removedObjects": ["b7..."],
+    "removedComponents": ["c8..."],
+    "addedComponents": [ { "source": "b2...", "component": { "type": "...", "data": { ... } } } ],
+    "addedChildren": [ { "source": "b2...", "object": { ... GameObject JSON ... } } ]
+  }
+}</code></pre>
+<ul>
+<li><strong>Addressing.</strong> <code>source</code> (an object) and <code>component</code> name the target by its id in the linked prefab's file. An object of a link inside that prefab is named by a path of ids, outer to inner: <code>"b5.../d4..."</code> is object <code>d4</code> of the prefab that the prefab's link <code>b5</code> points at.</li>
+<li><strong>Override paths</strong>: an object's <code>name</code>, <code>tag</code>, <code>layer</code>, <code>isActive</code> and <code>positionable.localPosition</code>, <code>.localRotation</code>, <code>.localScale</code>; a component's top-level data keys (<code>_halfExtents</code>), and inside a container field its inner keys (<code>scriptData.speed</code>). An array is one value.</li>
+<li><strong>Instance-owned values.</strong> The link's own <code>uuid</code>, <code>name</code>, local position and local rotation are the root's; they never come from the prefab, and an override of them is ignored. The root's scale and everything else come from the prefab unless overridden.</li>
+<li><strong>Ids are deterministic.</strong> Every object and component inside a link gets <code>PrefabNesting::DeriveId(id of its link root, its id in that link's prefab)</code> (a name-based UUID), applied link by link, so the same file always builds the same ids and two links to one prefab never collide. A reference from outside into an instance therefore survives a save and a reload. References inside the prefab follow to the derived ids.</li>
+<li><strong>Where links are expanded.</strong> In <code>Scene::Deserialize</code> (so every scene load: the players, the web player, <code>n2server</code>, the editor host) and in <code>PrefabManager::InstantiatePrefabs</code> (the editor's instantiate, paste and duplicate, and Lua <code>Prefab.Instantiate</code>, which also counts the expanded objects against its spawn caps). Data with no link is used as it is. Prefabs are read through <code>ResourceLoader</code>, each once per load.</li>
+<li><strong>Failures never throw.</strong> A link whose prefab is missing or unreadable, that would contain itself (a cycle), that nests more than <code>MaxLinkDepth</code> (64) links deep or expands to more than <code>MaxLinkObjects</code> (10,000) objects, is logged and becomes an empty object with its own id, name and transform. A change naming something the prefab no longer has is logged and skipped; the load then logs one summary line.</li>
+<li><strong>Marks.</strong> Expanded objects carry <code>prefabLinked</code> (the root of a link; its <code>prefabReference</code> is the prefab), <code>prefabLink</code> (the root of the nearest link the object came from) and <code>prefabSource</code> (its id in that link's prefab); a component entry carries <code>prefabSource</code> next to <code>type</code> and <code>data</code>. <code>GameObject::Serialize</code> writes them, so a game that serializes at runtime (<code>SceneManager::AddScene</code>'s stored copy, <code>RegisterPrefab</code>) writes <strong>expanded copies</strong>, never links, and loads them back as plain objects. <code>InstantiatePrefabs</code> derives a copy's inner ids from the copy's fresh link ids with them (and drops marks whose link root is not in the copy, as for a part of an instance copied alone). The renumbering never touches <code>prefabSource</code>.</li>
+<li><strong>Collapse.</strong> <code>PrefabNesting::Collapse</code> turns expanded instances (as <code>Serialize</code> writes them) back into links. It compares the instance with a fresh expansion of its prefab by id, and writes what differs as overrides, removed and added objects and components. If a prefab can't be loaded, that instance stays expanded, so nothing is lost. The editor host will use it to save links. Until then the host <strong>refuses to write</strong> a scene, prefab, stage or autosave holding expanded links ("This holds instances of nested prefabs ... can't save yet"), so no save replaces links by copies. The play snapshot is allowed (it is not a project file).</li>
+<li><strong>An older engine</strong> ignores <code>prefabInstance</code> and builds an empty object from the link's own keys, and its next save writes that. Open a project with links only with an engine that has them.</li>
+</ul>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>The same files always expand to the same objects with the same ids; a bad link is an empty placeholder and a log line, never an exception or a crash; <code>Collapse</code> after <code>Expand</code> gives a link that expands to the same objects again.</p>
+<p>Tests: <code>PrefabNestingTest.*</code> (<code>tests/engine/prefabs/PrefabNestingTests.cpp</code>): derived ids and marks, the same file giving the same ids, overrides, removals and additions, nested links and paths through them, a variant, cycles, missing prefabs and stale changes, collapse as the inverse of expand (also inside a nested link), collapse keeping an instance whose prefab is gone, the ids of a copy and of a part copied alone, runtime serialize writing expanded copies.</p>
+</div>
+<p class="src">Source: <code>engine/include/engine/prefabs/PrefabNesting.hpp</code>, <code>engine/src/prefabs/PrefabNesting.cpp</code>, <code>engine/src/prefabs/PrefabManager.cpp</code> (<code>CollectIds</code>, <code>Renumber</code>), <code>engine/src/sceneManagement/Scene.cpp</code> (<code>Scene::Deserialize</code>), <code>engine/src/gameobject/GameObject.cpp</code> (the marks), <code>editor-server/src/EditorServer.cpp</code> (<code>HoldsPrefabLinks</code>)</p>
 
 <h2 id="other-formats">Input, layers and Lua data</h2>
 <ul>
