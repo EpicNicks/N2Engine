@@ -46,6 +46,12 @@ add_library(N2EditorServer STATIC
     ${EDITOR_SERVER_SOURCES}
 )
 
+# EditorServer.cpp is past MSVC's default section limit in a Debug build (C1128 with the PhysX build's extra code), as
+# the engine library already is: the big object format, as engine/CMakeLists.txt sets for `engine`
+if(MSVC)
+    target_compile_options(N2EditorServer PRIVATE /bigobj)
+endif()
+
 if(N2ENGINE_EDITOR_TLS)
     # n2_mbedtls_tls brings the include directories and MBEDTLS_USER_CONFIG_FILE (PUBLIC there), and BCrypt on Windows
     target_link_libraries(N2EditorServer PRIVATE n2_mbedtls_tls)

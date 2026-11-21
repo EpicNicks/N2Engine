@@ -389,3 +389,33 @@ TEST(PrefabNestingTest, RuntimeSerializeWritesExpandedCopiesWithMarks)
     EXPECT_FALSE(Nesting::ContainsLinks(live)) << "an expanded copy loads as plain objects";
     EXPECT_TRUE(Nesting::ContainsLinks(json::array({Object(Id(5), "x"), Link(Id(6), "y", CratePrefab)})));
 }
+
+TEST(PrefabNestingTest, InstanceAsPrefabWritesTheInstanceInThePrefabsOwnIds)
+{
+    RegisterNestComponents();
+    FakeSource source = Source();
+    json live = Rebuilt(Expanded(Link(Id(1), "Room 1", RoomPrefab), source));
+    live["children"][0]["name"] = "Crate B";                    // the inner link's own name
+    live["children"].push_back(Object(Id(9), "Added"));          // an object the instance added
+
+    const auto content = Nesting::InstanceAsPrefab(live, source);
+    ASSERT_TRUE(content.has_value());
+    EXPECT_EQ((*content)["uuid"], Id(201)) << "the root gets back the prefab's root id";
+    EXPECT_FALSE(content->contains("prefabReference"));
+    EXPECT_FALSE(content->contains("prefabLinked"));
+    const json &inner = (*content)["children"][0];
+    EXPECT_EQ(inner["uuid"], Id(202)) << "the link inside keeps its id in the prefab";
+    EXPECT_EQ(inner["name"], "Crate B");
+    ASSERT_TRUE(inner.contains("prefabInstance")) << "and is written as a link";
+    EXPECT_EQ(inner["prefabInstance"]["prefab"], CratePrefab);
+    EXPECT_FALSE(inner.contains("children"));
+    EXPECT_EQ((*content)["children"][1]["uuid"], Id(9));
+
+    // As a prefab again, it expands to what the instance shows
+    FakeSource after = Source();
+    after.roots[RoomPrefab] = *content;
+    const json again = Rebuilt(Expanded(Link(Id(1), "Room 1", RoomPrefab), after));
+    EXPECT_EQ(again["children"][0]["name"], "Crate B");
+    EXPECT_EQ(again["children"][0]["children"][0]["name"], "Big lid") << "the inner link's overrides are kept";
+    EXPECT_EQ(again["children"][1]["name"], "Added");
+}
