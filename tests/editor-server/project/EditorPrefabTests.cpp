@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -1153,13 +1154,16 @@ TEST_F(EditorPrefabTest, AChangedPrefabUpdatesItsInstancesAsOneStepAndReferences
     EXPECT_EQ(holder->GetComponent<PrefabTestHolder>()->target->GetUUID().ToString(), secondLid)
         << "the reference into the rebuilt instance resolves again";
 
-    // An outside edit of the file, picked up by the poll
+    // An outside edit of the file, picked up by the poll. Its size differs and its time is moved on: Apply wrote the
+    // file a moment ago, and a file system with coarse times (CI's arm64 Linux leg) would show the same time and size
     json edited = file;
-    edited["rootObject"]["children"][0]["name"] = "Lid (outside)";
+    edited["rootObject"]["children"][0]["name"] = "Lid (edited outside)";
     WriteAsset("Crate.prefab", edited.dump(2) + "\n");
+    const fs::path crateFile = Assets() / "Crate.prefab";
+    fs::last_write_time(crateFile, fs::last_write_time(crateFile) + std::chrono::seconds(2));
     ASSERT_TRUE(server.PollAssets());
-    EXPECT_EQ(Node(firstLid).at("name"), "Lid (outside)");
-    EXPECT_EQ(Node(secondLid).at("name"), "Lid (outside)");
+    EXPECT_EQ(Node(firstLid).at("name"), "Lid (edited outside)");
+    EXPECT_EQ(Node(secondLid).at("name"), "Lid (edited outside)");
     EXPECT_EQ(Step(CommandType::Undo), "Update 2 prefab instances");
     EXPECT_EQ(Node(secondLid).at("name"), "Lid (applied)");
 }

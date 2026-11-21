@@ -228,22 +228,31 @@ namespace N2Engine::PrefabNesting
             ExpandReport &report;
             std::vector<std::string> visiting; // the prefabs being expanded, outer to inner (cycle check)
 
-            void Tree(json &object, std::size_t level)
+            // Walked with a stack on the heap, not recursion: a tree can be as deep as the hierarchy cap, and a frame per
+            // level overflowed the 1 MiB stack of an MSVC Debug build (the depth-capped prefab test). Link replaces only
+            // the object it is given, never a pending one, so the pointers kept here stay valid.
+            void Tree(json &root, const std::size_t rootLevel)
             {
-                if (!object.is_object() || level > JsonLimits::MaxHierarchyDepth)
+                std::vector<std::pair<json *, std::size_t>> pending{{&root, rootLevel}};
+                while (!pending.empty())
                 {
-                    return; // past the cap GameObject::Deserialize refuses the data anyway
-                }
-                if (object.contains("prefabInstance"))
-                {
-                    Link(object, level);
-                    return;
-                }
-                if (json *children = ChildrenOf(object))
-                {
-                    for (json &child : *children)
+                    auto [object, level] = pending.back();
+                    pending.pop_back();
+                    if (!object->is_object() || level > JsonLimits::MaxHierarchyDepth)
                     {
-                        Tree(child, level + 1);
+                        continue; // past the cap GameObject::Deserialize refuses the data anyway
+                    }
+                    if (object->contains("prefabInstance"))
+                    {
+                        Link(*object, level);
+                        continue;
+                    }
+                    if (json *children = ChildrenOf(*object))
+                    {
+                        for (auto it = children->rbegin(); it != children->rend(); ++it)
+                        {
+                            pending.emplace_back(&*it, level + 1);
+                        }
                     }
                 }
             }
@@ -601,24 +610,32 @@ namespace N2Engine::PrefabNesting
             PrefabSource &source;
             bool ok = true;
 
-            void Tree(json &object)
+            // Iterative, as Expander::Tree (a frame per level overflows a Debug build's stack at the hierarchy cap).
+            // Link replaces only the object it is given, so the pending pointers stay valid.
+            void Tree(json &root)
             {
-                if (!object.is_object())
+                std::vector<json *> pending{&root};
+                while (!pending.empty())
                 {
-                    return;
-                }
-                if (IsLinkedRoot(object) && CanonKey(object, "prefabReference") && CanonKey(object, "uuid"))
-                {
-                    if (Link(object))
+                    json *object = pending.back();
+                    pending.pop_back();
+                    if (!object->is_object())
                     {
-                        return;
+                        continue;
                     }
-                }
-                if (json *children = ChildrenOf(object))
-                {
-                    for (json &child : *children)
+                    if (IsLinkedRoot(*object) && CanonKey(*object, "prefabReference") && CanonKey(*object, "uuid"))
                     {
-                        Tree(child);
+                        if (Link(*object))
+                        {
+                            continue;
+                        }
+                    }
+                    if (json *children = ChildrenOf(*object))
+                    {
+                        for (auto it = children->rbegin(); it != children->rend(); ++it)
+                        {
+                            pending.push_back(&*it);
+                        }
                     }
                 }
             }
