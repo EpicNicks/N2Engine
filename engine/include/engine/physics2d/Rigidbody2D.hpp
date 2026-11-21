@@ -62,6 +62,13 @@ namespace N2Engine::Physics2D
         [[nodiscard]] std::shared_ptr<Physics2DWorld> GetWorld() const { return _world.lock(); }
 
         void OnTransformChanged() const;
+        /// The world's rollback restore calls it for a body that did not exist at the restored instant: this component has
+        /// no body any more, as after DestroyBody
+        void OnBodyLost()
+        {
+            _handle = Physics::INVALID_PHYSICS_HANDLE;
+            _world.reset();
+        }
 
     protected:
         void OnActiveFlagChanged() override;

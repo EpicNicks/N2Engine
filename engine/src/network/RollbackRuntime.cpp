@@ -33,15 +33,6 @@ namespace N2Engine::Network
             _window = 0;
         }
 
-        if (_window > 0 && _world.GetScene() != nullptr && _world.GetScene()->GetPhysics2DWorld() != nullptr)
-        {
-            // Box2D state is neither in a snapshot nor in the desync hash: a rollback would rewind everything but it
-            Logger::Warn(std::format("network.deterministic.mode is rollback but the scene has a 2D physics world, which a "
-                                     "snapshot does not hold: the session runs lockstep (rollback window {} ignored)",
-                                     _window));
-            _window = 0;
-        }
-
         Application &app = Application::GetInstance();
         if (!app.GetSimulationClock().IsNetworked())
         {
@@ -202,16 +193,6 @@ namespace N2Engine::Network
         if (scene == nullptr || SceneManager::GetCurSceneIndex() == -1 || &SceneManager::GetCurSceneRef() != scene)
         {
             Logger::Error("The network session's scene is not the current scene: the session stops");
-            return false;
-        }
-        if (_window > 0 && scene->GetPhysics2DWorld() != nullptr)
-        {
-            // The constructor falls back to lockstep for a 2D world that exists then; one created after the session began
-            // (a Rigidbody2D added at run time) cannot switch the session mode now, and a rollback would rewind everything
-            // but Box2D, which the snapshot and the desync hash do not hold: stop, loudly, rather than drift
-            Logger::Error("A 2D physics world appeared after the rollback session started; Box2D state is not in a snapshot, "
-                          "so a rollback would desync the peers silently: the session stops. Create the 2D world before the "
-                          "session starts, or use network.deterministic.mode lockstep");
             return false;
         }
         Application &app = Application::GetInstance();

@@ -51,6 +51,10 @@ namespace N2Engine
         int _layer = 0; // Layers::Default
         bool _isActive = true;
         std::optional<Math::UUID> _prefabReference;
+        // Nested prefabs (docs/serialization.html, "Prefab links"): set when this object came from expanding a link
+        std::optional<Math::UUID> _prefabSource;
+        std::optional<Math::UUID> _prefabLink;
+        bool _prefabLinked = false;
         bool _isMarkedForDestruction = false;
         // Set once destruction has finished (see IsTornDown); later than _isMarkedForDestruction, which is
         // set before OnDisable/OnDestroy run
@@ -126,6 +130,21 @@ namespace N2Engine
         // engine itself does nothing with it (instances are copies, v1 has no overrides).
         const std::optional<Math::UUID>& GetPrefabReference() const { return _prefabReference; }
         void SetPrefabReference(std::optional<Math::UUID> prefab) { _prefabReference = prefab; }
+
+        // Prefab links (nested prefabs, docs/serialization.html "Prefab links"), set by PrefabNesting::Expand:
+        // - PrefabLinked: this object is the root of an expanded link (its GetPrefabReference is the linked prefab);
+        // - PrefabLink: the root of the nearest link this object came from (not itself), if any;
+        // - PrefabSource: this object's id in that link's prefab, expanded (a file id, or for an object of a link
+        //   inside the prefab the id it has there).
+        // Serialized as "prefabLinked", "prefabLink" and "prefabSource". The engine uses them only to give copies
+        // deterministic ids (PrefabManager::InstantiatePrefabs) and to collapse instances back into links
+        // (PrefabNesting::Collapse).
+        bool IsPrefabLinked() const { return _prefabLinked; }
+        void SetPrefabLinked(bool linked) { _prefabLinked = linked; }
+        const std::optional<Math::UUID>& GetPrefabLink() const { return _prefabLink; }
+        void SetPrefabLink(std::optional<Math::UUID> link) { _prefabLink = link; }
+        const std::optional<Math::UUID>& GetPrefabSource() const { return _prefabSource; }
+        void SetPrefabSource(std::optional<Math::UUID> source) { _prefabSource = source; }
 
         // Layer: an index 0..31 (see Layers), 0 (Default) unless set. Serialized. Its colliders' shapes move
         // to the new layer straight away; children keep their own layer (as in Unity).

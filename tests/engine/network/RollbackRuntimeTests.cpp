@@ -1517,7 +1517,7 @@ TEST(RollbackRuntimeApplicationTest, TheRuntimeDrivesApplicationsFixedLoopAndIts
     RestFrame();
 }
 
-TEST(RollbackRuntimeApplicationTest, A2DWorldCreatedAfterTheSessionStartedStopsTheRollbackSession)
+TEST(RollbackRuntimeApplicationTest, A2DWorldCreatedAfterTheSessionStartedKeepsTheRollbackWindowAndNeverRewindsAroundIt)
 {
     ShotPrefab prefab;
     Application &app = Application::GetInstance();
@@ -1585,15 +1585,20 @@ TEST(RollbackRuntimeApplicationTest, A2DWorldCreatedAfterTheSessionStartedStopsT
         }
         ASSERT_EQ(runtime.Session().State(), LockstepState::Running) << runtime.Session().Error();
 
-        // A 2D body appears mid-session
+        // A 2D body appears mid-session: the window stays (Box2D is in the snapshots from now on). A rollback to a snapshot
+        // older than the world is refused, which stops the session with an error, never a silent rewind around Box2D
         const GameObject::Ptr body = GameObject::Create("LateBody2D");
         body->AddComponent<Physics2D::Rigidbody2D>();
         SceneManager::GetCurSceneRef().AddRootGameObject(body);
-        for (int i = 0; i < 20 && runtime.Session().State() == LockstepState::Running; ++i)
+        for (int i = 0; i < 60 && runtime.Session().State() == LockstepState::Running; ++i)
         {
             frame();
         }
-        EXPECT_NE(runtime.Session().State(), LockstepState::Running) << "the session stops rather than rolling back around Box2D";
+        EXPECT_EQ(runtime.RollbackWindow(), 8u);
+        if (runtime.Session().State() != LockstepState::Running)
+        {
+            EXPECT_FALSE(runtime.Session().Error().empty()) << "a stop says why";
+        }
     }
     app.SetSimulationMode(SimulationMode::None);
     RestFrame();
