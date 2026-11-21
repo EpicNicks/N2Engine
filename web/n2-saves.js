@@ -154,9 +154,10 @@ function N2PersistentSaves(env) {
 }
 
 // Glue for the real module (skipped by the test, which has no Module/FS/ENV in scope)
-if (typeof Module === 'object' && typeof FS === 'object' && typeof ENV === 'object') {
+if (typeof Module === 'object') {
   Module['preRun'] = Module['preRun'] || [];
   Module['preRun'].push(function () {
+    if (typeof FS !== 'object' || typeof ENV !== 'object') return; // not defined while this file is evaluated: checked when preRun runs
     var saves = N2PersistentSaves({
       FS: FS,
       IDBFS: typeof IDBFS === 'object' ? IDBFS : null,
