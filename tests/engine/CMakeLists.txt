@@ -116,6 +116,7 @@ set(N2ENGINE_NETWORK_TESTS
     network/NetworkRpcTests.cpp
     network/NetworkSessionTests.cpp
     network/NetworkTimeDilationTests.cpp
+    network/Rollback2DTests.cpp
     network/RollbackLuaTests.cpp
     network/RollbackRuntimeTests.cpp
     network/RollbackSessionNetworkTests.cpp
@@ -145,7 +146,7 @@ endif()
 
 # On this file only, so a build without Box2D recompiles almost nothing else
 if(N2ENGINE_USE_BOX2D)
-    set_source_files_properties(physics2d/Physics2DTests.cpp physics2d/LuaPhysics2DTests.cpp PROPERTIES COMPILE_DEFINITIONS N2ENGINE_BOX2D_ENABLED=1)
+    set_source_files_properties(physics2d/Physics2DTests.cpp physics2d/LuaPhysics2DTests.cpp network/Rollback2DTests.cpp PROPERTIES COMPILE_DEFINITIONS N2ENGINE_BOX2D_ENABLED=1)
 endif()
 # The particles and soft-body modules: on the whole program, not per file as Box2D's, because the shared test fakes
 # (particles/FakePhysicsBackend.hpp, included by tests of other subsystems too) run those modules' CPU backends.

@@ -17,6 +17,10 @@
 #include "engine/physics/BodyState.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
 #include "engine/physics/Rigidbody.hpp"
+#include "engine/physics2d/Collider2D.hpp"
+#include "engine/physics2d/Physics2DWorld.hpp"
+#include "engine/physics2d/Rigidbody2D.hpp"
+#include "engine/sceneManagement/Scene.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
 
 namespace N2Engine::Network
@@ -34,6 +38,50 @@ namespace N2Engine::Network
             for (const GameObject::Ptr &child : root.GetChildrenRecursive())
             {
                 if (child && child->GetComponent<Physics::Rigidbody>() != nullptr)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// The scene's 2D physics world, or null (no scene, no 2D component, or a build without Box2D)
+        Physics2D::Physics2DWorld *Live2DWorld(const NetworkWorld &world)
+        {
+            const Scene *const scene = world.GetScene();
+            return scene != nullptr ? scene->GetPhysics2DWorld() : nullptr;
+        }
+
+        /// True when a 2D component of the object lost its body (a restore of the 2D world drops the bodies made after the
+        /// restored instant, which is every body of an object spawned after the snapshot): such an object cannot be pooled,
+        /// a fresh instance is made instead and gets a new body, as it did the first time
+        bool HasLost2DBody(GameObject &root)
+        {
+            const auto lost = [](GameObject &object)
+            {
+                for (const Physics2D::Rigidbody2D *const body : object.GetComponents<Physics2D::Rigidbody2D>())
+                {
+                    if (!body->GetHandle().IsValid())
+                    {
+                        return true;
+                    }
+                }
+                for (const Physics2D::Collider2D *const collider : object.GetComponents<Physics2D::Collider2D>())
+                {
+                    if (!collider->GetHandle().IsValid())
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            if (lost(root))
+            {
+                return true;
+            }
+            for (const GameObject::Ptr &child : root.GetChildrenRecursive())
+            {
+                if (child && lost(*child))
                 {
                     return true;
                 }
@@ -271,6 +319,17 @@ namespace N2Engine::Network
             }
             out.hasPhysics = true;
         }
+        out.hasPhysics2d = false;
+        out.physics2d.clear();
+        if (Physics2D::Physics2DWorld *const world2D = Live2DWorld(_world); world2D != nullptr)
+        {
+            if (!world2D->SaveState(out.physics2d))
+            {
+                _lastError = "the 2D physics world refused SaveState (see the log)";
+                return false;
+            }
+            out.hasPhysics2d = true;
+        }
         ++_stats.saves;
         return true;
     }
@@ -280,6 +339,19 @@ namespace N2Engine::Network
         if (snapshot.hasPhysics && !PhysicsActive())
         {
             return std::unexpected(std::string("the snapshot has a physics part but this world has no snapshot-capable backend"));
+        }
+
+        Physics2D::Physics2DWorld *const world2D = Live2DWorld(_world);
+        if (snapshot.hasPhysics2d && world2D == nullptr)
+        {
+            return std::unexpected(std::string("the snapshot has a 2D physics part but this scene has no 2D world"));
+        }
+        if (!snapshot.hasPhysics2d && world2D != nullptr)
+        {
+            return std::unexpected(std::string("the scene has a 2D physics world that did not exist when the snapshot was "
+                                               "saved (or the snapshot came over the wire, which does not carry 2D "
+                                               "physics): it cannot be rewound to a state without it. Create the 2D world "
+                                               "before the session starts"));
         }
 
         if (snapshot.streams.size() != _streams.size())
@@ -384,6 +456,14 @@ namespace N2Engine::Network
             }
             _physics->SyncTransforms();
         }
+        if (snapshot.hasPhysics2d)
+        {
+            // Last, like the 3D part: it writes the bodies' poses back to their transforms
+            if (!world2D->RestoreState(std::span<const std::byte>(snapshot.physics2d.data(), snapshot.physics2d.size())))
+            {
+                return std::unexpected(std::string("the 2D physics world refused RestoreState (see the log)"));
+            }
+        }
         ForgetStalePristine();
         ++_stats.restores;
         if (!refusedNote.empty())
@@ -409,8 +489,11 @@ namespace N2Engine::Network
             const auto pristine = _pristine.find(id.value);
             const std::vector<GameObject::Ptr> descendants =
                 object.GetGameObject().GetChildrenRecursive();
+            const Scene *const scene = _world.GetScene();
+            const bool lost2D = scene != nullptr && scene->GetPhysics2DWorld() != nullptr &&
+                                HasLost2DBody(object.GetGameObject());
             const bool reusable = object.IsSpawned() && object.GetPrefabName() == prefab && object.GetOwner() == owner &&
-                                  pristine != _pristine.end() &&
+                                  pristine != _pristine.end() && !lost2D &&
                                   descendants.size() == pristine->second.descendants.size();
             if (reusable)
             {

@@ -75,6 +75,11 @@ namespace N2Engine::Network
         /// IPhysicsBackend::SaveState bytes; empty when the world has no snapshot-capable backend
         std::vector<std::byte> physics;
         bool hasPhysics = false;
+        /// Physics2DWorld::SaveState bytes of the scene's 2D world (Box2D); hasPhysics2d is false when the scene had none.
+        /// In-process only: SerializeWorldSnapshot does not carry it (the format is unchanged), so a host with a 2D world
+        /// does not serve spectator snapshots and a late joiner's RestoreForJoin refuses a scene that has one
+        std::vector<std::byte> physics2d;
+        bool hasPhysics2d = false;
         /// The global seeded RNG stream (math/Random.hpp); nullopt when it was not seeded
         std::optional<std::uint32_t> rng;
         /// The registered DeterministicRandom streams (RollbackWorld::AddRandomStream), in registration order

@@ -50,9 +50,11 @@ namespace N2Engine::Physics2D
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <format>
 #include <limits>
 #include <map>
+#include <span>
 #include <unordered_map>
 #include <utility>
 
@@ -86,6 +88,105 @@ namespace N2Engine::Physics2D
 
         b2Vec2 ToB2(const Math::Vector2 &v) { return b2Vec2{v.x, v.y}; }
         Math::Vector2 FromB2(const b2Vec2 v) { return Math::Vector2(v.x, v.y); }
+
+        // The rollback state's bytes (SaveState): native byte order, they belong to the build that wrote them
+        void PutBytes(std::vector<std::byte> &out, const void *data, const std::size_t size)
+        {
+            const auto *bytes = static_cast<const std::byte *>(data);
+            out.insert(out.end(), bytes, bytes + size);
+        }
+        void PutU8(std::vector<std::byte> &out, const std::uint8_t value) { PutBytes(out, &value, sizeof(value)); }
+        void PutU32(std::vector<std::byte> &out, const std::uint32_t value) { PutBytes(out, &value, sizeof(value)); }
+        void PutU64(std::vector<std::byte> &out, const std::uint64_t value) { PutBytes(out, &value, sizeof(value)); }
+        void PutF32(std::vector<std::byte> &out, const float value) { PutBytes(out, &value, sizeof(value)); }
+
+        void PutTouches(std::vector<std::byte> &out, const ContactTracker2D::TouchMap &touches)
+        {
+            PutU32(out, static_cast<std::uint32_t>(touches.size()));
+            for (const auto &entry : touches)
+            {
+                PutU32(out, entry.first.a.index);
+                PutU32(out, entry.first.a.generation);
+                PutU32(out, entry.first.b.index);
+                PutU32(out, entry.first.b.generation);
+                PutU32(out, static_cast<std::uint32_t>(entry.second.size()));
+                for (const ContactTracker2D::ShapePair &pair : entry.second)
+                {
+                    PutU64(out, pair.onA);
+                    PutU64(out, pair.onB);
+                }
+            }
+        }
+
+        /// Reads what the Put functions wrote; `ok` goes false at the first read past the end, and every later read gives 0
+        struct StateReader
+        {
+            std::span<const std::byte> data;
+            std::size_t position = 0;
+            bool ok = true;
+
+            [[nodiscard]] std::size_t Remaining() const { return data.size() - position; }
+
+            template <typename T>
+            T Get()
+            {
+                T value{};
+                if (!ok || Remaining() < sizeof(T))
+                {
+                    ok = false;
+                    return value;
+                }
+                std::memcpy(&value, data.data() + position, sizeof(T));
+                position += sizeof(T);
+                return value;
+            }
+            std::uint8_t U8() { return Get<std::uint8_t>(); }
+            std::uint32_t U32() { return Get<std::uint32_t>(); }
+            std::uint64_t U64() { return Get<std::uint64_t>(); }
+            float F32() { return Get<float>(); }
+
+            std::span<const std::byte> Take(const std::size_t size)
+            {
+                if (!ok || Remaining() < size)
+                {
+                    ok = false;
+                    return {};
+                }
+                const std::span<const std::byte> taken = data.subspan(position, size);
+                position += size;
+                return taken;
+            }
+
+            ContactTracker2D::TouchMap Touches()
+            {
+                ContactTracker2D::TouchMap touches;
+                const std::uint32_t count = U32();
+                for (std::uint32_t i = 0; i < count && ok; ++i)
+                {
+                    ContactTracker2D::BodyPair pair;
+                    pair.a.index = U32();
+                    pair.a.generation = U32();
+                    pair.b.index = U32();
+                    pair.b.generation = U32();
+                    const std::uint32_t shapes = U32();
+                    if (!ok || shapes > Remaining() / 16)
+                    {
+                        ok = false;
+                        break;
+                    }
+                    std::vector<ContactTracker2D::ShapePair> list;
+                    for (std::uint32_t s = 0; s < shapes; ++s)
+                    {
+                        ContactTracker2D::ShapePair shape;
+                        shape.onA = U64();
+                        shape.onB = U64();
+                        list.push_back(shape);
+                    }
+                    touches.emplace(pair, std::move(list));
+                }
+                return touches;
+            }
+        };
 
         b2Pos ToPos(const float x, const float y)
         {
@@ -800,6 +901,311 @@ namespace N2Engine::Physics2D
 
             [[nodiscard]] std::uint64_t HashState() const override { return b2World_GetStateHash(_world); }
 
+            [[nodiscard]] std::uint64_t HashSimulatedState() const override
+            {
+                std::uint64_t hash = 14695981039346656037ull;
+                const auto mix = [&hash](const void *data, const std::size_t size)
+                {
+                    const auto *bytes = static_cast<const unsigned char *>(data);
+                    for (std::size_t i = 0; i < size; ++i)
+                    {
+                        hash = (hash ^ static_cast<std::uint64_t>(bytes[i])) * 1099511628211ull;
+                    }
+                };
+                const auto mixFloat = [&mix](const float value) { mix(&value, sizeof(value)); };
+                const auto mixDouble = [&mix](const double value) { mix(&value, sizeof(value)); };
+                // _bodies is ordered by handle; the handle itself is not mixed, only what the body is
+                for (const auto &entry : _bodies)
+                {
+                    const BodyRecord &body = entry.second;
+                    if (!body.enabled)
+                    {
+                        continue;
+                    }
+                    const b2Pos position = b2Body_GetPosition(body.id);
+                    const b2Rot rotation = b2Body_GetRotation(body.id);
+                    const b2Vec2 velocity = b2Body_GetLinearVelocity(body.id);
+                    mixDouble(static_cast<double>(position.x));
+                    mixDouble(static_cast<double>(position.y));
+                    mixFloat(rotation.c);
+                    mixFloat(rotation.s);
+                    mixFloat(velocity.x);
+                    mixFloat(velocity.y);
+                    mixFloat(b2Body_GetAngularVelocity(body.id));
+                    const unsigned char flags = static_cast<unsigned char>((b2Body_IsAwake(body.id) ? 1u : 0u) |
+                                                                           (static_cast<unsigned>(body.type) << 1));
+                    mix(&flags, 1);
+                }
+                return hash;
+            }
+
+            // ===== Rollback =====
+            // The state is Box2D's snapshot image plus what this class keeps beside it. Bodies are named by their Box2D id
+            // and shapes by their shape key, both of which stay valid across b2World_RestoreFromSnapshot; the colliders
+            // behind a body's shapes by their index among the Collider2D components of the body's GameObject (the same on
+            // every build that makes the same scene), never by address.
+            static constexpr std::uint32_t kStateMagic = 0x3250324Eu; // "N2P2"
+            static constexpr std::uint32_t kStateVersion = 1;
+
+            [[nodiscard]] bool SaveState(std::vector<std::byte> &out) const override
+            {
+                out.clear();
+                const int size = b2World_GetSnapshot(_world, nullptr, 0);
+                if (size <= 0)
+                {
+                    Logger::Warn("2D physics: Box2D would not take a snapshot (the world is mid-step)");
+                    return false;
+                }
+                PutU32(out, kStateMagic);
+                PutU32(out, kStateVersion);
+                PutU32(out, static_cast<std::uint32_t>(size));
+                const std::size_t at = out.size();
+                out.resize(at + static_cast<std::size_t>(size));
+                if (b2World_GetSnapshot(_world, reinterpret_cast<std::uint8_t *>(out.data() + at), size) != size)
+                {
+                    Logger::Warn("2D physics: Box2D wrote a snapshot of another size than it announced");
+                    out.clear();
+                    return false;
+                }
+
+                PutU32(out, static_cast<std::uint32_t>(_bodies.size()));
+                for (const auto &entry : _bodies)
+                {
+                    const BodyRecord &body = entry.second;
+                    PutU64(out, b2StoreBodyId(body.id));
+                    PutU8(out, body.enabled ? 1 : 0);
+                    PutU8(out, static_cast<std::uint8_t>(body.type));
+                    PutU8(out, body.fixedRotation ? 1 : 0);
+                    PutU8(out, body.autoMass ? 1 : 0);
+                    PutF32(out, body.mass);
+                    PutU32(out, static_cast<std::uint32_t>(body.colliders.size()));
+                    const std::vector<Collider2D *> siblings =
+                        body.owner ? body.owner->GetComponents<Collider2D>() : std::vector<Collider2D *>{};
+                    for (Collider2D *collider : body.colliders)
+                    {
+                        const auto shape = _colliderShapes.find(collider);
+                        const auto position = std::ranges::find(siblings, collider);
+                        if (shape == _colliderShapes.end() || position == siblings.end())
+                        {
+                            Logger::Warn("2D physics: a shape's collider is not on its body's GameObject; the state cannot be saved");
+                            out.clear();
+                            return false;
+                        }
+                        PutU64(out, shape->second);
+                        PutU32(out, static_cast<std::uint32_t>(position - siblings.begin()));
+                    }
+                }
+                PutTouches(out, _tracker.Collisions());
+                PutTouches(out, _tracker.Triggers());
+                PutU8(out, _resyncTriggers ? 1 : 0);
+                return true;
+            }
+
+            [[nodiscard]] bool RestoreState(const std::span<const std::byte> in) override
+            {
+                StateReader reader{in};
+                if (reader.U32() != kStateMagic || reader.U32() != kStateVersion)
+                {
+                    Logger::Warn("2D physics: the state is not one of this build's 2D worlds");
+                    return false;
+                }
+                const std::uint32_t imageSize = reader.U32();
+                const std::span<const std::byte> image = reader.Take(imageSize);
+                struct SavedShape
+                {
+                    std::uint64_t key = 0;
+                    std::uint32_t ordinal = 0;
+                };
+                struct SavedBody
+                {
+                    std::uint64_t id = 0;
+                    bool enabled = true;
+                    std::uint8_t type = 0;
+                    bool fixedRotation = false;
+                    bool autoMass = true;
+                    float mass = 1.0f;
+                    std::vector<SavedShape> shapes;
+                };
+                std::vector<SavedBody> saved;
+                const std::uint32_t bodyCount = reader.U32();
+                if (!reader.ok || bodyCount > reader.Remaining() / 8)
+                {
+                    Logger::Warn("2D physics: the state is cut short");
+                    return false;
+                }
+                for (std::uint32_t i = 0; i < bodyCount && reader.ok; ++i)
+                {
+                    SavedBody body;
+                    body.id = reader.U64();
+                    body.enabled = reader.U8() != 0;
+                    body.type = reader.U8();
+                    body.fixedRotation = reader.U8() != 0;
+                    body.autoMass = reader.U8() != 0;
+                    body.mass = reader.F32();
+                    const std::uint32_t shapeCount = reader.U32();
+                    if (!reader.ok || shapeCount > reader.Remaining() / 12)
+                    {
+                        reader.ok = false;
+                        break;
+                    }
+                    for (std::uint32_t s = 0; s < shapeCount; ++s)
+                    {
+                        SavedShape shape;
+                        shape.key = reader.U64();
+                        shape.ordinal = reader.U32();
+                        body.shapes.push_back(shape);
+                    }
+                    saved.push_back(std::move(body));
+                }
+                ContactTracker2D::TouchMap collisions = reader.Touches();
+                ContactTracker2D::TouchMap triggers = reader.Touches();
+                const bool resyncTriggers = reader.U8() != 0;
+                if (!reader.ok || reader.Remaining() != 0)
+                {
+                    Logger::Warn("2D physics: the state is cut short or has bytes after its end");
+                    return false;
+                }
+
+                if (!b2World_RestoreFromSnapshot(_world, reinterpret_cast<const std::uint8_t *>(image.data()),
+                                                 static_cast<int>(image.size())))
+                {
+                    Logger::Error("2D physics: Box2D refused the snapshot image; this world must not be used any more");
+                    return false;
+                }
+
+                // The bodies of the saved state that this world still has keep their record; a body in the state with no
+                // record was destroyed since (Box2D brought it back: it goes again)
+                std::map<PhysicsBodyHandle, BodyRecord, HandleLess> bodies;
+                std::vector<b2BodyId> destroyed;
+                for (const SavedBody &savedBody : saved)
+                {
+                    const b2BodyId id = b2LoadBodyId(savedBody.id);
+                    const PhysicsBodyHandle handle = ToHandle(id);
+                    auto node = _bodies.extract(handle);
+                    if (node.empty())
+                    {
+                        destroyed.push_back(id);
+                        continue;
+                    }
+                    BodyRecord record = std::move(node.mapped());
+                    record.enabled = savedBody.enabled;
+                    record.type = static_cast<BodyType2D>(savedBody.type);
+                    record.fixedRotation = savedBody.fixedRotation;
+                    record.autoMass = savedBody.autoMass;
+                    record.mass = savedBody.mass;
+                    record.dirty = false; // Box2D's poses are the truth now
+                    record.colliders.clear();
+                    bodies.emplace(handle, std::move(record));
+                }
+                // What is left in _bodies did not exist at the saved instant: Box2D dropped it. Its components lose it.
+                for (auto &entry : _bodies)
+                {
+                    BodyRecord &lost = entry.second;
+                    if (lost.rigidbody)
+                    {
+                        lost.rigidbody->OnBodyLost();
+                    }
+                    if (lost.owner)
+                    {
+                        for (Collider2D *collider : lost.owner->GetComponents<Collider2D>())
+                        {
+                            if (collider->GetHandle() == entry.first)
+                            {
+                                collider->OnBodyLost();
+                            }
+                        }
+                    }
+                }
+                for (const b2BodyId id : destroyed)
+                {
+                    b2DestroyBody(id);
+                }
+                _bodies = std::move(bodies);
+
+                // The shapes: rebuilt from the state's list, each with its collider's current description
+                _shapes.clear();
+                _colliderShapes.clear();
+                for (const SavedBody &savedBody : saved)
+                {
+                    const auto live = _bodies.find(ToHandle(b2LoadBodyId(savedBody.id)));
+                    if (live == _bodies.end())
+                    {
+                        continue;
+                    }
+                    BodyRecord &record = live->second;
+                    const std::vector<Collider2D *> siblings =
+                        record.owner ? record.owner->GetComponents<Collider2D>() : std::vector<Collider2D *>{};
+                    for (const SavedShape &savedShape : savedBody.shapes)
+                    {
+                        const b2ShapeId id = b2LoadShapeId(savedShape.key);
+                        if (savedShape.ordinal >= siblings.size() || !b2Shape_IsValid(id))
+                        {
+                            Logger::Error("2D physics: the state names a collider or shape this world does not have; this world "
+                                          "must not be used any more");
+                            return false;
+                        }
+                        Collider2D *const collider = siblings[savedShape.ordinal];
+                        ShapeRecord shape;
+                        shape.id = id;
+                        shape.collider = collider;
+                        shape.body = live->first;
+                        shape.geometry = collider->DescribeShape();
+                        shape.isTrigger = b2Shape_IsSensor(id);
+                        shape.isCircle = b2Shape_GetType(id) == b2_circleShape;
+                        shape.layer = shape.geometry.layer;
+                        shape.maskBits = b2Shape_GetFilter(id).maskBits;
+                        _shapes.insert_or_assign(savedShape.key, std::move(shape));
+                        _colliderShapes[collider] = savedShape.key;
+                        record.colliders.push_back(collider);
+                    }
+                }
+
+                // The touching pairs of the saved instant, without the ones of a body or shape that is gone
+                const auto keep = [this](ContactTracker2D::TouchMap &touches)
+                {
+                    for (auto it = touches.begin(); it != touches.end();)
+                    {
+                        std::erase_if(it->second, [this](const ContactTracker2D::ShapePair &pair)
+                                      { return !_shapes.contains(pair.onA) || !_shapes.contains(pair.onB); });
+                        if (it->second.empty() || !_bodies.contains(it->first.a) || !_bodies.contains(it->first.b))
+                        {
+                            it = touches.erase(it);
+                        }
+                        else
+                        {
+                            ++it;
+                        }
+                    }
+                };
+                keep(collisions);
+                keep(triggers);
+                _tracker.RestoreTouches(std::move(collisions), std::move(triggers));
+                _targeted.clear();
+                _resyncTriggers = resyncTriggers;
+
+                // The transforms follow the restored poses, as after a step; the writes are not the game moving the object
+                _syncing = true;
+                for (const auto &entry : _bodies)
+                {
+                    const BodyRecord &body = entry.second;
+                    if (!body.enabled || body.type == BodyType2D::Static || !body.rigidbody || !body.owner)
+                    {
+                        continue;
+                    }
+                    if (Positionable *positionable = body.owner->GetPositionable())
+                    {
+                        _syncingBody = entry.first;
+                        const b2Pos position = b2Body_GetPosition(body.id);
+                        const Math::Vector3 current = positionable->GetPosition();
+                        const Math::Vector3 moved(static_cast<float>(position.x), static_cast<float>(position.y), current.z);
+                        positionable->SetPositionAndRotation(
+                            moved, body.fixedRotation ? positionable->GetRotation() : FromRot(b2Body_GetRotation(body.id)));
+                    }
+                }
+                _syncing = false;
+                return true;
+            }
+
             [[nodiscard]] bool KeepsShape(const ShapeKey key, const QueryTriggers triggers) const
             {
                 const auto it = _shapes.find(key);
@@ -1340,8 +1746,10 @@ namespace N2Engine::Physics2D
     {
         if (Application::GetInstance().GetSimulationMode() == SimulationMode::Deterministic)
         {
-            Logger::Warn("A 2D physics world was created in Deterministic mode. 2D physics state is not in the desync hash and a "
-                         "rollback does not restore it (docs/physics2d.html#network)");
+            Logger::Warn("A 2D physics world was created in Deterministic mode. It is in the desync hash and in rollback "
+                         "snapshots, but a serialised snapshot (a late joiner or spectator) does not carry it, so such a "
+                         "scene cannot be joined late, and a rollback needs a strict floating-point build "
+                         "(docs/physics2d.html#network)");
         }
         return std::make_shared<Box2DWorld>();
     }

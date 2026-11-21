@@ -174,7 +174,7 @@
 <li><a href="#joints-optional">Joints are an optional feature bit, reported by Jolt only</a></li>
 <li><a href="#box2d-module">Box2D is a separate 2D module with a concrete world and no backend interface</a></li>
 <li><a href="#box2d-events">2D event names carry a 2D suffix; changes inside a handler run immediately</a></li>
-<li><a href="#box2d-deterministic">2D is allowed under the Deterministic preset with a warning; a late 2D world stops a rollback session</a></li>
+<li><a href="#box2d-deterministic">2D is in rollback snapshots and the state hash; a 2D world created after a rollback session began cannot be rewound past its creation</a></li>
 <li><a href="#ordered-state">Physics iteration is ordered by handle and gameplay data is ordered by net id</a></li>
 <li><a href="#mass-authoritative">3D rigidbody mass is authoritative; 2D mass comes from shapes unless set</a></li>
 <li><a href="#inactive-and-recreated">Inactive objects leave physics; Enter and Exit stay balanced</a></li>
@@ -184,7 +184,7 @@
 </ul></li>
 <li><a href="#determinism">Determinism and math</a><ul>
 <li><a href="#strict-float">Strict floating point, not fixed point</a></li>
-<li><a href="#strict-fp-profile"><code>N2ENGINE_STRICT_FP</code> is a build profile on every target, default off except for web size and speed profiles</a></li>
+<li><a href="#strict-fp-profile"><code>N2ENGINE_STRICT_FP</code> is a build profile on every target, on by default</a></li>
 <li><a href="#engine-trig">Engine-owned sin, cos, atan, exp and log, written as short series</a></li>
 <li><a href="#fp-guard">Flush-to-zero off everywhere, with a guard on every network tick</a></li>
 <li><a href="#simd-tiers">SIMD tiers are an algorithm choice; the default is scalar; determinism requires scalar</a></li>
@@ -769,11 +769,11 @@
 <p><strong>Why.</strong> Stated: reusing the names would mean overloads that hide each other in C++ and a Lua handler whose argument changes type, and an ambiguity on an object using both worlds; queuing changes would make <code>SetLinearVelocity</code> right after creating a body silently do nothing.</p>
 <p><strong>Consequences and trade-offs.</strong> Two parallel event sets.</p>
 <p class="src">Where to look: <a href="physics2d.html#design-2d-handlers"><code>physics2d.html#design-2d-handlers</code></a>; <code>orchestrator/proposals/physics2d-box2d-design.md section 4, 6</code></p>
-<h3 id="box2d-deterministic">2D is allowed under the Deterministic preset with a warning; a late 2D world stops a rollback session <span class="badge" title="Rationale stated in the repository">stated</span></h3>
-<p><strong>Decision.</strong> Creating a 2D world in Deterministic mode logs one warning; a lockstep fallback applies when the 2D world exists at session start; a 2D world created after a rollback session has begun logs an error and stops the session (PR #390).</p>
+<h3 id="box2d-deterministic">2D is in rollback snapshots and the state hash; a 2D world created after a rollback session began cannot be rewound past its creation <span class="badge" title="Rationale stated in the repository">stated</span></h3>
+<p><strong>Decision.</strong> Box2D is saved and restored with Box2D's own snapshot plus the engine's records beside it, and its enabled bodies are a leaf of the state hash (issue #381). The lockstep fallback and the stop for a late 2D world (PR #382 and #390) are gone. Creating a 2D world in Deterministic mode still logs one warning. A snapshot older than a 2D world that appeared later cannot be restored: the session stops with an error. The serialised snapshot for late joiners does not carry 2D, and its format is unchanged.</p>
 <p><strong>Context.</strong> Rollback hashing and snapshots only read the 3D backend.</p>
-<p><strong>Why.</strong> Stated: rollback would silently rewind 3D but not 2D. Refusing outright would block offline lockstep experiments. Box2D's snapshot API is experimental ("the format will change").</p>
-<p><strong>Consequences and trade-offs.</strong> 2D has no hash or rollback hook yet (accepted gap).</p>
+<p><strong>Why.</strong> Stated: rollback would silently rewind 3D but not 2D, which is why the fallback and the stop existed. Box2D's snapshot API is experimental ("the format will change"), which is why its bytes are in-process only and are not put into the serialised snapshot, so no wire or format version moved.</p>
+<p><strong>Consequences and trade-offs.</strong> A scene with a 2D world cannot serve a late joiner or spectator yet. A body made after a snapshot by an object that is not networked loses its body on a rollback (<a href="physics2d.html#rollback">physics2d</a>).</p>
 <p class="src">Where to look: <code>orchestrator/proposals/physics2d-box2d-design.md decision H</code>; <a href="https://github.com/EpicNicks/N2Engine/pull/390">PR #390</a>; <a href="physics2d.html"><code>physics2d.html</code></a></p>
 <h3 id="ordered-state">Physics iteration is ordered by handle and gameplay data is ordered by net id <span class="badge" title="Rationale partly stated, partly inferred (inference marked)">mixed</span></h3>
 <p><strong>Decision.</strong> Physics pair and re-filter iteration is by body handle; the network server reads and encodes replicated objects in net id order and fields in layout order; objects are numbered in UUID order.</p>
@@ -819,10 +819,10 @@
 <p><strong>Why.</strong> Stated: both candidate physics engines are strict-float; Lua numbers are doubles; the renderer, math library and serialization are float; fixed point would force a custom physics engine and a parallel math stack (new fixed types, a 64x64-to-128 multiply, new serialization field kinds).</p>
 <p><strong>Consequences and trade-offs.</strong> The guarantee depends on compilers honouring IEEE without contraction. Risks named: NaN payloads, denormal modes set by any library, libm differences and constant folding of transcendental calls; they are guarded by cross-leg hashes on every toolchain bump.</p>
 <p class="src">Where to look: <code>orchestrator/proposals/netcode-runtime-design.md section 4.8</code>; <code>orchestrator/proposals/physics-backend-investigation-156.md section 3</code>; <a href="math.html#design-strict-fp"><code>math.html#design-strict-fp</code></a></p>
-<h3 id="strict-fp-profile"><code>N2ENGINE_STRICT_FP</code> is a build profile on every target, default off except for web size and speed profiles <span class="badge" title="Rationale stated in the repository">stated</span></h3>
-<p><strong>Decision.</strong> The option builds all targets with no FP contraction and no fast-math. It is ON by default only for the web size and speed profiles, and <code>build.strictFp</code> in the project turns it on for a game's own tree (n2build turns it on for a game that uses networking).</p>
+<h3 id="strict-fp-profile"><code>N2ENGINE_STRICT_FP</code> is a build profile on every target, on by default <span class="badge" title="Rationale stated in the repository">stated</span></h3>
+<p><strong>Decision.</strong> The option builds all targets with no FP contraction and no fast-math. It is ON by default in every build (issue #381; it was ON only for the web size and speed profiles before), <code>-DN2ENGINE_STRICT_FP=OFF</code> turns it off, and <code>build.strictFp</code> in the project turns it on for a game's own tree (n2build turns it on for a game that uses networking).</p>
 <p><strong>Context.</strong> The same source must compile to the same float operations.</p>
-<p><strong>Why.</strong> Stated: it applies to all targets, not only math, "because the inline math in the headers is compiled into every target that includes them, and they must all be the same code"; it is a profile, not a guarantee (C libraries, SIMD tiers, Debug versus Release and the prebuilt PhysX still differ). It defaults ON for web because Jolt declares cross-platform determinism only with it and WebAssembly has no fused multiply-add, so it changes no instruction there. Elsewhere it stays OFF "so existing builds are unchanged".</p>
+<p><strong>Why.</strong> Stated: it applies to all targets, not only math, "because the inline math in the headers is compiled into every target that includes them, and they must all be the same code"; it is a profile, not a guarantee (C libraries, SIMD tiers, Debug versus Release and the prebuilt PhysX still differ). It defaults ON for web because Jolt declares cross-platform determinism only with it and WebAssembly has no fused multiply-add, so it changes no instruction there. Elsewhere it stayed OFF "so existing builds are unchanged" until issue #381, when networked games became the common case and the default moved to ON (x86_64 and WebAssembly lose no instruction; arm64 may lose some speed in float-heavy code).</p>
 <p><strong>Consequences and trade-offs.</strong> One cold compile per leg when turned on; a warning if a networked game turns it off while using physics (PR #384).</p>
 <p class="src">Where to look: <code>CMakeLists.txt (N2ENGINE_STRICT_FP)</code>; <a href="math.html#design-strict-fp"><code>math.html#design-strict-fp</code></a>; <a href="project-modules.html"><code>project-modules.html</code></a>; <a href="https://github.com/EpicNicks/N2Engine/pull/384">PR #384</a></p>
 <h3 id="engine-trig">Engine-owned sin, cos, atan, exp and log, written as short series <span class="badge" title="Rationale stated in the repository">stated</span></h3>
@@ -1307,7 +1307,7 @@
 <tr><td>GPU timings in the profiler</td><td>Deferred</td><td>Timer queries would be needed in four backends.</td><td><code>orchestrator/proposals/engine-stats-profiler.md</code></td></tr>
 <tr><td>Pinning in soft bodies</td><td>Not in v1</td><td>Decided by the user: bodies only fall and squash.</td><td><a href="soft-bodies.html#design-softbody-no-pinning"><code>soft-bodies.html#design-softbody-no-pinning</code></a></td></tr>
 <tr><td>Named sorting layers for 2D</td><td>Deferred</td><td>Integer sorting order can later map layers onto ranges without changing scenes.</td><td><code>orchestrator/proposals/sprite2d-design.md</code></td></tr>
-<tr><td>Rollback for 2D physics</td><td>Deferred</td><td>Box2D's snapshot API is experimental; 2D currently warns or stops a rollback session.</td><td><code>orchestrator/proposals/physics2d-box2d-design.md decision H</code></td></tr>
+<tr><td>Rollback for 2D physics</td><td>Done (issue #381)</td><td>2D is in rollback snapshots and the state hash. Late-join and spectator snapshots do not carry it yet.</td><td><code>orchestrator/proposals/physics2d-box2d-design.md decision H</code></td></tr>
 <tr><td>Editing 2D polygon vertices in the inspector</td><td>Not available</td><td>There is no list-of-Vector2 field kind and a new kind needs a protocol minor.</td><td><code>orchestrator/proposals/physics2d-box2d-design.md</code></td></tr>
 <tr><td>Nested prefab instancing inside the prefab stage</td><td>Refused</td><td>Nested prefabs are edited as plain objects with links preserved in the file.</td><td><code>orchestrator/proposals/prefab-stage.md</code></td></tr>
 </tbody>

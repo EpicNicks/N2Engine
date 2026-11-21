@@ -76,19 +76,14 @@ option(N2ENGINE_RENDERER_VULKAN "Build the Vulkan renderer backend" ON)
 option(N2ENGINE_RENDERER_WEBGPU "Build the WebGPU renderer backend on Dawn (CI test harness only, Linux x86_64)" OFF)
 
 # ON builds every target with the strict floating-point profile: the same source then compiles to the same float
-# operations (no fused multiply-add contraction, no fast-math), which a later deterministic mode checks at startup
-# through Math::IsStrictFp() / N2_STRICT_FP. OFF (the default) changes no flag. It does not make results equal across
-# compilers or architectures by itself (see docs/math.html, "Strict floating-point build").
-# The default is ON for the web size and speed profiles (-DN2ENGINE_WEB_PROFILE=size|speed with an Emscripten toolchain):
-# Jolt declares CrossPlatform determinism only with it, so without it the Deterministic network preset is refused in the
-# web packages people ship (docs/physics.html). WebAssembly has no fused multiply-add, so it changes no instruction there
-# (the measured cost is in docs/web-build.html). Everywhere else the default stays OFF; -DN2ENGINE_STRICT_FP=OFF still
-# turns it off for a web build.
-set(_n2_strict_fp_default OFF)
-if((EMSCRIPTEN OR CMAKE_SYSTEM_NAME STREQUAL "Emscripten") AND DEFINED N2ENGINE_WEB_PROFILE
-        AND N2ENGINE_WEB_PROFILE MATCHES "^(size|speed)$")
-    set(_n2_strict_fp_default ON)
-endif()
+# operations (no fused multiply-add contraction, no fast-math), which the Deterministic network preset checks at startup
+# through Math::IsStrictFp() / N2_STRICT_FP. It does not make results equal across compilers or architectures by itself
+# (see docs/math.html, "Strict floating-point build").
+# The default is ON, for every build: a game that uses networking needs it, Jolt declares CrossPlatform determinism only
+# with it, and on x86_64 (no -march) and WebAssembly (no fused multiply-add) it changes no instruction of the engine; on
+# arm64, where fused multiply-add is in the base instruction set, it can cost some speed in float-heavy code.
+# -DN2ENGINE_STRICT_FP=OFF turns it off (a game that has no networking and wants the contraction).
+set(_n2_strict_fp_default ON)
 option(N2ENGINE_STRICT_FP "Build all targets with the strict floating-point profile (no FP contraction, no fast-math)" ${_n2_strict_fp_default})
 
 if(N2ENGINE_STRICT_FP)
