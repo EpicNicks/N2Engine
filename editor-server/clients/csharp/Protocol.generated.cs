@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.32.0";
+        public const string ProtocolVersion = "1.33.0";
     }
 
     public enum CommandType : byte
@@ -51,6 +51,7 @@ namespace N2Engine.Editor.Protocol
         SetLocalTransform = 0x3A,
         CreateScript = 0x40,
         RescanAssets = 0x41,
+        RevertPrefabOverrides = 0x42,
         ListAssets = 0xA0,
         GetAssetInfo = 0xA1,
         SetImportSettings = 0xA2,
@@ -107,6 +108,7 @@ namespace N2Engine.Editor.Protocol
         SavePrefabStage = 0x2C,
         ClosePrefabStage = 0x2D,
         GetPrefabStage = 0x2E,
+        GetPrefabOverrides = 0x2F,
         GetEngineStats = 0x54,
         GetShaderInfo = 0xB5,
     }
@@ -162,6 +164,7 @@ namespace N2Engine.Editor.Protocol
         PrefabStageInfo = 0x26,
         EngineStats = 0x27,
         ShaderInfo = 0x28,
+        PrefabOverrides = 0x29,
     }
 
     public struct Vec3
@@ -326,6 +329,26 @@ namespace N2Engine.Editor.Protocol
         public bool? Orphaned { get; set; }
     }
 
+    public class PrefabOverridesInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("rootId")]
+        public string RootId { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("prefab")]
+        public string Prefab { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("path")]
+        public string Path { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("overrides")]
+        public System.Text.Json.JsonElement[] Overrides { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("removedObjects")]
+        public string[] RemovedObjects { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("removedComponents")]
+        public string[] RemovedComponents { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("addedComponents")]
+        public System.Text.Json.JsonElement[] AddedComponents { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("addedChildren")]
+        public System.Text.Json.JsonElement[] AddedChildren { get; set; }
+    }
+
     public class HistoryEntry
     {
         [System.Text.Json.Serialization.JsonPropertyName("label")]
@@ -432,6 +455,8 @@ namespace N2Engine.Editor.Protocol
         public string[] Components { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("prefab")]
         public string? Prefab { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("linkDepth")]
+        public double? LinkDepth { get; set; }
     }
 
     public class EntityHeader
@@ -454,6 +479,8 @@ namespace N2Engine.Editor.Protocol
         public string Tag { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("prefab")]
         public string? Prefab { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("linkDepth")]
+        public double? LinkDepth { get; set; }
     }
 
     public class JsonVec3
@@ -1316,6 +1343,13 @@ namespace N2Engine.Editor.Protocol
         public string Name;
     }
 
+    public struct RevertPrefabOverridesRequest
+    {
+        public string EntityId;
+        /// <summary>JSON text: any JSON value</summary>
+        public string Targets;
+    }
+
     public struct ListAssetsRequest
     {
         public string Folder;
@@ -1537,6 +1571,11 @@ namespace N2Engine.Editor.Protocol
     public struct ClosePrefabStageRequest
     {
         public bool Discard;
+    }
+
+    public struct GetPrefabOverridesRequest
+    {
+        public string EntityId;
     }
 
     public struct GetEngineStatsRequest
@@ -1859,6 +1898,12 @@ namespace N2Engine.Editor.Protocol
     public struct PrefabStageInfoResponse
     {
         /// <summary>JSON text: PrefabStageInfo</summary>
+        public string Info;
+    }
+
+    public struct PrefabOverridesResponse
+    {
+        /// <summary>JSON text: PrefabOverridesInfo</summary>
         public string Info;
     }
 

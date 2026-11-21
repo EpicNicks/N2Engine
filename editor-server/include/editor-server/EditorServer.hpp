@@ -1062,6 +1062,16 @@ namespace N2Engine::Editor
         void HandleSavePrefabStage(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleClosePrefabStage(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetPrefabStage(int clientSocket, const std::vector<uint8_t> &payload);
+        // Prefab links (nested prefabs, protocol 1.33.0)
+        void HandleGetPrefabOverrides(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleRevertPrefabOverrides(int clientSocket, const std::vector<uint8_t> &payload);
+        /// Every instance of the changed prefabs in the loaded scene (`previous`: prefab UUID text -> the content its
+        /// instances were expanded from) is rebuilt from the prefab as it is now, keeping its overrides: one undo step.
+        /// While a prefab stage is open the parked scene's instances wait for ClosePrefabStageNow.
+        void PropagatePrefabChanges(std::unordered_map<std::string, nlohmann::json> previous);
+        /// Replaces the outermost prefab link root `rootId` of the loaded scene by `link` expanded, as one undo step
+        /// `label` (through scene snapshots, so references into it resolve again by id)
+        EditOutcome RebuildPrefabInstance(const std::string &rootId, const nlohmann::json &link, const std::string &label);
         // Host stats (protocol 1.28.0)
         void HandleGetEngineStats(int clientSocket, const std::vector<uint8_t> &payload);
         /// Answers PrefabStageInfo (GetPrefabStageInfo)
@@ -1573,6 +1583,11 @@ namespace N2Engine::Editor
         /// The open prefab stage (EditorServer.cpp), or null
         struct PrefabStage;
         std::unique_ptr<PrefabStage> _stage;
+        /// Prefabs that changed while a stage was open: prefab UUID text -> the content the parked scene's instances
+        /// were expanded from (PropagatePrefabChanges runs at ClosePrefabStageNow)
+        std::unordered_map<std::string, nlohmann::json> _pendingPrefabChanges;
+        /// While ApplyPrefab's write is noted: the instance it applied (PropagatePrefabChanges rebuilds it bare)
+        std::string _appliedInstance;
         // Starts numbering at the event epoch, a random number (see FrameTracker)
         FrameTracker _frames{_events.Epoch()};
         uint32_t _editorFramesRendered{0};

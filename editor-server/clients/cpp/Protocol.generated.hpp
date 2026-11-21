@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.32.0";
+inline constexpr const char *ProtocolVersion = "1.33.0";
 
 enum class CommandType : uint8_t
 {
@@ -52,6 +52,7 @@ enum class CommandType : uint8_t
     SetLocalTransform = 0x3A,
     CreateScript = 0x40,
     RescanAssets = 0x41,
+    RevertPrefabOverrides = 0x42,
     ListAssets = 0xA0,
     GetAssetInfo = 0xA1,
     SetImportSettings = 0xA2,
@@ -108,6 +109,7 @@ enum class CommandType : uint8_t
     SavePrefabStage = 0x2C,
     ClosePrefabStage = 0x2D,
     GetPrefabStage = 0x2E,
+    GetPrefabOverrides = 0x2F,
     GetEngineStats = 0x54,
     GetShaderInfo = 0xB5,
 };
@@ -163,6 +165,7 @@ enum class ResponseType : uint8_t
     PrefabStageInfo = 0x26,
     EngineStats = 0x27,
     ShaderInfo = 0x28,
+    PrefabOverrides = 0x29,
 };
 
 // Custom types
@@ -363,6 +366,12 @@ struct SetLocalTransformCmd
 struct CreateScriptCmd
 {
     std::string name;
+};
+
+struct RevertPrefabOverridesCmd
+{
+    std::string entityId;
+    std::string targets; // JSON: any
 };
 
 struct ListAssetsCmd
@@ -575,6 +584,11 @@ struct SetPrefabStageModeCmd
 struct ClosePrefabStageCmd
 {
     bool discard;
+};
+
+struct GetPrefabOverridesCmd
+{
+    std::string entityId;
 };
 
 struct GetEngineStatsCmd
@@ -868,6 +882,11 @@ struct AssetsMovedData
 struct PrefabStageInfoData
 {
     std::string info; // JSON: PrefabStageInfo
+};
+
+struct PrefabOverridesData
+{
+    std::string info; // JSON: PrefabOverridesInfo
 };
 
 struct EngineStatsData

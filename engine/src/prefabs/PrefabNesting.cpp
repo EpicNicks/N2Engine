@@ -576,7 +576,7 @@ namespace N2Engine::PrefabNesting
 
         // ===== Collapse =====
 
-        void StripMarks(json &root)
+        void StripMarksOf(json &root)
         {
             ForEachObject(root, [](json &object, json *)
             {
@@ -762,7 +762,7 @@ namespace N2Engine::PrefabNesting
                 {
                     json copy = JsonLimits::IterativeCopy(object);
                     Tree(copy); // an added object can itself be an instance
-                    StripMarks(copy);
+                    StripMarksOf(copy);
                     return copy;
                 };
 
@@ -1015,6 +1015,85 @@ namespace N2Engine::PrefabNesting
             Logger::Warn(std::format("{}: expanded {} prefab links; {} failed, {} changes skipped (see above)", what,
                                      report.links, report.errors, report.droppedChanges));
         }
+    }
+
+    void StripMarks(json &objectJson)
+    {
+        StripMarksOf(objectJson);
+    }
+
+    std::optional<json> InstanceAsPrefab(const json &instance, PrefabSource &source)
+    {
+        const auto linkId = CanonKey(instance, "uuid");
+        const auto prefab = CanonKey(instance, "prefabReference");
+        if (!linkId || !prefab || !IsLinkedRoot(instance))
+        {
+            Logger::Error("InstanceAsPrefab: the object is not the root of a prefab link");
+            return std::nullopt;
+        }
+        const json *fileRoot = source.LoadRoot(*Math::UUID::FromString(*prefab));
+        const auto rootFileId = fileRoot ? CanonKey(*fileRoot, "uuid") : std::nullopt;
+        if (!rootFileId)
+        {
+            Logger::Error(std::format("InstanceAsPrefab: prefab {} can't be loaded", *prefab));
+            return std::nullopt;
+        }
+
+        json copy = JsonLimits::IterativeCopy(instance);
+        // The ids this link's objects and components have in the prefab (what their prefabSource says)
+        std::unordered_map<std::string, std::string> ids{{*linkId, *rootFileId}};
+        ForEachObject(copy, [&](json &object, json *)
+        {
+            const bool isRoot = &object == &copy;
+            const bool ofThisLink = isRoot || CanonKey(object, "prefabLink") == linkId;
+            if (!ofThisLink)
+            {
+                return; // an object of a link inside: collapsed below
+            }
+            if (!isRoot)
+            {
+                const auto id = CanonKey(object, "uuid");
+                const auto src = CanonKey(object, "prefabSource");
+                if (id && src)
+                {
+                    ids[*id] = *src;
+                }
+            }
+            if (!isRoot && IsLinkedRoot(object))
+            {
+                return; // a link inside: its components are its own prefab's
+            }
+            if (json *components = ComponentsOf(object))
+            {
+                for (json &entry : *components)
+                {
+                    const auto id = entry.is_object() && entry.contains("data") ? CanonKey(entry["data"], "uuid") : std::nullopt;
+                    const auto src = CanonKey(entry, "prefabSource");
+                    if (id && src)
+                    {
+                        ids[*id] = *src;
+                    }
+                }
+            }
+        });
+        // The root stays an object (not a link to itself); links inside become links
+        copy.erase("prefabLinked");
+        Collapser collapser{source};
+        if (json *children = ChildrenOf(copy))
+        {
+            for (json &child : *children)
+            {
+                collapser.Tree(child);
+            }
+        }
+        if (!collapser.ok)
+        {
+            Logger::Warn("InstanceAsPrefab: a link inside could not be collapsed and is written expanded");
+        }
+        Renumber(copy, ids);
+        StripMarksOf(copy);
+        copy.erase("prefabReference");
+        return copy;
     }
 
     bool Collapse(json &objectsOrObject, PrefabSource &source)
