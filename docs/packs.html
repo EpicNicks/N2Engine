@@ -199,7 +199,7 @@
 <tbody>
 <tr><td>Reads of game data</td><td><code>ProjectFile::Load</code>, <code>AssetMetadata::FromFile</code>, <code>ResourceLoader</code>'s scan, stats, existence checks and <code>Load</code>, <code>LuaScript</code>, <code>SceneFile</code>, <code>PrefabFile</code>, <code>Material</code>, <code>Texture</code>, <code>Model</code> (and the glTF importer's buffers and images), <code>Font</code>, <code>AudioLoaders</code>, <code>Resources</code>' shader files</td><td>Yes (this stage)</td></tr>
 <tr><td>Writes of the project (editing)</td><td><code>ResourceLoader</code>'s <code>.meta</code> files, <code>.import</code> and <code>.n2</code> folders, asset state and moves; <code>ProjectFile</code>'s create and save</td><td>No: only an editor writes a project, and a packed project is read-only</td></tr>
-<tr><td>The game's own data</td><td><code>user://</code> (save data, <code>ProjectFile::UserDataPath</code>)</td><td>No: always a folder on disk</td></tr>
+<tr><td>The game's own data</td><td><code>user://</code> (save data, <code>ProjectFile::UserDataPath</code>)</td><td>No: always a folder on disk (on the web, Emscripten&rsquo;s IDBFS, kept in IndexedDB: see below)</td></tr>
 <tr><td>Not game data</td><td>Replay files (<code>ReplayLog</code>, <code>LockstepReplay</code>, <code>LockstepRuntime</code>), the editor host's token file (<code>TokenTable</code>), <code>/proc/self</code> (<code>ProcessMemory</code>)</td><td>No: files named on a command line or by the system</td></tr>
 <tr><td>Path arithmetic only</td><td><code>ResourcePath</code>, <code>ResourceUUID</code> (<code>weakly_canonical</code>, <code>absolute</code>), paths built in the Lua bindings</td><td>No I/O</td></tr>
 </tbody>
@@ -214,9 +214,11 @@
 <li><code>tools/n2build/n2build.test.mjs</code>: the files a pack holds, reproducible zips that CMake's own archiver extracts, the manifest, the module check, a non-solid 7z (when 7-Zip is installed), the pack format's precedence, a desktop package with <code>game.n2pack</code>, the web plan's <code>N2ENGINE_WEB_PACK</code>.</li>
 </ul>
 
+<h2 id="web-saves">Web saves</h2>
+<p>On the web <code>user://</code> is persistent <span class="badge">issue #423</span>: the player mounts Emscripten&rsquo;s IDBFS at the user data folder (<code>/n2-userdata</code>, by setting <code>XDG_DATA_HOME</code>), fills it from IndexedDB before the engine starts, and writes it back about a second after the last write, and when the page is hidden or closed. If IndexedDB is unavailable (some private windows, blocked site data) or a write-back fails (quota exceeded), the folder stays in memory for that page, one <code>saves:</code> line is logged, and the game keeps running; the data is then lost when the page closes. Details, limits and what is not verified in a browser: <a href="web-build.html#saves">Web build: persistent saves</a>.</p>
+
 <h2 id="not-yet">Not done yet</h2>
 <ul>
-<li><strong>Persistent web saves.</strong> <code>user://</code> on the web is in memory (Emscripten's MEMFS): a game's saves are lost when the page closes. Mounting IDBFS there and syncing after each write is the next step for the web; until then, this is the gap.</li>
 <li><strong>Streaming reads.</strong> A file is read whole; a mount that streams (large audio, video) can come later behind the same interface.</li>
 </ul>
 

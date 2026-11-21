@@ -189,6 +189,10 @@ console.log(`Loader: ${loaderEvents.join(', ')}`);
 expect(frameCount === frames, `${frameCount} frames reached the canvas, expected ${frames}`);
 expect(!badFrame, badFrame ?? '');
 expect(output.some((line) => line.startsWith('N2_WEB_SMOKE_DONE')), 'the player did not print N2_WEB_SMOKE_DONE');
+// Persistent saves (web/n2-saves.js, linked with --pre-js): node has no IndexedDB, so the player must have fallen back to
+// memory with its one warning, and still run. This also proves the glue's FS, ENV and IDBFS names exist in the real module.
+const savesWarnings = output.filter((line) => line.startsWith('saves: '));
+expect(savesWarnings.length === 1, `expected one 'saves: ...' fallback warning under node (no IndexedDB), got ${JSON.stringify(savesWarnings)}`);
 // Audio (stage 4): node has no WebAudio, so the player must start without sound (the frames above prove it ran, did not
 // crash and did not hang) and its health must report the audio subsystem as failed, not running or missing. The engine's log
 // does not reach this output, so the one warning itself is not counted here. A player built without the audio module

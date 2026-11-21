@@ -1992,6 +1992,7 @@ jobs:
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
           node scripts/web-loader-test.mjs
+          node scripts/web-saves-test.mjs
           node scripts/web-gpu-test.mjs
           node --test scripts/web-browser-support.test.mjs
           node --test scripts/project-modules.test.mjs

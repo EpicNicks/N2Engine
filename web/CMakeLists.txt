@@ -110,13 +110,15 @@ endif()
 target_link_options(N2WebPlayer PRIVATE
     -sMODULARIZE=1
     -sEXPORT_NAME=createN2Player
-    -sEXPORTED_RUNTIME_METHODS=callMain
+    -sEXPORTED_RUNTIME_METHODS=callMain,ENV
+    -lidbfs.js
+    "SHELL:--pre-js \"${CMAKE_CURRENT_SOURCE_DIR}/n2-saves.js\""
     "SHELL:--shell-file \"${N2_WEB_SHELL}\""
     ${N2_WEB_GAME_PRELOAD}
 )
 n2_check_project_modules(N2WebPlayer)
 set_property(TARGET N2WebPlayer APPEND PROPERTY LINK_DEPENDS
-    "${N2_WEB_SHELL}" "${CMAKE_CURRENT_SOURCE_DIR}/webgpu-library.js"
+    "${N2_WEB_SHELL}" "${CMAKE_CURRENT_SOURCE_DIR}/webgpu-library.js" "${CMAKE_CURRENT_SOURCE_DIR}/n2-saves.js"
     ${N2_WEB_GAME_DEPENDS})
 
 # Not a node/ctest executable: its map callbacks need a browser event loop and
