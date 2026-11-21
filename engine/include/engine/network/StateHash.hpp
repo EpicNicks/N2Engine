@@ -44,6 +44,9 @@ namespace N2Engine::Network
     /// no net id is (net ids start at 1). It covers the bodies in the simulation, networked or not, and skips parked ones.
     inline constexpr std::uint16_t kPhysicsFieldId = 0xFFFD;
     inline constexpr std::uint32_t kPhysicsObjectId = 0;
+    /// The 2D physics leaf: Physics2DWorld::HashSimulatedState of the scene's 2D world (Box2D), also on kPhysicsObjectId.
+    /// Present whenever the scene has a 2D world, in lockstep and rollback alike.
+    inline constexpr std::uint16_t kPhysics2DFieldId = 0xFFFC;
 
     /// nullopt when a HashTree bound is exceeded (more than kMaxTreeObjects objects or kMaxFieldsPerObject leaves)
     [[nodiscard]] std::optional<N2Net::HashTree> BuildStateHashTree(const NetworkWorld &world, LayoutCache &layouts,

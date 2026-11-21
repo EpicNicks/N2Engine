@@ -47,6 +47,17 @@ namespace N2Engine::Physics2D
         void OnLayerChanged();
 
         [[nodiscard]] Physics::PhysicsBodyHandle GetHandle() const { return _handle; }
+        /// The world's rollback restore calls it for a body that did not exist at the restored instant: this collider has
+        /// no body or shape any more
+        void OnBodyLost()
+        {
+            _handle = Physics::INVALID_PHYSICS_HANDLE;
+            _ownsBody = false;
+            _shapeAttached = false;
+            _world.reset();
+        }
+        /// The shape description the world was last given (what the rollback restore rebuilds its records from)
+        [[nodiscard]] ShapeDesc2D DescribeShape() const { return Describe(); }
 
     protected:
         void OnActiveFlagChanged() override;

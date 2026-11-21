@@ -89,8 +89,25 @@ namespace N2Engine::Physics2D
         void Dispatch();
         void Clear();
 
-    private:
         using TouchMap = std::map<BodyPair, std::vector<ShapePair>, BodyPairLess>;
+        /// The touching pairs (what a rollback snapshot holds of the tracker; between dispatches nothing else is pending)
+        [[nodiscard]] const TouchMap &Collisions() const { return _collisions; }
+        [[nodiscard]] const TouchMap &Triggers() const { return _triggers; }
+        /// Puts the touching pairs back and drops every pending event: the restored world already knows these contacts, so
+        /// they report no Enter again, and an Exit queued by the state that was rewound must not be delivered
+        void RestoreTouches(TouchMap collisions, TouchMap triggers)
+        {
+            _collisions = std::move(collisions);
+            _triggers = std::move(triggers);
+            _forgottenCollisions.clear();
+            _forgottenTriggers.clear();
+            _newCollisions.clear();
+            _endedCollisions.clear();
+            _newTriggers.clear();
+            _endedTriggers.clear();
+        }
+
+    private:
         struct Owners
         {
             std::weak_ptr<GameObject> a;

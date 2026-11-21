@@ -5,8 +5,10 @@
 // Create returns null, the components cope with that, and no Box2D code is in the binary (docs/physics2d.html#stripping).
 // Main thread only.
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <vector>
 
 #include <math/Vector2.hpp>
@@ -130,7 +132,22 @@ namespace N2Engine::Physics2D
         virtual int OverlapBox(const Math::Vector2 &center, const Math::Vector2 &halfExtents, float angleRadians,
                                std::vector<OverlapHit2D> &hits, std::uint32_t layerMask, QueryTriggers triggers) = 0;
 
-        /// Hash of the whole simulation, for tests and later for desync detection
+        /// Hash of the whole simulation (every body, parked ones included, the contacts and the id pools), for tests
         [[nodiscard]] virtual std::uint64_t HashState() const = 0;
+        /// The hash two peers of a network session compare: only the bodies IN the simulation (enabled), their pose,
+        /// velocities and sleep state. A body parked by a rollback (disabled) is not in it, so a peer that keeps a despawned
+        /// body for a while hashes like one that already destroyed it.
+        [[nodiscard]] virtual std::uint64_t HashSimulatedState() const = 0;
+
+        // ===== Rollback (netcode C5): docs/physics2d.html#rollback =====
+        /// Replaces `out` with the whole world's state: Box2D's own snapshot image (contact cache, sleep timers, id pools,
+        /// everything the solver carries) and what this wrapper keeps beside it (body flags, which collider owns which
+        /// shape, the touching pairs events are made from). Between steps only. The bytes belong to this build.
+        [[nodiscard]] virtual bool SaveState(std::vector<std::byte> &out) const = 0;
+        /// Puts a SaveState back into this world, in place. Bodies that did not exist then are removed (their Rigidbody2D
+        /// and Collider2D lose the body: OnBodyLost), bodies destroyed since come back only to be removed again (a
+        /// destroyed body is not restored). The bodies' transforms are written from the restored poses, as after a step.
+        /// False for bytes that are not a state of this world's bodies; the world must then not be used.
+        [[nodiscard]] virtual bool RestoreState(std::span<const std::byte> in) = 0;
     };
 }

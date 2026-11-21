@@ -6,9 +6,11 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -1278,6 +1280,209 @@ namespace
         EXPECT_EQ(first, second);
         EXPECT_NE(first, 0u);
         EXPECT_EQ(first, kGolden);
+    }
+
+    // ===== Rollback (issue #381): SaveState, RestoreState, HashSimulatedState =====
+
+    namespace
+    {
+        // A floor and crates that fall, pile up and touch, one of them with a Recorder, so there are contacts, sleeping bodies and events
+        Recorder *BuildPile(Scene &scene)
+        {
+            auto floor = GameObject::Create("Floor");
+            floor->CreatePositionable();
+            floor->GetPositionable()->SetPosition(Vector3(0.0f, -1.0f, 0.0f));
+            scene.AddRootGameObject(floor);
+            floor->AddComponent<BoxCollider2D>()->SetHalfExtents(Vector2(20.0f, 1.0f));
+            Recorder *recorder = nullptr;
+            for (int i = 0; i < 12; ++i)
+            {
+                auto crate = GameObject::Create("Crate" + std::to_string(i));
+                crate->CreatePositionable();
+                crate->GetPositionable()->SetPosition(Vector3(static_cast<float>(i % 3) * 0.5f - 0.5f, 0.6f + static_cast<float>(i) * 0.7f, 0.0f));
+                scene.AddRootGameObject(crate);
+                auto *rb = crate->AddComponent<Rigidbody2D>();
+                if (i % 2 == 0)
+                {
+                    crate->AddComponent<BoxCollider2D>()->SetHalfExtents(Vector2(0.3f, 0.3f));
+                }
+                else
+                {
+                    crate->AddComponent<CircleCollider2D>()->SetRadius(0.3f);
+                }
+                rb->SetAngularVelocity(static_cast<float>(i) * 0.1f);
+                if (i == 0)
+                {
+                    recorder = crate->AddComponent<Recorder>();
+                }
+            }
+            return recorder;
+        }
+
+        std::vector<Vector3> PositionsOf(Scene &scene)
+        {
+            std::vector<Vector3> out;
+            for (int i = 0; i < 12; ++i)
+            {
+                out.push_back(scene.FindGameObject("Crate" + std::to_string(i))->GetPositionable()->GetPosition());
+            }
+            return out;
+        }
+    }
+
+    TEST_F(Physics2DTest, ARestoredWorldStepsExactlyLikeTheWorldThatWasSaved)
+    {
+        Recorder *const recorder = BuildPile(*_scene);
+        Step(50);
+        Physics2DWorld *const world = _scene->GetPhysics2DWorld();
+        ASSERT_NE(world, nullptr);
+
+        std::vector<std::byte> saved;
+        ASSERT_TRUE(world->SaveState(saved));
+        const std::uint64_t deepAtSave = world->HashState();
+        const std::uint64_t simulatedAtSave = world->HashSimulatedState();
+        const std::vector<Vector3> positionsAtSave = PositionsOf(*_scene);
+        const int enterBefore = recorder->collisionEnter, stayBefore = recorder->collisionStay, exitBefore = recorder->collisionExit;
+
+        Step(70);
+        const std::uint64_t deepAfter = world->HashState();
+        const std::uint64_t simulatedAfter = world->HashSimulatedState();
+        const std::vector<Vector3> positionsAfter = PositionsOf(*_scene);
+        const int enterRun = recorder->collisionEnter - enterBefore, stayRun = recorder->collisionStay - stayBefore,
+                  exitRun = recorder->collisionExit - exitBefore;
+        ASSERT_NE(deepAfter, deepAtSave) << "the crates moved";
+        ASSERT_GT(stayRun, 0) << "the test needs contacts";
+
+        ASSERT_TRUE(world->RestoreState(saved));
+        EXPECT_EQ(world->HashState(), deepAtSave) << "Box2D's own state, contacts included";
+        EXPECT_EQ(world->HashSimulatedState(), simulatedAtSave);
+        const std::vector<Vector3> positionsRestored = PositionsOf(*_scene);
+        for (std::size_t i = 0; i < positionsRestored.size(); ++i)
+        {
+            EXPECT_EQ(positionsRestored[i].x, positionsAtSave[i].x) << i;
+            EXPECT_EQ(positionsRestored[i].y, positionsAtSave[i].y) << i;
+        }
+
+        const int enterMid = recorder->collisionEnter, stayMid = recorder->collisionStay, exitMid = recorder->collisionExit;
+        Step(70);
+        EXPECT_EQ(world->HashState(), deepAfter);
+        EXPECT_EQ(world->HashSimulatedState(), simulatedAfter);
+        const std::vector<Vector3> positionsAgain = PositionsOf(*_scene);
+        for (std::size_t i = 0; i < positionsAgain.size(); ++i)
+        {
+            EXPECT_EQ(positionsAgain[i].x, positionsAfter[i].x) << i;
+            EXPECT_EQ(positionsAgain[i].y, positionsAfter[i].y) << i;
+        }
+        // The events are the same ones again: no Enter is repeated or missing, no Exit is lost
+        EXPECT_EQ(recorder->collisionEnter - enterMid, enterRun);
+        EXPECT_EQ(recorder->collisionStay - stayMid, stayRun);
+        EXPECT_EQ(recorder->collisionExit - exitMid, exitRun);
+
+        // And a second restore of the same bytes does it again
+        ASSERT_TRUE(world->RestoreState(saved));
+        EXPECT_EQ(world->HashState(), deepAtSave);
+    }
+
+    TEST_F(Physics2DTest, ABodyMadeAfterTheSnapshotIsGoneAfterTheRestoreAndItsComponentsKnowIt)
+    {
+        BuildPile(*_scene);
+        Step(30);
+        Physics2DWorld *const world = _scene->GetPhysics2DWorld();
+        ASSERT_NE(world, nullptr);
+        std::vector<std::byte> saved;
+        ASSERT_TRUE(world->SaveState(saved));
+        const std::uint64_t deepAtSave = world->HashState();
+
+        Step(40);
+        const std::uint64_t control = world->HashState();
+
+        ASSERT_TRUE(world->RestoreState(saved));
+        auto late = Make("Late", 0.0f, 8.0f);
+        auto *lateBody = MakeBody(late, BodyType2D::Dynamic);
+        auto *lateBox = late->AddComponent<BoxCollider2D>();
+        Step(5);
+        ASSERT_TRUE(lateBody->GetHandle().IsValid());
+        EXPECT_NE(world->HashState(), deepAtSave);
+
+        ASSERT_TRUE(world->RestoreState(saved));
+        EXPECT_FALSE(lateBody->GetHandle().IsValid()) << "its body did not exist at the saved instant";
+        EXPECT_FALSE(lateBox->GetHandle().IsValid());
+        EXPECT_EQ(world->HashState(), deepAtSave);
+
+        Step(40);
+        EXPECT_EQ(world->HashState(), control) << "the world went on as if the body had never been made";
+    }
+
+    TEST_F(Physics2DTest, AStaticCollidersOwnBodyAndAnInactiveObjectSurviveARestore)
+    {
+        BuildPile(*_scene);
+        auto wall = Make("Wall", 2.0f, 2.0f);
+        wall->AddComponent<BoxCollider2D>()->SetHalfExtents(Vector2(0.2f, 2.0f));
+        auto off = Make("Off", -2.0f, 3.0f);
+        MakeBody(off, BodyType2D::Dynamic);
+        off->AddComponent<CircleCollider2D>()->SetRadius(0.3f);
+        Step(5);
+        off->SetActive(false);
+        Step(20);
+        Physics2DWorld *const world = _scene->GetPhysics2DWorld();
+        std::vector<std::byte> saved;
+        ASSERT_TRUE(world->SaveState(saved));
+        const std::uint64_t deepAtSave = world->HashState();
+        const Vector3 offAtSave = PositionOf(off);
+        const Math::Quaternion offRotationAtSave = off->GetPositionable()->GetRotation();
+
+        Step(30);
+        off->SetActive(true);
+        Step(30);
+        const std::uint64_t after = world->HashState();
+
+        // The game state at the saved instant is put back first (the object was inactive), then the world
+        // (a disabled body's transform is the game's to put back, as a networked object's replicated transform is)
+        off->SetActive(false);
+        off->GetPositionable()->SetPositionAndRotation(offAtSave, offRotationAtSave);
+        ASSERT_TRUE(world->RestoreState(saved));
+        EXPECT_EQ(world->HashState(), deepAtSave);
+        Step(30);
+        off->SetActive(true);
+        Step(30);
+        EXPECT_EQ(world->HashState(), after);
+    }
+
+    TEST_F(Physics2DTest, TheSimulatedHashLeavesOutADisabledBodyAndTheDeepHashDoesNot)
+    {
+        BuildPile(*_scene);
+        Step(20);
+        Physics2DWorld *const world = _scene->GetPhysics2DWorld();
+        const std::uint64_t simulated = world->HashSimulatedState();
+        const std::uint64_t deep = world->HashState();
+
+        auto parked = Make("Parked", 1.0f, 5.0f);
+        MakeBody(parked, BodyType2D::Dynamic);
+        parked->AddComponent<CircleCollider2D>()->SetRadius(0.3f);
+        parked->SetActive(false);
+        _scene->ProcessAttachQueue();
+        EXPECT_EQ(world->HashSimulatedState(), simulated) << "a parked body is not in the simulation";
+        EXPECT_NE(world->HashState(), deep);
+
+        parked->SetActive(true);
+        EXPECT_NE(world->HashSimulatedState(), simulated);
+    }
+
+    TEST_F(Physics2DTest, ARestoreRefusesBytesThatAreNotAStateOfThisBuild)
+    {
+        BuildPile(*_scene);
+        Step(5);
+        Physics2DWorld *const world = _scene->GetPhysics2DWorld();
+        std::vector<std::byte> saved;
+        ASSERT_TRUE(world->SaveState(saved));
+        std::vector<std::byte> cut(saved.begin(), saved.begin() + static_cast<std::ptrdiff_t>(saved.size() / 2));
+        EXPECT_FALSE(world->RestoreState(cut));
+        EXPECT_FALSE(world->RestoreState(std::span<const std::byte>{}));
+        std::vector<std::byte> wrongMagic = saved;
+        wrongMagic[0] = static_cast<std::byte>(0x7F);
+        EXPECT_FALSE(world->RestoreState(wrongMagic));
+        // A refused state leaves the world as it was
+        EXPECT_TRUE(world->RestoreState(saved));
     }
 
     // ===== Serialization =====
