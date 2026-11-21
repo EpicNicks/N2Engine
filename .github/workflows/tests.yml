@@ -48,6 +48,8 @@ jobs:
               total=$((total + 1))
               case "$f" in
                 docs/*) ;;
+                # The orchestrator's notes are text for people, not code: a Markdown file anywhere under orchestrator/ is docs too
+                orchestrator/*.md) ;;
                 */*) other=$((other + 1)); echo "not docs: $f" ;;
                 *.md) ;;
                 *) other=$((other + 1)); echo "not docs: $f" ;;
