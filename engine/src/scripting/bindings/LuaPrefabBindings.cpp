@@ -25,6 +25,7 @@
 #include "engine/io/ResourcePath.hpp"
 #include "engine/network/NetworkClient.hpp"
 #include "engine/network/NetworkServer.hpp"
+#include "engine/prefabs/PrefabNesting.hpp"
 #include "engine/prefabs/PrefabFile.hpp"
 #include "engine/prefabs/PrefabManager.hpp"
 #include "engine/sceneManagement/Scene.hpp"
@@ -202,8 +203,18 @@ namespace N2Engine::Scripting
                 throw std::runtime_error(std::format("Prefab.Instantiate: prefab '{}' has no root object", shown));
             }
 
+            // Prefab links inside it (nested prefabs) are expanded first, so the checks below count their objects
+            nlohmann::json expandedRoot;
+            const nlohmann::json *rootJson = &*root;
+            if (PrefabNesting::ContainsLinks(*root))
+            {
+                expandedRoot = JsonLimits::IterativeCopy(*root);
+                PrefabNesting::Expand(expandedRoot, "Prefab.Instantiate");
+                rootJson = &expandedRoot;
+            }
+
             // Everything is checked before anything is built, so a refused spawn adds nothing
-            const PrefabScan scan = Scan(*root);
+            const PrefabScan scan = Scan(*rootJson);
             if (scan.objects > MaxSpawnObjects)
             {
                 throw std::runtime_error(
@@ -230,7 +241,7 @@ namespace N2Engine::Scripting
             // Fresh UUIDs, references inside the prefab point at the copies, every other reference is cleared (no
             // resolver for the running scene: a stale UUID there could bind the wrong object)
             std::size_t cleared = 0;
-            std::vector<GameObject::Ptr> roots = PrefabManager::InstantiatePrefabs({&*root}, nullptr, &cleared);
+            std::vector<GameObject::Ptr> roots = PrefabManager::InstantiatePrefabs({rootJson}, nullptr, &cleared);
             if (roots.empty() || !roots.front())
             {
                 throw std::runtime_error(std::format("Prefab.Instantiate: can't instantiate '{}' (see the log)", shown));

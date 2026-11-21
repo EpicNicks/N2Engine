@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -42,6 +43,8 @@ namespace N2Engine
         GameObject &_gameObject;
         bool _isMarkedForDestruction = false;
         bool _isActive = true;
+        // Nested prefabs: this component's id in the prefab of the link it came from (see GameObject::GetPrefabSource)
+        std::optional<Math::UUID> _prefabSource;
 
         explicit Component(GameObject &gameObject);
 
@@ -67,6 +70,12 @@ namespace N2Engine
         Component &operator=(const Component &) = delete;
 
         [[nodiscard]] GameObject& GetGameObject() const;
+
+        /// Nested prefabs: the component's id in the prefab of the link it came from (its object's own link when the
+        /// object is a link root, else the object's GetPrefabLink), or none for a component an instance added.
+        /// Serialized as the component entry's "prefabSource", next to "type" and "data".
+        [[nodiscard]] const std::optional<Math::UUID>& GetPrefabSource() const { return _prefabSource; }
+        void SetPrefabSource(std::optional<Math::UUID> source) { _prefabSource = source; }
 
         // Serialization interface
         [[nodiscard]] nlohmann::json Serialize() const override;
