@@ -8,14 +8,14 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { LIGHTING, LIMITS, PER_DRAW, TEXTURE_BINDING_BASE } from './lib/contract.mjs';
+import { LIGHTING, LIMITS, PER_DRAW, TEXTURE_BINDING_BASE, VARYINGS, VERTEX_INPUTS } from './lib/contract.mjs';
 import { cookShader, manifestBytes, parseGlslangOutput, writeOutputs } from './lib/cook.mjs';
 import { runCorpus } from './lib/corpus.mjs';
 import { lintStage, stripComments } from './lib/lint.mjs';
 import { ShaderError, parseN2Shader } from './lib/parse.mjs';
 import { checkAuthoredWgsl } from './lib/authored.mjs';
-import { buildTargetSource, expandTemplate, materialSection, PRELUDE_DIR, usesNanChecks } from './lib/prelude.mjs';
-import { checkCapabilities, checkGlUniforms, checkReflection, checkWgslLayout } from './lib/reflect.mjs';
+import { buildTargetSource, buildVertexSource, expandTemplate, materialSection, PRELUDE_DIR, usesAtlasTextures, usesNanChecks } from './lib/prelude.mjs';
+import { checkCapabilities, checkGlUniforms, checkReflection, checkVertexReflection, checkWgslLayout } from './lib/reflect.mjs';
 import { layoutBlock } from './lib/std140.mjs';
 import { discoverTools, findTool, TOOL_NAMES } from './lib/tools.mjs';
 import { main, parseArguments } from './n2shader.mjs';
@@ -106,7 +106,8 @@ test('parse: baseColorTexture takes slot 0, the others follow in declaration ord
 
 const headerRejections = [
   ['no #stage line', '{ "n2shader": 1, "name": "A" }\nvoid main() {}\n', /no "#stage fragment" line/],
-  ['#stage vertex', '{ "n2shader": 1, "name": "A" }\n#stage fragment\nvoid main() {}\n#stage vertex\nvoid main() {}\n', /"#stage vertex" is reserved/],
+  ['an empty #stage vertex', '{ "n2shader": 1, "name": "A" }\n#stage fragment\nvoid main() {}\n#stage vertex\n', /the vertex stage is empty/],
+  ['a repeated #stage vertex', '{ "n2shader": 1, "name": "A" }\n#stage fragment\nvoid main() {}\n#stage vertex\nvoid n2_vertex() {}\n#stage vertex\nvoid n2_vertex() {}\n', /unknown or repeated stage/],
   ['#stage wgsl', '{ "n2shader": 1, "name": "A" }\n#stage fragment\nvoid main() {}\n#stage wgsl\n', /needs "targets"/],
   ['a repeated #stage fragment', '{ "n2shader": 1, "name": "A" }\n#stage fragment\nvoid main() {}\n#stage fragment\n', /unknown or repeated stage/],
   ['invalid JSON', '{ "n2shader": 1, \n#stage fragment\nvoid main() {}\n', /not valid JSON/],
@@ -257,6 +258,168 @@ test('authored: the cook keeps the author\'s WGSL as the WebGPU payload, says so
   // a contract violation stops the cook at its own stage with the line of the block
   const bad = cookShader(authoredShader(GOOD_WGSL.replace('@fragment', '@fragment @invariant')), { path: 'b.n2shader', targets: ['webgpu'], tools: noTools });
   assert.equal(bad.ok, bad.failedStage === null);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// A custom vertex stage (stage 9d)
+// ---------------------------------------------------------------------------------------------------------------------
+const VERTEX_HOOK = 'void n2_vertex() {\n  n2_WorldPos.y += u_Gain;\n}';
+const vertexShader = (vertex = VERTEX_HOOK, { fragment = 'void main() { n2_FragColor = vec4(1.0); }', extra = '' } = {}) =>
+  `${JSON.stringify({ n2shader: 1, name: 'V', params: [{ name: 'u_Gain', type: 'float', default: 0.5 }] })}\n#stage fragment\n${fragment}\n${extra}#stage vertex\n${vertex}\n`;
+
+test('vertex stage: the parser splits the stages, in either order with the authored WGSL', () => {
+  const parsed = parseN2Shader(vertexShader());
+  assert.equal(parsed.source.trim(), 'void main() { n2_FragColor = vec4(1.0); }');
+  assert.equal(parsed.vertex.trim(), VERTEX_HOOK);
+  assert.equal(parsed.vertexFirstLine, 5);
+  assert.equal(parsed.wgsl, undefined);
+  const both = parseN2Shader(`${JSON.stringify({ n2shader: 1, name: 'V', targets: { webgpu: 'authored' } })}\n#stage fragment\nvoid main() {}\n#stage vertex\nvoid n2_vertex() {}\n#stage wgsl\n${GOOD_WGSL}`);
+  assert.equal(both.vertex.trim(), 'void n2_vertex() {}');
+  assert.equal(both.wgsl.startsWith('struct Material'), true, 'the WGSL block ends the vertex stage');
+});
+
+test('vertex stage: the generated text per target (hook after the default maths, clip remap, the main the engine writes)', () => {
+  const parsed = parseN2Shader(vertexShader());
+  for (const target of ['vulkan', 'webgpu', 'gl']) {
+    const { text, userLine } = buildVertexSource(target, parsed);
+    assert.match(text, /void n2_DefaultVertex\(\)/, target);
+    assert.match(text, /void n2_SetPosition\(vec4 clip\)/, target);
+    assert.match(text, /void main\(\) \{\n    n2_DefaultVertex\(\);\n    n2_vertex\(\);/, target);
+    assert.equal(text.split('\n')[userLine - 1], 'void n2_vertex() {', `${target}: the author's first line is where #line says`);
+    assert.match(text, target === 'gl' ? /#define N2_CLIP_Z\(c\) \(\(c\)\.z\)/ : /#define N2_CLIP_Z\(c\) \(\(\(c\)\.z \+ \(c\)\.w\) \* 0\.5\)/, target);
+    assert.equal(/sampler2D|texture2D|n2_texd/.test(text), false, 'no textures in the vertex stage');
+  }
+  assert.match(buildVertexSource('vulkan', parsed).text, /layout\(set = 0, binding = 0, std140, row_major\) uniform PerDraw/);
+  assert.match(buildVertexSource('webgpu', parsed).text, /layout\(set = 0, binding = 0, std140\) uniform PerDraw/);
+  assert.match(buildVertexSource('vulkan', parsed).text, /layout\(set = 1, binding = 0, std140\) uniform Material \{\n    float u_Gain;/);
+  assert.match(buildVertexSource('gl', parsed).text, /uniform float u_Gain;/);
+  // the fragment stage reads every varying and calls the author's main (SPIR-V targets), the GL text is untouched
+  for (const target of ['vulkan', 'webgpu']) {
+    const fragment = buildTargetSource(target, parsed).text;
+    assert.match(fragment, /#define main n2_user_main/, target);
+    assert.match(fragment, /#undef main\nvoid main\(\) \{\n    float n2_sink = n2_UV\.x \+ n2_Color\.x \+ n2_WorldPos\.x \+ n2_Normal\.x \+ n2_Tangent\.x;\n    n2_user_main\(\);/, target);
+  }
+  assert.equal(buildTargetSource('gl', parsed).text.includes('n2_user_main'), false);
+  // a shader without a vertex stage generates exactly what it did
+  const plain = parseN2Shader(shader(header(), 'void main() { n2_FragColor = vec4(1.0); }'));
+  assert.equal(buildTargetSource('vulkan', plain).text.includes('n2_user_main'), false);
+  assert.throws(() => buildVertexSource('vulkan', plain), /no vertex stage/);
+});
+
+const vertexRejections = [
+  ['main defined by the author', 'void main() {}\nvoid n2_vertex() {}', /must not define main\(\)/],
+  ['no n2_vertex', 'void helper() {}', /no "void n2_vertex\(\)"/],
+  ['two n2_vertex', 'void n2_vertex() {}\nvoid n2_vertex() {}', /more than one n2_vertex/],
+  ['gl_Position', 'void n2_vertex() { gl_Position = vec4(0.0); }', /write the clip-space position with n2_SetPosition/],
+  ['a texture read', 'void n2_vertex() { vec4 c = n2_texture(0, n2_UV); }', /no textures in the vertex stage/],
+  ['n2_FragColor', 'void n2_vertex() { n2_FragColor = vec4(1.0); }', /not n2_FragColor/],
+  ['discard', 'void n2_vertex() { discard; }', /cannot discard/],
+  ['gl_VertexID', 'void n2_vertex() { int i = gl_VertexID; }', /gl_VertexID and gl_InstanceID are not available/],
+  ['a while loop', 'void n2_vertex() { while (true) {} }', /while loops are not allowed/],
+];
+for (const [name, vertex, pattern] of vertexRejections) {
+  test(`vertex stage rejects: ${name}`, () => {
+    const result = cookShader(vertexShader(vertex), { path: 'v.n2shader', targets: ['vulkan'], tools: noTools });
+    assert.equal(result.failedStage, 'lint');
+    assert.ok(result.diagnostics.some((entry) => pattern.test(entry.message)), JSON.stringify(result.diagnostics.map((entry) => entry.message)));
+  });
+}
+
+test('vertex stage: lint cites the author\'s file line of the vertex block', () => {
+  const result = cookShader(vertexShader('void n2_vertex() {\n  gl_Position = vec4(0.0);\n}'), { path: 'v.n2shader', targets: ['vulkan'], tools: noTools });
+  assert.deepEqual([result.diagnostics[0].file, result.diagnostics[0].line], ['v.n2shader', 6]);
+});
+
+test('vertex stage: without tools the GL vertex text and the manifest still come out', () => {
+  const result = cookShader(vertexShader(), { path: 'v.n2shader', targets: ['gl'], tools: noTools });
+  assert.equal(result.ok, true, JSON.stringify(result.diagnostics));
+  assert.equal(result.outputs.glVertex.file, 'shader.gl.vert');
+  assert.equal(result.outputs.glVertex.data.toString('utf8').includes('void n2_vertex()'), true);
+  assert.equal(result.manifest.vertexStage, true);
+  assert.ok(result.manifest.payloads.glVertex.sha256);
+  const plain = cookShader(shader(header()), { path: 'p.n2shader', targets: ['gl'], tools: noTools });
+  assert.equal('vertexStage' in plain.manifest, false);
+  assert.equal(Object.keys(plain.manifest.payloads).includes('glVertex'), false);
+});
+
+test('vertex stage: the reflection self-check of the vertex SPIR-V', () => {
+  const header0 = { uses: [], params: [{ name: 'u_Gain', type: 'float', default: 0 }] };
+  const layout0 = layoutBlock(header0.params);
+  const good = {
+    ubos: [
+      { name: 'PerDraw', set: 0, binding: 0, type: '_1', block_size: 220 },
+      { name: 'Material', set: 1, binding: 0, type: '_2', block_size: 4 },
+    ],
+    types: {
+      _1: { members: PER_DRAW.map((member) => ({ name: member.name, type: member.type, offset: member.offset })) },
+      _2: { members: [{ name: 'u_Gain', type: 'float', offset: 0 }] },
+    },
+    inputs: VERTEX_INPUTS.map((entry) => ({ name: entry.name, location: entry.location, type: 'vec4' })),
+    outputs: VARYINGS.map((entry) => ({ name: entry.name, location: entry.location, type: 'vec4' })),
+  };
+  assert.deepEqual(checkVertexReflection(good, { target: 'vulkan', header: header0, layout: layout0 }), []);
+  const bad = (change, pattern) => {
+    const copy = JSON.parse(JSON.stringify(good));
+    change(copy);
+    assert.ok(checkVertexReflection(copy, { target: 'vulkan', header: header0, layout: layout0 }).some((entry) => pattern.test(entry.message)));
+  };
+  bad((j) => { j.inputs.push({ name: 'aExtra', location: 7, type: 'vec4' }); }, /unexpected input "aExtra"/);
+  bad((j) => { j.outputs.pop(); }, /must write all five varyings/);
+  bad((j) => { j.outputs[0].name = 'n2_Other'; }, /unexpected output "n2_Other"/);
+  bad((j) => { j.textures = [{ name: 'tex', set: 1, binding: 1 }]; }, /declares textures/);
+  bad((j) => { j.types._1.members[3].offset = 200; }, /PerDraw\.n2_StageDim/);
+  bad((j) => { j.ubos.push({ name: 'Lighting', set: 0, binding: 1, type: '_1', block_size: 4 }); }, /unexpected uniform block "Lighting"/);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Cube and 3D textures as atlases (stage 9e)
+// ---------------------------------------------------------------------------------------------------------------------
+test('atlas textures: a cube and a texture3d take texture slots, the 3D one declares its depth', () => {
+  const params = [param('u_Sky', 'cube'), param('baseColorTexture', 'texture'), { name: 'u_Lut', type: 'texture3d', depth: 16 }, param('u_Gain', 'float')];
+  const { header: h } = parseN2Shader(shader(header({ params })));
+  assert.deepEqual(h.params.filter((p) => ['texture', 'cube', 'texture3d'].includes(p.type)).map((p) => [p.name, p.slot]), [['u_Sky', 1], ['baseColorTexture', 0], ['u_Lut', 2]]);
+  assert.equal(h.params[2].depth, 16);
+  assert.equal(layoutBlock(h.params).members.length, 1, 'only u_Gain is in the block');
+  assert.equal(h.params[0].default, 'white');
+  assert.equal(usesAtlasTextures(h), true);
+  assert.equal(usesAtlasTextures(parseN2Shader(shader(header())).header), false);
+});
+
+const atlasRejections = [
+  ['a texture3d without depth', [param('u_V', 'texture3d')], /needs "depth"/],
+  ['a depth of 1', [{ name: 'u_V', type: 'texture3d', depth: 1 }], /integer from 2 to 256/],
+  ['a depth over 256', [{ name: 'u_V', type: 'texture3d', depth: 257 }], /integer from 2 to 256/],
+  ['a fractional depth', [{ name: 'u_V', type: 'texture3d', depth: 2.5 }], /integer from 2 to 256/],
+  ['a depth on a cube', [{ name: 'u_V', type: 'cube', depth: 4 }], /"depth" applies to texture3d only/],
+  ['a cube default that is a colour', [param('u_V', 'cube', { default: [1, 0, 0, 1] })], /cube default must be one of/],
+  ['a name that collides with a depth constant', [{ name: 'u_V', type: 'texture3d', depth: 4 }, param('u_V_depth', 'float')], /collides with the constant/],
+  ['six atlases and textures together', [...Array.from({ length: 3 }, (_, i) => param(`u_C${i}`, 'cube')), ...Array.from({ length: 3 }, (_, i) => param(`u_T${i}`, 'texture'))], /at most 5 textures/],
+];
+for (const [name, params, pattern] of atlasRejections) test(`atlas textures reject: ${name}`, () => rejects(shader(header({ params })), pattern));
+
+test('atlas textures: the lookups and the slot constants are generated for a shader that has one, and only for it', () => {
+  const params = [param('u_Sky', 'cube'), { name: 'u_Lut', type: 'texture3d', depth: 16 }];
+  const parsed = parseN2Shader(shader(header({ params }), 'void main() { n2_FragColor = n2_textureCube(u_Sky, n2_Normal) + n2_texture3D(u_Lut, u_Lut_depth, n2_WorldPos); }'));
+  for (const target of ['vulkan', 'webgpu', 'gl']) {
+    const text = buildTargetSource(target, parsed).text;
+    assert.match(text, /vec4 n2_textureCube\(int slot, vec3 dir\)/, target);
+    assert.match(text, /vec4 n2_texture3D\(int slot, int depth, vec3 uvw\)/, target);
+    assert.match(text, /const int u_Sky = 0;/, target);
+    assert.match(text, /const int u_Lut = 1;/, target);
+    assert.match(text, /const int u_Lut_depth = 16;/, target);
+    assert.equal(text.split('\n')[buildTargetSource(target, parsed).userLine - 1], 'void main() { n2_FragColor = n2_textureCube(u_Sky, n2_Normal) + n2_texture3D(u_Lut, u_Lut_depth, n2_WorldPos); }', `${target}: #line still right`);
+  }
+  assert.match(buildTargetSource('vulkan', parsed).text, /layout\(set = 1, binding = 1\) uniform sampler2D n2_tex0;/);
+  const plain = parseN2Shader(shader(header({ params: [param('u_T', 'texture')] }), 'void main() { n2_FragColor = n2_texture(u_T, n2_UV); }'));
+  for (const target of ['vulkan', 'webgpu', 'gl']) assert.equal(buildTargetSource(target, plain).text.includes('n2_textureCube'), false, target);
+});
+
+test('atlas textures: the manifest says what each parameter is, with the 3D one\'s depth', () => {
+  const params = [param('u_Sky', 'cube', { default: 'black' }), { name: 'u_Lut', type: 'texture3d', depth: 16 }];
+  const result = cookShader(shader(header({ params }), 'void main() { n2_FragColor = n2_textureCube(u_Sky, n2_Normal); }'), { path: 'a.n2shader', targets: ['gl'], tools: noTools });
+  assert.equal(result.ok, true, JSON.stringify(result.diagnostics));
+  assert.deepEqual(result.manifest.params.map((p) => [p.name, p.type, p.slot, p.depth, p.default]), [['u_Sky', 'cube', 0, undefined, 'black'], ['u_Lut', 'texture3d', 1, 16, 'white']]);
+  assert.deepEqual(result.manifest.textures.map((t) => [t.name, t.slot, t.binding]), [['u_Sky', 0, 1], ['u_Lut', 1, 2]]);
 });
 
 test('header accepts exactly 256 bytes of block and exactly 5 textures', () => {

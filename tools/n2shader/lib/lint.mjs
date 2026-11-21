@@ -1,6 +1,6 @@
 // The user-stage lint (proposal sections 2.1, 5.2, 8 and 13.2): mechanical checks that run before any compiler, each with
 // a message that says what to write instead. Line numbers are the .n2shader file's.
-import { ALLOWED_EXTENSIONS } from './contract.mjs';
+import { ALLOWED_EXTENSIONS, isTextureType } from './contract.mjs';
 
 /** Replaces comments and string literals by spaces (newlines kept), so the rules never match inside them */
 export function stripComments(source) {
@@ -32,10 +32,17 @@ export function stripComments(source) {
   return out;
 }
 
+// What a custom vertex stage cannot use (it has no textures, no fragment inputs and no discard)
+const VERTEX_BANNED = [
+  [/\bn2_(?:texture|textureLod|texelFetch|textureSize|FragCoord)\b/, 'textures and n2_FragCoord() are not available in the vertex stage (v1: no textures in the vertex stage)'],
+  [/\bn2_FragColor\b|\bdiscard\b/, 'the vertex stage writes varyings and the clip position, not n2_FragColor, and cannot discard'],
+  [/\bgl_(?:PointSize|ClipDistance|CullDistance)\b/, 'this gl_ built-in is not part of the contract'],
+];
+
 // builtins and names the contract does not offer: [pattern, message]
 const BANNED = [
   // isnan and isinf are allowed since stage 9b: the cook adds shims that test the bit pattern (renderer/shaders/user/prelude/nan-shims.glsl)
-  [/\bgl_Position\b/, 'gl_Position is not available: v1 supplies the vertex stage (a custom vertex stage comes later with n2_SetPosition)'],
+  [/\bgl_Position\b/, 'gl_Position is not available: the vertex stage is the engine\'s unless you write a "#stage vertex" block, which sets the position with n2_SetPosition(vec4)'],
   [/\bgl_(?:VertexID|InstanceID|VertexIndex|InstanceIndex)\b/, 'gl_VertexID and gl_InstanceID are not available in v1 (the fragment stage has no such input)'],
   [/\bgl_FragCoord\b/, 'raw gl_FragCoord differs between OpenGL (bottom-left origin) and Vulkan/WebGPU (top-left): use n2_FragCoord(), which counts rows from the top on every target'],
   [/\bgl_FrontFacing\b/, 'gl_FrontFacing flips with the viewport on Vulkan and WebGPU and is not part of the contract'],
@@ -121,7 +128,8 @@ function topLevelQualifiers(text, firstLine) {
  * @param {{ firstLine: number, header: { params: object[] }, strict?: boolean }} options
  * @returns {{ severity: 'error'|'warning', line: number, rule: string, message: string }[]}
  */
-export function lintStage(source, { firstLine, header, strict = true }) {
+export function lintStage(source, { firstLine, header, strict = true, stage = 'fragment' }) {
+  const vertex = stage === 'vertex';
   const diagnostics = [];
   const add = (line, rule, message, severity = 'error') => diagnostics.push({ severity, line, rule, message });
   const text = stripComments(source);
@@ -130,7 +138,12 @@ export function lintStage(source, { firstLine, header, strict = true }) {
   lines.forEach((line, index) => {
     const number = firstLine + index;
     for (const [pattern, message] of BANNED) {
-      if (pattern.test(line)) add(number, 'banned-builtin', message);
+      if (pattern.test(line)) add(number, 'banned-builtin', vertex && /gl_Position/.test(message) ? 'gl_Position is not available: write the clip-space position with n2_SetPosition(vec4), which applies the target\'s depth remap' : message);
+    }
+    if (vertex) {
+      for (const [pattern, message] of VERTEX_BANNED) {
+        if (pattern.test(line)) add(number, 'banned-builtin', message);
+      }
     }
     const directive = /^\s*#\s*(\w+)\s*(.*)$/.exec(line);
     if (directive) {
@@ -159,7 +172,7 @@ export function lintStage(source, { firstLine, header, strict = true }) {
   if (strict) {
     const constants = new Set([...text.matchAll(/\bconst\s+(?:highp\s+|mediump\s+|lowp\s+)?(?:int|uint)\s+([A-Za-z_]\w*)\s*=/g)].map((match) => match[1]));
     const boundedParams = new Set(header.params.filter((param) => param.type === 'int' && Number.isFinite(param.max)).map((param) => param.name));
-    const textureSlots = new Set(header.params.filter((param) => param.type === 'texture').map((param) => param.name));
+    const textureSlots = new Set(header.params.filter((param) => isTextureType(param.type)).map((param) => param.name));
     for (const match of text.matchAll(/\bfor\s*\(/g)) {
       const open = match.index + match[0].length - 1;
       const close = matchParen(text, open);
@@ -178,9 +191,17 @@ export function lintStage(source, { firstLine, header, strict = true }) {
     }
   }
 
-  const mains = [...text.matchAll(/\bvoid\s+main\s*\(\s*(?:void)?\s*\)/g)];
-  if (mains.length === 0) add(firstLine, 'main', 'the stage has no "void main()"');
-  if (mains.length > 1) add(lineOf(text, mains[1].index, firstLine), 'main', 'the stage has more than one main()');
+  if (vertex) {
+    // The engine writes main() (default maths, then the author's hook, then the clip position)
+    if (/\bvoid\s+main\s*\(/.test(text)) add(lineOf(text, text.search(/\bvoid\s+main\s*\(/), firstLine), 'main', 'the vertex stage must not define main(): the engine writes it and calls your "void n2_vertex()"');
+    const hooks = [...text.matchAll(/\bvoid\s+n2_vertex\s*\(\s*(?:void)?\s*\)/g)];
+    if (hooks.length === 0) add(firstLine, 'main', 'the vertex stage has no "void n2_vertex()"');
+    if (hooks.length > 1) add(lineOf(text, hooks[1].index, firstLine), 'main', 'the vertex stage has more than one n2_vertex()');
+  } else {
+    const mains = [...text.matchAll(/\bvoid\s+main\s*\(\s*(?:void)?\s*\)/g)];
+    if (mains.length === 0) add(firstLine, 'main', 'the stage has no "void main()"');
+    if (mains.length > 1) add(lineOf(text, mains[1].index, firstLine), 'main', 'the stage has more than one main()');
+  }
 
   diagnostics.sort((a, b) => a.line - b.line || a.rule.localeCompare(b.rule));
   return diagnostics;

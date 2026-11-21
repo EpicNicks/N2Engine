@@ -161,6 +161,156 @@ bool Renderer::Common::ReadFragmentVaryings(const std::vector<std::uint32_t>& sp
     return true;
 }
 
+bool Renderer::Common::ReadVertexInterface(const std::vector<std::uint32_t>& spirv, std::string& error)
+{
+    constexpr std::uint32_t OpEntryPoint = 15;
+    constexpr std::uint32_t OpCapability = 17;
+    constexpr std::uint32_t OpVariable = 59;
+    constexpr std::uint32_t OpDecorate = 71;
+    constexpr std::uint32_t DecorationLocation = 30;
+    constexpr std::uint32_t StorageInput = 1;
+    constexpr std::uint32_t ExecutionVertex = 0;
+    constexpr std::uint32_t allowedCapabilities[] = {0, 1, 9, 39, 22, 43, 46, 50, 51};
+
+    constexpr std::size_t headerWords = 5;
+    if (spirv.size() < headerWords)
+    {
+        error = "the SPIR-V module is shorter than its header";
+        return false;
+    }
+    std::map<std::uint32_t, std::uint32_t> locations; // id -> Location decoration
+    std::set<std::uint32_t> inputVariables;
+    int entryPoints = 0;
+    std::size_t at = headerWords;
+    while (at < spirv.size())
+    {
+        const std::uint32_t head = spirv[at];
+        const std::uint32_t opcode = head & 0xFFFFu;
+        const std::size_t words = head >> 16;
+        if (words == 0 || at + words > spirv.size())
+        {
+            error = "the SPIR-V module has an instruction that runs past its end";
+            return false;
+        }
+        switch (opcode)
+        {
+        case OpCapability:
+            if (words >= 2 &&
+                std::find(std::begin(allowedCapabilities), std::end(allowedCapabilities), spirv[at + 1]) ==
+                    std::end(allowedCapabilities))
+            {
+                error = "the SPIR-V module declares capability " + std::to_string(spirv[at + 1]) +
+                    ", which user shaders may not use";
+                return false;
+            }
+            break;
+        case OpEntryPoint:
+            if (words < 4 || spirv[at + 1] != ExecutionVertex)
+            {
+                error = "the SPIR-V module has an entry point that is not a vertex stage";
+                return false;
+            }
+            ++entryPoints;
+            break;
+        case OpDecorate:
+            if (words >= 4 && spirv[at + 2] == DecorationLocation)
+            {
+                locations[spirv[at + 1]] = spirv[at + 3];
+            }
+            break;
+        case OpVariable:
+            if (words >= 4 && spirv[at + 3] == StorageInput)
+            {
+                inputVariables.insert(spirv[at + 2]);
+            }
+            break;
+        default: break;
+        }
+        at += words;
+    }
+    if (entryPoints != 1)
+    {
+        error = "the SPIR-V module must have exactly one vertex entry point (it has " + std::to_string(entryPoints) + ")";
+        return false;
+    }
+    for (const std::uint32_t id : inputVariables)
+    {
+        const auto location = locations.find(id);
+        if (location != locations.end() && location->second >= kUserVaryingCount)
+        {
+            error = "the vertex stage reads attribute location " + std::to_string(location->second) +
+                "; the engine's vertices have locations 0-" + std::to_string(kUserVaryingCount - 1);
+            return false;
+        }
+    }
+    return true;
+}
+
+namespace
+{
+    /// The checks of a blob's custom vertex payload for `target` (nothing for a blob without one). The fragment payload's checks ran first
+    std::string ValidateVertexPayload(const Renderer::Common::UserShaderBlob& blob, const Renderer::Common::UserShaderTarget target)
+    {
+        using namespace Renderer::Common;
+        switch (target)
+        {
+        case UserShaderTarget::Vulkan:
+            if (blob.vertexSpirv.empty())
+            {
+                return blob.vertexWgsl.empty() && blob.vertexGlsl.empty() ? std::string() : "a vertex payload for another backend";
+            }
+            if (blob.vertexSpirv.size() * sizeof(std::uint32_t) > kUserShaderMaxSpirvBytes)
+            {
+                return "the Vulkan vertex payload is " + std::to_string(blob.vertexSpirv.size() * sizeof(std::uint32_t)) +
+                    " bytes; the limit is " + std::to_string(kUserShaderMaxSpirvBytes);
+            }
+            if (blob.vertexSpirv[0] != 0x07230203u)
+            {
+                return "the Vulkan vertex payload is not SPIR-V (bad magic number)";
+            }
+            {
+                std::string problem;
+                if (!ReadVertexInterface(blob.vertexSpirv, problem))
+                {
+                    return "the Vulkan vertex payload: " + problem;
+                }
+            }
+            return {};
+        case UserShaderTarget::WebGpu:
+            if (blob.vertexWgsl.empty())
+            {
+                return blob.vertexSpirv.empty() && blob.vertexGlsl.empty() ? std::string() : "a vertex payload for another backend";
+            }
+            if (blob.vertexWgsl.size() > kUserShaderMaxWgslBytes)
+            {
+                return "the WebGPU vertex payload is " + std::to_string(blob.vertexWgsl.size()) + " bytes; the limit is " +
+                    std::to_string(kUserShaderMaxWgslBytes);
+            }
+            if (blob.vertexWgsl.find('\0') != std::string::npos)
+            {
+                return "the WebGPU vertex payload is not text (it holds a NUL byte)";
+            }
+            if (blob.vertexWgsl.find("@vertex") == std::string::npos)
+            {
+                return "the WebGPU vertex payload has no @vertex entry point";
+            }
+            return {};
+        case UserShaderTarget::OpenGl:
+            if (blob.vertexGlsl.empty())
+            {
+                return blob.vertexSpirv.empty() && blob.vertexWgsl.empty() ? std::string() : "a vertex payload for another backend";
+            }
+            if (std::string problem = UserGl::ValidateFragmentSource(blob.vertexGlsl); !problem.empty())
+            {
+                // the same text rules; the message names the fragment payload, so say which stage this was
+                return "the vertex stage: " + problem;
+            }
+            return {};
+        }
+        return {};
+    }
+}
+
 std::string Renderer::Common::ValidateUserShaderParams(const UserShaderBlob& blob)
 {
     if (blob.contract != kUserShaderContractVersion)
@@ -239,6 +389,15 @@ std::string Renderer::Common::ValidateUserShaderParams(const UserShaderBlob& blo
 }
 
 std::string Renderer::Common::ValidateUserShaderBlob(const UserShaderBlob& blob, const UserShaderTarget target)
+{
+    if (std::string problem = ValidateFragmentPayload(blob, target); !problem.empty())
+    {
+        return problem;
+    }
+    return ValidateVertexPayload(blob, target);
+}
+
+std::string Renderer::Common::ValidateFragmentPayload(const UserShaderBlob& blob, const UserShaderTarget target)
 {
     if (std::string problem = ValidateUserShaderParams(blob); !problem.empty())
     {

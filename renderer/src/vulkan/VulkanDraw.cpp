@@ -222,7 +222,8 @@ bool VulkanRenderer::CreateDrawResources()
         bindings[0].binding = 0;
         bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         bindings[0].descriptorCount = 1;
-        bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        // The vertex stage too: a user shader's custom vertex stage (stage 9d) reads the material block's parameters
+        bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         for (std::uint32_t i = 0; i < kSamplerCount; ++i)
         {
             bindings[1 + i].binding = kFirstSamplerBinding + i;
@@ -433,12 +434,16 @@ void VulkanRenderer::DestroyDrawResources()
                 vkDestroyShaderModule(_device, shader->fragmentModule, nullptr);
             }
         }
-        // The user shaders (live and retired): only their fragment modules are theirs, the vertex module is shared
+        // The user shaders (live and retired): their fragment modules (and a custom vertex module) are theirs, the vertex variants are shared
         for (const std::unique_ptr<VulkanShader>& shader : draw.userShaders)
         {
             if (shader && shader->fragmentModule != VK_NULL_HANDLE)
             {
                 vkDestroyShaderModule(_device, shader->fragmentModule, nullptr);
+            }
+            if (shader && shader->ownVertexModule != VK_NULL_HANDLE)
+            {
+                vkDestroyShaderModule(_device, shader->ownVertexModule, nullptr);
             }
         }
         for (const VkShaderModule module : draw.userVertexModules)
@@ -1153,8 +1158,26 @@ IShader* VulkanRenderer::CreateUserShader(const Renderer::Common::UserShaderBlob
     {
         return nullptr; // unreachable after the validation above
     }
+    // A custom vertex stage (stage 9d) is the shader's own module. It reads all five attributes and writes all five varyings (the cook makes
+    // the fragment stage read them all), so the vertex input is the full set whatever the fragment's mask says
+    VkShaderModule ownVertex = VK_NULL_HANDLE;
+    if (!blob.vertexSpirv.empty())
+    {
+        varyingMask = Renderer::Common::kUserVaryingMasks - 1;
+        VkShaderModuleCreateInfo vertexInfo{};
+        vertexInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        vertexInfo.codeSize = blob.vertexSpirv.size() * sizeof(std::uint32_t);
+        vertexInfo.pCode = blob.vertexSpirv.data();
+        const VkResult vertexResult = vkCreateShaderModule(_device, &vertexInfo, nullptr, &ownVertex);
+        if (vertexResult != VK_SUCCESS)
+        {
+            LogOnce("CreateUserShader: '" + label + "': the driver rejected the vertex module (result " +
+                    std::to_string(static_cast<int>(vertexResult)) + ")");
+            return nullptr;
+        }
+    }
 #if N2ENGINE_VULKAN_HAS_SPIRV
-    if (draw.userVertexModules[varyingMask] == VK_NULL_HANDLE)
+    if (ownVertex == VK_NULL_HANDLE && draw.userVertexModules[varyingMask] == VK_NULL_HANDLE)
     {
         const UserVertexSpirvEntry& entry = kUserVertexSpirv[varyingMask];
         draw.userVertexModules[varyingMask] = MakeModule(_device, Spirv{entry.words, entry.bytes});
@@ -1176,6 +1199,10 @@ IShader* VulkanRenderer::CreateUserShader(const Renderer::Common::UserShaderBlob
     {
         LogOnce("CreateUserShader: '" + label + "': the driver rejected the fragment module (result " +
                 std::to_string(static_cast<int>(result)) + ")");
+        if (ownVertex != VK_NULL_HANDLE)
+        {
+            vkDestroyShaderModule(_device, ownVertex, nullptr);
+        }
         return nullptr;
     }
 
@@ -1192,7 +1219,8 @@ IShader* VulkanRenderer::CreateUserShader(const Renderer::Common::UserShaderBlob
     const auto id = static_cast<std::uint16_t>(kBuiltInShaderCount + slotIndex);
     auto shader = std::make_unique<VulkanShader>(id, std::move(layout), blob.usesLighting);
     shader->varyingMask = varyingMask;
-    shader->vertexModule = draw.userVertexModules[varyingMask];
+    shader->ownVertexModule = ownVertex;
+    shader->vertexModule = ownVertex != VK_NULL_HANDLE ? ownVertex : draw.userVertexModules[varyingMask];
     shader->fragmentModule = module;
     VulkanShader* raw = shader.get();
     draw.userShaders[slotIndex] = std::move(shader);
@@ -1276,6 +1304,10 @@ void VulkanRenderer::CollectUserShadersLocked()
             if (shader->fragmentModule != VK_NULL_HANDLE)
             {
                 vkDestroyShaderModule(_device, shader->fragmentModule, nullptr);
+            }
+            if (shader->ownVertexModule != VK_NULL_HANDLE)
+            {
+                vkDestroyShaderModule(_device, shader->ownVertexModule, nullptr);
             }
             draw.freeUserIds.push_back(shader->id);
             draw.userShaders[slot].reset();

@@ -213,7 +213,9 @@ namespace N2Engine::Rendering::UserShaderCompiler
                 case ShaderParamType::Color: member.glsl = "vec4"; member.size = 16; align = 16; break;
                 case ShaderParamType::Mat3: member.glsl = "mat3"; member.qualifier = "layout(row_major) "; member.size = 48; align = 16; break;
                 case ShaderParamType::Mat4: member.glsl = "mat4"; member.qualifier = "layout(row_major) "; member.size = 64; align = 16; break;
-                case ShaderParamType::Texture: continue; // a texture is not in the block
+                case ShaderParamType::Texture:
+                case ShaderParamType::Cube:
+                case ShaderParamType::Texture3D: continue; // a texture is not in the block
                 }
                 member.offset = AlignUp(cursor, align);
                 cursor = member.offset + member.size;
@@ -226,7 +228,7 @@ namespace N2Engine::Rendering::UserShaderCompiler
 
         const char *TypeName(const ShaderParamType type)
         {
-            static constexpr std::array<const char *, 10> names{"float", "int", "bool", "vec2", "vec3", "vec4", "color", "texture", "mat3", "mat4"};
+            static constexpr std::array<const char *, 12> names{"float", "int", "bool", "vec2", "vec3", "vec4", "color", "texture", "mat3", "mat4", "cube", "texture3d"};
             return names[static_cast<std::size_t>(type)];
         }
 
@@ -403,7 +405,7 @@ namespace N2Engine::Rendering::UserShaderCompiler
             }
             for (const ShaderParam &param : params)
             {
-                if (param.type == ShaderParamType::Texture)
+                if (IsTextureParam(param.type))
                 {
                     text += std::format("const int {} = {};\n", param.name, param.slot);
                 }
@@ -483,7 +485,7 @@ namespace N2Engine::Rendering::UserShaderCompiler
         std::vector<int> slots;
         for (const ShaderParam &param : shader.GetParams())
         {
-            if (param.type == ShaderParamType::Texture)
+            if (IsTextureParam(param.type))
             {
                 slots.push_back(param.slot);
             }
@@ -743,7 +745,7 @@ namespace N2Engine::Rendering::UserShaderCompiler
         for (const ShaderParam &param : shader.GetParams())
         {
             nlohmann::json entry{{"name", param.name}, {"type", TypeName(param.type)}};
-            if (param.type == ShaderParamType::Texture)
+            if (IsTextureParam(param.type))
             {
                 entry["slot"] = param.slot;
             }

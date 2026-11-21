@@ -508,3 +508,122 @@ TEST_F(VulkanUserShaderTest, ABlobThatBreaksALimitIsRefusedBeforeTheDriverSeesIt
     EXPECT_EQ(R().CreateUserMaterial(nullptr, nullptr), nullptr);
     EXPECT_EQ(R().CreateUserMaterial(R().GetStandardUnlitShader(), nullptr), nullptr);
 }
+
+// ===== Stage 9d: a custom vertex stage =====
+
+TEST_F(VulkanUserShaderTest, ACustomVertexStageMovesTheGeometryByAParameterOfTheMaterialBlock)
+{
+    UserShaderBlob blob = LoadFixture("vertexshift");
+    ASSERT_FALSE(blob.vertexSpirv.empty()) << "the fixture carries its own vertex stage";
+    IShader* shader = R().CreateUserShader(blob);
+    ASSERT_NE(shader, nullptr);
+    IMaterial* material = MakeMaterial(shader);
+    ASSERT_NE(material, nullptr);
+    IMesh* mesh = MakeMesh(Quad(-0.5f, -0.5f, 0.5f, 0.5f, 0.0f));
+    CerrCapture capture;
+
+    // u_Shift 0: the quad is where it was made, the middle of the frame
+    const Frame centred = RenderFrame([&] { R().DrawMesh(mesh, Identity, material, RenderState{}); });
+    EXPECT_EQ(centred.At(32, 32), kGreen);
+    EXPECT_NE(centred.At(56, 32), kGreen) << "the right quarter is empty";
+
+    // u_Shift 1: the vertex stage moves the world x by one (the whole frame is two wide), so the quad covers the right quarter
+    material->SetFloat("u_Shift", 1.0f);
+    const Frame moved = RenderFrame([&] { R().DrawMesh(mesh, Identity, material, RenderState{}); });
+    EXPECT_NE(moved.At(32, 32), kGreen);
+    EXPECT_EQ(moved.At(56, 32), kGreen);
+    EXPECT_EQ(capture.Text().find("VUID"), std::string::npos) << capture.Text() << "no validation message: the vertex stage's interface is the fragment's";
+}
+
+TEST_F(VulkanUserShaderTest, AShaderWithACustomVertexStageAndOneWithoutShareAFrame)
+{
+    IMaterial* plain = MakeMaterial(MakeShader("solid"));
+    IMaterial* shifted = MakeMaterial(MakeShader("vertexshift"));
+    ASSERT_NE(plain, nullptr);
+    ASSERT_NE(shifted, nullptr);
+    shifted->SetFloat("u_Shift", -1.0f);
+    IMesh* quad = MakeMesh(Quad(-0.5f, -0.5f, 0.5f, 0.5f, 0.0f));
+    const Frame frame = RenderFrame(
+        [&]
+        {
+            R().DrawMesh(quad, Identity, plain, RenderState{});
+            R().DrawMesh(quad, Identity, shifted, RenderState{});
+        });
+    EXPECT_EQ(frame.At(32, 32), kRed) << "the engine's own vertex stage, the shader without one";
+    EXPECT_EQ(frame.At(8, 32), kGreen) << "the custom one, moved to the left quarter";
+}
+
+TEST_F(VulkanUserShaderTest, ADestroyedShaderWithACustomVertexStageIsReleasedWithItsModule)
+{
+    CerrCapture capture;
+    for (int round = 0; round < 3; ++round)
+    {
+        IShader* shader = MakeShader("vertexshift");
+        ASSERT_NE(shader, nullptr);
+        IMaterial* material = MakeMaterial(shader);
+        ASSERT_NE(material, nullptr);
+        IMesh* quad = MakeMesh(Quad(-0.5f, -0.5f, 0.5f, 0.5f, 0.0f));
+        const Frame frame = RenderFrame([&] { R().DrawMesh(quad, Identity, material, RenderState{}); });
+        EXPECT_EQ(frame.At(32, 32), kGreen);
+        R().DestroyShaderProgram(shader);
+        RenderFrame([] {}); // the retired shader is released at the next frame, its vertex module with it
+    }
+    EXPECT_EQ(capture.Text().find("VUID"), std::string::npos) << capture.Text();
+}
+
+// ===== Stage 9e: cube and 3D textures as 2D atlases =====
+
+TEST_F(VulkanUserShaderTest, ACubeAtlasIsReadByDirectionOneFaceEach)
+{
+    IMaterial* material = MakeMaterial(MakeShader("atlas"));
+    ASSERT_NE(material, nullptr);
+    // Six one-pixel faces side by side: +X red, -X green, +Y blue, -Y yellow, +Z cyan, -Z magenta
+    const std::uint8_t faces[6 * 4] = {255, 0,   0,   255, 0,   255, 0,   255, 0,   0,   255, 255,
+                                       255, 255, 0,   255, 0,   255, 255, 255, 255, 0,   255, 255};
+    ITexture* cube = R().CreateTexture(faces, 6, 1, 4, Nearest());
+    ASSERT_NE(cube, nullptr);
+    material->SetTextureSlot(0, cube); // u_Sky is the first texture parameter
+    material->SetInt("u_Mode", 0);
+    const struct
+    {
+        float x, y, z;
+        Rgb colour;
+    } cases[] = {{1, 0, 0, kRed},   {-1, 0, 0, kGreen},      {0, 1, 0, kBlue},        {0, -1, 0, kYellow},
+                 {0, 0, 1, Rgb{0, 255, 255}}, {0, 0, -1, Rgb{255, 0, 255}}, {2, 0.5f, -0.5f, kRed}, {-0.1f, 0.1f, -3, Rgb{255, 0, 255}}};
+    for (const auto& c : cases)
+    {
+        material->SetVec3("u_Dir", c.x, c.y, c.z);
+        EXPECT_TRUE(SameColour(DrawFullFrame(material).At(32, 32), c.colour)) << c.x << " " << c.y << " " << c.z;
+    }
+}
+
+TEST_F(VulkanUserShaderTest, AVolumeAtlasBlendsTheTwoNearestSlices)
+{
+    IMaterial* material = MakeMaterial(MakeShader("atlas"));
+    ASSERT_NE(material, nullptr);
+    // Two one-pixel slices side by side: red, then blue (u_Vol_depth is 2)
+    const std::uint8_t slices[2 * 4] = {255, 0, 0, 255, 0, 0, 255, 255};
+    ITexture* volume = R().CreateTexture(slices, 2, 1, 4, Nearest());
+    ASSERT_NE(volume, nullptr);
+    material->SetTextureSlot(1, volume); // u_Vol is the second texture parameter
+    material->SetInt("u_Mode", 1);
+    material->SetFloat("u_W", 0.25f); // the middle of slice 0
+    EXPECT_TRUE(SameColour(DrawFullFrame(material).At(32, 32), kRed));
+    material->SetFloat("u_W", 0.75f); // the middle of slice 1
+    EXPECT_TRUE(SameColour(DrawFullFrame(material).At(32, 32), kBlue));
+    material->SetFloat("u_W", 0.5f); // halfway: both
+    const Rgb mid = DrawFullFrame(material).At(32, 32);
+    EXPECT_NEAR(mid.r, 128, 3);
+    EXPECT_NEAR(mid.b, 128, 3);
+    EXPECT_EQ(mid.g, 0);
+}
+
+TEST_F(VulkanUserShaderTest, ACubeAndAVolumeNeverSetDrawTheirDeclaredDefaults)
+{
+    IMaterial* material = MakeMaterial(MakeShader("atlas"));
+    ASSERT_NE(material, nullptr);
+    material->SetInt("u_Mode", 0);
+    EXPECT_TRUE(SameColour(DrawFullFrame(material).At(32, 32), kBlack)) << "the cube defaults to black";
+    material->SetInt("u_Mode", 1);
+    EXPECT_TRUE(SameColour(DrawFullFrame(material).At(32, 32), kBlack)) << "so does the volume";
+}

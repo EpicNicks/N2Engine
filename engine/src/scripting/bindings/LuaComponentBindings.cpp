@@ -1216,7 +1216,7 @@ namespace N2Engine::Scripting::Bindings
             {
                 const auto param = h.material->GetParam(name);
                 const auto *declared = h.material->GetShader() ? h.material->GetShader()->FindParam(name) : nullptr;
-                if (!param || !declared || declared->type == Rendering::ShaderParamType::Texture)
+                if (!param || !declared || Rendering::IsTextureParam(declared->type))
                 {
                     return sol::nullopt;
                 }

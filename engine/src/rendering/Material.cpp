@@ -447,7 +447,7 @@ namespace N2Engine::Rendering
 
     bool Material::SetTexture(const std::string_view name, std::shared_ptr<Texture> texture)
     {
-        const ShaderParam *param = MatchParam(name, {ShaderParamType::Texture}, "SetTexture");
+        const ShaderParam *param = MatchParam(name, {ShaderParamType::Texture, ShaderParamType::Cube, ShaderParamType::Texture3D}, "SetTexture");
         if (!param)
         {
             return false;
@@ -594,7 +594,7 @@ namespace N2Engine::Rendering
     {
         for (const ShaderParam &param : _shader->GetParams())
         {
-            if (param.type == ShaderParamType::Texture)
+            if (IsTextureParam(param.type))
             {
                 continue; // bound when the GPU material is made (GpuCache::AcquireMaterial), by the slot the cook gave it
             }
@@ -628,7 +628,9 @@ namespace N2Engine::Rendering
                 target.SetMatrix(param.name, matrix.data(), param.type == ShaderParamType::Mat3 ? 3u : 4u);
                 break;
             }
-            case ShaderParamType::Texture: break;
+            case ShaderParamType::Texture:
+            case ShaderParamType::Cube:
+            case ShaderParamType::Texture3D: break;
             }
         }
     }
@@ -962,6 +964,8 @@ namespace N2Engine::Rendering
                         break;
                     }
                     case ShaderParamType::Texture:
+                    case ShaderParamType::Cube:
+                    case ShaderParamType::Texture3D:
                         if (auto texture = ReadTexture(value, baseDirectory, debugName, name))
                         {
                             stored.texture = std::move(*texture);
@@ -1062,7 +1066,9 @@ namespace N2Engine::Rendering
                     for (std::size_t i = 0; i < 16; ++i)
                         params[name].push_back(stored.matrix[i]);
                     break;
-                case ShaderParamType::Texture: params[name] = TextureJson(stored.texture); break;
+                case ShaderParamType::Texture:
+                case ShaderParamType::Cube:
+                case ShaderParamType::Texture3D: params[name] = TextureJson(stored.texture); break;
                 }
             }
             json["params"] = std::move(params);

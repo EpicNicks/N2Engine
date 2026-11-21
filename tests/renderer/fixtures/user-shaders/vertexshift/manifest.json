@@ -1,0 +1,115 @@
+{
+  "formatVersion": 1,
+  "contract": 1,
+  "name": "FixtureVertexShift",
+  "source": {
+    "file": "vertexshift.n2shader",
+    "sha256": "62a5df0c11ca1d147e5e9aa03b69f216aeb41ff3f568b02e807d12fcc0b03ef0"
+  },
+  "uses": [],
+  "state": {},
+  "vertexStage": true,
+  "blockSize": 32,
+  "params": [
+    {
+      "name": "u_Color",
+      "type": "color",
+      "offset": 0,
+      "size": 16,
+      "default": [
+        0,
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "name": "u_Shift",
+      "type": "float",
+      "offset": 16,
+      "size": 4,
+      "default": 0
+    }
+  ],
+  "textures": [],
+  "vertexAttributes": [
+    "aPos",
+    "aNormal",
+    "aTexCoord",
+    "aColor",
+    "aTangent"
+  ],
+  "lint": "strict",
+  "payloads": {
+    "vulkan": {
+      "file": "shader.vulkan.frag.spv",
+      "bytes": 2056,
+      "sha256": "c7f2290e8675e6c977dda628c0c14d4246ce0cdce90e1c14dfae00a456731173"
+    },
+    "vulkanVertex": {
+      "file": "shader.vulkan.vert.spv",
+      "bytes": 5320,
+      "sha256": "bab234cd8ceccf18ff219b95b6322248fbe47d217925b89da17c77d260cad2a7"
+    },
+    "webgpu": {
+      "file": "shader.webgpu.wgsl",
+      "bytes": 1025,
+      "sha256": "9de49dcb8b46a8680efddb826bb3b9766f2bb71fd823e6947f42d90b65f92be9"
+    },
+    "webgpuVertex": {
+      "file": "shader.webgpu.vertex.wgsl",
+      "bytes": 3988,
+      "sha256": "43507698217f445a183df13ff45c63ab13f69469d70cdc41ce04ee275b746813"
+    },
+    "gl": {
+      "file": "shader.gl.frag",
+      "bytes": 1667,
+      "sha256": "74e86bee4017f15d88efd2a60ca2a59d74137b1c761ec807c42e9a6432520f63"
+    },
+    "glVertex": {
+      "file": "shader.gl.vert",
+      "bytes": 2896,
+      "sha256": "186873ca6f6fb17a5b7ae0ff43ff1ac330f4dd0ed3d0cd295b8a89e974ed1436"
+    }
+  },
+  "validated": {
+    "vulkan": [
+      "glslang",
+      "spirv-val",
+      "capabilities",
+      "reflect",
+      "vertex-glslang",
+      "vertex-spirv-val",
+      "vertex-capabilities",
+      "vertex-reflect"
+    ],
+    "webgpu": [
+      "glslang",
+      "spirv-val",
+      "capabilities",
+      "reflect",
+      "tint",
+      "tint-roundtrip",
+      "wgsl-layout",
+      "vertex-glslang",
+      "vertex-spirv-val",
+      "vertex-capabilities",
+      "vertex-reflect",
+      "vertex-tint",
+      "vertex-tint-roundtrip",
+      "vertex-wgsl-layout"
+    ],
+    "gl": [
+      "glslang",
+      "gl-uniforms",
+      "vertex-glslang"
+    ]
+  },
+  "tools": {
+    "glslang": "Glslang Version: 11:15.3.0",
+    "spirvCross": "Git commit: vulkan-sdk-1.4.313.0-60-gd8e3e2b1 Timestamp: 2025-07-11T15:05:26",
+    "spirvDis": "SPIRV-Tools v2025.3 v2025.3.rc1-0-g33e02568",
+    "spirvVal": "SPIRV-Tools v2025.3 v2025.3.rc1-0-g33e02568",
+    "tint": "sha256:650ed934de155aeb"
+  }
+}

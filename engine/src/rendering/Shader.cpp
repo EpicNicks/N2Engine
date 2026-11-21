@@ -65,6 +65,8 @@ namespace N2Engine::Rendering
             if (name == "texture") return ShaderParamType::Texture;
             if (name == "mat3") return ShaderParamType::Mat3;
             if (name == "mat4") return ShaderParamType::Mat4;
+            if (name == "cube") return ShaderParamType::Cube;
+            if (name == "texture3d") return ShaderParamType::Texture3D;
             return std::nullopt;
         }
 
@@ -82,6 +84,8 @@ namespace N2Engine::Rendering
             case ShaderParamType::Texture: return "texture";
             case ShaderParamType::Mat3: return "mat3";
             case ShaderParamType::Mat4: return "mat4";
+            case ShaderParamType::Cube: return "cube";
+            case ShaderParamType::Texture3D: return "texture3d";
             }
             return "float";
         }
@@ -115,6 +119,8 @@ namespace N2Engine::Rendering
             switch (param.type)
             {
             case ShaderParamType::Texture:
+            case ShaderParamType::Cube:
+            case ShaderParamType::Texture3D:
                 if (!value.is_string() || (value.get<std::string>() != "white" && value.get<std::string>() != "black" &&
                                            value.get<std::string>() != "normal" && value.get<std::string>() != "none"))
                 {
@@ -297,6 +303,16 @@ namespace N2Engine::Rendering
                         return fail(std::format("parameter '{}': {}", param.name, why));
                     }
                 }
+                if (param.type == ShaderParamType::Texture3D)
+                {
+                    if (!entry.contains("depth") || !entry["depth"].is_number_integer() || entry["depth"].get<int>() < 2 ||
+                        entry["depth"].get<int>() > 256)
+                    {
+                        return fail(std::format("parameter '{}': a texture3d needs \"depth\", the number of slices (an integer from 2 to 256)",
+                                                param.name));
+                    }
+                    param.depth = entry["depth"].get<int>();
+                }
                 if (entry.contains("label") && entry["label"].is_string())
                 {
                     param.label = entry["label"].get<std::string>();
@@ -318,14 +334,14 @@ namespace N2Engine::Rendering
         int slot = 0;
         for (ShaderParam &param : params)
         {
-            if (param.type == ShaderParamType::Texture && param.name == "baseColorTexture")
+            if (IsTextureParam(param.type) && param.name == "baseColorTexture")
             {
                 param.slot = slot++;
             }
         }
         for (ShaderParam &param : params)
         {
-            if (param.type == ShaderParamType::Texture && param.name != "baseColorTexture")
+            if (IsTextureParam(param.type) && param.name != "baseColorTexture")
             {
                 param.slot = slot++;
             }
@@ -397,6 +413,20 @@ namespace N2Engine::Rendering
             }
             _text.push_back(rest[i]);
         }
+        // A custom vertex stage: a line that is exactly `#stage vertex` after the fragment stage's line
+        _hasAtlasTexture = std::ranges::any_of(_params, [](const ShaderParam &param) {
+            return param.type == ShaderParamType::Cube || param.type == ShaderParamType::Texture3D;
+        });
+        _hasVertexStage = false;
+        {
+            const std::size_t fragmentAt = _text.find("\n#stage fragment\n");
+            _hasVertexStage = fragmentAt != std::string::npos && _text.find("\n#stage vertex\n", fragmentAt) != std::string::npos;
+            if (!_hasVertexStage && fragmentAt != std::string::npos && _text.size() >= 14 &&
+                _text.compare(_text.size() - 14, 14, "\n#stage vertex") == 0)
+            {
+                _hasVertexStage = true;
+            }
+        }
         return true;
     }
 
@@ -415,12 +445,13 @@ namespace N2Engine::Rendering
                 source = end == std::string::npos ? std::string() : _text.substr(end + 1);
                 // The GLSL ends where an authored WebGPU module begins (stage 9f): that block is the WebGPU payload's, never compiled here
                 constexpr std::string_view wgslStage = "#stage wgsl";
+                constexpr std::string_view vertexStage = "#stage vertex";
                 for (std::size_t at = 0; at < source.size();)
                 {
                     const std::size_t lineEnd = source.find('\n', at);
                     const std::string_view candidate = std::string_view(source).substr(
                         at, lineEnd == std::string::npos ? std::string::npos : lineEnd - at);
-                    if (candidate == wgslStage)
+                    if (candidate == wgslStage || candidate == vertexStage)
                     {
                         source.resize(at);
                         break;
@@ -649,11 +680,13 @@ namespace N2Engine::Rendering
                 case ShaderParamType::Vec3: param.type = UserParamType::Vec3; break;
                 case ShaderParamType::Vec4: param.type = UserParamType::Vec4; break;
                 case ShaderParamType::Color: param.type = UserParamType::Color; break;
-                case ShaderParamType::Texture: param.type = UserParamType::Texture; break;
+                case ShaderParamType::Texture:
+                case ShaderParamType::Cube: // a cube and a 3D texture are 2D atlases to the backends: one 2D texture slot
+                case ShaderParamType::Texture3D: param.type = UserParamType::Texture; break;
                 case ShaderParamType::Mat3: param.type = UserParamType::Mat3; break;
                 case ShaderParamType::Mat4: param.type = UserParamType::Mat4; break;
                 }
-                if (declared.type == ShaderParamType::Texture)
+                if (IsTextureParam(declared.type))
                 {
                     param.slot = entry.at("slot").get<std::uint32_t>();
                     param.textureDefault = declared.defaultTexture == "black" ? UserTextureDefault::Black
@@ -684,6 +717,27 @@ namespace N2Engine::Rendering
                 error = std::format("the cooked {} payload cannot be read: {}", key, payload.error());
                 return std::nullopt;
             }
+            const auto toWords = [](const std::vector<std::uint8_t> &bytes, std::vector<std::uint32_t> &words) {
+                words.resize(bytes.size() / 4);
+                for (std::size_t i = 0; i < words.size(); ++i)
+                {
+                    const std::uint8_t *b = bytes.data() + 4 * i;
+                    words[i] = static_cast<std::uint32_t>(b[0]) | (static_cast<std::uint32_t>(b[1]) << 8) |
+                        (static_cast<std::uint32_t>(b[2]) << 16) | (static_cast<std::uint32_t>(b[3]) << 24);
+                }
+            };
+            const auto toText = [](const std::vector<std::uint8_t> &bytes) {
+                std::string text;
+                text.reserve(bytes.size());
+                for (const std::uint8_t byte : bytes)
+                {
+                    if (byte != '\r')
+                    {
+                        text.push_back(static_cast<char>(byte)); // the cooked text is LF; a checkout may have converted it
+                    }
+                }
+                return text;
+            };
             if (target == UserShaderTarget::Vulkan)
             {
                 if (payload->size() % 4 != 0)
@@ -691,26 +745,48 @@ namespace N2Engine::Rendering
                     error = "the cooked SPIR-V is not a whole number of words";
                     return std::nullopt;
                 }
-                blob.fragmentSpirv.resize(payload->size() / 4);
-                for (std::size_t i = 0; i < blob.fragmentSpirv.size(); ++i)
-                {
-                    const std::uint8_t *b = payload->data() + 4 * i;
-                    blob.fragmentSpirv[i] = static_cast<std::uint32_t>(b[0]) | (static_cast<std::uint32_t>(b[1]) << 8) |
-                        (static_cast<std::uint32_t>(b[2]) << 16) | (static_cast<std::uint32_t>(b[3]) << 24);
-                }
+                toWords(*payload, blob.fragmentSpirv);
             }
             else
             {
-                std::string text;
-                text.reserve(payload->size());
-                for (const std::uint8_t byte : *payload)
+                (target == UserShaderTarget::WebGpu ? blob.fragmentWgsl : blob.fragmentGlsl) = toText(*payload);
+            }
+
+            // A custom vertex stage (stage 9d): the manifest and the header must agree, as they do for the parameters
+            if (manifest.value("vertexStage", false) != _hasVertexStage)
+            {
+                error = _hasVertexStage
+                    ? "the cooked data is stale: the .n2shader has a vertex stage now and it was cooked without one (cook it again)"
+                    : "the cooked data is stale: it has a vertex stage the .n2shader no longer has (cook it again)";
+                return std::nullopt;
+            }
+            if (_hasVertexStage)
+            {
+                const std::string vertexKey = std::string(key) + "Vertex";
+                if (!payloads.contains(vertexKey))
                 {
-                    if (byte != '\r')
-                    {
-                        text.push_back(static_cast<char>(byte)); // the cooked text is LF; a checkout may have converted it
-                    }
+                    error = std::format("the cooked data has no vertex payload for the {} backend", key);
+                    return std::nullopt;
                 }
-                (target == UserShaderTarget::WebGpu ? blob.fragmentWgsl : blob.fragmentGlsl) = std::move(text);
+                const auto vertex = readPayload(payloads.at(vertexKey).at("file").get<std::string>());
+                if (!vertex)
+                {
+                    error = std::format("the cooked {} payload cannot be read: {}", vertexKey, vertex.error());
+                    return std::nullopt;
+                }
+                if (target == UserShaderTarget::Vulkan)
+                {
+                    if (vertex->size() % 4 != 0)
+                    {
+                        error = "the cooked vertex SPIR-V is not a whole number of words";
+                        return std::nullopt;
+                    }
+                    toWords(*vertex, blob.vertexSpirv);
+                }
+                else
+                {
+                    (target == UserShaderTarget::WebGpu ? blob.vertexWgsl : blob.vertexGlsl) = toText(*vertex);
+                }
             }
             return blob;
         }
@@ -801,6 +877,13 @@ namespace N2Engine::Rendering
         return std::nullopt;
 #else
         using Renderer::Common::UserShaderTarget;
+        if (NeedsCook())
+        {
+            why = _hasVertexStage
+                ? "it has a custom vertex stage, which is only made by the cook (tools/n2shader; the project's build and the editor do it)"
+                : "it has a cube or 3D texture parameter, whose lookups are only made by the cook (tools/n2shader; the project's build and the editor do it)";
+            return std::nullopt;
+        }
         if (target == UserShaderTarget::WebGpu)
         {
             why = "WGSL is made by the cook (Tint is not linked into the engine): the web ships cooked WGSL";

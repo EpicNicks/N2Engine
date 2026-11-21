@@ -1,0 +1,20 @@
+{ "n2shader": 1, "name": "FixtureAtlas",
+  "params": [
+    { "name": "u_Sky", "type": "cube", "default": "black" },
+    { "name": "u_Vol", "type": "texture3d", "depth": 2, "default": "black" },
+    { "name": "u_Dir", "type": "vec3", "default": [1, 0, 0] },
+    { "name": "u_W", "type": "float", "default": 0 },
+    { "name": "u_Mode", "type": "int", "default": 0 }
+  ]
+}
+#stage fragment
+// Stage 9e: u_Mode 0 reads the cube atlas in the direction u_Dir, 1 reads the volume atlas (two slices) at depth u_W
+void main() {
+    vec4 color;
+    if (u_Mode == 0) {
+        color = n2_textureCube(u_Sky, normalize(u_Dir));
+    } else {
+        color = n2_texture3D(u_Vol, u_Vol_depth, vec3(0.5, 0.5, u_W));
+    }
+    n2_FragColor = vec4(color.rgb, 1.0);
+}

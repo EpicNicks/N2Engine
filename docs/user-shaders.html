@@ -132,6 +132,7 @@ void main() {
 <tr><td><code>vec2</code>, <code>vec3</code>, <code>vec4</code></td><td>the same</td><td>2, 3 or 4 numbers</td><td>an array of that many numbers</td></tr>
 <tr id="matrix-params"><td><code>mat3</code>, <code>mat4</code></td><td>a <code>row_major</code> member of the block (a mat3 is 48 bytes, a mat4 64), so the numbers a Material holds are a row-major matrix and <code>m * v</code> is the usual column-vector product on every backend. No <code>default</code>: a new Material holds the identity</td><td><code>SetMat3</code>/<code>SetMat4</code>, nine or sixteen numbers, row by row</td><td>an array of 9 or 16 numbers, row by row</td></tr>
 <tr><td><code>color</code></td><td><code>vec4</code>, as given (sRGB-authored, no conversion)</td><td>a Color</td><td>an array of 4 numbers</td></tr>
+<tr id="atlas-textures"><td><code>cube</code>, <code>texture3d</code> (with <code>"depth": 2 to 256</code>)</td><td>a <code>const int</code> that is its slot, like a texture (and for a <code>texture3d</code> <code>&lt;name&gt;_depth</code>, its slice count); read with <code>n2_textureCube(slot, dir)</code> and <code>n2_texture3D(slot, depth, uvw)</code>. <a href="#atlases">Atlases</a>: one 2D texture slot each</td><td>a Texture (the atlas image)</td><td>a texture, as for <code>texture</code></td></tr>
 <tr><td><code>texture</code></td><td>a <code>const int</code> that is its slot, for <code>n2_texture</code></td><td>a texture asset</td><td><code>white</code>, <code>black</code>, <code>normal</code> (a flat normal map) or <code>none</code> (transparent)</td></tr>
 </tbody>
 </table>
@@ -162,14 +163,44 @@ void main() {
 <h2 id="limits">What is not available, and the limits</h2>
 <p>The cook refuses these with a message at your line, so you find out when you save, not when a player runs it:</p>
 <ul>
-<li><code>gl_Position</code> (the vertex stage is the engine's); <code>gl_FragCoord</code> (use <code>n2_FragCoord()</code>), <code>gl_FrontFacing</code>, <code>gl_FragDepth</code>, <code>gl_VertexID</code>, <code>gl_InstanceID</code> and other <code>gl_</code> inputs.</li>
-<li>Any <code>uniform</code>, <code>in</code>, <code>out</code>, <code>layout</code> or <code>buffer</code> declaration of your own (parameters come from the header), <code>#extension</code> lines, and 3D, cube, array, shadow and integer textures and images.</li>
+<li><code>gl_Position</code> (the vertex stage is the engine's unless you write <a href="#vertex-stage">your own</a>, which sets the position with <code>n2_SetPosition</code>); <code>gl_FragCoord</code> (use <code>n2_FragCoord()</code>), <code>gl_FrontFacing</code>, <code>gl_FragDepth</code>, <code>gl_VertexID</code>, <code>gl_InstanceID</code> and other <code>gl_</code> inputs.</li>
+<li>Any <code>uniform</code>, <code>in</code>, <code>out</code>, <code>layout</code> or <code>buffer</code> declaration of your own (parameters come from the header), <code>#extension</code> lines, and array, shadow and integer textures and images (a cube or 3D texture is a <a href="#atlases">parameter type</a>, not a sampler you declare).</li>
 <li>Atomics, barriers and image access; <code>textureGrad</code> and <code>textureGather</code>.</li>
 <li><strong>Sample, then branch.</strong> Sampling after a <code>discard</code> or inside a non-uniform branch is an error on WebGPU (the browser's rule); sample first (as the example does) or use <code>n2_textureLod</code> / <code>n2_texelFetch</code>, which need no derivatives.</li>
 <li>In the default (strict) mode, loops need an integer literal or <code>const</code> bound: <code>while</code> and <code>do</code> are refused (a shader that never ends cannot be ruled out in general, so a bounded <code>for</code> is the rule). The cook tool has a <code>--relaxed</code> option for your own use (<code>node tools/n2shader/n2shader.mjs cook --relaxed</code>).</li>
 <li><strong>Size limits:</strong> 256 KiB and 20,000 lines for the file, a 64 KiB header. Everything else that translates to all three backends (<code>inverse</code>, <code>determinant</code>, arrays, <code>switch</code>, <code>fwidth</code>) is allowed.</li>
 </ul>
 <p>The conformance corpus in <code>renderer/shaders/user/corpus</code> has a working example of each of these and a refused one of the rest.</p>
+
+<h2 id="atlases">Cube and 3D textures</h2>
+<p>A <code>cube</code> or <code>texture3d</code> parameter is a normal 2D texture holding an <em>atlas</em>, read through a lookup function, so it needs no new descriptor, pipeline or backend support and works on every backend the same way. It takes one of the five texture slots.</p>
+<ul>
+<li><strong>cube:</strong> six square faces side by side in the image, in the order <code>+X -X +Y -Y +Z -Z</code> (OpenGL's and Vulkan's cube order), each stored as a cube map image is (the image is <code>6 * size</code> wide and <code>size</code> tall). <code>n2_textureCube(u_Sky, direction)</code> picks the face by the largest component and reads it.</li>
+<li><strong>texture3d:</strong> <code>depth</code> slices side by side, slice 0 first (the image is <code>depth * width</code> wide). <code>n2_texture3D(u_Lut, u_Lut_depth, uvw)</code> blends the two nearest slices (trilinear); <code>u_Lut_depth</code> is the header's <code>depth</code>. A 16 x 16 x 16 colour-grading LUT is a 256 x 16 image.</li>
+<li><strong>Import the atlas</strong> with filter Bilinear or Point, wrap Clamp and mipmaps off (the lookups read level 0, and keep each tap half a texel inside its face or slice so filtering never bleeds into the neighbour). A cube's faces are not blended with each other at the edges (no seamless cube filtering).</li>
+<li><strong>Defaults:</strong> <code>white</code>, <code>black</code> or <code>none</code> (a 1 x 1 texture reads the same in every direction), like a <code>texture</code>. A <code>.mat</code>, <code>Material::SetTexture</code> and <code>MaterialInstance:SetTexture</code> take the atlas as for a texture.</li>
+<li><strong>Cooked only:</strong> the lookups live in the cook's prelude, which the runtime compiler does not embed, so a shader with one of these draws from cooked data (the project's build or the editor makes it), as the <a href="#fallback">fallback</a> without it.</li>
+<li><strong>Not done:</strong> true cube-map and 3D samplers (a texture of those kinds as a GPU resource, hardware seamless filtering, mip levels): that needs another descriptor type in the one layout every material shares, an <code>ITexture</code> creation API per backend and an asset format for the sources, and is left for when an atlas is not enough.</li>
+</ul>
+
+<h2 id="vertex-stage">A custom vertex stage</h2>
+<p>By default the engine writes the vertex stage (so a shader cannot forget the depth remap), and your fragment stage reads what it writes. To move geometry (waves, wind, billboards, a squash), add a <code>#stage vertex</code> block after the fragment stage:</p>
+<pre><code>{ "n2shader": 1, "name": "Wave", "params": [ { "name": "u_Wave", "type": "float", "default": 0.1 } ] }
+#stage fragment
+void main() { n2_FragColor = n2_Color; }
+#stage vertex
+void n2_vertex() {
+    n2_WorldPos.y += sin(n2_WorldPos.x * 4.0) * u_Wave;
+}</code></pre>
+<p>You write <code>void n2_vertex()</code>, never <code>main</code>. The engine's <code>main</code> does three things: it runs its default maths (the world position, the normal matrix, the unit tangent with its mirror sign, the uv and the vertex colour), then calls your <code>n2_vertex()</code>, then writes the clip position from <code>n2_WorldPos</code> unless you called <code>n2_SetPosition(vec4 clip)</code> yourself (give it OpenGL clip space, z from -w to w; it applies the target's depth remap, which is why <code>gl_Position</code> stays unavailable).</p>
+<ul>
+<li><strong>What you can read:</strong> the five vertex attributes as <code>n2_in_Position</code> (<code>vec3</code>), <code>n2_in_Normal</code> (<code>vec3</code>), <code>n2_in_UV</code> (<code>vec2</code>), <code>n2_in_Color</code> (<code>vec4</code>) and <code>n2_in_Tangent</code> (<code>vec4</code>); <code>n2_Model</code>, <code>n2_View</code>, <code>n2_Projection</code>; and the shader's parameters (the same block as the fragment stage, so <code>u_Wave</code> above is one value in both).</li>
+<li><strong>What you can write:</strong> the five varyings the fragment stage reads, <code>n2_UV</code>, <code>n2_Color</code>, <code>n2_WorldPos</code>, <code>n2_Normal</code>, <code>n2_Tangent</code>, already filled by the default maths, and the clip position through <code>n2_SetPosition</code>. A normal you change is not renormalised for you.</li>
+<li><strong>Not in the vertex stage (v1):</strong> textures, <code>n2_FragCoord()</code>, <code>n2_FragColor</code>, <code>discard</code>, <code>gl_VertexID</code>/<code>gl_InstanceID</code>, the lighting block, and your own <code>main</code>. The same strict loop rules apply. <code>isnan</code> and <code>isinf</code> work as in the fragment stage.</li>
+<li><strong>Cooking:</strong> each target gets a vertex payload next to the fragment one (<code>shader.vulkan.vert.spv</code>, <code>shader.webgpu.vertex.wgsl</code>, <code>shader.gl.vert</code>), checked like the fragment stage (glslang, spirv-val, the reflection of the PerDraw and Material blocks and of the five inputs and outputs, Tint and naga for WGSL). The engine makes your fragment stage read all five varyings (it renames your <code>main</code> and wraps it), so no vertex output is left unread, which the Vulkan validation layer would report.</li>
+<li><strong>Only cooked:</strong> the runtime compiler (<code>N2ENGINE_RUNTIME_SHADER_COMPILER</code>) does not build vertex stages: a shader with one draws from the cooked data the project's build or the editor makes, and as the <a href="#fallback">fallback</a> without it. A stripped pack keeps the empty <code>#stage vertex</code> line so the engine knows the cooked data has a vertex stage.</li>
+<li><strong>Costs:</strong> one more shader module per such shader and its pipelines; shaders without a vertex stage use the engine's shared module, exactly as before.</li>
+</ul>
 
 <h2 id="authored-wgsl">Authored WGSL for the web</h2>
 <p>By default the WebGPU build runs the WGSL that Tint makes from your GLSL, so one source drives every backend. When that translation gets in the way (a feature WGSL has and GLSL does not, a hand-tuned loop), a shader can supply its own WGSL for the web only. Set <code>"targets": { "webgpu": "authored" }</code> in the header and add a <code>#stage wgsl</code> block after the fragment stage:</p>

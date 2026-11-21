@@ -50,13 +50,22 @@ export const VARYINGS = Object.freeze([
 ].map(([name, location]) => Object.freeze({ name, location })));
 export const OUTPUT_NAME = 'n2_FragColor';
 
+/** The attributes a custom vertex stage reads (the engine's Common::Vertex), by name and location; the varyings it writes are VARYINGS */
+export const VERTEX_INPUTS = Object.freeze([
+  ['n2_in_Position', 0], ['n2_in_Normal', 1], ['n2_in_UV', 2], ['n2_in_Color', 3], ['n2_in_Tangent', 4],
+].map(([name, location]) => Object.freeze({ name, location })));
+
 /** What `uses` may hold in v1 ("time" is not in the contract) */
 export const USES = Object.freeze(['lighting']);
 
 /** The attributes the engine's vertex stage supplies (fragment-only v1: the lit attribute set) */
 export const VERTEX_ATTRIBUTES = Object.freeze(['aPos', 'aNormal', 'aTexCoord', 'aColor', 'aTangent']);
 
-export const PARAM_TYPES = Object.freeze(['float', 'int', 'bool', 'vec2', 'vec3', 'vec4', 'color', 'mat3', 'mat4', 'texture']);
+export const PARAM_TYPES = Object.freeze(['float', 'int', 'bool', 'vec2', 'vec3', 'vec4', 'color', 'mat3', 'mat4', 'texture', 'cube', 'texture3d']);
+/** The parameter types that take one of the five 2D texture slots: a cube (six faces side by side) and a 3D texture (slices side by side) are atlases (stage 9e) */
+export const TEXTURE_TYPES = Object.freeze(['texture', 'cube', 'texture3d']);
+export const isTextureType = (type) => TEXTURE_TYPES.includes(type);
+export const DEPTH_RANGE = Object.freeze({ min: 2, max: 256 });
 export const TEXTURE_DEFAULTS = Object.freeze(['white', 'black', 'normal', 'none']);
 export const BLEND_MODES = Object.freeze(['none', 'alpha', 'additive', 'premultiplied', 'multiply']);
 export const CULL_MODES = Object.freeze(['none', 'back']);

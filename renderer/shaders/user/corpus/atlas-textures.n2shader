@@ -1,0 +1,15 @@
+{ "n2shader": 1, "name": "AtlasTextures",
+  "params": [
+    { "name": "u_Sky", "type": "cube", "default": "black" },
+    { "name": "u_Lut", "type": "texture3d", "depth": 16, "default": "white" },
+    { "name": "u_Mix", "type": "float", "default": 0.5 }
+  ] }
+#stage fragment
+// Stage 9e: a cube texture and a 3D texture, both 2D atlases in one texture slot each. n2_textureCube(slot, direction) reads the cube
+// (six faces side by side), n2_texture3D(slot, depth, uvw) the volume (slices side by side; u_Lut_depth is its slice count).
+void main() {
+    vec3 dir = normalize(n2_Normal);
+    vec3 sky = n2_textureCube(u_Sky, dir).rgb;
+    vec3 graded = n2_texture3D(u_Lut, u_Lut_depth, sky).rgb;
+    n2_FragColor = vec4(mix(sky, graded, u_Mix), 1.0);
+}

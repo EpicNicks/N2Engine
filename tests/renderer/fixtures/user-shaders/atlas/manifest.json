@@ -1,0 +1,121 @@
+{
+  "formatVersion": 1,
+  "contract": 1,
+  "name": "FixtureAtlas",
+  "source": {
+    "file": "atlas.n2shader",
+    "sha256": "d66a6dec501b6c230725468c1c98f25b30cac28b879963f28f77f966f3fc07e7"
+  },
+  "uses": [],
+  "state": {},
+  "blockSize": 32,
+  "params": [
+    {
+      "name": "u_Sky",
+      "type": "cube",
+      "slot": 0,
+      "default": "black"
+    },
+    {
+      "name": "u_Vol",
+      "type": "texture3d",
+      "slot": 1,
+      "depth": 2,
+      "default": "black"
+    },
+    {
+      "name": "u_Dir",
+      "type": "vec3",
+      "offset": 0,
+      "size": 12,
+      "default": [
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "u_W",
+      "type": "float",
+      "offset": 12,
+      "size": 4,
+      "default": 0
+    },
+    {
+      "name": "u_Mode",
+      "type": "int",
+      "offset": 16,
+      "size": 4,
+      "default": 0
+    }
+  ],
+  "textures": [
+    {
+      "name": "u_Sky",
+      "slot": 0,
+      "default": "black",
+      "binding": 1,
+      "samplerBinding": 6
+    },
+    {
+      "name": "u_Vol",
+      "slot": 1,
+      "default": "black",
+      "binding": 2,
+      "samplerBinding": 7
+    }
+  ],
+  "vertexAttributes": [
+    "aPos",
+    "aNormal",
+    "aTexCoord",
+    "aColor",
+    "aTangent"
+  ],
+  "lint": "strict",
+  "payloads": {
+    "vulkan": {
+      "file": "shader.vulkan.frag.spv",
+      "bytes": 9992,
+      "sha256": "428136b1a28ffbaed3b00fb55e1fee891e8052ab92f38720da93515ef5e4c140"
+    },
+    "webgpu": {
+      "file": "shader.webgpu.wgsl",
+      "bytes": 5499,
+      "sha256": "bce3fbc9db98660b38844f01a1f041281b38a3488d1a0fb59bb06a1c6aa16825"
+    },
+    "gl": {
+      "file": "shader.gl.frag",
+      "bytes": 5247,
+      "sha256": "dafec565a448c691187175a2d8625b3552ea6162494e59e78fe658d662c4ff6a"
+    }
+  },
+  "validated": {
+    "vulkan": [
+      "glslang",
+      "spirv-val",
+      "capabilities",
+      "reflect"
+    ],
+    "webgpu": [
+      "glslang",
+      "spirv-val",
+      "capabilities",
+      "reflect",
+      "tint",
+      "tint-roundtrip",
+      "wgsl-layout"
+    ],
+    "gl": [
+      "glslang",
+      "gl-uniforms"
+    ]
+  },
+  "tools": {
+    "glslang": "Glslang Version: 11:15.3.0",
+    "spirvCross": "Git commit: vulkan-sdk-1.4.313.0-60-gd8e3e2b1 Timestamp: 2025-07-11T15:05:26",
+    "spirvDis": "SPIRV-Tools v2025.3 v2025.3.rc1-0-g33e02568",
+    "spirvVal": "SPIRV-Tools v2025.3 v2025.3.rc1-0-g33e02568",
+    "tint": "sha256:650ed934de155aeb"
+  }
+}

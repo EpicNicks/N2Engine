@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -443,4 +444,104 @@ TEST(UserShaderBlobTest, ANewMaterialHoldsTheIdentityForItsMatrices)
     EXPECT_EQ(at(68), 1.0f);
     EXPECT_EQ(at(88), 1.0f);
     EXPECT_EQ(at(108), 1.0f);
+}
+
+// ===== Stage 9d: a custom vertex stage =====
+
+TEST(UserShaderBlobTest, ACookedCustomVertexStageIsAcceptedForEveryTarget)
+{
+    const UserShaderBlob blob = LoadFixture("vertexshift");
+    EXPECT_TRUE(blob.HasVertexStage());
+    EXPECT_FALSE(blob.vertexSpirv.empty());
+    EXPECT_FALSE(blob.vertexWgsl.empty());
+    EXPECT_FALSE(blob.vertexGlsl.empty());
+    for (const auto target : {Renderer::Common::UserShaderTarget::Vulkan, Renderer::Common::UserShaderTarget::WebGpu,
+                              Renderer::Common::UserShaderTarget::OpenGl})
+    {
+        EXPECT_EQ(ValidateUserShaderBlob(blob, target), std::string()) << static_cast<int>(target);
+    }
+    EXPECT_FALSE(LoadFixture("solid").HasVertexStage());
+    std::string problem;
+    EXPECT_TRUE(Renderer::Common::ReadVertexInterface(blob.vertexSpirv, problem)) << problem;
+}
+
+TEST(UserShaderBlobTest, ABadCustomVertexPayloadIsRefusedBeforeTheDeviceSeesIt)
+{
+    using Renderer::Common::UserShaderTarget;
+    const UserShaderBlob good = LoadFixture("vertexshift");
+    const auto refused = [&](UserShaderBlob blob, const UserShaderTarget target, const char* expected)
+    {
+        const std::string problem = ValidateUserShaderBlob(blob, target);
+        EXPECT_NE(problem.find(expected), std::string::npos) << problem;
+    };
+    // Vulkan
+    {
+        UserShaderBlob blob = good;
+        blob.vertexSpirv[0] = 0xDEADBEEFu;
+        refused(blob, UserShaderTarget::Vulkan, "not SPIR-V");
+        blob = good;
+        blob.vertexSpirv = good.fragmentSpirv; // a fragment module where a vertex one belongs
+        refused(blob, UserShaderTarget::Vulkan, "not a vertex stage");
+        blob = good;
+        blob.vertexSpirv.resize(256 * 1024 / 4 + 8, 0);
+        blob.vertexSpirv[0] = 0x07230203u;
+        refused(blob, UserShaderTarget::Vulkan, "the limit is");
+        blob = good;
+        blob.vertexSpirv.resize(blob.vertexSpirv.size() - 3); // truncated mid-instruction
+        EXPECT_FALSE(ValidateUserShaderBlob(blob, UserShaderTarget::Vulkan).empty());
+        blob = good;
+        blob.vertexWgsl = "x"; // a payload of another backend next to a Vulkan one
+        EXPECT_TRUE(ValidateUserShaderBlob(blob, UserShaderTarget::Vulkan).empty()) << "only the target's own payload is looked at";
+    }
+    // WebGPU
+    {
+        UserShaderBlob blob = good;
+        blob.vertexWgsl = "@fragment fn main() {}";
+        refused(blob, UserShaderTarget::WebGpu, "no @vertex entry point");
+        blob = good;
+        blob.vertexWgsl += std::string(1, '\0');
+        refused(blob, UserShaderTarget::WebGpu, "not text");
+        blob = good;
+        blob.vertexWgsl.assign(300 * 1024, 'a');
+        refused(blob, UserShaderTarget::WebGpu, "the limit is");
+        blob = good;
+        blob.vertexSpirv.clear();
+        blob.vertexGlsl.clear();
+        blob.vertexWgsl.clear();
+        EXPECT_TRUE(ValidateUserShaderBlob(blob, UserShaderTarget::WebGpu).empty()) << "no vertex payload: the engine's own vertex stage";
+    }
+    // OpenGL
+    {
+        UserShaderBlob blob = good;
+        blob.vertexGlsl = "#version 450\nvoid main() {}\n";
+        refused(blob, UserShaderTarget::OpenGl, "#version 330 core");
+        blob = good;
+        blob.vertexGlsl = "#version 330 core\n#extension GL_ARB_foo : enable\nvoid main() {}\n";
+        refused(blob, UserShaderTarget::OpenGl, "vertex stage");
+    }
+}
+
+TEST(UserShaderBlobTest, ACustomVertexStageNeverReadsAnAttributePastTheEnginesFive)
+{
+    UserShaderBlob blob = LoadFixture("vertexshift");
+    // Bump every input location decoration to 9: the module now reads an attribute the vertex buffer does not have
+    constexpr std::uint32_t OpDecorate = 71, DecorationLocation = 30, OpVariable = 59, StorageInput = 1;
+    std::set<std::uint32_t> inputs;
+    for (std::size_t at = 5; at < blob.vertexSpirv.size(); at += blob.vertexSpirv[at] >> 16)
+    {
+        if ((blob.vertexSpirv[at] & 0xFFFFu) == OpVariable && blob.vertexSpirv[at + 3] == StorageInput)
+        {
+            inputs.insert(blob.vertexSpirv[at + 2]);
+        }
+    }
+    for (std::size_t at = 5; at < blob.vertexSpirv.size(); at += blob.vertexSpirv[at] >> 16)
+    {
+        if ((blob.vertexSpirv[at] & 0xFFFFu) == OpDecorate && blob.vertexSpirv[at + 2] == DecorationLocation && inputs.count(blob.vertexSpirv[at + 1]))
+        {
+            blob.vertexSpirv[at + 3] = 9;
+        }
+    }
+    std::string problem;
+    EXPECT_FALSE(Renderer::Common::ReadVertexInterface(blob.vertexSpirv, problem));
+    EXPECT_NE(problem.find("attribute location 9"), std::string::npos) << problem;
 }

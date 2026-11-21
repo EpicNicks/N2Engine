@@ -64,7 +64,9 @@ export function missingShaderTools(tools, targets) {
 export function stripSource(text) {
   const match = /^[ \t]*#stage fragment[ \t]*\r?$/m.exec(text);
   if (!match) return text; // not a shader the cook accepts; the cook has already reported it
-  return `${text.slice(0, match.index)}#stage fragment\n`;
+  // A custom vertex stage (stage 9d) keeps its (empty) stage line: the engine tells a shader that has one from the text, and the cooked data says it has one
+  const hasVertex = /^[ \t]*#stage vertex[ \t]*\r?$/m.test(text.slice(match.index));
+  return `${text.slice(0, match.index)}#stage fragment\n${hasVertex ? '#stage vertex\n' : ''}`;
 }
 
 /**
