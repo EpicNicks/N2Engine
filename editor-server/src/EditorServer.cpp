@@ -9907,7 +9907,9 @@ namespace N2Engine::Editor
             link["positionable"] = *place;
         }
         OverlayPrefabSource source; // this file as just read, other prefabs through the loader
-        source.overlay.emplace(prefabUuid.ToString(), rootJson);
+        // Copied without recursion: nlohmann's copy recurses once per JSON level and overflows a Debug build's stack at
+        // the hierarchy cap (the depth-capped prefab test)
+        source.overlay.emplace(prefabUuid.ToString(), JsonLimits::IterativeCopy(rootJson));
         // The loader holds the prefab too: a later change of the file is compared with what this instance was expanded
         // from, which ApplyAssetChanges reads from the loader before it reloads the file (PropagatePrefabChanges)
         (void)IO::ResourceLoader::Instance().LoadByUUID<PrefabFile>(prefabUuid);
@@ -10250,7 +10252,7 @@ namespace N2Engine::Editor
         {
             return std::unexpected(std::string("The instance is not in the scene"));
         }
-        nlohmann::json expanded = link;
+        nlohmann::json expanded = JsonLimits::IterativeCopy(link); // its added children can be deep
         PrefabNesting::ResourcePrefabSource source;
         PrefabNesting::ExpandReport report;
         PrefabNesting::Expand(expanded, source, report);
