@@ -1,6 +1,6 @@
 # Proposal: nested prefabs and per-instance overrides
 
-Status: design only, no code. Written against master at 308f4f8b (editor protocol **1.32.0**). Tags: [V] verified in the tree at that commit, [M] from memory or general knowledge, not checked here, [E] estimate. Protocol: this takes the next free minor; the working number is **1.33.0**.
+Status: **accepted** (user, 2026-11-20: decisions 1, 2 and 4 answered directly, the rest "go with your recommendation"); no code yet. Written against master at 308f4f8b (editor protocol **1.32.0**). Tags: [V] verified in the tree at that commit, [M] from memory or general knowledge, not checked here, [E] estimate. Protocol: this takes the next free minor; the working number is **1.33.0**.
 
 Why now: the Triangle-Like port (`E:\Code\Projects\Triangle-Like N2Engine`, `LEDGER.md` "Migration to engine files") is moving its rooms and prefabs from Lua data tables to `.prefab` files, so the editor can show, edit and play them. Unity's rooms are mostly **nested prefab instances with per-instance overrides** (a crate, a turret or a pedestal placed in a room, with its scale, sprite or script fields changed). The user decided on 2026-11-20 that this becomes a general engine feature, not a game-side workaround.
 
@@ -184,3 +184,14 @@ The Triangle-Like port needs PR 1 to run from `.prefab` files and PR 2 to edit t
 6. **Legacy instances**: stay copies; an explicit "Convert to link" per instance, never automatic. Recommendation: yes.
 7. **PR split**: engine core first, with the host refusing to save links until PR 2. Recommendation: as written.
 8. **Protocol number**: 1.33.0. Confirm; renumber if another minor lands first.
+
+## Decisions taken (user, 2026-11-20)
+
+1. Storage: **links expanded at load** (B). Replaces EN4's self-contained model.
+2. Ids: **deterministic** `UUIDv5(link id, source id)`; random only for a new instance's link id.
+3. Instance-owned root values: as recommended (name, local position, local rotation never propagate).
+4. Runtime saves: **expanded copies** with `prefabReference`. Asked which is faster: expanded is (one serializer walk, no prefab reads, no diff, and the stored JSON needs no expansion when reloaded); links only save size, on paths that are neither hot nor large (`SceneManager::AddScene`'s stored copy, `RegisterPrefab`).
+5. Play snapshot: collapsed, as recommended.
+6. Legacy instances: stay copies, explicit "Convert to link", as recommended.
+7. PR split: **engine core first**, the host refusing to save links until PR 2, as recommended.
+8. Protocol: 1.33.0, renumbered if another minor lands first.
