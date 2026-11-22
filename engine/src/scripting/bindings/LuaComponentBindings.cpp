@@ -70,6 +70,7 @@ namespace N2Engine::Scripting::Bindings
         {
             std::function<sol::object(GameObject &, sol::this_state)> add;
             std::function<sol::object(const GameObject &, sol::this_state)> get;
+            std::function<sol::object(const GameObject &, sol::this_state)> getAll; // a plain array, maybe empty
             std::function<sol::object(Component &, lua_State *)> asLua; // null object if not this type
             std::function<std::optional<ComponentRefBase>(const sol::object &)> asRef; // nullopt if not this type
         };
@@ -89,6 +90,17 @@ namespace N2Engine::Scripting::Bindings
                         return sol::make_object(state, ComponentRef<T>(*component));
                     }
                     return sol::lua_nil;
+                },
+                [](const GameObject &go, sol::this_state state) -> sol::object
+                {
+                    const std::vector<T *> components = go.GetComponents<T>();
+                    sol::table list = sol::state_view(state).create_table(static_cast<int>(components.size()), 0);
+                    int index = 1;
+                    for (T *component : components)
+                    {
+                        list[index++] = ComponentRef<T>(*component);
+                    }
+                    return list;
                 },
                 [](Component &component, lua_State *state) -> sol::object
                 {
@@ -494,6 +506,11 @@ namespace N2Engine::Scripting::Bindings
     sol::object GetComponentByName(const GameObject &gameObject, const std::string &typeName, sol::this_state state)
     {
         return FindAccess(typeName).get(gameObject, state);
+    }
+
+    sol::object GetComponentsByName(const GameObject &gameObject, const std::string &typeName, sol::this_state state)
+    {
+        return FindAccess(typeName).getAll(gameObject, state);
     }
 
     std::vector<Math::Vector2> ReadVector2Array(const sol::table &points, const std::string_view caller)

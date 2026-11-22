@@ -898,6 +898,12 @@ function GameObject:AddComponent(typeName) end
 ---@return Component|nil nil when the object has no component of that type
 function GameObject:GetComponent(typeName) end
 
+---Every component of a type, in the object's order (GetComponent's is the first), as a plain array, empty for none
+---(same names as AddComponent)
+---@param typeName string
+---@return Component[]
+function GameObject:GetComponents(typeName) end
+
 ---The instance table (self) of the first LuaComponent here whose script runs, or of the first running `path`.
 ---How one script calls another: obj:GetScript("res://scripts/Enemy.lua"):Damage(1)
 ---@param path string|nil e.g. "res://scripts/Enemy.lua"

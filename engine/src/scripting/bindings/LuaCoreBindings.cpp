@@ -186,6 +186,11 @@ namespace N2Engine::Scripting::Bindings
             {
                 return GetComponentByName(*go.Pin(), typeName, state);
             },
+            // Every component of that type, in the object's order (GetComponent's is the first), as a plain array
+            "GetComponents", [](const GameObjectRef &go, const std::string &typeName, sol::this_state state)
+            {
+                return GetComponentsByName(*go.Pin(), typeName, state);
+            },
             // The instance table (`self`) of the first LuaComponent on this object whose script is running, or of the
             // first running `path` ("res://scripts/Enemy.lua") when given; nil if none. This is how one script calls
             // another (a projectile calls the enemy's Damage). The table is the same one each time, so it can key a
