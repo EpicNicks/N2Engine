@@ -419,3 +419,36 @@ TEST(PrefabNestingTest, InstanceAsPrefabWritesTheInstanceInThePrefabsOwnIds)
     EXPECT_EQ(again["children"][0]["children"][0]["name"], "Big lid") << "the inner link's overrides are kept";
     EXPECT_EQ(again["children"][1]["name"], "Added");
 }
+
+TEST(PrefabNestingTest, ResolveSourcePathFollowsTheIdsAnExpansionDerives)
+{
+    const std::string link = Math::UUID::Random().ToString();
+    const std::string root = Math::UUID::Random().ToString();
+    const std::string a = Math::UUID::Random().ToString();
+    const std::string b = Math::UUID::Random().ToString();
+    const auto uuid = [](const std::string &text) { return *Math::UUID::FromString(text); };
+
+    EXPECT_EQ(Nesting::ResolveSourcePath(link, root, root), link) << "the prefab's root is the link root";
+    EXPECT_EQ(Nesting::ResolveSourcePath(link, root, a), Nesting::DeriveId(uuid(link), uuid(a)).ToString());
+    EXPECT_EQ(Nesting::ResolveSourcePath(link, root, a + "/" + b),
+              Nesting::DeriveId(Nesting::DeriveId(uuid(link), uuid(a)), uuid(b)).ToString())
+        << "through a link inside: its root's id, then the object's inside it";
+    EXPECT_FALSE(Nesting::ResolveSourcePath(link, root, "not an id").has_value());
+    EXPECT_FALSE(Nesting::ResolveSourcePath(link, root, a + "/").has_value());
+}
+
+TEST(PrefabNestingTest, RenumberIdsRewritesIdsEverywhereButPrefabSources)
+{
+    const std::string from = Math::UUID::Random().ToString();
+    const std::string to = Math::UUID::Random().ToString();
+    json value = {{"uuid", from},
+                  {"prefabSource", from},
+                  {"components", json::array({{{"data", {{"target", from}}}, {"prefabSource", from}}})},
+                  {"other", "text"}};
+    Nesting::RenumberIds(value, {{from, to}});
+    EXPECT_EQ(value["uuid"], to);
+    EXPECT_EQ(value["components"][0]["data"]["target"], to);
+    EXPECT_EQ(value["prefabSource"], from) << "an id in a prefab stays as it is";
+    EXPECT_EQ(value["components"][0]["prefabSource"], from);
+    EXPECT_EQ(value["other"], "text");
+}

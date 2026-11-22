@@ -98,6 +98,7 @@ namespace
             {"GetPrefabStage", CommandType::GetPrefabStage},
             {"GetPrefabOverrides", CommandType::GetPrefabOverrides},
             {"RevertPrefabOverrides", CommandType::RevertPrefabOverrides},
+            {"ApplyPrefabOverrides", CommandType::ApplyPrefabOverrides},
             {"GetEngineStats", CommandType::GetEngineStats},
             {"GetNetworkSettings", CommandType::GetNetworkSettings},
             {"SetNetworkSettings", CommandType::SetNetworkSettings},
@@ -250,6 +251,7 @@ namespace
             {"UnpackPrefab", [](BufferReader &r) { (void)UnpackPrefabCmd::Deserialize(r); }},
             {"GetPrefabOverrides", [](BufferReader &r) { (void)GetPrefabOverridesCmd::Deserialize(r); }},
             {"RevertPrefabOverrides", [](BufferReader &r) { (void)RevertPrefabOverridesCmd::Deserialize(r); }},
+            {"ApplyPrefabOverrides", [](BufferReader &r) { (void)ApplyPrefabOverridesCmd::Deserialize(r); }},
             {"SetPhysicsBackend", [](BufferReader &r) { (void)SetPhysicsBackendCmd::Deserialize(r); }},
             {"MoveAsset", [](BufferReader &r) { (void)MoveAssetCmd::Deserialize(r); }},
             {"OpenPrefabStage", [](BufferReader &r) { (void)OpenPrefabStageCmd::Deserialize(r); }},
@@ -714,7 +716,7 @@ TEST(ProtocolSpecTest, EveryCommandIsClassifiedForAPlayHost)
         {"DiscardAutosave", true},
         {"SetImportSettings", true}, {"WriteTextAsset", true}, {"CreateScriptAsset", true}, {"CreateFolder", true},
         // The prefab commands that write a .prefab file (InstantiatePrefab only reads one, UnpackPrefab changes the scene)
-        {"CreatePrefab", true}, {"ApplyPrefab", true},
+        {"CreatePrefab", true}, {"ApplyPrefab", true}, {"ApplyPrefabOverrides", true},
         // J9: SetPhysicsBackend saves project.n2proj (GetPhysicsBackends only reads, below)
         {"SetPhysicsBackend", true},
         // 1.24.0: MoveAsset moves files under assets/ and .import/

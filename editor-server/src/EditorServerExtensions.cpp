@@ -133,6 +133,7 @@ namespace N2Engine::Editor
             // 1.33.0: an instance's overrides are the user's to look at and revert, as the other prefab commands
             {CommandType::GetPrefabOverrides, false},
             {CommandType::RevertPrefabOverrides, false},
+            {CommandType::ApplyPrefabOverrides, false},
             // The prefab stage (1.26.0): it swaps the scene the user edits, which is the user's to do (and an extension's
             // writes are refused while a stage is open)
             {CommandType::OpenPrefabStage, false},

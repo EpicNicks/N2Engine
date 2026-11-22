@@ -1110,7 +1110,118 @@ namespace N2Engine::PrefabNesting
         Renumber(copy, ids);
         StripMarksOf(copy);
         copy.erase("prefabReference");
+
+        if (fileRoot->contains("prefabInstance"))
+        {
+            // A variant: its root is a link to a base prefab. `copy` is the variant's content in its own ids, which are
+            // the ids a fresh expansion of that root link gives. That expansion's marks tell which objects and
+            // components are the base's; with them on `copy` (its links inside expanded the same way), collapsing it
+            // gives the root link again, with what differs from the base as overrides.
+            json fresh = JsonLimits::IterativeCopy(*fileRoot);
+            ExpandReport report;
+            Expander expander{source, report, {}};
+            expander.Tree(fresh, 1);
+            if (report.errors > 0)
+            {
+                Logger::Error(std::format("InstanceAsPrefab: the base of variant {} can't be expanded", *prefab));
+                return std::nullopt;
+            }
+            expander.Tree(copy, 1);
+            std::unordered_map<std::string, const json *> freshObjects, freshComponents;
+            ForEachObject(fresh, [&](json &object, json *)
+            {
+                if (const auto id = CanonKey(object, "uuid"))
+                {
+                    freshObjects[*id] = &object;
+                }
+                if (json *components = ComponentsOf(object))
+                {
+                    for (const json &entry : *components)
+                    {
+                        if (const auto id = entry.is_object() && entry.contains("data") ? CanonKey(entry["data"], "uuid") : std::nullopt)
+                        {
+                            freshComponents[*id] = &entry;
+                        }
+                    }
+                }
+            });
+            ForEachObject(copy, [&](json &object, json *)
+            {
+                const auto id = CanonKey(object, "uuid");
+                const auto it = id ? freshObjects.find(*id) : freshObjects.end();
+                if (it == freshObjects.end())
+                {
+                    return; // the variant's own object: an addition to the base
+                }
+                for (const char *key : {"prefabLinked", "prefabReference", "prefabLink", "prefabSource"})
+                {
+                    if (const auto mark = it->second->find(key); mark != it->second->end())
+                    {
+                        object[key] = *mark;
+                    }
+                    else
+                    {
+                        object.erase(key);
+                    }
+                }
+                if (json *components = ComponentsOf(object))
+                {
+                    for (json &entry : *components)
+                    {
+                        const auto componentId = entry.is_object() && entry.contains("data") ? CanonKey(entry["data"], "uuid") : std::nullopt;
+                        const auto found = componentId ? freshComponents.find(*componentId) : freshComponents.end();
+                        if (found != freshComponents.end() && found->second->contains("prefabSource"))
+                        {
+                            entry["prefabSource"] = (*found->second)["prefabSource"];
+                        }
+                    }
+                }
+            });
+            Collapser variant{source};
+            variant.Tree(copy);
+            if (!variant.ok || !copy.contains("prefabInstance"))
+            {
+                Logger::Error(std::format("InstanceAsPrefab: variant {} can't be written as a link to its base", *prefab));
+                return std::nullopt;
+            }
+        }
         return copy;
+    }
+
+    std::optional<std::string> ResolveSourcePath(const std::string &link, const std::string &rootSource, const std::string &path)
+    {
+        std::optional<std::string> current = Canon(json(link));
+        if (!current)
+        {
+            return std::nullopt;
+        }
+        if (const auto root = Canon(json(rootSource)); root && Canon(json(path)) == root)
+        {
+            return current; // the link root takes the link's own id
+        }
+        std::size_t start = 0;
+        while (start <= path.size())
+        {
+            const std::size_t slash = path.find('/', start);
+            const std::size_t end = slash == std::string::npos ? path.size() : slash;
+            const auto part = Canon(json(path.substr(start, end - start)));
+            if (!part)
+            {
+                return std::nullopt;
+            }
+            current = Derive(*current, *part);
+            if (slash == std::string::npos)
+            {
+                break;
+            }
+            start = slash + 1;
+        }
+        return current;
+    }
+
+    void RenumberIds(json &value, const std::unordered_map<std::string, std::string> &ids)
+    {
+        Renumber(value, ids);
     }
 
     bool Collapse(json &objectsOrObject, PrefabSource &source)

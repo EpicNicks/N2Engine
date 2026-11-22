@@ -1,7 +1,7 @@
 // Auto-generated from protocol.json by generate_typescript.py - do not edit
 
 /** protocol.json's version (major.minor.patch); Hello sends it, and the server answers with its own */
-export const PROTOCOL_VERSION = "1.33.0";
+export const PROTOCOL_VERSION = "1.34.0";
 
 // ==================== Types ====================
 
@@ -116,6 +116,14 @@ export interface PrefabOverridesInfo {
   removedComponents: string[];
   addedComponents: unknown[];
   addedChildren: unknown[];
+  linkPath?: PrefabLinkLevel[];
+  applyTo?: unknown;
+}
+
+export interface PrefabLinkLevel {
+  rootId: string;
+  prefab: string;
+  path: string;
 }
 
 export interface HistoryEntry {
@@ -178,6 +186,8 @@ export interface HierarchyNode {
   components: string[];
   prefab?: string;
   linkDepth?: number;
+  overridden?: boolean;
+  prefabAdded?: boolean;
 }
 
 export interface EntityHeader {
@@ -191,6 +201,9 @@ export interface EntityHeader {
   tag: string;
   prefab?: string;
   linkDepth?: number;
+  overridden?: boolean;
+  prefabAdded?: boolean;
+  overrides?: string[];
 }
 
 export interface JsonVec3 {
@@ -222,6 +235,8 @@ export interface EntityComponent {
   type: string;
   uuid: string;
   values: unknown;
+  overrides?: string[];
+  prefabAdded?: boolean;
 }
 
 export interface EntityDetails {
@@ -623,6 +638,7 @@ export const CommandType = {
   CreateScript: 0x40,
   RescanAssets: 0x41,
   RevertPrefabOverrides: 0x42,
+  ApplyPrefabOverrides: 0x43,
   ListAssets: 0xA0,
   GetAssetInfo: 0xA1,
   SetImportSettings: 0xA2,
@@ -781,6 +797,7 @@ export const CommandResponse = {
   CreateScript: "ScriptData",
   RescanAssets: "Ok",
   RevertPrefabOverrides: "Ok",
+  ApplyPrefabOverrides: "Ok",
   ListAssets: "AssetList",
   GetAssetInfo: "AssetDetail",
   SetImportSettings: "Ok",
@@ -992,6 +1009,12 @@ export interface RevertPrefabOverridesRequest {
   targets: unknown;
 }
 
+export interface ApplyPrefabOverridesRequest {
+  entityId: string;
+  targets: unknown;
+  level: number;
+}
+
 export interface ListAssetsRequest {
   folder: string;
   recursive: boolean;
@@ -1134,6 +1157,7 @@ export interface ApplyPrefabRequest {
 
 export interface UnpackPrefabRequest {
   entityId: string;
+  completely: boolean;
 }
 
 export interface SetPhysicsBackendRequest {
@@ -2192,6 +2216,24 @@ export function decodeRevertPrefabOverridesRequest(payload: Uint8Array): RevertP
   return { entityId, targets };
 }
 
+/** ApplyPrefabOverrides's request payload (without the frame header) */
+export function encodeApplyPrefabOverridesRequest(value: ApplyPrefabOverridesRequest): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.string(value.entityId);
+  writer.json(value.targets);
+  writer.i32(value.level);
+  return writer.finish();
+}
+
+/** Reads ApplyPrefabOverrides's request payload; bytes after the last field are ignored */
+export function decodeApplyPrefabOverridesRequest(payload: Uint8Array): ApplyPrefabOverridesRequest {
+  const reader = new ProtocolReader(payload);
+  const entityId = reader.string();
+  const targets = reader.json() as unknown;
+  const level = reader.i32();
+  return { entityId, targets, level };
+}
+
 /** ListAssets's request payload (without the frame header) */
 export function encodeListAssetsRequest(value: ListAssetsRequest): Uint8Array {
   const writer = new ProtocolWriter();
@@ -2650,6 +2692,7 @@ export function decodeApplyPrefabRequest(payload: Uint8Array): ApplyPrefabReques
 export function encodeUnpackPrefabRequest(value: UnpackPrefabRequest): Uint8Array {
   const writer = new ProtocolWriter();
   writer.string(value.entityId);
+  writer.bool(value.completely);
   return writer.finish();
 }
 
@@ -2657,7 +2700,8 @@ export function encodeUnpackPrefabRequest(value: UnpackPrefabRequest): Uint8Arra
 export function decodeUnpackPrefabRequest(payload: Uint8Array): UnpackPrefabRequest {
   const reader = new ProtocolReader(payload);
   const entityId = reader.string();
-  return { entityId };
+  const completely = reader.remaining > 0 ? reader.bool() : false;
+  return { entityId, completely };
 }
 
 /** SetPhysicsBackend's request payload (without the frame header) */
@@ -3655,6 +3699,7 @@ export const RequestCodecs = {
   SetLocalTransform: { encode: encodeSetLocalTransformRequest, decode: decodeSetLocalTransformRequest },
   CreateScript: { encode: encodeCreateScriptRequest, decode: decodeCreateScriptRequest },
   RevertPrefabOverrides: { encode: encodeRevertPrefabOverridesRequest, decode: decodeRevertPrefabOverridesRequest },
+  ApplyPrefabOverrides: { encode: encodeApplyPrefabOverridesRequest, decode: decodeApplyPrefabOverridesRequest },
   ListAssets: { encode: encodeListAssetsRequest, decode: decodeListAssetsRequest },
   GetAssetInfo: { encode: encodeGetAssetInfoRequest, decode: decodeGetAssetInfoRequest },
   SetImportSettings: { encode: encodeSetImportSettingsRequest, decode: decodeSetImportSettingsRequest },

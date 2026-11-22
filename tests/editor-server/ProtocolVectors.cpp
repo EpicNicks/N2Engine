@@ -251,12 +251,21 @@ namespace ProtocolVectors
                             {"position", Vec3Json(cmd.position)}};
             }},
             {"ApplyPrefab", [](BufferReader &r) { return json{{"entityId", ApplyPrefabCmd::Deserialize(r).entityId}}; }},
-            {"UnpackPrefab", [](BufferReader &r) { return json{{"entityId", UnpackPrefabCmd::Deserialize(r).entityId}}; }},
+            {"UnpackPrefab", [](BufferReader &r)
+            {
+                const auto cmd = UnpackPrefabCmd::Deserialize(r);
+                return json{{"entityId", cmd.entityId}, {"completely", cmd.completely}};
+            }},
             {"GetPrefabOverrides", [](BufferReader &r) { return json{{"entityId", GetPrefabOverridesCmd::Deserialize(r).entityId}}; }},
             {"RevertPrefabOverrides", [](BufferReader &r)
             {
                 const auto cmd = RevertPrefabOverridesCmd::Deserialize(r);
                 return json{{"entityId", cmd.entityId}, {"targets", cmd.targets}};
+            }},
+            {"ApplyPrefabOverrides", [](BufferReader &r)
+            {
+                const auto cmd = ApplyPrefabOverridesCmd::Deserialize(r);
+                return json{{"entityId", cmd.entityId}, {"targets", cmd.targets}, {"level", cmd.level}};
             }},
             {"SetPhysicsBackend", [](BufferReader &r) { return json{{"backend", SetPhysicsBackendCmd::Deserialize(r).backend}}; }},
             {"MoveAsset", [](BufferReader &r) { return json{{"moves", MoveAssetCmd::Deserialize(r).moves}}; }},

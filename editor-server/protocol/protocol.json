@@ -1,5 +1,5 @@
 {
-  "version": "1.33.0",
+  "version": "1.34.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -303,7 +303,7 @@
     },
     "GetHierarchy": {
       "id": "0x28",
-      "description": "The loaded scene's objects as one flat list in depth-first order (a parent before its children, siblings in their order): each node is {id, parentId (empty for a root of the scene), index (its place among its siblings), name, active (its own flag), activeInHierarchy (it and every ancestor are active), layer, tag, components (the type names, in order)}. revision is the scene revision the list was read at: a client refetches the list when a sceneChanged event's revision moves past the one it holds. Error when no scene is loaded.",
+      "description": "The loaded scene's objects as one flat list in depth-first order (a parent before its children, siblings in their order): each node is {id, parentId (empty for a root of the scene), index (its place among its siblings), name, active (its own flag), activeInHierarchy (it and every ancestor are active), layer, tag, components (the type names, in order)}. revision is the scene revision the list was read at: a client refetches the list when a sceneChanged event's revision moves past the one it holds. Error when no scene is loaded. Prefab marks: prefab (since 1.19.0) is the asset an instance root is linked to; linkDepth (since 1.33.0) is how many prefab links the object is in; overridden (since 1.34.0, only when true) means the object differs from its prefab (a value of its own or of a component, a component added to it), and an instance root is overridden when the instance has any change at all, removed objects and components included; prefabAdded (since 1.34.0, only when true) marks the root of an object an instance added. They are what a save would write, compared with the prefabs as the loader has them.",
       "request": {},
       "response": {
         "type": "Hierarchy",
@@ -462,7 +462,7 @@
     },
     "GetEntity": {
       "id": "0x39",
-      "description": "One object in full. entity is {header (id, parentId, index, name, active, activeInHierarchy, layer and tag, as a hierarchy node has them), transform (the local position, rotation and scale, rotation a quaternion; absent for an object that has no transform), components (each {type, uuid, values}: values is the component's saved form, what Scene saves for it, in component order)}. worldMatrix is the object's local-to-world matrix (the identity for an object with no transform), so a client draws a gizmo without walking the parent chain. Error when there is no scene or no such object.",
+      "description": "One object in full. entity is {header (id, parentId, index, name, active, activeInHierarchy, layer and tag, as a hierarchy node has them), transform (the local position, rotation and scale, rotation a quaternion; absent for an object that has no transform), components (each {type, uuid, values}: values is the component's saved form, what Scene saves for it, in component order)}. worldMatrix is the object's local-to-world matrix (the identity for an object with no transform), so a client draws a gizmo without walking the parent chain. Error when there is no scene or no such object. Since 1.34.0, for an object of a prefab instance: header.overridden and header.prefabAdded as on a HierarchyNode, header.overrides (the object's own overridden paths, such as \"name\" or \"positionable.localScale\"), and on each component overrides (its overridden paths: a key of values, or \"scriptData.<field>\") and prefabAdded (the instance added it). Each is present only when there is something to say.",
       "request": {
         "entityId": "string"
       },
@@ -509,6 +509,16 @@
       "request": {
         "entityId": "string",
         "targets": "json"
+      },
+      "response": { "type": "Ok" }
+    },
+    "ApplyPrefabOverrides": {
+      "id": "0x43",
+      "description": "Since 1.34.0 (Hello lists the capability \"prefabOverridesApply\"). Write command (a viewer is refused with forbidden, a --read-only host with readOnly; a play host refuses it, as it refuses every command that writes a project file; refused while a prefab stage is open, with stageOpen). Writes chosen overrides of the prefab instance entityId is in (its outermost link, as GetPrefabOverrides) into a prefab, as Unity's \"Apply to Prefab\": targets is a non-empty array naming entries as RevertPrefabOverrides' targets do ({all: true} applies everything). level picks the prefab of the link path that receives each target: 0 the outermost instance's prefab, 1 the prefab of the link inside it that holds the target, and so on; -1 the innermost prefab that holds each target (GetPrefabOverrides' applyTo lists the levels of each entry). A target applied below level 0 becomes that prefab's own value, so every instance of it gets it; at level 0 it becomes the outer prefab's override of the link inside. The prefab's ids, its name and its root's name and place are kept; a variant stays a variant. Every prefab is checked before any file is written: a target deeper than its path's links, two targets that would reach one prefab through two of its instances, and a change that would make a prefab contain itself (with the error code prefabCycle) are Errors and nothing changes. The files are written atomically; then every instance in the scene of a changed prefab is updated, as one undo step, the instance applied from keeping only what it did not apply (undo restores the scene; the files stay). Error without a project, without a scene, for an object in no instance, and when a prefab can't be read.",
+      "request": {
+        "entityId": "string",
+        "targets": "json",
+        "level": "int32"
       },
       "response": { "type": "Ok" }
     },
@@ -1014,7 +1024,7 @@
     },
     "CreatePrefab": {
       "id": "0xA9",
-      "description": "Since 1.19.0. Write command (a viewer is refused with forbidden, a --read-only host with readOnly; a play host refuses it, as it refuses every command that writes a project file). Saves an object and everything under it as a prefab asset and links the object to it. entityId is the object's UUID; path is a res:// path inside the project's assets folder that ends in .prefab (any case) with a non-empty name, resolved with the same boundary checks as WriteTextAsset (no .. part, drive, backslash or device name, no symbolic link leading out). The folders above it that are missing are created. An existing file is an Error unless overwrite is true; a folder or other non-file in the way is always an Error. The file is JSON in the form Prefab::Serialize writes, {name, rootObject}, indented by two spaces and ending in a newline: name is the object's name and rootObject its saved form with its whole subtree (components with their values, children, local transforms, the UUIDs it has in the open scene). The root's own prefabReference is left out of the file (the file is not linked to itself); a descendant's is kept. The file is at most 16 MiB of text (else Error) and is written atomically, then indexed like any asset (an assetsChanged event lists it as added, or as modified when it replaced one). Writing the file is not an undo step, as SaveSceneToFile is not. The object's link (prefabReference, shown as prefab on its HierarchyNode and EntityHeader) is set to the file's asset UUID as one undo step labelled \"Create Prefab <name>\" (undo clears it again, or restores the one it had); nothing is recorded when the object already had that link. sceneChanged lists the object. Answers AssetCreated: path as the file system spells it, and uuid the prefab asset's UUID. Error without a project, without a scene, for an object that is not in the scene and for a path that is not a valid .prefab path.",
+      "description": "Since 1.19.0. Write command (a viewer is refused with forbidden, a --read-only host with readOnly; a play host refuses it, as it refuses every command that writes a project file). Saves an object and everything under it as a prefab asset and links the object to it. entityId is the object's UUID; path is a res:// path inside the project's assets folder that ends in .prefab (any case) with a non-empty name, resolved with the same boundary checks as WriteTextAsset (no .. part, drive, backslash or device name, no symbolic link leading out). The folders above it that are missing are created. An existing file is an Error unless overwrite is true; a folder or other non-file in the way is always an Error. The file is JSON in the form Prefab::Serialize writes, {name, rootObject}, indented by two spaces and ending in a newline: name is the object's name and rootObject its saved form with its whole subtree (components with their values, children, local transforms, the UUIDs it has in the open scene). The root's own prefabReference is left out of the file (the file is not linked to itself); a descendant's is kept. The file is at most 16 MiB of text (else Error) and is written atomically, then indexed like any asset (an assetsChanged event lists it as added, or as modified when it replaced one). Writing the file is not an undo step, as SaveSceneToFile is not. The object's link (prefabReference, shown as prefab on its HierarchyNode and EntityHeader) is set to the file's asset UUID as one undo step labelled \"Create Prefab <name>\" (undo clears it again, or restores the one it had); nothing is recorded when the object already had that link. sceneChanged lists the object. Answers AssetCreated: path as the file system spells it, and uuid the prefab asset's UUID. Error without a project, without a scene, for an object that is not in the scene and for a path that is not a valid .prefab path. Since 1.34.0, entityId may be the root of a prefab link instance (an outermost one: not part of another instance's content): the file is then a VARIANT of that instance's prefab, whose rootObject is a link to the base prefab with the instance's overrides (as a scene file stores the instance), under a new id of the variant's own, so a later change of the base still reaches the variant and its instances. The instance then becomes a bare link to the variant, as one undo step labelled \"Create Prefab Variant <name>\" (undo restores it as an instance of the base; the file stays). Its objects get the ids an instance of the variant has (they derive through the variant's root), and every reference to their old ids in the scene is rewritten to the new ones. Error when entityId is the base's own file, or is inside another instance's content.",
       "request": {
         "entityId": "string",
         "path": "string",
@@ -1047,7 +1057,7 @@
     },
     "ApplyPrefab": {
       "id": "0xAB",
-      "description": "Since 1.19.0. Write command (a viewer is refused with forbidden, a --read-only host with readOnly; a play host refuses it, as it refuses every command that writes a project file). Overwrites the prefab file an object is linked to with the object as it is now: entityId names an object whose prefabReference is set (the root of an instance, or the object CreatePrefab was given). The file is written as CreatePrefab writes it (the object and its whole subtree; the root's prefabReference left out), except that the prefab's name and its root object's name are kept as the file has them, so applying an instance called Cube (1) does not rename the prefab; a file that cannot be read keeps nothing and takes the object's names. The file is written atomically and an assetsChanged event lists it as modified. It changes nothing in the scene (no revision, no undo step), and instances already in the scene are not updated, since a prefab is copied when it is instantiated. A client asks the user before sending it. Error without a project, without a scene, for an object that is not in the scene or is linked to no prefab, when the prefab asset no longer exists or is not a prefab, and when the file would be over 16 MiB.",
+      "description": "Since 1.19.0. Write command (a viewer is refused with forbidden, a --read-only host with readOnly; a play host refuses it, as it refuses every command that writes a project file). Overwrites the prefab file an object is linked to with the object as it is now: entityId names an object whose prefabReference is set (the root of an instance, or the object CreatePrefab was given). The file is written as CreatePrefab writes it (the object and its whole subtree; the root's prefabReference left out), except that the prefab's name and its root object's name are kept as the file has them, so applying an instance called Cube (1) does not rename the prefab; a file that cannot be read keeps nothing and takes the object's names. The file is written atomically and an assetsChanged event lists it as modified. It changes nothing in the scene (no revision, no undo step), and instances already in the scene are not updated, since a prefab is copied when it is instantiated. A client asks the user before sending it. Error without a project, without a scene, for an object that is not in the scene or is linked to no prefab, when the prefab asset no longer exists or is not a prefab, and when the file would be over 16 MiB. Since 1.34.0, applying an instance of a variant (a prefab whose root is a link to a base) writes the variant as a link to its base again, with the instance's content as its overrides: it stays a variant.",
       "request": {
         "entityId": "string"
       },
@@ -1055,9 +1065,10 @@
     },
     "UnpackPrefab": {
       "id": "0xAC",
-      "description": "Since 1.19.0. Write command (a viewer is refused with forbidden, a --read-only host with readOnly). Removes an object's prefab link (prefabReference), as one undo step labelled \"Unpack Prefab <name>\" (undo restores the link). Only that object's own link is cleared: the object, its children and the prefab file are not touched. sceneChanged lists the object. Error without a scene, for an object that is not in the scene and for one that is linked to no prefab.",
+      "description": "Since 1.19.0. Write command (a viewer is refused with forbidden, a --read-only host with readOnly; refused while a prefab stage is open, with stageOpen). Makes an instance plain objects, as one undo step labelled \"Unpack Prefab <name>\" (undo restores the link). For a legacy instance (a copy with prefabReference, written before 1.33.0) only that object's own link is cleared. For a prefab link instance (since 1.33.0) the object and its own objects lose their link marks; links inside it stay links. completely (since 1.34.0, trailing, default false) also unpacks every instance inside it, at any depth, so nothing under the object is linked any more, as one step labelled \"Unpack Prefab Completely <name>\". The prefab files are not touched. sceneChanged lists the objects. Error without a scene, for an object that is not in the scene, for one that is linked to no prefab, and for an instance inside another instance's content (unpack that one first).",
       "request": {
-        "entityId": "string"
+        "entityId": "string",
+        "completely": "bool"
       },
       "response": { "type": "Ok" }
     },
@@ -1201,7 +1212,7 @@
     },
     "GetPrefabOverrides": {
       "id": "0x2F",
-      "description": "Since 1.33.0. Read command (a viewer may call it). The overrides of the prefab instance entityId is in: its outermost prefab link (an instance inside another instance is part of that one, and a file stores the changes on the outermost link). The instance is compared with its prefab as the loader has it now (PrefabNesting::Collapse), so the answer is what a save would write. Answers PrefabOverrides. Error without a scene, for an object not in the scene, for one in no prefab instance, and when the prefab can't be read.",
+      "description": "Since 1.33.0. Read command (a viewer may call it). The overrides of the prefab instance entityId is in: its outermost prefab link (an instance inside another instance is part of that one, and a file stores the changes on the outermost link). The instance is compared with its prefab as the loader has it now (PrefabNesting::Collapse), so the answer is what a save would write. Answers PrefabOverrides. Since 1.34.0 the answer also has linkPath (the links entityId is in, outer to inner: {rootId, prefab, path} each, the first being rootId's), applyTo (for each list of changes, one array per entry, in order: the levels it can be applied to with ApplyPrefabOverrides, {level, prefab, path} each, level 0 the outermost instance's prefab), and, on each entry that is an object (an override, added component or added child), objectId (the scene id of the object it names) and, on a component override, componentId. Error without a scene, for an object not in the scene, for one in no prefab instance, and when the prefab can't be read.",
       "request": {
         "entityId": "string"
       },
@@ -1337,7 +1348,14 @@
       "removedObjects": "string[]",
       "removedComponents": "string[]",
       "addedComponents": "json[]",
-      "addedChildren": "json[]"
+      "addedChildren": "json[]",
+      "linkPath?": "PrefabLinkLevel[]",
+      "applyTo?": "json"
+    },
+    "PrefabLinkLevel": {
+      "rootId": "string",
+      "prefab": "string",
+      "path": "string"
     },
     "HistoryEntry": {
       "label": "string",
@@ -1392,7 +1410,9 @@
       "tag": "string",
       "components": "string[]",
       "prefab?": "string",
-      "linkDepth?": "number"
+      "linkDepth?": "number",
+      "overridden?": "bool",
+      "prefabAdded?": "bool"
     },
     "EntityHeader": {
       "id": "string",
@@ -1404,7 +1424,10 @@
       "layer": "number",
       "tag": "string",
       "prefab?": "string",
-      "linkDepth?": "number"
+      "linkDepth?": "number",
+      "overridden?": "bool",
+      "prefabAdded?": "bool",
+      "overrides?": "string[]"
     },
     "JsonVec3": {
       "x": "number",
@@ -1430,7 +1453,9 @@
     "EntityComponent": {
       "type": "string",
       "uuid": "string",
-      "values": "json"
+      "values": "json",
+      "overrides?": "string[]",
+      "prefabAdded?": "bool"
     },
     "EntityDetails": {
       "header": "EntityHeader",
@@ -1811,6 +1836,9 @@
     }
   },
   "optionalTrailing": {
+    "UnpackPrefabRequest": [
+      "completely"
+    ],
     "HelloRequest": [
       "errorCodes",
       "user",

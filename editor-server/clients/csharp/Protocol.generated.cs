@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.33.0";
+        public const string ProtocolVersion = "1.34.0";
     }
 
     public enum CommandType : byte
@@ -52,6 +52,7 @@ namespace N2Engine.Editor.Protocol
         CreateScript = 0x40,
         RescanAssets = 0x41,
         RevertPrefabOverrides = 0x42,
+        ApplyPrefabOverrides = 0x43,
         ListAssets = 0xA0,
         GetAssetInfo = 0xA1,
         SetImportSettings = 0xA2,
@@ -347,6 +348,20 @@ namespace N2Engine.Editor.Protocol
         public System.Text.Json.JsonElement[] AddedComponents { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("addedChildren")]
         public System.Text.Json.JsonElement[] AddedChildren { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("linkPath")]
+        public PrefabLinkLevel[]? LinkPath { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("applyTo")]
+        public System.Text.Json.JsonElement? ApplyTo { get; set; }
+    }
+
+    public class PrefabLinkLevel
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("rootId")]
+        public string RootId { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("prefab")]
+        public string Prefab { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("path")]
+        public string Path { get; set; }
     }
 
     public class HistoryEntry
@@ -457,6 +472,10 @@ namespace N2Engine.Editor.Protocol
         public string? Prefab { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("linkDepth")]
         public double? LinkDepth { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("overridden")]
+        public bool? Overridden { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("prefabAdded")]
+        public bool? PrefabAdded { get; set; }
     }
 
     public class EntityHeader
@@ -481,6 +500,12 @@ namespace N2Engine.Editor.Protocol
         public string? Prefab { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("linkDepth")]
         public double? LinkDepth { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("overridden")]
+        public bool? Overridden { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("prefabAdded")]
+        public bool? PrefabAdded { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("overrides")]
+        public string[]? Overrides { get; set; }
     }
 
     public class JsonVec3
@@ -533,6 +558,10 @@ namespace N2Engine.Editor.Protocol
         public string Uuid { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("values")]
         public System.Text.Json.JsonElement Values { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("overrides")]
+        public string[]? Overrides { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("prefabAdded")]
+        public bool? PrefabAdded { get; set; }
     }
 
     public class EntityDetails
@@ -1350,6 +1379,14 @@ namespace N2Engine.Editor.Protocol
         public string Targets;
     }
 
+    public struct ApplyPrefabOverridesRequest
+    {
+        public string EntityId;
+        /// <summary>JSON text: any JSON value</summary>
+        public string Targets;
+        public int Level;
+    }
+
     public struct ListAssetsRequest
     {
         public string Folder;
@@ -1531,6 +1568,8 @@ namespace N2Engine.Editor.Protocol
     public struct UnpackPrefabRequest
     {
         public string EntityId;
+        /// <summary>Optional trailing: the default (false, 0, empty or a zero vector) when the payload ends before it</summary>
+        public bool Completely;
     }
 
     public struct SetPhysicsBackendRequest

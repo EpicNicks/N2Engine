@@ -61,6 +61,7 @@ namespace
             {"CreatePrefab", Class::Write}, {"InstantiatePrefab", Class::Write}, {"ApplyPrefab", Class::Write},
             {"UnpackPrefab", Class::Write},
             {"GetPrefabOverrides", Class::Read}, {"RevertPrefabOverrides", Class::Write},
+            {"ApplyPrefabOverrides", Class::Write},
             // The physics backend picker (since 1.20.0): the list reads, choosing one saves the project file
             {"GetPhysicsBackends", Class::Read}, {"SetPhysicsBackend", Class::Write},
             // Moving assets (since 1.24.0): files and .meta files move

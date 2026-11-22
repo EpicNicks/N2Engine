@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.33.0";
+inline constexpr const char *ProtocolVersion = "1.34.0";
 
 enum class CommandType : uint8_t
 {
@@ -53,6 +53,7 @@ enum class CommandType : uint8_t
     CreateScript = 0x40,
     RescanAssets = 0x41,
     RevertPrefabOverrides = 0x42,
+    ApplyPrefabOverrides = 0x43,
     ListAssets = 0xA0,
     GetAssetInfo = 0xA1,
     SetImportSettings = 0xA2,
@@ -374,6 +375,13 @@ struct RevertPrefabOverridesCmd
     std::string targets; // JSON: any
 };
 
+struct ApplyPrefabOverridesCmd
+{
+    std::string entityId;
+    std::string targets; // JSON: any
+    int32_t level;
+};
+
 struct ListAssetsCmd
 {
     std::string folder;
@@ -546,6 +554,7 @@ struct ApplyPrefabCmd
 struct UnpackPrefabCmd
 {
     std::string entityId;
+    bool completely; // optional trailing: the default (false, 0, empty or a zero vector) when the payload ends before it
 };
 
 struct SetPhysicsBackendCmd
