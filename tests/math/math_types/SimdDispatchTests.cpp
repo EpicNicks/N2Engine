@@ -524,6 +524,74 @@ TEST_P(SimdDispatchTest, ElementwiseArithmeticIsBitIdenticalToScalar)
     }
 }
 
+// #381 item 10, the rest of the elementwise operations: Vector4's add, subtract and scalar multiply, and every
+// elementwise batch of Vector3 and Vector4 for every count around the batch widths and at several start offsets (the
+// AVX pairs and eights, the NEON fours and the scalar tails). Each output lane is one IEEE operation on the same two
+// inputs, so every tier must give the scalar tier's bits, signed zeros, infinities and NaN included.
+TEST_P(SimdDispatchTest, ElementwiseVector4AndBatchesAreBitIdenticalToScalar)
+{
+    std::vector<Vector4> samples4 = EdgeCaseVectors4();
+    for (const Vector4 &v : SampleVectors4())
+        samples4.push_back(v);
+    for (size_t i = 0; i < samples4.size(); ++i)
+    {
+        const Vector4 &a = samples4[i];
+        const std::string at = " a=" + std::to_string(i);
+        ExpectIdenticalToScalar([&] { return a * -1.75f; }, "Vector4 ScalarMul" + at);
+        for (size_t j = 0; j < samples4.size(); ++j)
+        {
+            const Vector4 &b = samples4[j];
+            const std::string ab = at + " b=" + std::to_string(j);
+            ExpectIdenticalToScalar([&] { return a + b; }, "Vector4 Add" + ab);
+            ExpectIdenticalToScalar([&] { return a - b; }, "Vector4 Sub" + ab);
+        }
+    }
+
+    const std::vector<Vector3> pool3 = VectorPool3(BATCH_POOL_SIZE);
+    const std::vector<Vector4> pool4 = VectorPool4(BATCH_POOL_SIZE);
+    for (const size_t count : BATCH_COUNTS)
+    {
+        for (const size_t offset : BATCH_OFFSETS)
+        {
+            const std::string at = " count=" + std::to_string(count) + " offset=" + std::to_string(offset);
+            const Vector3 *a3 = pool3.data() + offset;
+            const Vector3 *b3 = pool3.data() + offset + 16;
+            const Vector4 *a4 = pool4.data() + offset;
+            const Vector4 *b4 = pool4.data() + offset + 16;
+            ExpectIdenticalToScalar([&] {
+                std::vector<Vector3> out(count);
+                Vector3::AddBatch(a3, b3, out.data(), count);
+                return out;
+            }, "Vector3 AddBatch" + at);
+            ExpectIdenticalToScalar([&] {
+                std::vector<Vector3> out(count);
+                Vector3::SubBatch(a3, b3, out.data(), count);
+                return out;
+            }, "Vector3 SubBatch" + at);
+            ExpectIdenticalToScalar([&] {
+                std::vector<Vector3> out(count);
+                Vector3::ScalarMulBatch(a3, out.data(), -1.75f, count);
+                return out;
+            }, "Vector3 ScalarMulBatch" + at);
+            ExpectIdenticalToScalar([&] {
+                std::vector<Vector4> out(count);
+                Vector4::AddBatch(a4, b4, out.data(), count);
+                return out;
+            }, "Vector4 AddBatch" + at);
+            ExpectIdenticalToScalar([&] {
+                std::vector<Vector4> out(count);
+                Vector4::SubBatch(a4, b4, out.data(), count);
+                return out;
+            }, "Vector4 SubBatch" + at);
+            ExpectIdenticalToScalar([&] {
+                std::vector<Vector4> out(count);
+                Vector4::ScalarMulBatch(a4, out.data(), -1.75f, count);
+                return out;
+            }, "Vector4 ScalarMulBatch" + at);
+        }
+    }
+}
+
 TEST_P(SimdDispatchTest, Vector3BatchOperations)
 {
     // An odd count larger than 8 exercises both the AVX batches and their scalar tails
