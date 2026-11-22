@@ -35,6 +35,7 @@
 #include <string_view>
 #include <vector>
 
+#include <nlohmann/json.hpp>
 #include <renderer/common/FrameRows.hpp>
 #include <renderer/common/RendererConfig.hpp>
 
@@ -51,6 +52,7 @@
 #include "engine/input/Keyboard.hpp"
 #include "engine/input/Mouse.hpp"
 #include "engine/input/Touchscreen.hpp"
+#include "engine/io/LatePacks.hpp"
 #include "engine/io/ProjectFile.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourcePath.hpp"
@@ -99,6 +101,37 @@ EM_JS(int, n2_gpu_status, (), {
     var session = Module['n2GpuSession'];
     return session ? session.status() : 1;
 });
+
+#ifdef N2_WEB_LATE_PACKS
+namespace
+{
+    /// The project folder the late packs' folders are relative to (set when the player starts)
+    std::filesystem::path g_lateProjectDir;
+}
+
+/// The loader calls it when a late pack has been written to `file` in the virtual filesystem: mounts it at `folder` (the
+/// project-relative folder late-packs.json names) and rescans the assets. 1 when mounted, 0 otherwise (the reason logged).
+extern "C" EMSCRIPTEN_KEEPALIVE int n2_mount_late_pack(const char *file, const char *folder)
+{
+    if (file == nullptr || folder == nullptr || g_lateProjectDir.empty())
+    {
+        return 0;
+    }
+    auto mount = N2Engine::IO::Pack::OpenZip(std::filesystem::path(file));
+    if (!mount)
+    {
+        N2Engine::Logger::Error("A late pack can't be read: " + mount.error());
+        return 0;
+    }
+    const std::filesystem::path at = g_lateProjectDir / N2Engine::IO::PathFromUtf8(std::string(folder));
+    if (!N2Engine::IO::LatePacks::Arrive(at, std::move(*mount)))
+    {
+        N2Engine::Logger::Error(std::string("A late pack arrived for a folder that is not waiting for one: ") + folder);
+        return 0;
+    }
+    return 1;
+}
+#endif
 
 namespace
 {
@@ -645,6 +678,30 @@ int main(int argc, char *argv[])
         IO::ResourceUUID::Initialize(IO::ResourceUUID::NamespaceForProjectDir(projectDir));
         IO::ResourceLoader::Instance().Initialize(projectDir);
     }
+
+#ifdef N2_WEB_LATE_PACKS
+    // The folders this package fetches after the start (build.web.lateAssets; docs/web-build.html#late-packs): the build
+    // wrote their list next to the project, and the loader mounts each pack through n2_mount_late_pack when it arrives
+    {
+        g_lateProjectDir = projectDir;
+        const auto listed = IO::Vfs::Instance().ReadText(projectDir / "late-packs.json");
+        const nlohmann::json packs = listed ? nlohmann::json::parse(*listed, nullptr, false) : nlohmann::json();
+        if (!packs.is_object() || !packs.contains("packs") || !packs["packs"].is_array())
+        {
+            Logger::Warn("late-packs.json is missing or not readable: every file of the game is expected in the first download");
+        }
+        else
+        {
+            for (const nlohmann::json &pack : packs["packs"])
+            {
+                if (pack.is_object() && pack.contains("folder") && pack["folder"].is_string())
+                {
+                    IO::LatePacks::Register(projectDir / IO::PathFromUtf8(pack["folder"].get<std::string>()));
+                }
+            }
+        }
+    }
+#endif
 
 #ifdef N2ENGINE_SCRIPTING_ENABLED
     if (!Scripting::LuaRuntime::Instance().RunFile(IO::ResourcePath("res://scene.lua")))

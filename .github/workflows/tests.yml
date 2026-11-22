@@ -1996,6 +1996,7 @@ jobs:
           node scripts/web-gpu-test.mjs
           node --test scripts/web-browser-support.test.mjs
           node --test scripts/project-modules.test.mjs
+          node --test scripts/web-late-packs.test.mjs
 
       # Stage 4: the audio unlock of the loader (web/n2-loader.js, createAudioUnlock) under node with a mock AudioContext
       # and a mock document: resume once on the first gesture, listeners removed, failures tolerated, the hidden tab
@@ -2111,6 +2112,24 @@ jobs:
             echo "    $line" >> "$GITHUB_STEP_SUMMARY"
           done
 
+      # #425: a project that lists build.web.lateAssets (tests/projects/web_late_assets: assets/late fetched after the start).
+      # index.data leaves the folder out, late-0.n2pack holds it, the node smoke fetches and mounts it once the player runs
+      # (late-pack-ready and "Late pack arrived"), and the sizes show what the first download no longer carries
+      - name: Build and run a project with late packs
+        run: |
+          set -e -o pipefail
+          . "$HOME/emsdk/emsdk_env.sh"
+          emcmake cmake -S . -B build-web-late -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=size -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_PROJECT=tests/projects/web_late_assets 2>&1 | tee configure-late.log
+          grep -q "Web package: late packs for assets/late" configure-late.log
+          cmake --build build-web-late --target web-package -- -k 0
+          test -f build-web-late/web-package/late-0.n2pack
+          node scripts/web-package-smoke.mjs build-web-late/web-package 30 320x180 --precompressed
+          for f in index.data late-0.n2pack; do
+            line="build-web-late: $f raw $(wc -c < "build-web-late/web-package/$f") brotli $(wc -c < "build-web-late/web-package/$f.br")"
+            echo "[LATE-PACKS-SIZE] $line"
+            echo "    $line" >> "$GITHUB_STEP_SUMMARY"
+          done
+
       - name: Build and check the web package (speed profile)
         # The speed tree has its own flags: nothing in this run can reuse its objects, so ccache is off for it
         env:
@@ -2221,6 +2240,16 @@ jobs:
           mkdir -p browser-evidence
           node --test scripts/web-browser-support.test.mjs
           xvfb-run -a node scripts/web-browser-smoke.mjs browser-inputs/build-web-size/web-package scripts/browser-tools --swiftshader --headed 2>&1 | tee browser-evidence/runner.log
+      # #425: the time to first frame the gate measured (its [WEB-TTFF] line: page start to Start enabled, the click to the first
+      # presented frame, each package file's size and download time), in the job summary. SwiftShader and a local server: an
+      # order of magnitude, never judged
+      - name: Time to first frame
+        if: ${{ !cancelled() }}
+        run: |
+          line=$(grep -o '\[WEB-TTFF\].*' browser-evidence/runner.log | head -n 1 || true)
+          if [ -z "$line" ]; then echo "no [WEB-TTFF] line: the gate did not reach its first frame"; exit 0; fi
+          echo "$line"
+          { echo "### Time to first frame (size profile, Chromium SwiftShader WebGPU, local server)"; echo; echo "    $line"; echo; } >> "$GITHUB_STEP_SUMMARY"
       - name: Retain browser diagnostics
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7

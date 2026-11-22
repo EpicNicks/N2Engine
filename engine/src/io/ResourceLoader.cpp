@@ -1,4 +1,5 @@
 #include "engine/io/ResourceLoader.hpp"
+#include "engine/io/LatePacks.hpp"
 #include "engine/io/ResourceUUID.hpp"
 #include "engine/Logger.hpp"
 #include "engine/audio/AudioClip.hpp"
@@ -284,6 +285,20 @@ namespace N2Engine::IO
         if (walkError)
         {
             throw std::filesystem::filesystem_error("can't scan the assets folder", directory, walkError);
+        }
+        // The late packs that have arrived (#425): mounted inside this folder, so the disk walk above does not see them
+        const std::filesystem::path normal = directory.lexically_normal();
+        for (const std::filesystem::path &late : LatePacks::Arrived())
+        {
+            const std::filesystem::path relative = late.lexically_relative(normal);
+            if (relative.empty() || *relative.begin() == "..")
+            {
+                continue;
+            }
+            for (const VfsEntry &file : Vfs::Instance().ListFiles(late))
+            {
+                ScanOne(late / PathFromUtf8(file.path), result, seen);
+            }
         }
     }
 

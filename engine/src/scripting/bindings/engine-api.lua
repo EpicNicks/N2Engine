@@ -3521,6 +3521,21 @@ function Network.GetTimeDilation() end
 ---@return boolean applied
 function Network.SetTimeDilation(dilation) end
 
+-- ===== ASSETS =====
+
+---Files that may come after the start: a web package fetches the folders of build.web.lateAssets once the game runs
+---@class Assets
+Assets = {}
+
+---Whether a res:// file can be loaded now: false while its late pack has not arrived, or when it does not exist
+---@param path string
+---@return boolean
+function Assets.IsAvailable(path) end
+
+---How many late packs have not arrived yet (0 outside the web player)
+---@return integer
+function Assets.PendingCount() end
+
 -- ===== APPLICATION =====
 
 ---@class Application

@@ -62,6 +62,66 @@ else()
     message(STATUS "Web package: ${N2_WEB_PROJECT_DIR} has no .import folder; asset UUIDs are the hashes of their paths")
 endif()
 
+# Late packs (#425, docs/web-build.html#late-packs): the folders the project lists in build.web.lateAssets (inside assets/)
+# are left out of index.data and written as late-<n>.n2pack next to it (scripts/web-late-packs.mjs, at web-package time);
+# the loader fetches them once the game runs and the player mounts each at its folder. late-packs.json, which names them,
+# is written here and preloaded at /project/late-packs.json. A project without the list packs as before.
+file(READ "${N2_WEB_PROJECT_DIR}/project.n2proj" _n2_web_project_text)
+string(JSON _n2_late_type ERROR_VARIABLE _n2_late_error TYPE "${_n2_web_project_text}" build web lateAssets)
+set(N2_WEB_LATE_FOLDERS "")
+if(NOT _n2_late_error AND _n2_late_type STREQUAL "ARRAY")
+    string(JSON _n2_late_count LENGTH "${_n2_web_project_text}" build web lateAssets)
+    if(_n2_late_count GREATER 0)
+        math(EXPR _n2_late_last "${_n2_late_count} - 1")
+        foreach(_n2_i RANGE ${_n2_late_last})
+            string(JSON _n2_folder GET "${_n2_web_project_text}" build web lateAssets ${_n2_i})
+            string(REGEX REPLACE "/+$" "" _n2_folder "${_n2_folder}")
+            if(NOT _n2_folder MATCHES "^assets/[^/]" OR _n2_folder MATCHES "(^|/)\\.\\.?(/|$)" OR NOT IS_DIRECTORY "${N2_WEB_PROJECT_DIR}/${_n2_folder}")
+                message(FATAL_ERROR "build.web.lateAssets: '${_n2_folder}' is not a folder inside ${N2_WEB_PROJECT_DIR}/assets")
+            endif()
+            list(APPEND N2_WEB_LATE_FOLDERS "${_n2_folder}")
+        endforeach()
+    endif()
+elseif(NOT _n2_late_error)
+    message(FATAL_ERROR "build.web.lateAssets in ${N2_WEB_PROJECT_DIR}/project.n2proj must be an array of folders")
+endif()
+set(N2_WEB_LATE_PRELOAD "")
+set(N2_WEB_LATE_RUNTIME "")
+if(N2_WEB_LATE_FOLDERS AND N2ENGINE_WEB_PACK)
+    # One game pack (n2build) holds every file: there is nothing to fetch later
+    message(WARNING "build.web.lateAssets is ignored with N2ENGINE_WEB_PACK: the game's one pack is downloaded whole before the start")
+    set(N2_WEB_LATE_FOLDERS "")
+endif()
+if(N2_WEB_LATE_FOLDERS)
+    # The loader writes each pack into the virtual filesystem and calls the player (FS, ccall)
+    set(N2_WEB_LATE_RUNTIME ",FS,ccall")
+    set(_n2_late_json "{\n  \"format\": 1,\n  \"packs\": [")
+    set(_n2_index 0)
+    foreach(_n2_folder IN LISTS N2_WEB_LATE_FOLDERS)
+        if(_n2_index GREATER 0)
+            string(APPEND _n2_late_json ",")
+        endif()
+        string(APPEND _n2_late_json "\n    { \"file\": \"late-${_n2_index}.n2pack\", \"folder\": \"${_n2_folder}\" }")
+        list(APPEND N2_WEB_LATE_PRELOAD
+            "SHELL:--exclude-file \"${N2_WEB_PROJECT_DIR}/${_n2_folder}\""
+            "SHELL:--exclude-file \"${N2_WEB_PROJECT_DIR}/${_n2_folder}/*\"")
+        math(EXPR _n2_index "${_n2_index} + 1")
+    endforeach()
+    string(APPEND _n2_late_json "\n  ]\n}\n")
+    set(_n2_late_old "")
+    if(EXISTS "${CMAKE_BINARY_DIR}/web/late-packs.json")
+        file(READ "${CMAKE_BINARY_DIR}/web/late-packs.json" _n2_late_old)
+    endif()
+    if(NOT _n2_late_old STREQUAL _n2_late_json)
+        file(WRITE "${CMAKE_BINARY_DIR}/web/late-packs.json" "${_n2_late_json}")
+    endif()
+    list(APPEND N2_WEB_LATE_PRELOAD "SHELL:--preload-file \"${CMAKE_BINARY_DIR}/web/late-packs.json@/project/late-packs.json\"")
+    target_compile_definitions(N2WebPlayer PRIVATE N2_WEB_LATE_PACKS=1)
+    list(JOIN N2_WEB_LATE_FOLDERS ", " _n2_late_shown)
+    message(STATUS "Web package: late packs for ${_n2_late_shown} (fetched after the start)")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${N2_WEB_PROJECT_DIR}/project.n2proj")
+
 # The game as one pack (build targets stage 4; docs/packs.html): n2build cooks the project into a stored zip and passes it as
 # N2ENGINE_WEB_PACK, which is preloaded as /game.n2pack instead of the folders above; the player mounts it at /project. Without
 # it the folders are preloaded as before.
@@ -79,7 +139,8 @@ else()
     set(N2_WEB_GAME_PRELOAD
         "SHELL:--preload-file \"${N2_WEB_PROJECT_DIR}/assets@/project/assets\""
         "SHELL:--preload-file \"${N2_WEB_PROJECT_DIR}/project.n2proj@/project/project.n2proj\""
-        ${N2_WEB_IMPORT_PRELOAD})
+        ${N2_WEB_IMPORT_PRELOAD}
+        ${N2_WEB_LATE_PRELOAD})
     set(N2_WEB_GAME_DEPENDS "${N2_WEB_PROJECT_DIR}/project.n2proj" ${N2_WEB_PROJECT_FILES})
 endif()
 
@@ -110,7 +171,7 @@ endif()
 target_link_options(N2WebPlayer PRIVATE
     -sMODULARIZE=1
     -sEXPORT_NAME=createN2Player
-    -sEXPORTED_RUNTIME_METHODS=callMain,ENV
+    -sEXPORTED_RUNTIME_METHODS=callMain,ENV${N2_WEB_LATE_RUNTIME}
     -lidbfs.js
     "SHELL:--pre-js \"${CMAKE_CURRENT_SOURCE_DIR}/n2-saves.js\""
     "SHELL:--shell-file \"${N2_WEB_SHELL}\""
@@ -142,7 +203,17 @@ set(N2_WEB_FINALIZE_ARGS "")
 if(N2ENGINE_WEB_PRECOMPRESS_EFFECTIVE)
     list(APPEND N2_WEB_FINALIZE_ARGS --precompress)
 endif()
+if(N2_WEB_LATE_FOLDERS)
+    list(APPEND N2_WEB_FINALIZE_ARGS --late-packs "${CMAKE_BINARY_DIR}/web/late-packs.json")
+endif()
+set(N2_WEB_LATE_COMMAND "")
+if(N2_WEB_LATE_FOLDERS)
+    list(JOIN N2_WEB_LATE_FOLDERS "," _n2_late_arg)
+    set(N2_WEB_LATE_COMMAND COMMAND ${N2ENGINE_WEB_NODE} "${CMAKE_SOURCE_DIR}/scripts/web-late-packs.mjs"
+        --project "${N2_WEB_PROJECT_DIR}" --out "${CMAKE_BINARY_DIR}/web-package" --folders "${_n2_late_arg}")
+endif()
 add_custom_target(web-package
+    ${N2_WEB_LATE_COMMAND}
     COMMAND ${N2ENGINE_WEB_NODE} "${CMAKE_SOURCE_DIR}/scripts/web-package-finalize.mjs" "${CMAKE_BINARY_DIR}/web-package"
             --loader "${CMAKE_CURRENT_SOURCE_DIR}/n2-loader.js" --profile ${N2ENGINE_WEB_PROFILE} ${N2_WEB_FINALIZE_ARGS}
     COMMENT "The web package is in ${CMAKE_BINARY_DIR}/web-package"

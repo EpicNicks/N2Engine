@@ -103,6 +103,12 @@ async function screenshot(name, visible = false) {
       let api;
       window.__gpuFrames = 0;
       window.__gpuEvents = [];
+      // #425: when Start was clicked and when the first frame was presented (performance.now, from the page's start)
+      window.__startClickedAt = null;
+      window.__firstFrameAt = null;
+      document.addEventListener('click', (event) => {
+        if (window.__startClickedAt === null && event.target && event.target.id === 'start') window.__startClickedAt = performance.now();
+      }, true);
       Object.defineProperty(window, 'N2Loader', { get: () => api, set(value) {
         api = value;
         const session = api.createGpuSession;
@@ -113,7 +119,11 @@ async function screenshot(name, visible = false) {
           const result = session(options);
           window.__gpuSession = result;
           const present = result.present;
-          result.present = function (texture) { present(texture); window.__gpuFrames++; };
+          result.present = function (texture) {
+            present(texture);
+            window.__gpuFrames++;
+            if (window.__firstFrameAt === null) window.__firstFrameAt = performance.now();
+          };
           return result;
         };
       } });
@@ -122,6 +132,16 @@ async function screenshot(name, visible = false) {
     stage('WebGPU selection and presentation');
     await page.goto(base + '/');
     await page.waitForFunction(() => !document.querySelector('#start').disabled, null, { timeout: 120000 });
+    // #425: the load, measured on this first (cold) page load: when Start became clickable, and each package file's size
+    // and download time (Resource Timing); the first frame is taken after the click below
+    const loadTiming = await page.evaluate(() => {
+      const nav = performance.getEntriesByType('navigation')[0];
+      const files = performance.getEntriesByType('resource')
+        .filter((entry) => /\/(index\.(js|wasm|data)|n2-loader\.js|manifest\.json)(\?|$)/.test(entry.name))
+        .map((entry) => ({ file: entry.name.replace(/^.*\//, '').replace(/\?.*$/, ''), bytes: entry.transferSize || entry.encodedBodySize,
+          start: Math.round(entry.startTime), ms: Math.round(entry.duration) }));
+      return { readyMs: Math.round(performance.now()), domContentLoadedMs: nav ? Math.round(nav.domContentLoadedEventEnd) : null, files };
+    });
     assert.equal(await page.evaluate(() => !!window.__gpuSession), true, 'WebGPU must acquire a real device');
     report.adapter = await page.evaluate(async () => {
       const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
@@ -134,6 +154,20 @@ async function screenshot(name, visible = false) {
     await page.click('#start');
     await page.waitForFunction(() => window.__gpuFrames >= 10, null, { timeout: 30000 });
     assert.equal(await page.locator('#error').isVisible(), false, messages.join('\n'));
+    const frameTiming = await page.evaluate(() => ({ clickedMs: window.__startClickedAt, firstFrameMs: window.__firstFrameAt }));
+    report.timeToFirstFrame = {
+      ...loadTiming,
+      startClickedMs: frameTiming.clickedMs === null ? null : Math.round(frameTiming.clickedMs),
+      firstFrameMs: frameTiming.firstFrameMs === null ? null : Math.round(frameTiming.firstFrameMs),
+      clickToFirstFrameMs: frameTiming.clickedMs === null || frameTiming.firstFrameMs === null ? null
+        : Math.round(frameTiming.firstFrameMs - frameTiming.clickedMs),
+      note: 'SwiftShader WebGPU on a CI runner, files from a local server (no network): an order of magnitude only',
+    };
+    assert.notEqual(report.timeToFirstFrame.firstFrameMs, null, 'the first frame was not seen');
+    const ttff = report.timeToFirstFrame;
+    console.log('[WEB-TTFF] ready_ms=' + ttff.readyMs + ' start_clicked_ms=' + ttff.startClickedMs + ' first_frame_ms=' + ttff.firstFrameMs +
+      ' click_to_first_frame_ms=' + ttff.clickToFirstFrameMs + ' files=' +
+      ttff.files.map((f) => f.file + ':' + f.bytes + 'B/' + f.ms + 'ms').join(','));
     assert.deepEqual(await page.locator('#canvas').evaluate(c => [c.width, c.height]), [1600, 900]);
     await screenshot('gpu.png', true);
     stage('HiDPI and resize');

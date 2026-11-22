@@ -1,0 +1,21 @@
+{
+  "build": {
+    "modules": {
+      "scripting": false
+    },
+    "web": {
+      "lateAssets": [
+        "assets/late"
+      ]
+    }
+  },
+  "engineVersion": "1.0.0",
+  "formatVersion": 1,
+  "name": "web_late_assets",
+  "projectId": "15c6f1fd-efc2-51c9-8ddf-edcac3a24096",
+  "scenes": [
+    "res://scenes/Main.scene"
+  ],
+  "settings": {},
+  "startupScene": "res://scenes/Main.scene"
+}

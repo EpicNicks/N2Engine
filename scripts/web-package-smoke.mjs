@@ -14,6 +14,9 @@
 //    have the size asked for, and show something (more than one colour, some pixel not black). The loader's progress
 //    must end at the manifest's sizes and the asset pack must have come through the loader's hook. Under node there is no
 //    WebAudio: the player must run with the audio subsystem failed in its health (stage 4).
+// 3. Late packs (#425, docs/web-build.html#late-packs): a package whose project lists build.web.lateAssets also holds
+//    late-<n>.n2pack (and, precompressed, their siblings), named in manifest.json's latePacks. Once the player runs, the
+//    loader's fetchLatePacks must fetch and mount every one (late-pack-ready, and the player's "Late pack arrived" line).
 //
 // This is not a browser: nothing here proves the canvas, the input events, the page or the hosting work. See
 // docs/web-checklist.html for what a person has to check.
@@ -38,10 +41,12 @@ function expect(condition, message) {
 }
 
 // 1. The package contents
-const compressible = ['index.html', 'index.js', 'index.wasm', 'index.data', 'n2-loader.js'];
+const present = fs.existsSync(dir) ? fs.readdirSync(dir).sort() : [];
+// The late packs of the package, if its project has any (3. above)
+const latePacks = present.filter((name) => /^late-\d+\.n2pack$/.test(name));
+const compressible = ['index.html', 'index.js', 'index.wasm', 'index.data', 'n2-loader.js', ...latePacks];
 const required = [...compressible, 'manifest.json'];
 const siblings = compressible.flatMap((name) => [`${name}.br`, `${name}.gz`]);
-const present = fs.existsSync(dir) ? fs.readdirSync(dir).sort() : [];
 console.log(`Package ${dir}: ${present.join(', ') || '(missing)'}`);
 for (const name of required) {
   expect(present.includes(name), `missing ${name}`);
@@ -60,6 +65,8 @@ if (problems.length === 0) {
   // manifest.json against the files
   manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
   expect(Object.keys(manifest.files).sort().join() === compressible.slice().sort().join(), `manifest lists ${Object.keys(manifest.files)}`);
+  const listedLate = (manifest.latePacks ?? []).map((pack) => pack.file).sort();
+  expect(listedLate.join() === latePacks.join(), `manifest.latePacks names ${listedLate}, the folder holds ${latePacks}`);
   for (const name of compressible) {
     const entry = manifest.files[name];
     const plain = fs.readFileSync(path.join(dir, name));
@@ -131,6 +138,7 @@ expect(gpuSelection.renderer === 'software' && !gpuSelection.device,
 // The mock host: serves the folder's files by the URL the loader asks for (query dropped), index.wasm with a wrong MIME type
 const requested = [];
 const loaderEvents = [];
+let lateDone = null;
 let lastProgress = null;
 async function mockFetch(url) {
   requested.push(url);
@@ -165,9 +173,18 @@ try {
     n2Stopped: (framesRun) => globalThis.__n2Done(framesRun),
     n2Failed: (message) => globalThis.__n2Failed(message),
     onAbort: (reason) => globalThis.__n2Failed(`abort: ${reason}`),
+  }).then((engine) => {
+    // 3. The late packs, fetched once the player runs, as the page does after callMain
+    if (latePacks.length > 0) lateDone = loader.fetchLatePacks(engine);
   }).catch((error) => globalThis.__n2Failed(String(error?.message ?? error)));
   const framesRun = await done;
   expect(framesRun === frames, `the player ran ${framesRun} frames, expected ${frames}`);
+  if (latePacks.length > 0) {
+    const mounted = lateDone ? await lateDone : 0;
+    expect(mounted === latePacks.length, `${mounted} of ${latePacks.length} late packs were mounted (events: ${loaderEvents})`);
+    expect(output.filter((line) => line.includes('Late pack arrived')).length === latePacks.length,
+      `the player did not log "Late pack arrived" once per late pack`);
+  }
 } catch (error) {
   problems.push(String(error?.message ?? error));
 }
