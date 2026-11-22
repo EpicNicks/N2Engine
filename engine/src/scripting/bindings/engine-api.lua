@@ -792,6 +792,10 @@ function GameObject:IsValid() end
 ---@return string
 function GameObject:GetName() end
 
+---The object's UUID as text (what a .prefab's {"ref": uuid} fields name; a prefab instance's ids are renumbered)
+---@return string
+function GameObject:GetUUID() end
+
 ---Set the name of this GameObject
 ---@param name string
 function GameObject:SetName(name) end
@@ -1550,6 +1554,11 @@ function LuaComponent:GetScriptPath() end
 ---True when the script is missing, failed to load, or didn't return a table
 ---@return boolean
 function LuaComponent:HasMissingScript() end
+
+---The component's field values (its scriptData) as a new table, objects and arrays included (they are not put on
+---the script's self). A copy: changing it changes nothing. Nesting deeper than 100 is an error.
+---@return table
+function LuaComponent:GetScriptData() end
 
 ---The running script's instance table (its self), or nil when no script runs. The same table each call; once the
 ---component is destroyed its gameObject and component fields are nil.

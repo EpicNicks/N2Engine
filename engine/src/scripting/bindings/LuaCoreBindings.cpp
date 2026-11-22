@@ -85,6 +85,8 @@ namespace N2Engine::Scripting::Bindings
 
             "IsValid", [](const GameObjectRef &go) { return go.IsValid(); },
             "GetName", Forward<GameObjectRef, &GameObject::GetName>(),
+            // The object's UUID as text: what a .prefab's {"ref": uuid} fields name, renumbered with the instance
+            "GetUUID", [](const GameObjectRef &go) { return go.Pin()->GetUUID().ToString(); },
             "SetName", Forward<GameObjectRef, &GameObject::SetName>(),
             "GetTag", Forward<GameObjectRef, &GameObject::GetTag>(),
             "SetTag", Forward<GameObjectRef, &GameObject::SetTag>(),

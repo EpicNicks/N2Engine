@@ -52,55 +52,6 @@ namespace N2Engine::Scripting::Bindings
             }
             return IO::ResourceLoader::Instance().Resolve(IO::ResourcePath("user://saves/" + name));
         }
-
-        sol::object JsonToLua(const nlohmann::json &value, sol::state_view lua, const int depth)
-        {
-            if (depth > JsonMaxDepth)
-            {
-                throw std::runtime_error(std::format("Json.Decode: nesting deeper than {}", JsonMaxDepth));
-            }
-            switch (value.type())
-            {
-            case nlohmann::json::value_t::boolean:
-                return sol::make_object(lua, value.get<bool>());
-            case nlohmann::json::value_t::number_integer:
-                return sol::make_object(lua, value.get<std::int64_t>());
-            case nlohmann::json::value_t::number_unsigned:
-            {
-                const auto u = value.get<std::uint64_t>();
-                if (u <= static_cast<std::uint64_t>(INT64_MAX))
-                {
-                    return sol::make_object(lua, static_cast<std::int64_t>(u));
-                }
-                return sol::make_object(lua, static_cast<double>(u));
-            }
-            case nlohmann::json::value_t::number_float:
-                return sol::make_object(lua, value.get<double>());
-            case nlohmann::json::value_t::string:
-                return sol::make_object(lua, value.get<std::string>());
-            case nlohmann::json::value_t::array:
-            {
-                sol::table table = lua.create_table(static_cast<int>(value.size()), 0);
-                int index = 1;
-                for (const auto &element : value)
-                {
-                    table[index++] = JsonToLua(element, lua, depth + 1);
-                }
-                return table;
-            }
-            case nlohmann::json::value_t::object:
-            {
-                sol::table table = lua.create_table(0, static_cast<int>(value.size()));
-                for (const auto &[key, element] : value.items())
-                {
-                    table[key] = JsonToLua(element, lua, depth + 1);
-                }
-                return table;
-            }
-            default:
-                return sol::lua_nil; // null and discarded values
-            }
-        }
     }
 
     void BindSaveData(LuaRuntime &runtime)
@@ -202,7 +153,7 @@ namespace N2Engine::Scripting::Bindings
                 {
                     return {sol::lua_nil, sol::make_object(lua, std::string("Json.Decode: not valid JSON"))};
                 }
-                return {JsonToLua(parsed, lua, 0), sol::lua_nil};
+                return {JsonToLua(parsed, lua, JsonMaxDepth, "Json.Decode"), sol::lua_nil};
             }
         );
     }
