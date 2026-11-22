@@ -3536,6 +3536,10 @@ function Assets.IsAvailable(path) end
 ---@return integer
 function Assets.PendingCount() end
 
+---How many late packs could not be fetched (the loader tried three times): their files will not come in this session
+---@return integer
+function Assets.FailedCount() end
+
 -- ===== APPLICATION =====
 
 ---@class Application

@@ -67,6 +67,11 @@ if (problems.length === 0) {
   expect(Object.keys(manifest.files).sort().join() === compressible.slice().sort().join(), `manifest lists ${Object.keys(manifest.files)}`);
   const listedLate = (manifest.latePacks ?? []).map((pack) => pack.file).sort();
   expect(listedLate.join() === latePacks.join(), `manifest.latePacks names ${listedLate}, the folder holds ${latePacks}`);
+  // The first download really leaves them out: index.js's package list (file_packager's metadata) names no file under them
+  const indexJs = fs.readFileSync(path.join(dir, 'index.js'), 'utf8');
+  for (const pack of manifest.latePacks ?? []) {
+    expect(!indexJs.includes(`/project/${pack.folder}/`), `index.data still holds files of the late folder ${pack.folder}`);
+  }
   for (const name of compressible) {
     const entry = manifest.files[name];
     const plain = fs.readFileSync(path.join(dir, name));
@@ -174,7 +179,9 @@ try {
     n2Failed: (message) => globalThis.__n2Failed(message),
     onAbort: (reason) => globalThis.__n2Failed(`abort: ${reason}`),
   }).then((engine) => {
-    // 3. The late packs, fetched once the player runs, as the page does after callMain
+    // 3. The late packs, fetched once the player runs, as the page does after callMain. The fetch and the mount are a few
+    // promise steps on files read from disk, the 30 frames each a timer: the mount comes long before the last frame (the
+    // runtime does not exit when the player stops, so a mount after it would still work)
     if (latePacks.length > 0) lateDone = loader.fetchLatePacks(engine);
   }).catch((error) => globalThis.__n2Failed(String(error?.message ?? error)));
   const framesRun = await done;

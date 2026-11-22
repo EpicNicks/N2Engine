@@ -74,6 +74,20 @@ TEST_F(LatePacksTest, AFolderIsPendingUntilItsPackArrivesAndOnlyWhatIsInsideIt)
     EXPECT_FALSE(IO::LatePacks::Arrive(late, IO::MakeFolderMount(_root / "pack"))) << "it arrives once";
 }
 
+TEST_F(LatePacksTest, AFailedPackStaysPendingAndIsCountedUntilItArrives)
+{
+    const fs::path late = _root / "project" / "assets" / "late";
+    IO::LatePacks::Register(late);
+    IO::LatePacks::Fail(_root / "project" / "assets" / "unknown"); // not registered: nothing
+    EXPECT_TRUE(IO::LatePacks::Failed().empty());
+    IO::LatePacks::Fail(late);
+    ASSERT_EQ(IO::LatePacks::Failed().size(), 1u);
+    EXPECT_TRUE(IO::LatePacks::IsPending(late / "x.scene")) << "its files are still not there";
+    fs::create_directories(_root / "pack");
+    ASSERT_TRUE(IO::LatePacks::Arrive(late, IO::MakeFolderMount(_root / "pack")));
+    EXPECT_TRUE(IO::LatePacks::Failed().empty()) << "a pack that arrives after all is no longer failed";
+}
+
 TEST_F(LatePacksTest, ALateSceneLoadsOnlyAfterItsPackArrivedAndTheScanIndexedIt)
 {
     Write(_root / "project" / "assets" / "scenes" / "Main.scene", R"({"name":"Main","rootGameObjects":[]})");

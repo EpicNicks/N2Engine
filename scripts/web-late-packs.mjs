@@ -48,6 +48,7 @@ export function folderEntries(dir) {
 /** Writes the packs; returns [{file, folder, files, bytes}] */
 export function writeLatePacks(projectDir, outDir, folders) {
   const packs = [];
+  if (new Set(folders).size !== folders.length) throw new Error('a late folder is listed twice');
   // Overlapping folders would mount one inside the other: refused
   for (const a of folders) {
     for (const b of folders) {

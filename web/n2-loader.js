@@ -296,18 +296,28 @@
       packs.forEach(function (pack) {
         chain = chain.then(function () {
           var expected = manifest.files[pack.file] && manifest.files[pack.file].raw;
-          return get(pack.file).then(function (response) {
-            return readAll(response, function () {});
-          }).then(function (bytes) {
-            if (expected && bytes.length !== expected) {
-              throw new Error(pack.file + ' arrived with ' + bytes.length + ' bytes but the build says ' + expected);
-            }
+          // Up to three tries (a dropped connection), then the player is told (Assets.FailedCount)
+          function download(tries) {
+            return get(pack.file).then(function (response) {
+              return readAll(response, function () {});
+            }).then(function (bytes) {
+              if (expected && bytes.length !== expected) {
+                throw new Error(pack.file + ' arrived with ' + bytes.length + ' bytes but the build says ' + expected);
+              }
+              return bytes;
+            }).catch(function (error) {
+              if (tries <= 1) throw error;
+              return download(tries - 1);
+            });
+          }
+          return download(3).then(function (bytes) {
             engine.FS.writeFile('/' + pack.file, bytes);
             var ok = engine.ccall('n2_mount_late_pack', 'number', ['string', 'string'], ['/' + pack.file, pack.folder]);
             if (!ok) throw new Error('the player did not mount it (see the log)');
             mounted++;
             onEvent('late-pack-ready', { file: pack.file, folder: pack.folder, bytes: bytes.length });
           }).catch(function (error) {
+            try { engine.ccall('n2_late_pack_failed', null, ['string'], [pack.folder]); } catch (ignored) { /* an older player */ }
             onEvent('late-pack-failed', { file: pack.file, folder: pack.folder,
               reason: String(error && error.message ? error.message : error) });
           });

@@ -33,6 +33,14 @@ const compressible = new Set(['.html', '.js', '.wasm', '.data', '.n2pack']);
 for (const name of fs.readdirSync(dir)) {
   if (/\.(br|gz)$/.test(name) || name === 'manifest.json') fs.rmSync(path.join(dir, name));
 }
+// #425: a late pack of an earlier build that this one does not name (the list was dropped or changed) goes too
+const namedLate = new Set();
+if (latePacksFile) {
+  for (const pack of JSON.parse(fs.readFileSync(latePacksFile, 'utf8')).packs ?? []) namedLate.add(pack.file);
+}
+for (const name of fs.readdirSync(dir)) {
+  if (/^late-\d+\.n2pack$/.test(name) && !namedLate.has(name)) fs.rmSync(path.join(dir, name));
+}
 fs.copyFileSync(loader, path.join(dir, 'n2-loader.js'));
 
 // The page's two script tags get ?v=<first 12 hex digits of the file's sha256>, the same version the loader puts on

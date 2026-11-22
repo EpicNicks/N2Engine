@@ -131,6 +131,15 @@ extern "C" EMSCRIPTEN_KEEPALIVE int n2_mount_late_pack(const char *file, const c
     }
     return 1;
 }
+
+/// The loader gave up on the pack of `folder` (the project-relative folder late-packs.json names): Assets.FailedCount counts it
+extern "C" EMSCRIPTEN_KEEPALIVE void n2_late_pack_failed(const char *folder)
+{
+    if (folder != nullptr && !g_lateProjectDir.empty())
+    {
+        N2Engine::IO::LatePacks::Fail(g_lateProjectDir / N2Engine::IO::PathFromUtf8(std::string(folder)));
+    }
+}
 #endif
 
 namespace

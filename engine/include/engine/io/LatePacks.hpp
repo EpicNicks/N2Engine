@@ -33,6 +33,11 @@ namespace N2Engine::IO
         /// ResourceLoader rescans the project's assets when it is initialised. False (nothing changes) for a folder that was
         /// not registered or has arrived already.
         bool Arrive(const std::filesystem::path &folder, std::unique_ptr<IMount> mount);
+        /// The pack of a registered folder could not be fetched (the loader tried, and gave up): the folder stays pending (its
+        /// files are not there) and is counted by Failed, so a game can say so instead of waiting
+        void Fail(const std::filesystem::path &folder);
+        /// The registered folders whose pack failed and has not arrived since
+        [[nodiscard]] std::vector<std::filesystem::path> Failed();
         /// Forgets every folder (tests; a player that opens another project)
         void Reset();
     }

@@ -74,7 +74,8 @@ test('the loader fetches every late pack after the start, writes it and has the 
   const mounted = await loader.fetchLatePacks(engine);
   assert.equal(mounted, 1, 'the player refused the second (0): it stays pending');
   assert.deepEqual(written, [['/late-0.n2pack', 'first pack'], ['/late-1.n2pack', 'second pack!']]);
-  assert.deepEqual(mounts, [['n2_mount_late_pack', '/late-0.n2pack', 'assets/a'], ['n2_mount_late_pack', '/late-1.n2pack', 'assets/b']]);
+  assert.deepEqual(mounts, [['n2_mount_late_pack', '/late-0.n2pack', 'assets/a'], ['n2_mount_late_pack', '/late-1.n2pack', 'assets/b'],
+    ['n2_late_pack_failed', 'assets/b']], 'a refused mount is reported to the player as failed (Assets.FailedCount)');
   assert.ok(requested.includes(`late-0.n2pack?v=${files['late-0.n2pack'].sha256.slice(0, 12)}`), 'fetched by its hash');
   assert.deepEqual(events.filter(([n]) => n.startsWith('late-pack')).map(([n, d]) => [n, d.file]),
     [['late-pack-ready', 'late-0.n2pack'], ['late-pack-failed', 'late-1.n2pack']]);
@@ -83,15 +84,19 @@ test('the loader fetches every late pack after the start, writes it and has the 
 test('a pack of the wrong size is not mounted, and a package without late packs fetches nothing', async () => {
   const data = Buffer.from('short');
   const manifest = { format: 1, files: { 'late-0.n2pack': { raw: 99, sha256: 'a'.repeat(64) } }, latePacks: [{ file: 'late-0.n2pack', folder: 'assets/a' }] };
-  const fetchFn = async (url) => (url === 'manifest.json' ? new Response(JSON.stringify(manifest)) : new Response(data));
+  let fetches = 0;
+  const fetchFn = async (url) => { fetches++; return url === 'manifest.json' ? new Response(JSON.stringify(manifest)) : new Response(data); };
   const events = [];
   const loader = N2Loader.create({ fetch: fetchFn, onEvent: (name, detail) => events.push([name, detail]) });
   loader.run(() => new Promise(() => {}), {}).catch(() => {});
   await new Promise((resolve) => setTimeout(resolve, 20));
-  let calls = 0;
-  const mounted = await loader.fetchLatePacks({ FS: { writeFile: () => calls++ }, ccall: () => { calls++; return 1; } });
+  let writes = 0;
+  const called = [];
+  const mounted = await loader.fetchLatePacks({ FS: { writeFile: () => writes++ }, ccall: (name, type, types, args) => { called.push([name, ...args]); return 1; } });
   assert.equal(mounted, 0);
-  assert.equal(calls, 0, 'nothing written or mounted');
+  assert.equal(writes, 0, 'nothing written');
+  assert.deepEqual(called, [['n2_late_pack_failed', 'assets/a']], 'not mounted; the player is told it failed');
+  assert.equal(fetches, 1 + 3 + 1, 'the manifest, three tries of the pack, and the index.data run() asked for') ;
   assert.match(events.find(([n]) => n === 'late-pack-failed')[1].reason, /99/);
 
   const none = N2Loader.create({ fetch: async () => new Response(JSON.stringify({ format: 1, files: {} })) });

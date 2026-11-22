@@ -1,6 +1,7 @@
 #include "engine/io/LatePacks.hpp"
 
 #include <algorithm>
+#include <exception>
 #include <format>
 
 #include "engine/Logger.hpp"
@@ -14,6 +15,7 @@ namespace N2Engine::IO::LatePacks
         {
             std::filesystem::path root;
             bool arrived = false;
+            bool failed = false;
         };
 
         std::vector<Folder> &Folders()
@@ -103,14 +105,51 @@ namespace N2Engine::IO::LatePacks
         }
         Vfs::Instance().Mount(root, std::move(mount));
         it->arrived = true;
+        it->failed = false;
         ResourceLoader &loader = ResourceLoader::Instance();
         if (!loader.GetAssetsRoot().empty())
         {
-            const auto result = loader.RescanAssets();
-            (void)result;
+            // The rescan can throw (a folder that cannot be walked): this runs from the loader's call, which must get an
+            // answer, so the error is logged; the pack stays mounted and the next rescan (an asset change) tries again
+            try
+            {
+                const auto result = loader.RescanAssets();
+                (void)result;
+            }
+            catch (const std::exception &error)
+            {
+                Logger::Error(std::format("Late pack {}: the asset rescan failed ({}); its files load after the next rescan",
+                                          PathToUtf8(root), error.what()));
+            }
         }
         Logger::Info(std::format("Late pack arrived: {} is available", PathToUtf8(root)));
         return true;
+    }
+
+    void Fail(const std::filesystem::path &folder)
+    {
+        const std::filesystem::path root = Normal(folder);
+        for (Folder &f : Folders())
+        {
+            if (f.root == root && !f.arrived)
+            {
+                f.failed = true;
+                Logger::Error(std::format("Late pack for {} could not be fetched: its files are not available", PathToUtf8(root)));
+            }
+        }
+    }
+
+    std::vector<std::filesystem::path> Failed()
+    {
+        std::vector<std::filesystem::path> out;
+        for (const Folder &f : Folders())
+        {
+            if (f.failed && !f.arrived)
+            {
+                out.push_back(f.root);
+            }
+        }
+        return out;
     }
 
     void Reset()

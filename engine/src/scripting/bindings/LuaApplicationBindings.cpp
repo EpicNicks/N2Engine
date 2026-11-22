@@ -22,7 +22,9 @@ namespace N2Engine::Scripting::Bindings
                 return !IO::LatePacks::IsPending(resolved) && IO::Vfs::Instance().Exists(resolved);
             },
             // How many late packs have not arrived yet (0 outside the web player, and once all have)
-            "PendingCount", []() -> int { return static_cast<int>(IO::LatePacks::Pending().size()); });
+            "PendingCount", []() -> int { return static_cast<int>(IO::LatePacks::Pending().size()); },
+            // How many of them could not be fetched (the loader tried three times): their files will not come in this session
+            "FailedCount", []() -> int { return static_cast<int>(IO::LatePacks::Failed().size()); });
 
         // ===== Application Global =====
         lua["Application"] = lua.create_table_with(
