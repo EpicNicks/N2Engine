@@ -383,14 +383,15 @@ jobs:
 
       # The physics bench (#381 item 7): Jolt and PhysX step cost on a settled pile, an active pile and joint chains, 1000
       # raycasts and the Jolt snapshot cost, printed as tables into this job's summary (scripts/physics-bench-summary.py).
-      # Shared-runner timings are noise: nothing judges a number; the step fails only when the bench itself fails.
+      # Shared-runner timings are noise: nothing judges a number; the step fails only when the bench itself fails. Native legs
+      # also run PhysicsCorpusThreadsTest here, so its [CORPUS-THREADS] lines are in the log (ctest hides a passing test's).
       - name: Physics bench numbers
         if: needs.changes.outputs.docs_only != 'true' && matrix.config == 'Release' && matrix.physx == 'ON' && !cancelled()
         shell: pwsh
         env:
           ALSOFT_DRIVERS: "null"
         run: |
-          & "./build/bin/Release/engine_tests.exe" --gtest_filter='PhysicsBackendBenchTest.*' | Tee-Object -FilePath physics-bench.log
+          & "./build/bin/Release/engine_tests.exe" --gtest_filter='PhysicsBackendBenchTest.*:PhysicsCorpusThreadsTest.*' | Tee-Object -FilePath physics-bench.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/physics-bench-summary.py --leg windows-release physics-bench.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -672,12 +673,13 @@ jobs:
 
       # The physics bench (#381 item 7): Jolt and PhysX step cost on a settled pile, an active pile and joint chains, 1000
       # raycasts and the Jolt snapshot cost, printed as tables into this job's summary (scripts/physics-bench-summary.py).
-      # Shared-runner timings are noise: nothing judges a number; the step fails only when the bench itself fails.
+      # Shared-runner timings are noise: nothing judges a number; the step fails only when the bench itself fails. Native legs
+      # also run PhysicsCorpusThreadsTest here, so its [CORPUS-THREADS] lines are in the log (ctest hides a passing test's).
       - name: Physics bench numbers
         if: ${{ !cancelled() }}
         run: |
           set -o pipefail
-          ./build/bin/engine_tests --gtest_filter='PhysicsBackendBenchTest.*' | tee physics-bench.log
+          ./build/bin/engine_tests --gtest_filter='PhysicsBackendBenchTest.*:PhysicsCorpusThreadsTest.*' | tee physics-bench.log
           python3 scripts/physics-bench-summary.py --leg linux-x86_64-clang physics-bench.log
         env:
           ALSOFT_DRIVERS: "null"
@@ -1378,12 +1380,13 @@ jobs:
 
       # The physics bench (#381 item 7): Jolt and PhysX step cost on a settled pile, an active pile and joint chains, 1000
       # raycasts and the Jolt snapshot cost, printed as tables into this job's summary (scripts/physics-bench-summary.py).
-      # Shared-runner timings are noise: nothing judges a number; the step fails only when the bench itself fails.
+      # Shared-runner timings are noise: nothing judges a number; the step fails only when the bench itself fails. Native legs
+      # also run PhysicsCorpusThreadsTest here, so its [CORPUS-THREADS] lines are in the log (ctest hides a passing test's).
       - name: Physics bench numbers
         if: ${{ !cancelled() }}
         run: |
           set -o pipefail
-          ./build/bin/engine_tests --gtest_filter='PhysicsBackendBenchTest.*' | tee physics-bench.log
+          ./build/bin/engine_tests --gtest_filter='PhysicsBackendBenchTest.*:PhysicsCorpusThreadsTest.*' | tee physics-bench.log
           python3 scripts/physics-bench-summary.py --leg linux-arm64-clang physics-bench.log
         env:
           ALSOFT_DRIVERS: "null"
@@ -1629,12 +1632,13 @@ jobs:
 
       # The physics bench (#381 item 7): Jolt and PhysX step cost on a settled pile, an active pile and joint chains, 1000
       # raycasts and the Jolt snapshot cost, printed as tables into this job's summary (scripts/physics-bench-summary.py).
-      # Shared-runner timings are noise: nothing judges a number; the step fails only when the bench itself fails.
+      # Shared-runner timings are noise: nothing judges a number; the step fails only when the bench itself fails. Native legs
+      # also run PhysicsCorpusThreadsTest here, so its [CORPUS-THREADS] lines are in the log (ctest hides a passing test's).
       - name: Physics bench numbers
         if: ${{ !cancelled() }}
         run: |
           set -o pipefail
-          ./build/bin/engine_tests --gtest_filter='PhysicsBackendBenchTest.*' | tee physics-bench.log
+          ./build/bin/engine_tests --gtest_filter='PhysicsBackendBenchTest.*:PhysicsCorpusThreadsTest.*' | tee physics-bench.log
           python3 scripts/physics-bench-summary.py --leg linux-x86_64-gcc physics-bench.log
         env:
           ALSOFT_DRIVERS: "null"
@@ -1978,7 +1982,8 @@ jobs:
 
       # The physics bench (#381 item 7): Jolt and PhysX step cost on a settled pile, an active pile and joint chains, 1000
       # raycasts and the Jolt snapshot cost, printed as tables into this job's summary (scripts/physics-bench-summary.py).
-      # Shared-runner timings are noise: nothing judges a number; the step fails only when the bench itself fails.
+      # Shared-runner timings are noise: nothing judges a number; the step fails only when the bench itself fails. Native legs
+      # also run PhysicsCorpusThreadsTest here, so its [CORPUS-THREADS] lines are in the log (ctest hides a passing test's).
       - name: Physics bench numbers
         if: ${{ !cancelled() }}
         run: |

@@ -105,7 +105,9 @@ namespace N2PhysicsTests
             built.bodies = count;
         }
 
-        /// `count` bodies as chains of 10 hinged links hanging from world points in a row
+        /// `count` bodies rounded down to whole chains of 10 hinged links (at least one chain), hanging straight from world
+        /// points on a grid 1 apart (the links are 0.3 wide, so none overlaps at the start); each chain's last link is
+        /// pushed sideways, so the chains swing into each other
         void BuildJointChains(IPhysicsBackend &backend, const int count, Built &built)
         {
             const PhysicsMaterial material = PhysicsMaterial::Default();
@@ -115,14 +117,13 @@ namespace N2PhysicsTests
             const int chains = std::max(1, count / 10);
             for (int chain = 0; chain < chains; ++chain)
             {
-                const float x = -10.0f + 0.7f * static_cast<float>(chain);
+                const float x = -10.0f + 1.0f * static_cast<float>(chain % 20);
+                const float z = 1.0f * static_cast<float>(chain / 20);
                 PhysicsBodyHandle previous;
                 Vector3 previousPos;
                 for (int link = 0; link < 10; ++link)
                 {
-                    // Each chain starts turned a little, so the chains swing and collide
-                    const Vector3 position(x + 0.25f * static_cast<float>(link) * static_cast<float>(chain % 3), 12.0f - 0.8f * static_cast<float>(link),
-                                           0.1f * static_cast<float>(chain % 4));
+                    const Vector3 position(x, 12.0f - 0.8f * static_cast<float>(link), z);
                     const PhysicsBodyHandle body =
                         backend.CreateDynamicBody(position, Math::Quaternion::Identity, 1.0f, nullptr, false);
                     backend.AddBoxCollider(body, nullptr, Vector3(0.15f, 0.35f, 0.15f), Vector3::Zero, material);
@@ -146,6 +147,7 @@ namespace N2PhysicsTests
                     previousPos = position;
                     ++built.bodies;
                 }
+                backend.SetVelocity(previous, Vector3(2.0f * static_cast<float>(chain % 3 - 1), 0.0f, 1.0f * static_cast<float>(chain % 2)));
             }
         }
 

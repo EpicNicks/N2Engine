@@ -637,7 +637,7 @@ namespace N2PhysicsTests
                 join(JointType::Slider, base, basePos, piston, rodPos, Vector3(4.0f, 1.0f, 0.0f), Vector3(0.0f, 1.0f, 0.0f), true,
                      -0.2f, 0.4f);
 
-                // The welded pair, dropped turned onto the floor
+                // The welded pair, dropped spinning onto the floor
                 const Vector3 leftPos(-4.0f, 3.0f, 1.0f);
                 const Vector3 rightPos(-3.2f, 3.0f, 1.0f);
                 const PhysicsBodyHandle left = box(leftPos, Vector3(0.4f, 0.2f, 0.3f), 1.5f);
@@ -796,11 +796,19 @@ namespace N2PhysicsTests
             }
         }
 
-        // A deterministic single-threaded Jolt backend, the one every corpus scene runs on
-        void InitSingle(JoltBackend &backend)
+        // A deterministic single-threaded Jolt backend, the one every corpus scene runs on; false when it does not start
+        [[nodiscard]] bool InitSingle(JoltBackend &backend)
         {
             backend.SetDeterministic(true);
-            EXPECT_TRUE(backend.Initialize());
+            return backend.Initialize();
+        }
+
+        // The backend's state hash, which a joint rollback compares: a failure when there is none (0 == 0 proves nothing)
+        std::uint64_t RequiredHash(const JoltBackend &backend)
+        {
+            const std::optional<std::uint64_t> hash = backend.HashState();
+            EXPECT_TRUE(hash.has_value()) << "the backend gave no state hash";
+            return hash.value_or(0);
         }
 
         // ===== scenes 9 and 10: a world with inputs, for the snapshot and the rollback =====
@@ -1290,21 +1298,21 @@ namespace N2PhysicsTests
     TEST_F(PhysicsDeterminismCorpusTest, Scene11Joints)
     {
         JoltBackend backend;
-        InitSingle(backend);
+        ASSERT_TRUE(InitSingle(backend));
         SceneJoints(backend, JoltRecords());
     }
 
     TEST_F(PhysicsDeterminismCorpusTest, Scene12LargePile)
     {
         JoltBackend backend;
-        InitSingle(backend);
+        ASSERT_TRUE(InitSingle(backend));
         SceneLargePile(backend, JoltRecords());
     }
 
     TEST_F(PhysicsDeterminismCorpusTest, Scene13Projectiles)
     {
         JoltBackend backend;
-        InitSingle(backend);
+        ASSERT_TRUE(InitSingle(backend));
         SceneProjectiles(backend, JoltRecords());
     }
 
@@ -1316,7 +1324,7 @@ namespace N2PhysicsTests
         std::vector<std::uint64_t> straightHashes(kTicks / kInterval + 1, 0);
         {
             JoltBackend backend;
-            InitSingle(backend);
+            ASSERT_TRUE(InitSingle(backend));
             JointRig rig;
             rig.Build(backend);
             for (int tick = 1; tick <= kTicks; ++tick)
@@ -1325,12 +1333,12 @@ namespace N2PhysicsTests
                 Tick(backend);
                 if (tick % kInterval == 0)
                 {
-                    straightHashes[static_cast<std::size_t>(tick / kInterval)] = backend.HashState().value_or(0);
+                    straightHashes[static_cast<std::size_t>(tick / kInterval)] = RequiredHash(backend);
                 }
             }
         }
         JoltBackend backend;
-        InitSingle(backend);
+        ASSERT_TRUE(InitSingle(backend));
         JointRig rig;
         rig.Build(backend);
         for (int base = 0; base < kTicks; base += 10)
@@ -1351,7 +1359,7 @@ namespace N2PhysicsTests
             const int done = base + 10;
             if (done % kInterval == 0)
             {
-                const std::uint64_t hash = backend.HashState().value_or(0);
+                const std::uint64_t hash = RequiredHash(backend);
                 Add(JoltRecords(), "joint_rollback", "state", done, hash);
                 EXPECT_EQ(hash, straightHashes[static_cast<std::size_t>(done / kInterval)])
                     << "the rolled-back joint rig differs from the straight run at tick " << done;
@@ -1395,7 +1403,7 @@ namespace N2PhysicsTests
             std::vector<Record> single;
             {
                 JoltBackend backend;
-                InitSingle(backend);
+                ASSERT_TRUE(InitSingle(backend));
                 ASSERT_TRUE(backend.UsesSingleThreadedJobSystem());
                 scene.run(backend, single);
             }
@@ -1436,7 +1444,7 @@ namespace N2PhysicsTests
         std::vector<std::uint64_t> straight;
         {
             JoltBackend backend;
-            InitSingle(backend);
+            ASSERT_TRUE(InitSingle(backend));
             JointRig rig;
             rig.Build(backend);
             for (int tick = 1; tick <= 300; ++tick)
@@ -1445,7 +1453,7 @@ namespace N2PhysicsTests
                 Tick(backend);
                 if (tick % kInterval == 0)
                 {
-                    straight.push_back(backend.HashState().value_or(0));
+                    straight.push_back(RequiredHash(backend));
                 }
             }
         }
@@ -1473,10 +1481,13 @@ namespace N2PhysicsTests
             }
             if ((base + 10) % kInterval == 0)
             {
-                rolled.push_back(backend.HashState().value_or(0));
+                rolled.push_back(RequiredHash(backend));
             }
         }
         EXPECT_EQ(rolled, straight);
+        std::printf("[CORPUS-THREADS] joint_rollback workers=3 records=%zu last=%s straight=%s\n", rolled.size(),
+                    rolled.empty() ? "-" : Hex(rolled.back()).c_str(), straight.empty() ? "-" : Hex(straight.back()).c_str());
+        std::fflush(stdout);
 #endif
     }
 
