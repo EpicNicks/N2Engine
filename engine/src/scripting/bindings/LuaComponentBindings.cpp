@@ -30,6 +30,7 @@
 #include "engine/example/renderers/SphereRenderer.hpp"
 #include <assetimport/ModelImporters.hpp>
 #include "engine/io/ResourcePath.hpp"
+#include "engine/scripting/LuaJson.hpp"
 #include "engine/scripting/ScriptCoroutine.hpp"
 #include "engine/physics/BoxCollider.hpp"
 #include "engine/physics/CapsuleCollider.hpp"
@@ -69,6 +70,7 @@ namespace N2Engine::Scripting::Bindings
         {
             std::function<sol::object(GameObject &, sol::this_state)> add;
             std::function<sol::object(const GameObject &, sol::this_state)> get;
+            std::function<sol::object(const GameObject &, sol::this_state)> getAll; // a plain array, maybe empty
             std::function<sol::object(Component &, lua_State *)> asLua; // null object if not this type
             std::function<std::optional<ComponentRefBase>(const sol::object &)> asRef; // nullopt if not this type
         };
@@ -88,6 +90,17 @@ namespace N2Engine::Scripting::Bindings
                         return sol::make_object(state, ComponentRef<T>(*component));
                     }
                     return sol::lua_nil;
+                },
+                [](const GameObject &go, sol::this_state state) -> sol::object
+                {
+                    const std::vector<T *> components = go.GetComponents<T>();
+                    sol::table list = sol::state_view(state).create_table(static_cast<int>(components.size()), 0);
+                    int index = 1;
+                    for (T *component : components)
+                    {
+                        list[index++] = ComponentRef<T>(*component);
+                    }
+                    return list;
                 },
                 [](Component &component, lua_State *state) -> sol::object
                 {
@@ -495,6 +508,11 @@ namespace N2Engine::Scripting::Bindings
         return FindAccess(typeName).get(gameObject, state);
     }
 
+    sol::object GetComponentsByName(const GameObject &gameObject, const std::string &typeName, sol::this_state state)
+    {
+        return FindAccess(typeName).getAll(gameObject, state);
+    }
+
     std::vector<Math::Vector2> ReadVector2Array(const sol::table &points, const std::string_view caller)
     {
         std::vector<Math::Vector2> result;
@@ -659,6 +677,16 @@ namespace N2Engine::Scripting::Bindings
                 sprite->SetTexture(path ? LoadTextureOrThrow(*path, "Sprite2D:SetTexture") : nullptr);
             },
             "HasTexture", [](const Sprite2DRef &ref) { return ref.Pin()->GetTexture() != nullptr; },
+            // The texture's resource path (as SetTexture takes it), or nil without one
+            "GetTexture", [](const Sprite2DRef &ref) -> sol::optional<std::string>
+            {
+                const auto &texture = ref.Pin()->GetTexture();
+                if (!texture)
+                {
+                    return sol::nullopt;
+                }
+                return TexturePathForLua(*texture);
+            },
             // The texture's size in pixels, or nil without one (for an outline's padding maths)
             "GetTextureSize", [](const Sprite2DRef &ref) -> sol::optional<Math::Vector2>
             {
@@ -1123,6 +1151,14 @@ namespace N2Engine::Scripting::Bindings
             },
             "GetScriptPath", [](const LuaComponentRef &c) { return c.Pin()->GetScriptPath().ToString(); },
             "HasMissingScript", Forward<LuaComponentRef, &LuaComponent::HasMissingScript>(),
+            // The component's field values (its scriptData) as a new Lua table, objects and arrays included, which are
+            // not put on the script's `self`; a .prefab instance's values with its overrides applied. A copy: changing it
+            // changes nothing. Nesting deeper than 100 is a Lua error.
+            "GetScriptData", [](const LuaComponentRef &c, sol::this_state state)
+            {
+                return JsonToLua(c.Pin()->GetScriptData(), sol::state_view(state), JsonMaxDepth,
+                                 "LuaComponent:GetScriptData");
+            },
             // The script's instance table (its `self`), or nil when no script runs: how one script calls another's
             // functions. The same table each time; see GameObject:GetScript.
             "GetScript", [](const LuaComponentRef &c) -> sol::object

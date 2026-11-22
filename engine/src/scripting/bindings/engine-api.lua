@@ -792,6 +792,10 @@ function GameObject:IsValid() end
 ---@return string
 function GameObject:GetName() end
 
+---The object's UUID as text (what a .prefab's {"ref": uuid} fields name; a prefab instance's ids are renumbered)
+---@return string
+function GameObject:GetUUID() end
+
 ---Set the name of this GameObject
 ---@param name string
 function GameObject:SetName(name) end
@@ -864,6 +868,19 @@ function GameObject:FindChild(name) end
 ---@return GameObject|nil
 function GameObject:FindChildRecursive(name) end
 
+---The number of direct children
+---@return integer
+function GameObject:GetChildCount() end
+
+---The direct child at a 1-based sibling index, nil out of range
+---@param index integer
+---@return GameObject|nil
+function GameObject:GetChild(index) end
+
+---The direct children in sibling order, as a plain array (a snapshot, not a live view)
+---@return GameObject[]
+function GameObject:GetChildren() end
+
 ---Destroy this GameObject (does nothing if it's already destroyed)
 function GameObject:Destroy() end
 
@@ -880,6 +897,12 @@ function GameObject:AddComponent(typeName) end
 ---@param typeName string
 ---@return Component|nil nil when the object has no component of that type
 function GameObject:GetComponent(typeName) end
+
+---Every component of a type, in the object's order (GetComponent's is the first), as a plain array, empty for none
+---(same names as AddComponent)
+---@param typeName string
+---@return Component[]
+function GameObject:GetComponents(typeName) end
 
 ---The instance table (self) of the first LuaComponent here whose script runs, or of the first running `path`.
 ---How one script calls another: obj:GetScript("res://scripts/Enemy.lua"):Damage(1)
@@ -1537,6 +1560,11 @@ function LuaComponent:GetScriptPath() end
 ---True when the script is missing, failed to load, or didn't return a table
 ---@return boolean
 function LuaComponent:HasMissingScript() end
+
+---The component's field values (its scriptData) as a new table, objects and arrays included (they are not put on
+---the script's self). A copy: changing it changes nothing. Nesting deeper than 100 is an error.
+---@return table
+function LuaComponent:GetScriptData() end
 
 ---The running script's instance table (its self), or nil when no script runs. The same table each call; once the
 ---component is destroyed its gameObject and component fields are nil.
@@ -2492,6 +2520,9 @@ function Sprite2D:GetFlash() end
 function Sprite2D:SetTexture(path) end
 ---@return boolean
 function Sprite2D:HasTexture() end
+---The texture's resource path (as SetTexture takes it), or nil without one
+---@return string|nil
+function Sprite2D:GetTexture() end
 ---The texture's size in pixels, or nil without a texture
 ---@return Vector2|nil
 function Sprite2D:GetTextureSize() end

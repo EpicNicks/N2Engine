@@ -238,6 +238,29 @@ TEST_F(LuaSceneTest, GetComponentReturnsSameComponentOrNil)
     Lua()["get_test_added"] = sol::lua_nil;
 }
 
+// GetComponents lists every component of a type in the object's order; empty for none, an error for an unknown name
+TEST_F(LuaSceneTest, GetComponentsListsEveryComponentOfATypeInOrder)
+{
+    Run(R"(
+        get_test_go = GameObject.Create("GetComponentsTest")
+        get_test_first = get_test_go:AddComponent("LuaComponent")
+        get_test_go:AddComponent("SphereRenderer")
+        get_test_second = get_test_go:AddComponent("LuaComponent")
+    )");
+
+    EXPECT_EQ(LuaValue("#get_test_go:GetComponents('LuaComponent')").as<int>(), 2);
+    EXPECT_TRUE(LuaValue("get_test_go:GetComponents('LuaComponent')[1] == get_test_first").as<bool>());
+    EXPECT_TRUE(LuaValue("get_test_go:GetComponents('LuaComponent')[2] == get_test_second").as<bool>());
+    EXPECT_TRUE(LuaValue("get_test_go:GetComponents('LuaComponent')[1] == get_test_go:GetComponent('LuaComponent')").as<bool>());
+    EXPECT_EQ(LuaValue("#get_test_go:GetComponents('SphereRenderer')").as<int>(), 1);
+    EXPECT_EQ(LuaValue("#get_test_go:GetComponents('BoxCollider')").as<int>(), 0) << "an empty array, not nil";
+    EXPECT_FALSE(LuaValue("pcall(function() return get_test_go:GetComponents('NoSuchType') end)").as<bool>());
+
+    Lua()["get_test_go"] = sol::lua_nil;
+    Lua()["get_test_first"] = sol::lua_nil;
+    Lua()["get_test_second"] = sol::lua_nil;
+}
+
 TEST_F(LuaSceneTest, EveryScriptableComponentCanBeAdded)
 {
     for (const std::string &name : Bindings::GetScriptableComponentNames())

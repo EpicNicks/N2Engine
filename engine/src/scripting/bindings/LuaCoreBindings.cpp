@@ -8,6 +8,7 @@
 #include "engine/Layers.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <format>
 #include <stdexcept>
 #include <vector>
@@ -84,6 +85,8 @@ namespace N2Engine::Scripting::Bindings
 
             "IsValid", [](const GameObjectRef &go) { return go.IsValid(); },
             "GetName", Forward<GameObjectRef, &GameObject::GetName>(),
+            // The object's UUID as text: what a .prefab's {"ref": uuid} fields name, renumbered with the instance
+            "GetUUID", [](const GameObjectRef &go) { return go.Pin()->GetUUID().ToString(); },
             "SetName", Forward<GameObjectRef, &GameObject::SetName>(),
             "GetTag", Forward<GameObjectRef, &GameObject::GetTag>(),
             "SetTag", Forward<GameObjectRef, &GameObject::SetTag>(),
@@ -151,6 +154,22 @@ namespace N2Engine::Scripting::Bindings
             {
                 return RefOrNil(go.Pin()->FindChildRecursive(name));
             },
+            "GetChildCount", [](const GameObjectRef &go)
+            {
+                return static_cast<std::int64_t>(go.Pin()->GetChildCount());
+            },
+            // 1-based, as Lua arrays (and GetChildren's) are; nil out of range
+            "GetChild", [](const GameObjectRef &go, const std::int64_t index)
+            {
+                const GameObject::Ptr gameObject = go.Pin();
+                if (index < 1 || static_cast<std::uint64_t>(index) > gameObject->GetChildCount())
+                {
+                    return sol::optional<GameObjectRef>();
+                }
+                return RefOrNil(gameObject->GetChild(static_cast<size_t>(index - 1)));
+            },
+            // A snapshot in sibling order, so the script may reparent or destroy while it walks it
+            "GetChildren", [](const GameObjectRef &go) { return RefList(go.Pin()->GetChildren()); },
             "Destroy", [](const GameObjectRef &go)
             {
                 // Destroying an already destroyed object is a no-op, not an error
@@ -166,6 +185,11 @@ namespace N2Engine::Scripting::Bindings
             "GetComponent", [](const GameObjectRef &go, const std::string &typeName, sol::this_state state)
             {
                 return GetComponentByName(*go.Pin(), typeName, state);
+            },
+            // Every component of that type, in the object's order (GetComponent's is the first), as a plain array
+            "GetComponents", [](const GameObjectRef &go, const std::string &typeName, sol::this_state state)
+            {
+                return GetComponentsByName(*go.Pin(), typeName, state);
             },
             // The instance table (`self`) of the first LuaComponent on this object whose script is running, or of the
             // first running `path` ("res://scripts/Enemy.lua") when given; nil if none. This is how one script calls

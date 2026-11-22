@@ -308,6 +308,49 @@ TEST_F(LuaPrefabSpawnTest, InstantiateWithoutAParentAddsARootOfTheSceneLinkedToT
     EXPECT_EQ(RootCount(), before + 1);
 }
 
+// A script reads an instance's field values, objects and arrays included, with GetScriptData, and finds the object a
+// {"ref": uuid} value names by GetUUID: the instance's ids are renumbered, the references with them
+TEST_F(LuaPrefabSpawnTest, GetScriptDataReadsAnInstancesFieldsAndGetUuidResolvesItsReferences)
+{
+    WriteText("scripts/Data.lua", R"(
+        local Data = {}
+        Data.__index = Data
+        Data.SerializableFields = { speed = { type = "float" }, tags = { type = "Json" }, target = { type = "Json" } }
+        return Data
+    )");
+    const GameObject::Ptr root = GameObject::Create("Holder");
+    const GameObject::Ptr target = GameObject::Create("Target");
+    root->AddChild(target, false);
+    auto *data = root->AddComponent<LuaComponent>();
+    data->SetScriptData(json{{"speed", 2.5},
+                             {"tags", json::array({"Enemy", "Wall"})},
+                             {"target", {{"ref", target->GetUUID().ToString()}, {"comp", "BoxCollider2D"}}},
+                             {"nested", {{"a", {{"b", true}}}}}});
+    data->SetScript(IO::ResourcePath("res://scripts/Data.lua"));
+    WritePrefab("prefabs/holder.prefab", root);
+    IO::ResourceLoader::Instance().Initialize(s_root); // registers the files written above
+    Lua()["prefabtest_file_target"] = target->GetUUID().ToString();
+
+    Run(R"(
+        prefabtest_go = Prefab.Instantiate("res://prefabs/holder.prefab")
+        prefabtest_other = prefabtest_go:GetComponent("LuaComponent"):GetScriptData()
+    )");
+    EXPECT_FLOAT_EQ(Eval<float>("prefabtest_other.speed"), 2.5f);
+    EXPECT_EQ(Eval<std::string>("table.concat(prefabtest_other.tags, ',')"), "Enemy,Wall") << "1-based arrays";
+    EXPECT_TRUE(Eval<bool>("prefabtest_other.nested.a.b")) << "an undeclared value is there too";
+    EXPECT_EQ(Eval<std::string>("prefabtest_other.target.comp"), "BoxCollider2D");
+    EXPECT_TRUE(Eval<bool>("prefabtest_other.target.ref == prefabtest_go:FindChild('Target'):GetUUID()"));
+    EXPECT_TRUE(Eval<bool>("prefabtest_other.target.ref ~= prefabtest_file_target")) << "renumbered with the instance";
+    EXPECT_EQ(Eval<std::string>("prefabtest_go:GetUUID()").size(), 36u);
+    EXPECT_TRUE(Eval<bool>("prefabtest_go:GetUUID() ~= prefabtest_go:FindChild('Target'):GetUUID()"));
+
+    // A copy: changing it changes nothing
+    Run("prefabtest_other.speed = 9; prefabtest_other.tags[1] = 'Player'");
+    EXPECT_FLOAT_EQ(Eval<float>("prefabtest_go:GetComponent('LuaComponent'):GetScriptData().speed"), 2.5f);
+    EXPECT_EQ(Eval<std::string>("prefabtest_go:GetComponent('LuaComponent'):GetScriptData().tags[1]"), "Enemy");
+    Run("prefabtest_file_target = nil");
+}
+
 TEST_F(LuaPrefabSpawnTest, InstantiateUnderAParentAtAWorldPositionAndRotation)
 {
     Spawner(json{{"enemy", Uuid(EnemyPath)}});

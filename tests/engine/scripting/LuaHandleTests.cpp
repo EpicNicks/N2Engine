@@ -489,6 +489,60 @@ TEST_F(LuaHandleTest, DetachedChildStaysUsable)
     EXPECT_EQ(Eval<std::string>("handle_detached:GetName()"), "Child");
 }
 
+// GetChildCount, GetChild(i) and GetChildren list the direct children in sibling order; GetChild is 1-based
+TEST_F(LuaHandleTest, ChildrenAreListedInSiblingOrder)
+{
+    const auto parent = GameObject::Create("Parent");
+    const auto first = GameObject::Create("First");
+    first->AddChild(GameObject::Create("Grandchild"));
+    parent->AddChild(first);
+    parent->AddChild(GameObject::Create("Second"));
+    parent->AddChild(GameObject::Create("Third"));
+    Lua()["handle_parent"] = GameObjectRef(parent);
+
+    EXPECT_EQ(Eval<int>("handle_parent:GetChildCount()"), 3) << "direct children only";
+    EXPECT_EQ(Eval<std::string>("handle_parent:GetChild(1):GetName()"), "First");
+    EXPECT_EQ(Eval<std::string>("handle_parent:GetChild(3):GetName()"), "Third");
+    EXPECT_TRUE(Eval<bool>("handle_parent:GetChild(0) == nil"));
+    EXPECT_TRUE(Eval<bool>("handle_parent:GetChild(4) == nil"));
+    EXPECT_TRUE(Eval<bool>("handle_parent:GetChild(-1) == nil"));
+    EXPECT_TRUE(Eval<bool>("handle_parent:GetChild(1) == handle_parent:FindChild('First')"));
+    EXPECT_EQ(Eval<std::string>(R"((function()
+        local names = {}
+        for i, child in ipairs(handle_parent:GetChildren()) do names[i] = child:GetName() end
+        return table.concat(names, ",")
+    end)())"), "First,Second,Third");
+    EXPECT_EQ(Eval<int>("handle_parent:GetChild(1):GetChildCount()"), 1);
+    EXPECT_EQ(Eval<int>("#handle_parent:GetChild(2):GetChildren()"), 0) << "a leaf has an empty array, not nil";
+
+    parent->GetChild(1)->SetSiblingIndex(0);
+    EXPECT_EQ(Eval<std::string>("handle_parent:GetChild(1):GetName()"), "Second") << "follows SetSiblingIndex";
+}
+
+// GetChildren is a snapshot: reparenting the children while walking it visits each one once
+TEST_F(LuaHandleTest, GetChildrenIsASnapshot)
+{
+    const auto parent = GameObject::Create("Parent");
+    const auto other = GameObject::Create("Other");
+    for (const char *name : {"A", "B", "C"})
+    {
+        parent->AddChild(GameObject::Create(name));
+    }
+    Lua()["handle_parent"] = GameObjectRef(parent);
+    Lua()["handle_other"] = GameObjectRef(other);
+
+    EXPECT_EQ(Eval<int>(R"((function()
+        local moved = 0
+        for _, child in ipairs(handle_parent:GetChildren()) do
+            handle_other:AddChild(child)
+            moved = moved + 1
+        end
+        return moved
+    end)())"), 3);
+    EXPECT_TRUE(parent->GetChildren().empty());
+    EXPECT_EQ(other->GetChildCount(), 3u);
+}
+
 // Handles work throughout a teardown (OnDisable/OnDestroy), including to components torn down before the
 // script's own, and fail once it's over. IsDestroyed() is already true during those callbacks, which used
 // to make self.gameObject unusable in OnDestroy.

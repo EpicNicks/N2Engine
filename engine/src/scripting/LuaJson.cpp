@@ -2,6 +2,9 @@
 
 #include <cmath>
 #include <cstdint>
+#include <format>
+#include <stdexcept>
+#include <string_view>
 #include <unordered_set>
 
 namespace N2Engine::Scripting
@@ -107,5 +110,63 @@ namespace N2Engine::Scripting
             actionsJson[key.as<std::string>()] = {{"bindings", bindings}};
         }
         return {{"actions", actionsJson}};
+    }
+
+    namespace
+    {
+        sol::object JsonToLuaAt(const nlohmann::json &value, sol::state_view lua, const int depth, const int maxDepth,
+                                const std::string_view what)
+        {
+            if (depth > maxDepth)
+            {
+                throw std::runtime_error(std::format("{}: nesting deeper than {}", what, maxDepth));
+            }
+            switch (value.type())
+            {
+            case nlohmann::json::value_t::boolean:
+                return sol::make_object(lua, value.get<bool>());
+            case nlohmann::json::value_t::number_integer:
+                return sol::make_object(lua, value.get<std::int64_t>());
+            case nlohmann::json::value_t::number_unsigned:
+            {
+                const auto u = value.get<std::uint64_t>();
+                if (u <= static_cast<std::uint64_t>(INT64_MAX))
+                {
+                    return sol::make_object(lua, static_cast<std::int64_t>(u));
+                }
+                return sol::make_object(lua, static_cast<double>(u));
+            }
+            case nlohmann::json::value_t::number_float:
+                return sol::make_object(lua, value.get<double>());
+            case nlohmann::json::value_t::string:
+                return sol::make_object(lua, value.get<std::string>());
+            case nlohmann::json::value_t::array:
+            {
+                sol::table table = lua.create_table(static_cast<int>(value.size()), 0);
+                int index = 1;
+                for (const auto &element : value)
+                {
+                    table[index++] = JsonToLuaAt(element, lua, depth + 1, maxDepth, what);
+                }
+                return table;
+            }
+            case nlohmann::json::value_t::object:
+            {
+                sol::table table = lua.create_table(0, static_cast<int>(value.size()));
+                for (const auto &[key, element] : value.items())
+                {
+                    table[key] = JsonToLuaAt(element, lua, depth + 1, maxDepth, what);
+                }
+                return table;
+            }
+            default:
+                return sol::lua_nil; // null and discarded values
+            }
+        }
+    }
+
+    sol::object JsonToLua(const nlohmann::json &value, sol::state_view lua, const int maxDepth, const std::string_view what)
+    {
+        return JsonToLuaAt(value, lua, 0, maxDepth, what);
     }
 }

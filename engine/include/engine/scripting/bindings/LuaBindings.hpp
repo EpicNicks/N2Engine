@@ -127,6 +127,8 @@ namespace N2Engine::Scripting
         sol::object AddComponentByName(GameObject& gameObject, const std::string& typeName, sol::this_state state);
         /// GameObject:GetComponent("BoxCollider"): the component, or nil if the object doesn't have one
         sol::object GetComponentByName(const GameObject& gameObject, const std::string& typeName, sol::this_state state);
+        /// GameObject:GetComponents("LuaComponent"): every component of that type, in order, as a plain array (maybe empty)
+        sol::object GetComponentsByName(const GameObject& gameObject, const std::string& typeName, sol::this_state state);
         /// Names accepted by AddComponent/GetComponent
         std::vector<std::string> GetScriptableComponentNames();
         /// A component as its concrete Lua type when it's one of those, else as Component
