@@ -11,7 +11,7 @@ namespace N2Engine::Editor
 {
     /// The version of protocol.json this server implements (ProtocolSpecTest pins the two equal). Hello compares the
     /// client's with it: the same major version is compatible, whatever the minor and patch versions.
-    inline constexpr std::string_view ProtocolVersion = "1.32.0";
+    inline constexpr std::string_view ProtocolVersion = "1.33.0";
 
     struct ProtocolVersionNumber
     {
@@ -83,6 +83,8 @@ namespace N2Engine::Editor
         SavePrefabStage = 0x2C,
         ClosePrefabStage = 0x2D,
         GetPrefabStage = 0x2E,
+        // Prefab links (nested prefabs, since 1.33.0): an instance's overrides, and reverting them
+        GetPrefabOverrides = 0x2F,
         CreateEntity = 0x30,
         DestroyEntity = 0x31,
         SetEntityTransform = 0x32,
@@ -98,6 +100,7 @@ namespace N2Engine::Editor
         InstantiateEntities = 0x3C,
         CreateScript = 0x40,
         RescanAssets = 0x41,
+        RevertPrefabOverrides = 0x42,
         ListAssets = 0xA0,
         GetAssetInfo = 0xA1,
         SetImportSettings = 0xA2,
@@ -200,6 +203,7 @@ namespace N2Engine::Editor
         PrefabStageInfo = 0x26,
         EngineStats = 0x27,
         ShaderInfo = 0x28,
+        PrefabOverrides = 0x29,
         AssetList = 0xA0,
         AssetDetail = 0xA1,
         TextData = 0xA2,

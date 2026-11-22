@@ -252,6 +252,12 @@ namespace ProtocolVectors
             }},
             {"ApplyPrefab", [](BufferReader &r) { return json{{"entityId", ApplyPrefabCmd::Deserialize(r).entityId}}; }},
             {"UnpackPrefab", [](BufferReader &r) { return json{{"entityId", UnpackPrefabCmd::Deserialize(r).entityId}}; }},
+            {"GetPrefabOverrides", [](BufferReader &r) { return json{{"entityId", GetPrefabOverridesCmd::Deserialize(r).entityId}}; }},
+            {"RevertPrefabOverrides", [](BufferReader &r)
+            {
+                const auto cmd = RevertPrefabOverridesCmd::Deserialize(r);
+                return json{{"entityId", cmd.entityId}, {"targets", cmd.targets}};
+            }},
             {"SetPhysicsBackend", [](BufferReader &r) { return json{{"backend", SetPhysicsBackendCmd::Deserialize(r).backend}}; }},
             {"MoveAsset", [](BufferReader &r) { return json{{"moves", MoveAssetCmd::Deserialize(r).moves}}; }},
             {"OpenPrefabStage", [](BufferReader &r)
@@ -408,6 +414,7 @@ namespace ProtocolVectors
             {"AssetPreview",[](BufferWriter &w,const json &f){const auto pixels=FromHex(StringField(f,"pixels"));WriteAssetPreview(w,f.at("info"),pixels);}},
             {"AssetDetail", [](BufferWriter &w, const json &f) { WriteAssetDetail(w, f.at("info")); }},
             {"ShaderInfo", [](BufferWriter &w, const json &f) { WriteShaderInfo(w, f.at("info")); }},
+            {"PrefabOverrides", [](BufferWriter &w, const json &f) { WritePrefabOverrides(w, f.at("info")); }},
             {"TextData", [](BufferWriter &w, const json &f) { WriteTextData(w, StringField(f, "text")); }},
             {"AssetCreated", [](BufferWriter &w, const json &f)
             {

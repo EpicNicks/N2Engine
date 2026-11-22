@@ -15,6 +15,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <future>
 #include <system_error>
@@ -47,6 +48,7 @@
 #include "engine/prefabs/Prefab.hpp"
 #include "engine/prefabs/PrefabFile.hpp"
 #include "engine/prefabs/PrefabManager.hpp"
+#include "engine/prefabs/PrefabNesting.hpp"
 #include "engine/rendering/Light.hpp"
 #include "engine/rendering/Mesh.hpp"
 #include "engine/rendering/Shader.hpp"
@@ -241,48 +243,125 @@ namespace N2Engine::Editor
             return JsonLimits::IterativeDump(scene, 2, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
         }
 
-        /// Whether scene or prefab JSON holds objects expanded from a prefab link (nested prefabs,
-        /// docs/serialization.html "Prefab links"). Until this host collapses them back into links
-        /// (orchestrator/proposals/prefab-nesting.md, PR 2), it refuses to write such data to a project file: the
-        /// file would get copies in place of its links. Walks rootGameObjects, rootObject and children, iteratively.
-        bool HoldsPrefabLinks(const nlohmann::json &data)
+        /// Prefab links (nested prefabs, docs/serialization.html "Prefab links"): every expanded instance in data the host
+        /// writes to a project file becomes its link again (PrefabNesting::Collapse, compared with its prefab as the loader
+        /// has it now). Scene JSON (rootGameObjects) or prefab JSON (rootObject, whose objects also lose leftover marks: a
+        /// prefab file holds links, not marks). An instance whose prefab can't be loaded stays expanded, logged: nothing
+        /// is lost, the file just holds a copy there.
+        void CollapseForFile(nlohmann::json &data, const std::string_view what)
         {
-            std::vector<const nlohmann::json *> pending{&data};
+            PrefabNesting::ResourcePrefabSource source;
+            bool ok = true;
+            if (const auto roots = data.find("rootGameObjects"); roots != data.end() && roots->is_array())
+            {
+                ok = PrefabNesting::Collapse(*roots, source);
+            }
+            if (const auto root = data.find("rootObject"); root != data.end() && root->is_object())
+            {
+                ok = PrefabNesting::Collapse(*root, source) && ok;
+                PrefabNesting::StripMarks(*root);
+            }
+            if (!ok)
+            {
+                ServerLog::Warn(std::format("{}: an instance whose prefab can't be loaded is saved as a copy", what));
+            }
+        }
+
+        /// One prefab's content as given (a file just read, or the content an instance was expanded from), the others
+        /// through the loader
+        class OverlayPrefabSource final : public PrefabNesting::PrefabSource
+        {
+        public:
+            std::unordered_map<std::string, nlohmann::json> overlay; // prefab UUID text -> its rootObject
+
+            const nlohmann::json *LoadRoot(const Math::UUID &prefab) override
+            {
+                if (const auto it = overlay.find(prefab.ToString()); it != overlay.end())
+                {
+                    return &it->second;
+                }
+                return _loader.LoadRoot(prefab);
+            }
+
+        private:
+            PrefabNesting::ResourcePrefabSource _loader;
+        };
+
+        bool IsLinkRoot(const nlohmann::json &object)
+        {
+            const auto linked = object.find("prefabLinked");
+            return linked != object.end() && linked->is_boolean() && linked->get<bool>();
+        }
+
+        /// The outermost link roots of a scene's JSON (a link root inside another link is part of that one), parents
+        /// before children, as pointers into `scene`
+        std::vector<nlohmann::json *> OutermostLinkRoots(nlohmann::json &scene)
+        {
+            std::vector<nlohmann::json *> found;
+            std::vector<nlohmann::json *> pending;
+            if (const auto roots = scene.find("rootGameObjects"); roots != scene.end() && roots->is_array())
+            {
+                for (auto it = roots->rbegin(); it != roots->rend(); ++it)
+                {
+                    pending.push_back(&*it);
+                }
+            }
             while (!pending.empty())
             {
-                const nlohmann::json &value = *pending.back();
+                nlohmann::json *object = pending.back();
                 pending.pop_back();
-                if (value.is_array())
-                {
-                    for (const auto &item : value)
-                    {
-                        pending.push_back(&item);
-                    }
-                    continue;
-                }
-                if (!value.is_object())
+                if (!object->is_object())
                 {
                     continue;
                 }
-                if (value.contains("prefabLink") || value.contains("prefabInstance") ||
-                    (value.contains("prefabLinked") && value["prefabLinked"] == true))
+                if (IsLinkRoot(*object) && !object->contains("prefabLink"))
                 {
-                    return true;
+                    found.push_back(object);
+                    continue;
                 }
-                for (const char *key : {"rootGameObjects", "rootObject", "children"})
+                if (const auto children = object->find("children"); children != object->end() && children->is_array())
                 {
-                    if (const auto it = value.find(key); it != value.end())
+                    for (auto it = children->rbegin(); it != children->rend(); ++it)
                     {
                         pending.push_back(&*it);
                     }
                 }
             }
-            return false;
+            return found;
         }
 
-        constexpr const char *PrefabLinksRefusal =
-            "This holds instances of nested prefabs (prefab links), which this editor host can't save yet: the file would "
-            "get copies in place of its links";
+        /// Whether an instance (its JSON) holds a link to one of `prefabs` (UUID texts), itself included
+        bool UsesAnyPrefab(const nlohmann::json &instance, const std::unordered_map<std::string, nlohmann::json> &prefabs)
+        {
+            std::vector<const nlohmann::json *> pending{&instance};
+            while (!pending.empty())
+            {
+                const nlohmann::json &object = *pending.back();
+                pending.pop_back();
+                if (!object.is_object())
+                {
+                    continue;
+                }
+                if (IsLinkRoot(object))
+                {
+                    if (const auto reference = object.find("prefabReference"); reference != object.end() && reference->is_string())
+                    {
+                        if (const auto uuid = Math::UUID::FromString(reference->get<std::string>()); uuid && prefabs.contains(uuid->ToString()))
+                        {
+                            return true;
+                        }
+                    }
+                }
+                if (const auto children = object.find("children"); children != object.end() && children->is_array())
+                {
+                    for (const auto &child : *children)
+                    {
+                        pending.push_back(&child);
+                    }
+                }
+            }
+            return false;
+        }
 
         // ==================== Assets ====================
 
@@ -427,6 +506,26 @@ namespace N2Engine::Editor
             if (const auto &prefab = gameObject.GetPrefabReference(); prefab.has_value())
             {
                 header["prefab"] = prefab->ToString();
+            }
+            // How many prefab links the object is in, itself counted when it is a link's root (since 1.33.0), only when
+            // it is in one
+            int linkDepth = gameObject.IsPrefabLinked() || gameObject.GetPrefabLink().has_value() ? 0 : -1;
+            if (linkDepth == 0)
+            {
+                for (const GameObject *at = &gameObject; at != nullptr;)
+                {
+                    if (at->IsPrefabLinked())
+                    {
+                        ++linkDepth;
+                    }
+                    const auto parent = at->GetParent();
+                    at = parent.get();
+                }
+                if (linkDepth == 0 && gameObject.GetPrefabLink().has_value())
+                {
+                    linkDepth = 1;
+                }
+                header["linkDepth"] = linkDepth;
             }
             return header;
         }
@@ -2933,7 +3032,7 @@ namespace N2Engine::Editor
     std::vector<std::string> EditorServer::Capabilities()
     {
         return {"editorExtensions","editorTooling","luaSyntax","assetPreviews","entityClipboard","prefabAssets","physicsBackends","networkPanel","prefabFields",
-                "prefabStage","prefabStageContext","engineStats","buildTargets","buildSettings","shaders"};
+                "prefabStage","prefabStageContext","engineStats","buildTargets","buildSettings","shaders","prefabNesting"};
     }
 
     bool EditorServer::EnableEditorExtensions(std::filesystem::path projectRoot)
@@ -4384,6 +4483,8 @@ namespace N2Engine::Editor
         {CommandType::GetNetworkSettings, "GetNetworkSettings", EditorServer::CommandClass::Read},
         {CommandType::GetNetworkValidation, "GetNetworkValidation", EditorServer::CommandClass::Read},
         {CommandType::GetPrefabStage, "GetPrefabStage", EditorServer::CommandClass::Read},
+        // Prefab links (1.33.0): the overrides are read from the scene (a diff with the prefab files), nothing written
+        {CommandType::GetPrefabOverrides, "GetPrefabOverrides", EditorServer::CommandClass::Read},
         // Host stats (1.28.0): counts and timings, no file or object named
         {CommandType::GetEngineStats, "GetEngineStats", EditorServer::CommandClass::Read},
         {CommandType::GetShaderInfo, "GetShaderInfo", EditorServer::CommandClass::Read},
@@ -4415,6 +4516,7 @@ namespace N2Engine::Editor
         {CommandType::InstantiatePrefab, "InstantiatePrefab", EditorServer::CommandClass::Write},
         {CommandType::ApplyPrefab, "ApplyPrefab", EditorServer::CommandClass::Write},
         {CommandType::UnpackPrefab, "UnpackPrefab", EditorServer::CommandClass::Write},
+        {CommandType::RevertPrefabOverrides, "RevertPrefabOverrides", EditorServer::CommandClass::Write},
         {CommandType::SetPhysicsBackend, "SetPhysicsBackend", EditorServer::CommandClass::Write},
         {CommandType::SetNetworkSettings, "SetNetworkSettings", EditorServer::CommandClass::Write},
         {CommandType::SetLocalTransform, "SetLocalTransform", EditorServer::CommandClass::Write},
@@ -4807,6 +4909,12 @@ namespace N2Engine::Editor
             break;
         case CommandType::GetPrefabStage:
             HandleGetPrefabStage(clientSocket, payload);
+            break;
+        case CommandType::GetPrefabOverrides:
+            HandleGetPrefabOverrides(clientSocket, payload);
+            break;
+        case CommandType::RevertPrefabOverrides:
+            HandleRevertPrefabOverrides(clientSocket, payload);
             break;
         case CommandType::GetPhysicsBackends:
             HandleGetPhysicsBackends(clientSocket);
@@ -6301,6 +6409,8 @@ namespace N2Engine::Editor
                 return std::unexpected("No scene loaded");
             }
             sceneJson = scene->Serialize();
+            // Links collapsed (prefab-nesting.md decision 5): the play host expands them as a player does
+            CollapseForFile(sceneJson, "Play snapshot");
             name = scene->sceneName;
             sceneKey = OpenScenePath();
         }
@@ -8106,6 +8216,25 @@ namespace N2Engine::Editor
         {
             return;
         }
+        // Prefab links: the content each changed prefab had before the reload below, which is what the open scene's
+        // instances of it were expanded from (PropagatePrefabChanges compares them with it)
+        std::unordered_map<std::string, nlohmann::json> previousPrefabs;
+        for (const IO::ResourcePath &path : changes.modified)
+        {
+            std::string extension = path.GetExtension();
+            std::ranges::transform(extension, extension.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (extension != PrefabFile::Extension)
+            {
+                continue;
+            }
+            if (const auto held = IO::ResourceLoader::Instance().GetCached<PrefabFile>(path))
+            {
+                if (const auto root = held->GetData().find("rootObject"); root != held->GetData().end() && root->is_object())
+                {
+                    previousPrefabs.emplace(held->GetUUID().ToString(), JsonLimits::IterativeCopy(*root));
+                }
+            }
+        }
         // A .n2shader is cooked before the assets are reloaded, so the reload reads its new payload
         CookChangedShaders(changes);
         for (const IO::ResourcePath &path : changes.modified)
@@ -8126,6 +8255,10 @@ namespace N2Engine::Editor
         _events.Push("assetsChanged", std::move(event));
         // A prefab stage's file moved, changed or went away
         CheckPrefabStageFile();
+        if (!previousPrefabs.empty())
+        {
+            PropagatePrefabChanges(std::move(previousPrefabs));
+        }
         if (_extensions != nullptr)
         {
             // OnAssetsChanged (E-X6): after the reload and the event, as a call of its own; each list is cut to what a hook is
@@ -9631,12 +9764,17 @@ namespace N2Engine::Editor
             }
         }
 
-        const nlohmann::json created = PrefabJsonOf(entity, std::nullopt, std::nullopt);
-        if (HoldsPrefabLinks(created))
+        if (entity->IsPrefabLinked())
         {
-            SendError(clientSocket, PrefabLinksRefusal);
+            // The prefab would be a variant (its root a link): its instance would need its ids derived again
+            SendError(clientSocket, std::format("'{}' is a prefab instance: a prefab made from one would be a variant, which "
+                                                "can't be created yet (unpack it first)",
+                                                SanitizeForLog(entity->GetName())));
             return;
         }
+        // Instances inside it are written as links
+        nlohmann::json created = PrefabJsonOf(entity, std::nullopt, std::nullopt);
+        CollapseForFile(created, "CreatePrefab");
         const std::string text = SceneFileText(created);
         if (text.size() > MaxClipboardBytes)
         {
@@ -9753,16 +9891,53 @@ namespace N2Engine::Editor
             return;
         }
 
-        // The shared primitive of InstantiateEntities: fresh UUIDs, references inside the prefab point at the copies, a
-        // reference to anything else is left empty (nothing is looked up in the scene)
-        std::vector<std::shared_ptr<GameObject>> roots = PrefabManager::InstantiatePrefabs({&rootJson}, nullptr);
-        if (roots.empty())
+        // A link to the prefab, expanded (nested prefabs, docs/serialization.html "Prefab links"): the prefab's objects
+        // with ids derived from a fresh link id, so a save writes the instance back as a link and a change of the prefab
+        // reaches it. The link takes the prefab root's name and place. A reference to anything outside the prefab is
+        // left empty (nothing is looked up in the scene).
+        const Math::UUID prefabUuid = PrefabAssetUuid(resolved->resourcePath);
+        nlohmann::json link{{"uuid", Math::UUID::Random().ToString()},
+                            {"prefabInstance", {{"prefab", prefabUuid.ToString()}}}};
+        if (const auto name = rootJson.find("name"); name != rootJson.end() && name->is_string())
+        {
+            link["name"] = *name;
+        }
+        if (const auto place = rootJson.find("positionable"); place != rootJson.end())
+        {
+            link["positionable"] = *place;
+        }
+        OverlayPrefabSource source; // this file as just read, other prefabs through the loader
+        // Copied without recursion: nlohmann's copy recurses once per JSON level and overflows a Debug build's stack at
+        // the hierarchy cap (the depth-capped prefab test)
+        source.overlay.emplace(prefabUuid.ToString(), JsonLimits::IterativeCopy(rootJson));
+        // The loader holds the prefab too: a later change of the file is compared with what this instance was expanded
+        // from, which ApplyAssetChanges reads from the loader before it reloads the file (PropagatePrefabChanges)
+        (void)IO::ResourceLoader::Instance().LoadByUUID<PrefabFile>(prefabUuid);
+        PrefabNesting::ExpandReport report;
+        PrefabNesting::Expand(link, source, report);
+        if (report.errors > 0)
+        {
+            SendError(clientSocket, "The prefab couldn't be instantiated: a prefab it links to can't be expanded (see the log)");
+            return;
+        }
+        std::vector<std::shared_ptr<GameObject>> roots;
+        try
+        {
+            ReferenceResolver resolver;
+            roots.push_back(GameObject::Deserialize(link, &resolver));
+            resolver.ResolveAll();
+        }
+        catch (const std::exception &e)
+        {
+            SendError(clientSocket, "The prefab couldn't be instantiated: " + SanitizeForLog(e.what()));
+            return;
+        }
+        if (roots.empty() || roots.front() == nullptr)
         {
             SendError(clientSocket, "The prefab couldn't be instantiated (see the log)");
             return;
         }
         const std::shared_ptr<GameObject> root = roots.front();
-        root->SetPrefabReference(PrefabAssetUuid(resolved->resourcePath));
 
         if (const std::optional<std::string> refused = AttachRoots(*scene, parent, roots, cmd.siblingIndex))
         {
@@ -9847,11 +10022,48 @@ namespace N2Engine::Editor
                 rootName = name->get<std::string>();
             }
         }
-        const nlohmann::json applied = PrefabJsonOf(entity, prefabName, rootName);
-        if (HoldsPrefabLinks(applied))
+        if (entity->IsPrefabLinked() && entity->GetPrefabLink().has_value())
         {
-            SendError(clientSocket, PrefabLinksRefusal);
+            // A link inside another instance: its changes are that instance's overrides, saved on the outer link
+            SendError(clientSocket, std::format("'{}' is inside another prefab instance: apply that one", SanitizeForLog(entity->GetName())));
             return;
+        }
+        nlohmann::json applied;
+        if (entity->IsPrefabLinked())
+        {
+            // A link instance (nested prefabs): its content in the prefab's own ids, so an Apply does not renumber the
+            // file; links inside it stay links. The root's place is the instance's own: the file keeps its root's.
+            PrefabNesting::ResourcePrefabSource source;
+            std::optional<nlohmann::json> root = PrefabNesting::InstanceAsPrefab(entity->Serialize(), source);
+            if (!root)
+            {
+                SendError(clientSocket, "The prefab " + shown + " can't be read to apply to (see the log)");
+                return;
+            }
+            if (rootName)
+            {
+                (*root)["name"] = *rootName;
+            }
+            if (const auto current = ReadPrefabFile(*resolved); current)
+            {
+                const nlohmann::json &fileRoot = current->at("rootObject");
+                if (const auto place = fileRoot.find("positionable"); place != fileRoot.end() && place->is_object())
+                {
+                    for (const char *part : {"localPosition", "localRotation"})
+                    {
+                        if (const auto value = place->find(part); value != place->end())
+                        {
+                            (*root)["positionable"][part] = *value;
+                        }
+                    }
+                }
+            }
+            applied = {{"name", prefabName.value_or(entity->GetName())}, {"rootObject", std::move(*root)}};
+        }
+        else
+        {
+            applied = PrefabJsonOf(entity, prefabName, rootName);
+            CollapseForFile(applied, "ApplyPrefab");
         }
         const std::string text = SceneFileText(applied);
         if (text.size() > MaxClipboardBytes)
@@ -9865,7 +10077,12 @@ namespace N2Engine::Editor
             SendError(clientSocket, ClientText::Failure("Couldn't write " + shown, "the file could not be written", written.error()));
             return;
         }
+        // The instance applied from now is the prefab: PropagatePrefabChanges rebuilds it from its bare link (its added
+        // objects became the prefab's, with ids derived from the link like the rest), the other instances keep their
+        // overrides
+        _appliedInstance = entity->IsPrefabLinked() ? entity->GetUUID().ToString() : std::string{};
         NoteAssetWritten(resolved->resourcePath, true);
+        _appliedInstance.clear();
         ServerLog::Info("Applied to prefab " + shown);
 
         BufferWriter response;
@@ -9902,10 +10119,463 @@ namespace N2Engine::Editor
             return;
         }
 
+        if (entity->GetPrefabLink().has_value())
+        {
+            // A link inside another instance is part of that one's content: unpacking it alone would not be saved
+            SendError(clientSocket, std::format("'{}' is inside another prefab instance: unpack that one first",
+                                                SanitizeForLog(entity->GetName())));
+            return;
+        }
+        if (entity->IsPrefabLinked())
+        {
+            // A link instance becomes plain objects: it and its own objects lose their link marks (links inside it stay
+            // links). One undo step through scene snapshots (the marks are not in the history's own ops).
+            auto snapshotBefore = std::make_shared<const std::string>(SnapshotScene(*scene));
+            const Math::UUID rootId = entity->GetUUID();
+            entity->SetPrefabReference(std::nullopt);
+            entity->SetPrefabLinked(false);
+            for (const auto &component : entity->GetAllComponents())
+            {
+                component->SetPrefabSource(std::nullopt);
+            }
+            std::vector<std::shared_ptr<GameObject>> pending(entity->GetChildren().begin(), entity->GetChildren().end());
+            while (!pending.empty())
+            {
+                const std::shared_ptr<GameObject> object = pending.back();
+                pending.pop_back();
+                if (object->GetPrefabLink() == rootId)
+                {
+                    object->SetPrefabLink(std::nullopt);
+                    object->SetPrefabSource(std::nullopt);
+                    if (!object->IsPrefabLinked())
+                    {
+                        for (const auto &component : object->GetAllComponents())
+                        {
+                            component->SetPrefabSource(std::nullopt);
+                        }
+                    }
+                }
+                for (const auto &child : object->GetChildren())
+                {
+                    pending.push_back(child);
+                }
+            }
+            auto snapshotAfter = std::make_shared<const std::string>(SnapshotScene(*scene));
+            EditOp op;
+            op.undo = [this, snapshotBefore]() -> EditOutcome { return RestoreSceneSnapshot(*snapshotBefore); };
+            op.redo = [this, snapshotAfter]() -> EditOutcome { return RestoreSceneSnapshot(*snapshotAfter); };
+            op.undoBytes = snapshotBefore->size();
+            op.redoBytes = snapshotAfter->size();
+            MarkSceneChanged(SubtreeIds(*entity));
+            RecordEdit(Labelled("Unpack Prefab", entity->GetName()), std::move(op));
+            BufferWriter response;
+            WriteOk(response);
+            SendResponse(clientSocket, response.Release());
+            return;
+        }
+
         entity->SetPrefabReference(std::nullopt);
         MarkSceneChanged({entity->GetUUID().ToString()});
         RecordEdit(Labelled("Unpack Prefab", entity->GetName()), PrefabLinkOp(entity->GetUUID().ToString(), before, std::nullopt));
 
+        BufferWriter response;
+        WriteOk(response);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    // ==================== Prefab links (nested prefabs, protocol 1.33.0) ====================
+
+    namespace
+    {
+        /// The outermost prefab link root `object` is in (itself counted), or null: overrides belong to that one, since a
+        /// file stores an instance's changes on its outermost link
+        std::shared_ptr<GameObject> OutermostLinkRoot(const std::shared_ptr<GameObject> &object)
+        {
+            std::shared_ptr<GameObject> found;
+            for (std::shared_ptr<GameObject> at = object; at != nullptr; at = at->GetParent())
+            {
+                if (at->IsPrefabLinked())
+                {
+                    found = at;
+                }
+            }
+            return found;
+        }
+
+        /// Finds the object with `id` in scene JSON (any depth), or null
+        nlohmann::json *FindObjectJson(nlohmann::json &scene, const std::string &id)
+        {
+            std::vector<nlohmann::json *> pending;
+            if (const auto roots = scene.find("rootGameObjects"); roots != scene.end() && roots->is_array())
+            {
+                for (auto &root : *roots)
+                {
+                    pending.push_back(&root);
+                }
+            }
+            while (!pending.empty())
+            {
+                nlohmann::json *object = pending.back();
+                pending.pop_back();
+                if (!object->is_object())
+                {
+                    continue;
+                }
+                if (const auto uuid = object->find("uuid"); uuid != object->end() && uuid->is_string() &&
+                                                            Math::UUID::FromString(uuid->get<std::string>()) == Math::UUID::FromString(id))
+                {
+                    return object;
+                }
+                if (const auto children = object->find("children"); children != object->end() && children->is_array())
+                {
+                    for (auto &child : *children)
+                    {
+                        pending.push_back(&child);
+                    }
+                }
+            }
+            return nullptr;
+        }
+    }
+
+    EditOutcome EditorServer::RebuildPrefabInstance(const std::string &rootId, const nlohmann::json &link, const std::string &label)
+    {
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            return std::unexpected(std::string("No scene loaded"));
+        }
+        auto before = std::make_shared<const std::string>(SnapshotScene(*scene));
+        nlohmann::json sceneJson = nlohmann::json::parse(*before, nullptr, false);
+        nlohmann::json *object = sceneJson.is_discarded() ? nullptr : FindObjectJson(sceneJson, rootId);
+        if (object == nullptr)
+        {
+            return std::unexpected(std::string("The instance is not in the scene"));
+        }
+        nlohmann::json expanded = JsonLimits::IterativeCopy(link); // its added children can be deep
+        PrefabNesting::ResourcePrefabSource source;
+        PrefabNesting::ExpandReport report;
+        PrefabNesting::Expand(expanded, source, report);
+        if (report.errors > 0)
+        {
+            return std::unexpected(std::string("A prefab of the instance can't be expanded (see the log)"));
+        }
+        // An instance inside another object keeps what it was to that object (a link inside a link is not rebuilt here)
+        for (const char *key : {"prefabLink", "prefabSource"})
+        {
+            if (const auto mark = object->find(key); mark != object->end())
+            {
+                expanded[key] = *mark;
+            }
+        }
+        *object = std::move(expanded);
+        auto after = std::make_shared<const std::string>(
+            JsonLimits::IterativeDump(sceneJson, -1, ' ', false, nlohmann::json::error_handler_t::replace));
+        if (*after == *before)
+        {
+            return {};
+        }
+        if (const EditOutcome restored = RestoreSceneSnapshot(*after); !restored)
+        {
+            return restored;
+        }
+        EditOp op;
+        op.undo = [this, before]() -> EditOutcome { return RestoreSceneSnapshot(*before); };
+        op.redo = [this, after]() -> EditOutcome { return RestoreSceneSnapshot(*after); };
+        op.undoBytes = before->size();
+        op.redoBytes = after->size();
+        MarkSceneChanged({}, true);
+        RecordEdit(label, std::move(op));
+        return {};
+    }
+
+    void EditorServer::PropagatePrefabChanges(std::unordered_map<std::string, nlohmann::json> previous)
+    {
+        if (_stage != nullptr)
+        {
+            // The parked scene's instances were expanded from the content before the first change: keep that one
+            for (const auto &[uuid, content] : previous)
+            {
+                _pendingPrefabChanges.try_emplace(uuid, content);
+            }
+        }
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            return;
+        }
+        const auto before = std::make_shared<const std::string>(SnapshotScene(*scene));
+        nlohmann::json sceneJson = nlohmann::json::parse(*before, nullptr, false);
+        if (sceneJson.is_discarded())
+        {
+            return;
+        }
+        // Each outermost instance that uses a changed prefab: its link as it was (diffed against the old content), expanded
+        // with the prefab as it is now. Ids are derived from the link ids, so the rebuilt objects keep theirs and every
+        // reference to them resolves again when the snapshot is restored.
+        OverlayPrefabSource oldContent;
+        oldContent.overlay = std::move(previous);
+        PrefabNesting::ResourcePrefabSource newContent;
+        std::size_t rebuilt = 0;
+        std::string firstName;
+        for (nlohmann::json *instance : OutermostLinkRoots(sceneJson))
+        {
+            if (!UsesAnyPrefab(*instance, oldContent.overlay))
+            {
+                continue;
+            }
+            nlohmann::json link;
+            if (!_appliedInstance.empty() && instance->value("uuid", std::string{}) == _appliedInstance)
+            {
+                // The instance ApplyPrefab wrote the prefab from: the prefab as it is now, with no overrides
+                link = {{"uuid", _appliedInstance}, {"name", instance->value("name", std::string{})},
+                        {"prefabInstance", {{"prefab", instance->value("prefabReference", std::string{})}}}};
+                if (const auto place = instance->find("positionable"); place != instance->end() && place->is_object())
+                {
+                    for (const char *part : {"localPosition", "localRotation"})
+                    {
+                        if (const auto value = place->find(part); value != place->end())
+                        {
+                            link["positionable"][part] = *value;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                link = JsonLimits::IterativeCopy(*instance);
+                if (!PrefabNesting::Collapse(link, oldContent) || !link.contains("prefabInstance"))
+                {
+                    continue; // its prefab is gone: left as it is
+                }
+            }
+            PrefabNesting::ExpandReport report;
+            PrefabNesting::Expand(link, newContent, report);
+            if (report.errors > 0)
+            {
+                continue;
+            }
+            if (firstName.empty() && link.contains("name") && link["name"].is_string())
+            {
+                firstName = link["name"].get<std::string>();
+            }
+            *instance = std::move(link);
+            ++rebuilt;
+        }
+        if (rebuilt == 0)
+        {
+            return;
+        }
+        auto after = std::make_shared<const std::string>(
+            JsonLimits::IterativeDump(sceneJson, -1, ' ', false, nlohmann::json::error_handler_t::replace));
+        if (*after == *before)
+        {
+            return;
+        }
+        if (const EditOutcome restored = RestoreSceneSnapshot(*after); !restored)
+        {
+            ServerLog::Warn("The prefab's instances couldn't be updated: " + restored.error());
+            return;
+        }
+        EditOp op;
+        op.undo = [this, before]() -> EditOutcome { return RestoreSceneSnapshot(*before); };
+        op.redo = [this, after]() -> EditOutcome { return RestoreSceneSnapshot(*after); };
+        op.undoBytes = before->size();
+        op.redoBytes = after->size();
+        MarkSceneChanged({}, true);
+        RecordEdit(rebuilt == 1 ? "Update instance " + firstName : std::format("Update {} prefab instances", rebuilt), std::move(op));
+        ServerLog::Info(std::format("Updated {} prefab instance{}", rebuilt, rebuilt == 1 ? "" : "s"));
+    }
+
+    void EditorServer::HandleGetPrefabOverrides(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const GetPrefabOverridesCmd cmd = GetPrefabOverridesCmd::Deserialize(reader);
+        if (reader.HasData())
+        {
+            SendError(clientSocket, "Malformed payload: trailing bytes");
+            return;
+        }
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            SendError(clientSocket, "No scene loaded");
+            return;
+        }
+        const std::shared_ptr<GameObject> entity = FindEntity(*scene, cmd.entityId);
+        if (entity == nullptr)
+        {
+            SendError(clientSocket, NotFoundMessage("Entity", cmd.entityId));
+            return;
+        }
+        const std::shared_ptr<GameObject> root = OutermostLinkRoot(entity);
+        if (root == nullptr)
+        {
+            SendError(clientSocket, std::format("'{}' isn't part of a prefab instance", SanitizeForLog(entity->GetName())));
+            return;
+        }
+        nlohmann::json link = root->Serialize();
+        PrefabNesting::ResourcePrefabSource source;
+        if (!PrefabNesting::Collapse(link, source) || !link.contains("prefabInstance"))
+        {
+            SendError(clientSocket, std::format("The prefab '{}' is an instance of can't be read (see the log)",
+                                                SanitizeForLog(root->GetName())));
+            return;
+        }
+        const nlohmann::json &instance = link["prefabInstance"];
+        std::string path;
+        if (const auto prefab = Math::UUID::FromString(instance.value("prefab", std::string{})))
+        {
+            if (const IO::AssetMetadata *meta = IO::ResourceLoader::Instance().GetMetadata(*prefab))
+            {
+                path = meta->resourcePath.ToString();
+            }
+        }
+        nlohmann::json info{{"rootId", root->GetUUID().ToString()},
+                            {"prefab", instance.value("prefab", std::string{})},
+                            {"path", path}};
+        for (const char *key : {"overrides", "removedObjects", "removedComponents", "addedComponents", "addedChildren"})
+        {
+            info[key] = instance.contains(key) ? instance[key] : nlohmann::json::array();
+        }
+        BufferWriter response;
+        WritePrefabOverrides(response, info);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleRevertPrefabOverrides(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const RevertPrefabOverridesCmd cmd = RevertPrefabOverridesCmd::Deserialize(reader);
+        if (reader.HasData())
+        {
+            SendError(clientSocket, "Malformed payload: trailing bytes");
+            return;
+        }
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            SendError(clientSocket, "No scene loaded");
+            return;
+        }
+        const std::shared_ptr<GameObject> entity = FindEntity(*scene, cmd.entityId);
+        if (entity == nullptr)
+        {
+            SendError(clientSocket, NotFoundMessage("Entity", cmd.entityId));
+            return;
+        }
+        const std::shared_ptr<GameObject> root = OutermostLinkRoot(entity);
+        if (root == nullptr)
+        {
+            SendError(clientSocket, std::format("'{}' isn't part of a prefab instance", SanitizeForLog(entity->GetName())));
+            return;
+        }
+        if (!cmd.targets.is_array() || cmd.targets.empty())
+        {
+            SendError(clientSocket, "targets must be a non-empty array");
+            return;
+        }
+        nlohmann::json link = root->Serialize();
+        PrefabNesting::ResourcePrefabSource source;
+        if (!PrefabNesting::Collapse(link, source) || !link.contains("prefabInstance"))
+        {
+            SendError(clientSocket, std::format("The prefab '{}' is an instance of can't be read (see the log)",
+                                                SanitizeForLog(root->GetName())));
+            return;
+        }
+        nlohmann::json &instance = link["prefabInstance"];
+        // Removes the entries of instance[key] that match: everything is checked first, so an unknown target changes nothing
+        auto drop = [&instance](const char *key, const std::function<bool(const nlohmann::json &)> &matches) -> bool
+        {
+            const auto list = instance.find(key);
+            if (list == instance.end() || !list->is_array())
+            {
+                return false;
+            }
+            const std::size_t size = list->size();
+            nlohmann::json kept = nlohmann::json::array();
+            for (const auto &entry : *list)
+            {
+                if (!matches(entry))
+                {
+                    kept.push_back(entry);
+                }
+            }
+            *list = std::move(kept);
+            return list->size() != size;
+        };
+        auto sameId = [](const nlohmann::json &a, const nlohmann::json &b)
+        {
+            return a.is_string() && b.is_string() && a.get<std::string>() == b.get<std::string>();
+        };
+        for (const auto &target : cmd.targets)
+        {
+            if (!target.is_object())
+            {
+                SendError(clientSocket, "Each target must be an object");
+                return;
+            }
+            bool found = false;
+            if (target.contains("all"))
+            {
+                for (const char *key : {"overrides", "removedObjects", "removedComponents", "addedComponents", "addedChildren"})
+                {
+                    found = instance.erase(key) > 0 || found;
+                }
+                found = true;
+            }
+            else if (target.contains("source"))
+            {
+                found = drop("overrides", [&](const nlohmann::json &entry)
+                {
+                    return entry.is_object() && sameId(entry.value("source", nlohmann::json()), target["source"]) &&
+                           (!target.contains("component") || sameId(entry.value("component", nlohmann::json()), target["component"])) &&
+                           (!target.contains("path") || entry.value("path", nlohmann::json()) == target["path"]);
+                });
+            }
+            else if (target.contains("removedObject"))
+            {
+                found = drop("removedObjects", [&](const nlohmann::json &entry) { return sameId(entry, target["removedObject"]); });
+            }
+            else if (target.contains("removedComponent"))
+            {
+                found = drop("removedComponents", [&](const nlohmann::json &entry) { return sameId(entry, target["removedComponent"]); });
+            }
+            else if (target.contains("addedChild"))
+            {
+                found = drop("addedChildren", [&](const nlohmann::json &entry)
+                {
+                    return entry.is_object() && entry.contains("object") && entry["object"].is_object() &&
+                           sameId(entry["object"].value("uuid", nlohmann::json()), target["addedChild"]);
+                });
+            }
+            else if (target.contains("addedComponent"))
+            {
+                found = drop("addedComponents", [&](const nlohmann::json &entry)
+                {
+                    return entry.is_object() && entry.contains("component") && entry["component"].is_object() &&
+                           entry["component"].contains("data") &&
+                           sameId(entry["component"]["data"].value("uuid", nlohmann::json()), target["addedComponent"]);
+                });
+            }
+            else
+            {
+                SendError(clientSocket, "A target names no override: use all, source, removedObject, removedComponent, "
+                                        "addedChild or addedComponent");
+                return;
+            }
+            if (!found)
+            {
+                SendError(clientSocket, "A target matches nothing the instance overrides");
+                return;
+            }
+        }
+        if (const EditOutcome rebuilt = RebuildPrefabInstance(root->GetUUID().ToString(), link, Labelled("Revert", root->GetName()));
+            !rebuilt)
+        {
+            SendError(clientSocket, "The instance couldn't be rebuilt: " + rebuilt.error());
+            return;
+        }
         BufferWriter response;
         WriteOk(response);
         SendResponse(clientSocket, response.Release());
@@ -9979,6 +10649,7 @@ namespace N2Engine::Editor
         case CommandType::InstantiatePrefab:
         case CommandType::ApplyPrefab:
         case CommandType::UnpackPrefab:
+        case CommandType::RevertPrefabOverrides:
         // One stage at a time
         case CommandType::OpenPrefabStage:
             return true;
@@ -10273,9 +10944,17 @@ namespace N2Engine::Editor
         stageScene->SetEditMode(true);
         ReferenceResolver resolver;
         std::shared_ptr<GameObject> root;
+        // Links inside the prefab (nested prefabs) are shown expanded; SavePrefabStage collapses them again. The root
+        // itself is the prefab's content, never a link to it.
+        nlohmann::json expandedRoot;
+        if (PrefabNesting::ContainsLinks(rootJson))
+        {
+            expandedRoot = JsonLimits::IterativeCopy(rootJson);
+            PrefabNesting::Expand(expandedRoot, "Prefab stage");
+        }
         try
         {
-            root = GameObject::Deserialize(rootJson, &resolver);
+            root = GameObject::Deserialize(expandedRoot.is_null() ? rootJson : expandedRoot, &resolver);
         }
         catch (const std::exception &e)
         {
@@ -10294,7 +10973,8 @@ namespace N2Engine::Editor
         std::size_t linkedObjects = 0;
         stageScene->TraverseAll([&](const std::shared_ptr<GameObject> &object)
         {
-            if (object != root && object->GetPrefabReference().has_value())
+            // A legacy copy with a link (an expanded link is a real nested instance, saved as its link)
+            if (object != root && object->GetPrefabReference().has_value() && !object->IsPrefabLinked())
             {
                 ++linkedObjects;
             }
@@ -10462,11 +11142,8 @@ namespace N2Engine::Editor
         {
             prefabJson = PrefabJsonOf(root, _stage->name, std::nullopt);
         }
-        if (HoldsPrefabLinks(prefabJson))
-        {
-            SendError(clientSocket, PrefabLinksRefusal);
-            return;
-        }
+        // Links inside the prefab (shown expanded on the stage) are written as links
+        CollapseForFile(prefabJson, "SavePrefabStage");
         const std::string text = SceneFileText(prefabJson);
         if (text.size() > MaxClipboardBytes)
         {
@@ -10526,6 +11203,13 @@ namespace N2Engine::Editor
         PushSceneChanged({}, true);
         PushHistoryChanged();
         PushPrefabStageChanged();
+        // Prefabs saved while the scene was parked: its instances update now
+        if (!_pendingPrefabChanges.empty())
+        {
+            std::unordered_map<std::string, nlohmann::json> pending = std::move(_pendingPrefabChanges);
+            _pendingPrefabChanges.clear();
+            PropagatePrefabChanges(std::move(pending));
+        }
     }
 
     void EditorServer::DiscardPrefabStage(const std::string_view reason)
@@ -11045,17 +11729,8 @@ namespace N2Engine::Editor
         _lastAutosave = now;
         std::error_code error;
         std::filesystem::create_directories(file.parent_path(), error);
-        const nlohmann::json autosaved = scene->Serialize();
-        if (HoldsPrefabLinks(autosaved))
-        {
-            // Not written (it would hold copies in place of links); once, as for a folder that can't be written
-            if (!_autosaveWarned)
-            {
-                _autosaveWarned = true;
-                ServerLog::Warn(std::string("No autosave: ") + PrefabLinksRefusal);
-            }
-            return;
-        }
+        nlohmann::json autosaved = scene->Serialize();
+        CollapseForFile(autosaved, "Autosave");
         const auto written = IO::WriteTextFileAtomically(file, SceneFileText(autosaved));
         if (!written && !_autosaveWarned)
         {
@@ -11457,11 +12132,8 @@ namespace N2Engine::Editor
             // Written before the switch: a file that can't be written leaves the loaded scene as it is
             std::error_code error;
             std::filesystem::create_directories(resolved->file.parent_path(), error);
-            const nlohmann::json created = scene->Serialize();
-            if (HoldsPrefabLinks(created))
-            {
-                return std::unexpected(std::string(PrefabLinksRefusal));
-            }
+            nlohmann::json created = scene->Serialize();
+            CollapseForFile(created, "Save scene");
             if (auto written = IO::WriteTextFileAtomically(resolved->file, SceneFileText(created)); !written)
             {
                 return std::unexpected(ClientText::Failure("Couldn't write " + SanitizeForLog(resolved->resourcePath.ToString()),
@@ -11508,10 +12180,7 @@ namespace N2Engine::Editor
         }
 
         nlohmann::json sceneJson = scene->Serialize();
-        if (HoldsPrefabLinks(sceneJson))
-        {
-            return std::unexpected(std::string(PrefabLinksRefusal));
-        }
+        CollapseForFile(sceneJson, "Save scene");
         // The autosave of the scene as it was named before this save, which may be another file
         const std::filesystem::path previousAutosave = GetAutosaveFile();
         std::error_code error;

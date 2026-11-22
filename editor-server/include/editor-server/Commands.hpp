@@ -761,6 +761,34 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    struct GetPrefabOverridesCmd
+    {
+        /// Any object of a prefab instance (since 1.33.0): the answer is for the outermost link it is in
+        std::string entityId;
+
+        static GetPrefabOverridesCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
+    struct RevertPrefabOverridesCmd
+    {
+        /// Any object of a prefab instance (since 1.33.0)
+        std::string entityId;
+        /// What to revert: [{all: true}], or entries {source, component?, path?} (overrides), {removedObject},
+        /// {removedComponent}, {addedChild}, {addedComponent} naming entries of GetPrefabOverrides' instance
+        nlohmann::json targets;
+
+        static RevertPrefabOverridesCmd Deserialize(BufferReader &r)
+        {
+            RevertPrefabOverridesCmd cmd;
+            cmd.entityId = r.ReadString();
+            cmd.targets = ReadBoundedJson(r);
+            return cmd;
+        }
+    };
+
     /// OpenPrefabStage (since 1.26.0)
     struct OpenPrefabStageCmd
     {
@@ -1331,6 +1359,16 @@ namespace N2Engine::Editor::Protocol
         BufferWriter payload;
         WriteJson(payload, stats);
         w.WriteU8(static_cast<uint8_t>(ResponseType::EngineStats));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// GetPrefabOverrides' response (since 1.33.0): the PrefabOverridesInfo as one JSON value
+    inline void WritePrefabOverrides(BufferWriter &w, const nlohmann::json &info)
+    {
+        BufferWriter payload;
+        WriteJson(payload, info);
+        w.WriteU8(static_cast<uint8_t>(ResponseType::PrefabOverrides));
         w.WriteU32(static_cast<uint32_t>(payload.Size()));
         w.WriteBytes(payload.Data());
     }

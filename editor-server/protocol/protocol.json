@@ -1,5 +1,5 @@
 {
-  "version": "1.32.0",
+  "version": "1.33.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -502,6 +502,15 @@
       "request": {},
       "response": { "type": "Ok" },
       "description": "Indexes the project's assets again: new and changed files get .meta files, and deleted files are forgotten (they no longer load by path or UUID; their .meta files are kept, so import settings come back with the file). When anything changed, an assetsChanged event lists it: {added, removed, modified}, res:// paths, each sorted. Since 1.9.0 the host does this by itself about once a second while a client is connected (see PollEvents's assetsChanged), so a client needs this command only to force a scan, and a script or other asset held in memory whose file changed is reloaded here as the watcher does (see WriteTextAsset)."
+    },
+    "RevertPrefabOverrides": {
+      "id": "0x42",
+      "description": "Since 1.33.0. Write command (a viewer is refused with forbidden, a --read-only host with readOnly; refused while a prefab stage is open, with stageOpen). Reverts overrides of the prefab instance entityId is in (its outermost link, as GetPrefabOverrides): targets is a non-empty array of {all: true} (everything), {source, component?, path?} (the overrides that match: without path, all of that object or component), {removedObject}, {removedComponent} (brings it back), {addedChild}, {addedComponent} (an id: removes what the instance added), naming entries as GetPrefabOverrides gives them. The instance is rebuilt from its prefab with what is left, as one undo step labelled \"Revert <name>\"; its objects keep their ids (they derive from the link id), so references to them still resolve. Every target is checked first: one that is not an object, names no kind, or matches nothing is an Error and nothing changes.",
+      "request": {
+        "entityId": "string",
+        "targets": "json"
+      },
+      "response": { "type": "Ok" }
     },
     "ListAssets": {
       "id": "0xA0",
@@ -1190,6 +1199,19 @@
         }
       }
     },
+    "GetPrefabOverrides": {
+      "id": "0x2F",
+      "description": "Since 1.33.0. Read command (a viewer may call it). The overrides of the prefab instance entityId is in: its outermost prefab link (an instance inside another instance is part of that one, and a file stores the changes on the outermost link). The instance is compared with its prefab as the loader has it now (PrefabNesting::Collapse), so the answer is what a save would write. Answers PrefabOverrides. Error without a scene, for an object not in the scene, for one in no prefab instance, and when the prefab can't be read.",
+      "request": {
+        "entityId": "string"
+      },
+      "response": {
+        "type": "PrefabOverrides",
+        "fields": {
+          "info": "json:PrefabOverridesInfo"
+        }
+      }
+    },
     "GetEngineStats": {
       "id": "0x54",
       "description": "Since 1.28.0 (Hello lists the capability \"engineStats\"). Read command (a viewer may call it; not offered to editor extensions). Never logs (a client polls it: the Profiler every ~250 ms while it is open). Where the host's frames go and what it holds: stats is an EngineStats. The first call turns the host's frame timers on (the sections of Application::Tick; they only read the steady clock, so the game runs the same with them on), so its answer has no frames yet; they go off again when no GetEngineStats has come for 10 s. host: kind (\"play\" on a play host, else \"edit\"), state (\"Playing\", \"Paused\" or \"Edit\", as GetPlayState), renderer (the backend's name; absent without a renderer), timersEnabled, timeScale. frame: the newest frame record's number (0 when none is held); a play host numbers its frames as GetPlayState counts them, frames Step ran included. frames: the records the host holds (the last 240 frames) whose frame is greater than sinceFrame, oldest first; sinceFrame 0, or one past the newest record (a new play session), gives all of them, so a client that sends the last answer's frame gets every frame once. An edit host runs no game frames: its frames are empty. A record: intervalMs (from the previous frame's start; 0 for the first frame after the timers came on or after a pause), tickMs (the whole frame), fixedMs and fixedTicks (the fixed-step loop and the ticks it ran), physicsMs (inside those ticks: the physics backend's step, transform sync and collision callbacks), updateMs (pointer dispatch, Update, coroutines, LateUpdate), audioMs, renderMs (0 on a play host, which draws on request), and, on a play host, commandsMs (the time spent handling the commands that came after the frame, until the next one; a paused game's commands count for no frame), of which renderRequestMs and readbackMs are RenderFrame's drawing and readback. The newest record's command times can still grow after it was sent, until the next frame starts. Durations are wall-clock milliseconds, rounded to 3 decimals. summary: over the frames held, windowFrames, fps (1000 over the average intervalMs) and tickMs {avg, p95, max}. render (absent without a renderer): the last frame the renderer finished (on a play host the game as drawn for RenderFrame, on the edit host the editor view): counters (whether the backend counts its draws: OpenGL, Vulkan, WebGPU and the software renderer do), drawCalls, triangles (indices / 3: the built-in pipelines draw triangle lists), vertices (the vertex count of each drawn mesh), framesRendered (the frames the renderer has finished), width and height (the viewport size frames are drawn at). scene (absent without a loaded scene): objects, activeObjects (active in the hierarchy), components, luaComponents. lua (absent before the Lua runtime exists): memoryBytes (what the state holds, which the cap counts) and memoryCapBytes. physics (absent without a physics backend): backend (\"physx\" or \"jolt\") and, once it is initialized, bodies, staticBodies and activeBodies (the dynamic and kinematic bodies awake as of the last step). process (absent where the platform has no query): workingSetBytes (the working set on Windows, the resident set on Linux) and peakWorkingSetBytes. No GPU timings.",
@@ -1307,6 +1329,16 @@
       "externalChange?": "bool",
       "orphaned?": "bool"
     },
+    "PrefabOverridesInfo": {
+      "rootId": "string",
+      "prefab": "string",
+      "path": "string",
+      "overrides": "json[]",
+      "removedObjects": "string[]",
+      "removedComponents": "string[]",
+      "addedComponents": "json[]",
+      "addedChildren": "json[]"
+    },
     "HistoryEntry": {
       "label": "string",
       "bytes": "number"
@@ -1359,7 +1391,8 @@
       "layer": "number",
       "tag": "string",
       "components": "string[]",
-      "prefab?": "string"
+      "prefab?": "string",
+      "linkDepth?": "number"
     },
     "EntityHeader": {
       "id": "string",
@@ -1370,7 +1403,8 @@
       "activeInHierarchy": "bool",
       "layer": "number",
       "tag": "string",
-      "prefab?": "string"
+      "prefab?": "string",
+      "linkDepth?": "number"
     },
     "JsonVec3": {
       "x": "number",
@@ -1764,7 +1798,8 @@
     "AssetsMoved": "0xA5",
     "PrefabStageInfo": "0x26",
     "EngineStats": "0x27",
-    "ShaderInfo": "0x28"
+    "ShaderInfo": "0x28",
+    "PrefabOverrides": "0x29"
   },
   "extraResponses": {
     "ErrorCoded": {

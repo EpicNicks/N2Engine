@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -92,4 +93,17 @@ namespace N2Engine::PrefabNesting
      * be loaded: that instance is then left expanded, so nothing is lost.
      */
     bool Collapse(nlohmann::json &objectsOrObject, PrefabSource &source);
+
+    /// Removes the link marks (prefabLinked, prefabLink, prefabSource and a component entry's prefabSource) from every
+    /// object of a GameObject JSON tree. Links themselves (prefabInstance) carry none and are left as they are.
+    void StripMarks(nlohmann::json &objectJson);
+
+    /**
+     * ApplyPrefab's content for an expanded instance (GameObject JSON as Serialize writes it, its root a link root):
+     * the prefab's rootObject as the instance has it now, in the prefab's OWN ids. The root and every object and
+     * component of this link get back their id in the prefab (their prefabSource); objects and components the instance
+     * added keep theirs; links inside it are collapsed into links, with their ids in the prefab; marks and the root's
+     * prefabReference are removed. nullopt (logged) when the prefab can't be loaded or the data is not a link root.
+     */
+    [[nodiscard]] std::optional<nlohmann::json> InstanceAsPrefab(const nlohmann::json &instance, PrefabSource &source);
 }
