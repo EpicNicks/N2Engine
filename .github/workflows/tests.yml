@@ -1154,16 +1154,28 @@ jobs:
 
       - name: Run in the simulator (first frame and a frame rate)
         if: matrix.target == 'ios'
+        # A slow simulator start can let the first-frame line go by before the log stream attaches (a known flake): the run
+        # is tried once more when, and only when, a line it must log is missing. A failing n2build run is not retried.
         run: |
-          node tools/n2build/n2build.mjs run --target ios --project lua_project --config debug --out "$RUNNER_TEMP/package/LuaDemo" --no-build --seconds 60 | tee run.txt
-          grep -q "N2Engine iOS player: first frame" run.txt
-          grep -Eq "N2Engine iOS player: [0-9]+ frames, [0-9.]+ fps" run.txt
-          # The first-frame line names the renderer (the lines before it can go by before the log stream starts)
           if [ "${{ matrix.moltenvk }}" = true ]; then
-            grep -q "N2Engine iOS player: first frame, the Vulkan renderer (MoltenVK)" run.txt
+            renderer="N2Engine iOS player: first frame, the Vulkan renderer (MoltenVK)"
           else
-            grep -q "N2Engine iOS player: first frame, the software renderer" run.txt
+            renderer="N2Engine iOS player: first frame, the software renderer"
           fi
+          for attempt in 1 2; do
+            set -o pipefail
+            node tools/n2build/n2build.mjs run --target ios --project lua_project --config debug --out "$RUNNER_TEMP/package/LuaDemo" --no-build --seconds 60 | tee run.txt
+            # The first-frame line names the renderer (the lines before it can go by before the log stream starts)
+            if grep -q "N2Engine iOS player: first frame" run.txt &&
+               grep -Eq "N2Engine iOS player: [0-9]+ frames, [0-9.]+ fps" run.txt &&
+               grep -q "$renderer" run.txt; then
+              echo "first frame, frame rate and renderer seen (attempt $attempt)"
+              exit 0
+            fi
+            echo "::warning::attempt $attempt: the simulator log lacks the first frame, the frame rate or the renderer line"
+            cp run.txt "run-attempt-$attempt.txt"
+          done
+          exit 1
 
       # When the run fails: the app's crash report, if the simulator wrote one, and the simulator's log for the app
       - name: The iOS app's crash report and log (on failure)
@@ -1516,6 +1528,28 @@ jobs:
             echo "    $line" >> "$GITHUB_STEP_SUMMARY"
           done
 
+      # Scripting and network both left out: the two modules most code paths ask about, off together. The whole suite runs
+      # (the Lua and session tests are not built, the others skip their cases), no Lua and no session code is linked into the
+      # player, and its size is printed against the full tree's
+      - name: Build and test with neither scripting nor network
+        run: |
+          set -e -o pipefail
+          cmake -S . -B build-noscriptnet -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DN2ENGINE_RENDERER_VULKAN=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DN2ENGINE_PROJECT=tests/projects/no_scripting_network 2>&1 | tee configure-noscriptnet.log
+          grep -q "Engine modules: scripting OFF" configure-noscriptnet.log
+          grep -q "Engine modules: network OFF" configure-noscriptnet.log
+          cmake --build build-noscriptnet --parallel --target engine_tests n2player n2_replay -- -k 0
+          if [ -e build-noscriptnet/bin/N2Server ] || [ -e build-noscriptnet/bin/N2EditorHost ]; then echo "an editor or server binary was built without scripting and network"; exit 1; fi
+          ./build-noscriptnet/bin/engine_tests
+          if nm -C build-noscriptnet/bin/n2player | grep -E ' (luaL_newstate|lua_pcallk)$|sol::' ; then echo "Lua is still linked into the player"; exit 1; fi
+          if nm -C build-noscriptnet/bin/n2player | grep -E 'N2Engine::Network::(NetworkServer|NetworkClient|LockstepRuntime)::' ; then echo "a network session is still linked into the player"; exit 1; fi
+          for tree in build build-noscriptnet; do
+            p="$tree/bin/n2player"
+            strip -o "$p.stripped" "$p"
+            line="$tree: n2player raw $(wc -c < "$p") stripped $(wc -c < "$p.stripped")"
+            echo "[SCRIPTING-NETWORK-SIZE-NATIVE] $line"
+            echo "    $line" >> "$GITHUB_STEP_SUMMARY"
+          done
+
       # The network module alone (docs/netcode.html#leaving-it-out): a desktop player with every other module, the same
       # configure as the full tree above, against the full player's size. N2Server and its tests are not part of it.
       - name: Build the desktop player without the network module
@@ -1752,11 +1786,19 @@ jobs:
   # The unit tests run on the dev profile only; the size and speed profiles build and check the player package (no tests:
   # they would not add coverage, only minutes). The tests that cannot run on the web are excluded by an explicit list (tests/engine/CMakeLists.txt) or
   # skip themselves; docs/web-build.html lists them with their reasons and describes the build.
+  # Since the per-profile split the three profiles are three legs of one matrix, built in parallel: dev (the unit tests,
+  # the corpora, the dev package and its budgets), size (the size package, the Jolt and Box2D measurements, the module
+  # projects, the browser gate's package) and speed (the speed package). Each leg installs the SDK and configures its own
+  # tree; the PhysX and Dawn caches are shared. The dev leg keeps the job's old check name.
   web:
-    name: web (Emscripten, dev profile, node tests)
+    name: web (Emscripten, ${{ matrix.profile }} profile${{ matrix.profile == 'dev' && ', node tests' || '' }})
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [dev, size, speed]
     # Since the per-project module builds (#315) a full run took about 63 minutes: every step passed and the job was cancelled at 60.
     # Master runs on 2026-11-13 took 67 to 87 minutes before ccache (PR #360)
     timeout-minutes: 90
@@ -1840,6 +1882,7 @@ jobs:
           key: dawn-downloads-web-emsdk-${{ env.EMSCRIPTEN_VERSION }}-${{ hashFiles('cmake/EmdawnwebgpuPort.cmake') }}
 
       - name: Configure (dev profile)
+        if: matrix.profile == 'dev'
         run: |
           set -e -o pipefail
           . "$HOME/emsdk/emsdk_env.sh"
@@ -1861,17 +1904,18 @@ jobs:
 
       # Without the tests (only the GLFW and OpenAL headers are fetched): the size and speed profiles build the player
       # package further down
-      - name: Configure (size and speed profiles)
+      - name: Configure (size or speed profile)
+        if: matrix.profile != 'dev'
         run: |
           set -e -o pipefail
           . "$HOME/emsdk/emsdk_env.sh"
-          for profile in size speed; do
-            emcmake cmake -S . -B "build-web-$profile" -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE="$profile" -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_USE_JOLT=ON 2>&1 | tee "configure-$profile.log"
-            # N2ENGINE_STRICT_FP is ON by default for these two profiles (so Jolt can declare CrossPlatform there)
-            grep -q "Strict floating-point profile enabled" "configure-$profile.log"
-          done
+          profile="${{ matrix.profile }}"
+          emcmake cmake -S . -B "build-web-$profile" -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE="$profile" -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_USE_JOLT=ON 2>&1 | tee "configure-$profile.log"
+          # N2ENGINE_STRICT_FP is ON by default for these two profiles (so Jolt can declare CrossPlatform there)
+          grep -q "Strict floating-point profile enabled" "configure-$profile.log"
 
       - name: Build
+        if: matrix.profile == 'dev'
         # The dev tree has its own flags: nothing in this run can reuse its objects, so ccache is off for it
         env:
           CCACHE_DISABLE: "1"
@@ -1881,7 +1925,7 @@ jobs:
           cmake --build build-web --target math_tests text_tests assetimport_tests engine_tests renderer_tests web_tests jolt_smoke_tests box2d_smoke_tests N2WebGpuReadbackTests -- -k 0
 
       - name: Save the Dawn downloads
-        if: steps.dawn-download-cache.outputs.cache-hit != 'true'
+        if: matrix.profile == 'dev' && (steps.dawn-download-cache.outputs.cache-hit != 'true')
         uses: actions/cache/save@v6
         with:
           path: |
@@ -1891,6 +1935,7 @@ jobs:
 
       # CMake's Emscripten toolchain sets CMAKE_CROSSCOMPILING_EMULATOR to node, so ctest runs build-web/bin/<name>.js under node
       - name: Test under node
+        if: matrix.profile == 'dev'
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
@@ -1899,6 +1944,7 @@ jobs:
       # The Jolt BACKEND under node (single-threaded: the web build has no pthreads): its [JOLT-BACKEND-DETERMINISM] lines in the
       # job's log and summary, to be compared with the native legs'
       - name: Jolt backend determinism numbers
+        if: matrix.profile == 'dev'
         run: |
           set -e -o pipefail
           . "$HOME/emsdk/emsdk_env.sh"
@@ -1908,7 +1954,7 @@ jobs:
       # The physics determinism corpus (stage J7) under node (single-threaded; the dev profile, strict floating point): the same
       # file and artifact as the native legs, compared by the `determinism` job. NODERAWFS makes the file a real one.
       - name: Physics determinism corpus
-        if: ${{ !cancelled() }}
+        if: matrix.profile == 'dev' && (!cancelled())
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
@@ -1918,7 +1964,7 @@ jobs:
           N2_DETERMINISM_HASHES_OUT: ${{ github.workspace }}/determinism-hashes.json
 
       - name: Upload the determinism hashes
-        if: "!cancelled()"
+        if: matrix.profile == 'dev' && (!cancelled())
         uses: actions/upload-artifact@v7
         with:
           name: determinism-hashes-web-node
@@ -1931,7 +1977,7 @@ jobs:
       # replay-hashes.json and uploaded for the `golden-replay` job, which compares every leg with the others and with
       # tests/golden/replay-determinism.json. ctest ran the same tests above. Under node (NODERAWFS makes the file a real one).
       - name: Golden replay hashes
-        if: ${{ !cancelled() }}
+        if: matrix.profile == 'dev' && (!cancelled())
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
@@ -1941,7 +1987,7 @@ jobs:
           N2_REPLAY_HASHES_OUT: ${{ github.workspace }}/replay-hashes.json
 
       - name: Upload the replay hashes
-        if: "!cancelled()"
+        if: matrix.profile == 'dev' && (!cancelled())
         uses: actions/upload-artifact@v7
         with:
           name: replay-hashes-web-node
@@ -1951,9 +1997,11 @@ jobs:
 
       # Only reports (raw and gzip sizes in the job summary); the budgets are checked on the package below
       - name: Report artifact sizes
+        if: matrix.profile == 'dev'
         run: bash scripts/web-size-report.sh build-web/bin
 
       - name: Test browser WebSocket transport against a native listener
+        if: matrix.profile == 'dev'
         # The dev tree has its own flags: nothing in this run can reuse its objects, so ccache is off for it
         env:
           CCACHE_DISABLE: "1"
@@ -1968,6 +2016,7 @@ jobs:
       # Stage 2 (issue #155): the web player and its package folder (build-web/web-package: index.html, index.js,
       # index.wasm, index.data, static files only). Linking it also runs the packaging of lua_project's assets.
       - name: Build the web package
+        if: matrix.profile == 'dev'
         # The dev tree has its own flags: nothing in this run can reuse its objects, so ccache is off for it
         env:
           CCACHE_DISABLE: "1"
@@ -1980,6 +2029,7 @@ jobs:
       # under node for 30 frames with the canvas mocked: every frame must arrive at the size asked for and show something.
       # This is not a browser: the canvas, the input events and the page itself are checked by hand (docs/web-checklist.html).
       - name: Smoke the web package under node
+        if: matrix.profile == 'dev'
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
@@ -1988,6 +2038,7 @@ jobs:
       # The loader (web/n2-loader.js) under node with a mock fetch: right and wrong MIME type (one request), no manifest,
       # a compressing host without a manifest, 404, truncated file, LinkError, a page older than its manifest
       - name: Test the web loader under node
+        if: matrix.profile == 'dev'
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
@@ -2000,17 +2051,20 @@ jobs:
       # Stage 4: the audio unlock of the loader (web/n2-loader.js, createAudioUnlock) under node with a mock AudioContext
       # and a mock document: resume once on the first gesture, listeners removed, failures tolerated, the hidden tab
       - name: Test the web audio unlock under node
+        if: matrix.profile == 'dev'
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
           node scripts/web-audio-unlock-test.mjs
 
       - name: Report web package sizes
+        if: matrix.profile == 'dev'
         run: bash scripts/web-size-report.sh build-web/web-package
 
       # Stage 3: the package's sizes (manifest.json, written by the web-package target) against web/budgets.json, the one
       # place the budgets live. The job fails when one is exceeded.
       - name: Check the web package size budgets (dev)
+        if: matrix.profile == 'dev'
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
@@ -2019,6 +2073,7 @@ jobs:
       # Stage 3: the size and speed profiles, each a full rebuild of the engine, the renderer and the player (LTO, no tests),
       # then the same package smoke (now with the .br/.gz siblings required) and the profile's budgets.
       - name: Build and check the web package (size profile)
+        if: matrix.profile == 'size'
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
@@ -2032,6 +2087,7 @@ jobs:
       # the probe minus the baseline's), and the probe, which runs the smoke test's scenario, must print the golden state hash
       # (it exits non-zero otherwise)
       - name: Measure Jolt Physics (size profile)
+        if: matrix.profile == 'size'
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
@@ -2041,6 +2097,7 @@ jobs:
 
       # What 2D physics costs a game that does not use it, and what leaving it out saves: the size profile built without Box2D
       - name: Measure the size profile without Box2D
+        if: matrix.profile == 'size'
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
@@ -2058,6 +2115,7 @@ jobs:
       # only audio and UI (no_audio_ui), must each build, start and draw, and the sizes are what leaving them out saves. Size
       # profile, against the full package just built.
       - name: Build and run a project with no physics modules
+        if: matrix.profile == 'size'
         run: |
           set -e -o pipefail
           . "$HOME/emsdk/emsdk_env.sh"
@@ -2112,6 +2170,7 @@ jobs:
           done
 
       - name: Build and check the web package (speed profile)
+        if: matrix.profile == 'speed'
         # The speed tree has its own flags: nothing in this run can reuse its objects, so ccache is off for it
         env:
           CCACHE_DISABLE: "1"
@@ -2124,6 +2183,7 @@ jobs:
           node scripts/web-budget-check.mjs build-web-speed/web-package speed
 
       - name: Measure Jolt Physics (speed profile)
+        if: matrix.profile == 'speed'
         # The speed tree has its own flags: nothing in this run can reuse its objects, so ccache is off for it
         env:
           CCACHE_DISABLE: "1"
@@ -2138,16 +2198,15 @@ jobs:
       # emdawnwebgpu port, cmake/EmdawnwebgpuPort.cmake, which emcc fetches at the first compile). G5 selects it in supporting
       # browsers; the node smokes above run software. The proof that it is linked is the port's JavaScript in
       # index.js: the call that makes a render pipeline on the browser's GPUDevice, which only the backend's pipeline cache reaches
-      - name: Check that the WebGPU backend is linked into the player (all profiles)
+      - name: Check that the WebGPU backend is linked into the player (every profile, each in its own leg)
         run: |
           set -e
-          for dir in build-web build-web-size build-web-speed; do
-            if ! grep -q 'createRenderPipeline(' "$dir/web-package/index.js"; then
-              echo "$dir/web-package/index.js has no WebGPU backend (no createRenderPipeline call)"
-              exit 1
-            fi
-            echo "$dir: the WebGPU backend is linked into the player"
-          done
+          if [ "${{ matrix.profile }}" = dev ]; then dir=build-web; else dir="build-web-${{ matrix.profile }}"; fi
+          if ! grep -q 'createRenderPipeline(' "$dir/web-package/index.js"; then
+            echo "$dir/web-package/index.js has no WebGPU backend (no createRenderPipeline call)"
+            exit 1
+          fi
+          echo "$dir: the WebGPU backend is linked into the player"
 
       # Runs after a failed build or test, and on a timeout or cancel too (the slow runs are the ones to look at): what ccache
       # did in this run, from zeroed statistics
@@ -2169,11 +2228,13 @@ jobs:
           ccache -s
 
       # G6 reuses these exact build outputs in a separate browser job; no second engine build or mutable artifact ref.
-      # The size-profile player keeps the transfer small. The dev readback executable links only the renderer.
-      - name: Upload the browser gate inputs
+      # The size-profile player keeps the transfer small (from the size leg). The dev readback executable links only the
+      # renderer (from the dev leg). Two artifacts, since the legs are separate jobs; the browser job puts each back at its path.
+      - name: Upload the browser gate inputs (the size-profile package)
+        if: matrix.profile == 'size'
         uses: actions/upload-artifact@v7
         with:
-          name: webgpu-browser-inputs
+          name: webgpu-browser-inputs-package
           path: |
             build-web-size/web-package/index.html
             build-web-size/web-package/index.js
@@ -2181,6 +2242,15 @@ jobs:
             build-web-size/web-package/index.data
             build-web-size/web-package/n2-loader.js
             build-web-size/web-package/manifest.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload the browser gate inputs (the readback test)
+        if: matrix.profile == 'dev'
+        uses: actions/upload-artifact@v7
+        with:
+          name: webgpu-browser-inputs-readback
+          path: |
             build-web/browser-tests/n2-webgpu-readback.js
             build-web/browser-tests/n2-webgpu-readback.wasm
           if-no-files-found: error
@@ -2208,8 +2278,12 @@ jobs:
           cache-dependency-path: scripts/browser-tools/package-lock.json
       - uses: actions/download-artifact@v8
         with:
-          name: webgpu-browser-inputs
-          path: browser-inputs
+          name: webgpu-browser-inputs-package
+          path: browser-inputs/build-web-size/web-package
+      - uses: actions/download-artifact@v8
+        with:
+          name: webgpu-browser-inputs-readback
+          path: browser-inputs/build-web/browser-tests
       - name: Install the pinned browser and tools
         run: |
           npm ci --prefix scripts/browser-tools --ignore-scripts
