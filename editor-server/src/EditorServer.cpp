@@ -1094,9 +1094,54 @@ namespace N2Engine::Editor
                     return std::unexpected("Set the script (scriptUUID) and its data (scriptData) in separate requests");
                 }
             }
+            // Protocol 1.35.0: an optional state member (shaderState: a Sprite2D's, a UI Image's or a ParticleSystem's shader and
+            // its values) is not a field, so it is checked here and taken out of the field check; the copy below applies it
+            nlohmann::json optionalStates = nlohmann::json::object();
+            if (values.is_object())
+            {
+                std::vector<std::string> taken;
+                for (const auto &[key, value] : values.items())
+                {
+                    if (!component.HasOptionalState(key))
+                    {
+                        continue;
+                    }
+                    if (!value.is_null() && !value.is_object())
+                    {
+                        return std::unexpected(std::format("'{}' must be an object or null", EditorServer::SanitizeForLog(key)));
+                    }
+                    if (value.is_object())
+                    {
+                        const auto shader = value.find("shader");
+                        if (shader == value.end() || !shader->is_string() || !Math::UUID::FromString(shader->get<std::string>()).has_value())
+                        {
+                            return std::unexpected(std::format("'{}.shader' must be the UUID of a Shader asset", EditorServer::SanitizeForLog(key)));
+                        }
+                        const IO::AssetMetadata *meta = IO::ResourceLoader::Instance().GetMetadata(*Math::UUID::FromString(shader->get<std::string>()));
+                        if (meta == nullptr || meta->resourceType != "Shader")
+                        {
+                            return std::unexpected(std::format("'{}.shader' names no Shader asset", EditorServer::SanitizeForLog(key)));
+                        }
+                        if (const auto params = value.find("params"); params != value.end() && !params->is_object())
+                        {
+                            return std::unexpected(std::format("'{}.params' must be an object", EditorServer::SanitizeForLog(key)));
+                        }
+                    }
+                    optionalStates[key] = value;
+                    taken.push_back(key);
+                }
+                for (const std::string &key : taken)
+                {
+                    values.erase(key);
+                }
+            }
             if (const auto problem = ValidateFieldValues(fields, values))
             {
                 return std::unexpected(EditorServer::SanitizeForLog(*problem, 300));
+            }
+            for (const auto &[key, value] : optionalStates.items())
+            {
+                values[key] = value;
             }
 
             // Every field a key names, with the value it is given (a container's own fields included)
@@ -3067,7 +3112,7 @@ namespace N2Engine::Editor
     {
         return {"editorExtensions","editorTooling","luaSyntax","assetPreviews","entityClipboard","prefabAssets","physicsBackends","networkPanel","prefabFields",
                 "prefabStage","prefabStageContext","engineStats","buildTargets","buildSettings","shaders","prefabNesting",
-                "prefabOverridesApply"};
+                "prefabOverridesApply","shaderState"};
     }
 
     bool EditorServer::EnableEditorExtensions(std::filesystem::path projectRoot)

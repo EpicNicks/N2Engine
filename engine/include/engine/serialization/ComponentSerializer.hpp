@@ -606,6 +606,18 @@ namespace N2Engine
          * whole component relies on and an edit of one field mustn't trigger). A field with a range is clamped.
          * Keys that aren't members are ignored here: the editor server rejects them first (ValidateFieldValues).
          */
+        [[nodiscard]] bool HasOptionalState(const std::string_view key) const override
+        {
+            for (const MemberSerializer &member : _members)
+            {
+                if (member.unlisted && member.name == key)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         void SetEditorFields(const nlohmann::json &values, ReferenceResolver *resolver) override
         {
             if (!values.is_object())
