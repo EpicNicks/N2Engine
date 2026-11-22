@@ -2,6 +2,20 @@ Continue work on N2Engine (GitHub EpicNicks/N2Engine at E:\Code\Projects\N2Engin
 
 Read the memory index first, then orchestrator/README.md and the LAST entries of orchestrator/project-memory/pending-minor-defects.md (the source of truth for what merged and why) and orchestrator-lessons.md. Do not read agent transcripts; read only the ledger files of items you need.
 
+## Current state (2026-11-22; read first)
+
+Nested prefabs (proposal `orchestrator/proposals/prefab-nesting.md`, decisions taken by the user on 2026-11-20) are ALL MERGED, engine and frontend:
+
+- **#426** (design, 5d9894ba): files store a link plus override values; links are expanded at load in `Scene::Deserialize` and `PrefabManager::InstantiatePrefabs`; ids inside a link are `DeriveId(link root id, id in the prefab)`. Reopened EN4's storage decision.
+- **#428** (engine core, f0d425e5): `prefabInstance { prefab, overrides, removedObjects, removedComponents, addedComponents, addedChildren }`; a variant is a prefab whose root is a link; `PrefabNesting::Expand`/`Collapse`; failures (missing prefab, cycle, more than 64 deep, more than 10,000 objects) give a logged empty placeholder, never throw; runtime saves write expanded copies with marks. No protocol change.
+- **#429** (editor host, protocol 1.33.0, 1773e382): every host save collapses instances back into links; InstantiatePrefab makes a link instance; ApplyPrefab through `InstanceAsPrefab`; a changed `.prefab` rebuilds every outermost instance as one undo step; `GetPrefabOverrides` (0x2F), `RevertPrefabOverrides` (0x42), response `PrefabOverrides` (0x29), `linkDepth`, Hello capability `prefabNesting`. Deviations in its PR body (no old-content cache, outermost link only, some nested cases refused).
+- **#431** (Lua, 66d76c98): `GameObject:GetChildCount/GetChild/GetChildren/GetUUID/GetComponents(name)`, `LuaComponent:GetScriptData()`, `Sprite2D:GetTexture()`; `JsonToLua` moved to `LuaJson` with a depth limit.
+- **#432** (protocol 1.34.0, b3091b98): `ApplyPrefabOverrides` (0x43) with `level` (-1 innermost), `linkPath`/`applyTo` on `GetPrefabOverrides`, `overridden`/`prefabAdded` marks on hierarchy rows, entity headers and components, `UnpackPrefab` `completely`, variants via CreatePrefab of an outermost link instance (`PrefabNesting::RenumberIds`, `ResolveSourcePath`). Hello capability `prefabOverridesApply`.
+- **Frontend #81** (merged 2026-11-22, pins 1.34.0): prefab links and overrides in the hierarchy and inspector. **Frontend #82** (merged 2026-11-22 by this session, b1891dcd, 3 of 3 green, no protocol change): override marks and Revert on N objects in the multi-object inspector; MCP tools `n2_get_prefab_overrides`, `n2_revert_prefab_overrides`, `n2_apply_prefab_overrides` (asks first). Not run in a real Electron window.
+- **Next free protocol minor: 1.35.0.**
+- **Worktree cleanup: DONE.** `git worktree list` shows only the main checkout and `.claude/worktrees` is empty (2026-11-22); E: has 17 GB free of 477 GB. The local branches of the merged worktrees are still there (all merged or pushed); they cost no disk. The main checkout is still on the stale `docs-design-decision-cards` with the superseded uncommitted CONTINUE.md edit and the untracked old `user-shaders-execution-notes.md` (left alone).
+- **A goal run started on 2026-11-22** (#381 items 1 gap, 5 to 8 and 10; CI follow-ups; #425; user shader follow-ups); its results go in a later section.
+
 ## Current state (2026-11-21; read first)
 
 A goal run on 2026-11-20/21 launched lanes for issue #381 and the web umbrella; no agent is running now and every PR below is MERGED. Lanes A (user shaders stage 6, #406 and stages 7 to 9), B2 (#381 items 2, 4, 9: #382, #387 to #389) and C (#62 ufbx, #107) were ALREADY on master before the run (checked in the code, not only by PR title), so no agent was launched for them; the user accepted that on 2026-11-21.
