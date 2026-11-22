@@ -1155,7 +1155,9 @@ jobs:
       - name: Run in the simulator (first frame and a frame rate)
         if: matrix.target == 'ios'
         # A slow simulator start can let the first-frame line go by before the log stream attaches (a known flake): the run
-        # is tried once more when, and only when, a line it must log is missing. A failing n2build run is not retried.
+        # is tried once more when, and only when, a line it must log is missing from a run that lasted its 60 seconds. A
+        # failing n2build run is not retried, and neither is an app that exited early (n2build reports that as a normal end,
+        # so the step times the run): that is a crash, and the crash-report step below collects it.
         run: |
           if [ "${{ matrix.moltenvk }}" = true ]; then
             renderer="N2Engine iOS player: first frame, the Vulkan renderer (MoltenVK)"
@@ -1164,7 +1166,12 @@ jobs:
           fi
           for attempt in 1 2; do
             set -o pipefail
+            started=$SECONDS
             node tools/n2build/n2build.mjs run --target ios --project lua_project --config debug --out "$RUNNER_TEMP/package/LuaDemo" --no-build --seconds 60 | tee run.txt
+            if [ $(( SECONDS - started )) -lt 55 ]; then
+              echo "::error::attempt $attempt: the app ended after $(( SECONDS - started )) s, before its 60 seconds: it exited early (a crash?), not retried"
+              exit 1
+            fi
             # The first-frame line names the renderer (the lines before it can go by before the log stream starts)
             if grep -q "N2Engine iOS player: first frame" run.txt &&
                grep -Eq "N2Engine iOS player: [0-9]+ frames, [0-9.]+ fps" run.txt &&
@@ -1173,7 +1180,6 @@ jobs:
               exit 0
             fi
             echo "::warning::attempt $attempt: the simulator log lacks the first frame, the frame rate or the renderer line"
-            cp run.txt "run-attempt-$attempt.txt"
           done
           exit 1
 
@@ -1537,8 +1543,10 @@ jobs:
           cmake -S . -B build-noscriptnet -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DN2ENGINE_RENDERER_VULKAN=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DN2ENGINE_PROJECT=tests/projects/no_scripting_network 2>&1 | tee configure-noscriptnet.log
           grep -q "Engine modules: scripting OFF" configure-noscriptnet.log
           grep -q "Engine modules: network OFF" configure-noscriptnet.log
+          grep -q "Scripting: not in this build" configure-noscriptnet.log
+          # Neither the editor host nor the server is even a target of this tree (a build of named targets could not show it)
+          if cmake --build build-noscriptnet --target help | grep -E '(^|[ :])(N2Server|N2EditorHost|editor-server|n2server)(:|$)'; then echo "an editor or server target was configured without scripting and network"; exit 1; fi
           cmake --build build-noscriptnet --parallel --target engine_tests n2player n2_replay -- -k 0
-          if [ -e build-noscriptnet/bin/N2Server ] || [ -e build-noscriptnet/bin/N2EditorHost ]; then echo "an editor or server binary was built without scripting and network"; exit 1; fi
           ./build-noscriptnet/bin/engine_tests
           if nm -C build-noscriptnet/bin/n2player | grep -E ' (luaL_newstate|lua_pcallk)$|sol::' ; then echo "Lua is still linked into the player"; exit 1; fi
           if nm -C build-noscriptnet/bin/n2player | grep -E 'N2Engine::Network::(NetworkServer|NetworkClient|LockstepRuntime)::' ; then echo "a network session is still linked into the player"; exit 1; fi
@@ -1789,7 +1797,9 @@ jobs:
   # Since the per-profile split the three profiles are three legs of one matrix, built in parallel: dev (the unit tests,
   # the corpora, the dev package and its budgets), size (the size package, the Jolt and Box2D measurements, the module
   # projects, the browser gate's package) and speed (the speed package). Each leg installs the SDK and configures its own
-  # tree; the PhysX and Dawn caches are shared. The dev leg keeps the job's old check name.
+  # tree. Every leg restores the PhysX and Dawn caches and only the dev leg saves them, so on a miss (a new pin) each leg
+  # builds PhysX and downloads Dawn's port itself, three times the GitHub requests of one cold run (accepted: a miss is
+  # rare, and each leg checks that PhysX is on). The dev leg keeps the job's old check name.
   web:
     name: web (Emscripten, ${{ matrix.profile }} profile${{ matrix.profile == 'dev' && ', node tests' || '' }})
     needs: changes
@@ -1896,7 +1906,7 @@ jobs:
           ls -l external/PhysX/physx/bin/emscripten.wasm32/lib
 
       - name: Save the PhysX WebAssembly libraries
-        if: steps.physx-web-cache.outputs.cache-hit != 'true'
+        if: matrix.profile == 'dev' && steps.physx-web-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: external/PhysX/physx/bin/emscripten.wasm32
@@ -1913,6 +1923,8 @@ jobs:
           emcmake cmake -S . -B "build-web-$profile" -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE="$profile" -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_USE_JOLT=ON 2>&1 | tee "configure-$profile.log"
           # N2ENGINE_STRICT_FP is ON by default for these two profiles (so Jolt can declare CrossPlatform there)
           grep -q "Strict floating-point profile enabled" "configure-$profile.log"
+          # On a PhysX cache miss this leg builds PhysX itself (the dev leg saves the cache): it must have worked here too
+          grep -q "PhysX enabled" "configure-$profile.log"
 
       - name: Build
         if: matrix.profile == 'dev'
