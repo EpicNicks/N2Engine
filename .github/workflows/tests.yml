@@ -381,6 +381,20 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      # The physics bench (#381 item 7): Jolt and PhysX step cost on a settled pile, an active pile and joint chains, 1000
+      # raycasts and the Jolt snapshot cost, printed as tables into this job's summary (scripts/physics-bench-summary.py).
+      # Shared-runner timings are noise: nothing judges a number; the step fails only when the bench itself fails.
+      - name: Physics bench numbers
+        if: needs.changes.outputs.docs_only != 'true' && matrix.config == 'Release' && matrix.physx == 'ON' && !cancelled()
+        shell: pwsh
+        env:
+          ALSOFT_DRIVERS: "null"
+        run: |
+          & "./build/bin/Release/engine_tests.exe" --gtest_filter='PhysicsBackendBenchTest.*' | Tee-Object -FilePath physics-bench.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/physics-bench-summary.py --leg windows-release physics-bench.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       # The golden replay corpus (netcode C2), on the strict Release leg only: the same steps as the Linux legs. The hashes go to
       # the `golden-replay` job as an artifact.
       - name: Golden replay hashes
@@ -635,7 +649,7 @@ jobs:
           ALSOFT_DRIVERS: "null"
           PYTHONDONTWRITEBYTECODE: "1"
 
-      # The physics determinism corpus (stage J7): ten scenes on Jolt, 600 ticks each, hashed every 60 ticks; the hashes are
+      # The physics determinism corpus (stage J7): fourteen scenes on Jolt, 600 ticks each, hashed every 60 ticks; the hashes are
       # written to determinism-hashes.json and uploaded for the `determinism` job, which compares every leg with the others and
       # with tests/golden/physics-determinism.json. ctest ran the same tests above (what they assert concerns this binary
       # alone); this run is the one that writes the file. A failed corpus test fails this leg, and the file is uploaded anyway.
@@ -655,6 +669,18 @@ jobs:
           path: determinism-hashes.json
           if-no-files-found: warn
           retention-days: 30
+
+      # The physics bench (#381 item 7): Jolt and PhysX step cost on a settled pile, an active pile and joint chains, 1000
+      # raycasts and the Jolt snapshot cost, printed as tables into this job's summary (scripts/physics-bench-summary.py).
+      # Shared-runner timings are noise: nothing judges a number; the step fails only when the bench itself fails.
+      - name: Physics bench numbers
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          ./build/bin/engine_tests --gtest_filter='PhysicsBackendBenchTest.*' | tee physics-bench.log
+          python3 scripts/physics-bench-summary.py --leg linux-x86_64-clang physics-bench.log
+        env:
+          ALSOFT_DRIVERS: "null"
 
       # The golden replay corpus (netcode C2): three physics-free scenes (transforms, a Lua sim script, Lua-steered transforms)
       # replayed from the input logs of tests/golden/replays, 600 ticks each, hashed every 60 ticks; the hashes are written to
@@ -1329,7 +1355,7 @@ jobs:
           ALSOFT_DRIVERS: "null"
           PYTHONDONTWRITEBYTECODE: "1"
 
-      # The physics determinism corpus (stage J7): ten scenes on Jolt, 600 ticks each, hashed every 60 ticks; the hashes are
+      # The physics determinism corpus (stage J7): fourteen scenes on Jolt, 600 ticks each, hashed every 60 ticks; the hashes are
       # written to determinism-hashes.json and uploaded for the `determinism` job, which compares every leg with the others and
       # with tests/golden/physics-determinism.json. ctest ran the same tests above (what they assert concerns this binary
       # alone); this run is the one that writes the file. A failed corpus test fails this leg, and the file is uploaded anyway.
@@ -1349,6 +1375,18 @@ jobs:
           path: determinism-hashes.json
           if-no-files-found: warn
           retention-days: 30
+
+      # The physics bench (#381 item 7): Jolt and PhysX step cost on a settled pile, an active pile and joint chains, 1000
+      # raycasts and the Jolt snapshot cost, printed as tables into this job's summary (scripts/physics-bench-summary.py).
+      # Shared-runner timings are noise: nothing judges a number; the step fails only when the bench itself fails.
+      - name: Physics bench numbers
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          ./build/bin/engine_tests --gtest_filter='PhysicsBackendBenchTest.*' | tee physics-bench.log
+          python3 scripts/physics-bench-summary.py --leg linux-arm64-clang physics-bench.log
+        env:
+          ALSOFT_DRIVERS: "null"
 
       # The golden replay corpus (netcode C2): three physics-free scenes (transforms, a Lua sim script, Lua-steered transforms)
       # replayed from the input logs of tests/golden/replays, 600 ticks each, hashed every 60 ticks; the hashes are written to
@@ -1568,7 +1606,7 @@ jobs:
           ALSOFT_DRIVERS: "null"
           PYTHONDONTWRITEBYTECODE: "1"
 
-      # The physics determinism corpus (stage J7): ten scenes on Jolt, 600 ticks each, hashed every 60 ticks; the hashes are
+      # The physics determinism corpus (stage J7): fourteen scenes on Jolt, 600 ticks each, hashed every 60 ticks; the hashes are
       # written to determinism-hashes.json and uploaded for the `determinism` job, which compares every leg with the others and
       # with tests/golden/physics-determinism.json. ctest ran the same tests above (what they assert concerns this binary
       # alone); this run is the one that writes the file. A failed corpus test fails this leg, and the file is uploaded anyway.
@@ -1588,6 +1626,18 @@ jobs:
           path: determinism-hashes.json
           if-no-files-found: warn
           retention-days: 30
+
+      # The physics bench (#381 item 7): Jolt and PhysX step cost on a settled pile, an active pile and joint chains, 1000
+      # raycasts and the Jolt snapshot cost, printed as tables into this job's summary (scripts/physics-bench-summary.py).
+      # Shared-runner timings are noise: nothing judges a number; the step fails only when the bench itself fails.
+      - name: Physics bench numbers
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          ./build/bin/engine_tests --gtest_filter='PhysicsBackendBenchTest.*' | tee physics-bench.log
+          python3 scripts/physics-bench-summary.py --leg linux-x86_64-gcc physics-bench.log
+        env:
+          ALSOFT_DRIVERS: "null"
 
       # The golden replay corpus (netcode C2): three physics-free scenes (transforms, a Lua sim script, Lua-steered transforms)
       # replayed from the input logs of tests/golden/replays, 600 ticks each, hashed every 60 ticks; the hashes are written to
@@ -1925,6 +1975,17 @@ jobs:
           path: determinism-hashes.json
           if-no-files-found: warn
           retention-days: 30
+
+      # The physics bench (#381 item 7): Jolt and PhysX step cost on a settled pile, an active pile and joint chains, 1000
+      # raycasts and the Jolt snapshot cost, printed as tables into this job's summary (scripts/physics-bench-summary.py).
+      # Shared-runner timings are noise: nothing judges a number; the step fails only when the bench itself fails.
+      - name: Physics bench numbers
+        if: ${{ !cancelled() }}
+        run: |
+          set -eo pipefail
+          . "$HOME/emsdk/emsdk_env.sh"
+          node build-web/bin/engine_tests.js --gtest_filter='PhysicsBackendBenchTest.*' | tee physics-bench.log
+          python3 scripts/physics-bench-summary.py --leg web-node physics-bench.log
 
       # The golden replay corpus (netcode C2): three physics-free scenes (transforms, a Lua sim script, Lua-steered transforms)
       # replayed from the input logs of tests/golden/replays, 600 ticks each, hashed every 60 ticks; the hashes are written to

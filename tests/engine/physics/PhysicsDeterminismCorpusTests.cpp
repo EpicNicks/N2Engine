@@ -1,6 +1,6 @@
 // The physics determinism scene corpus (stage J7 of the Jolt plan, docs/physics.html "Determinism proof in CI").
 //
-// Ten fixed scenes run on the Jolt backend, 600 ticks of 1/60 s each, and the state is hashed every 60 ticks (events and
+// Fourteen fixed scenes run on the Jolt backend, 600 ticks of 1/60 s each, and the state is hashed every 60 ticks (events and
 // query results too, where a scene has them). The hashes are written to a JSON file when the environment variable
 // N2_DETERMINISM_HASHES_OUT names one (CI sets it; N2_DETERMINISM_LEG names the leg), and printed on lines that start with
 // "[CORPUS]". The CI job "determinism" compares the files of all legs with each other and with tests/golden/
@@ -33,6 +33,7 @@
 
 #include "engine/Component.hpp"
 #include "engine/Layers.hpp"
+#include "engine/physics/JointTypes.hpp"
 #include "engine/physics/PhysicsMaterial.hpp"
 #include "engine/physics/Raycast.hpp"
 
@@ -568,6 +569,240 @@ namespace N2PhysicsTests
             }
         }
 
+        // ===== scenes 11 to 14 (#381 item 7): joints, a large pile, fast projectiles, a rollback with joints =====
+
+        // The joint rig of scenes 11 and 14: a chain of six boxes hanging from a world point (a Ball to the world, then
+        // limited and free hinges), a slider piston with limits, a welded (Fixed) pair, and a rope (a Distance joint with
+        // limits) from a world point to a sphere. Its inputs push the chain's end and the rope's sphere.
+        struct JointRig
+        {
+            std::vector<PhysicsBodyHandle> bodies;
+            PhysicsBodyHandle chainEnd;
+            PhysicsBodyHandle bob;
+            PhysicsBodyHandle piston;
+
+            void Build(JoltBackend &backend)
+            {
+                const PhysicsMaterial material = PhysicsMaterial::Default();
+                AddFloor(backend, bodies);
+                const auto box = [&](const Vector3 &at, const Vector3 &half, const float mass)
+                {
+                    const PhysicsBodyHandle body =
+                        backend.CreateDynamicBody(at, Math::Quaternion::Identity, mass, nullptr, false);
+                    backend.AddBoxCollider(body, nullptr, half, Vector3::Zero, material);
+                    bodies.push_back(body);
+                    return body;
+                };
+                const auto join = [&](const JointType type, const PhysicsBodyHandle a, const Vector3 &posA,
+                                      const PhysicsBodyHandle b, const Vector3 &posB, const Vector3 &at, const Vector3 &axis,
+                                      const bool limits, const float low, const float high)
+                {
+                    JointDesc desc;
+                    desc.type = type;
+                    desc.bodyA = a;
+                    desc.bodyB = b;
+                    desc.anchorA = at - posA;
+                    desc.anchorB = b.IsValid() ? at - posB : at;
+                    desc.axis = axis;
+                    desc.useLimits = limits;
+                    desc.limitMin = low;
+                    desc.limitMax = high;
+                    const PhysicsJointHandle joint = backend.CreateJoint(desc);
+                    EXPECT_TRUE(joint.IsValid());
+                };
+
+                // The chain: link 0 hangs from the world at (0, 9, 0)
+                Vector3 previousPos(0.0f, 8.6f, 0.0f);
+                PhysicsBodyHandle previous = box(previousPos, Vector3(0.15f, 0.35f, 0.15f), 1.0f);
+                join(JointType::Ball, previous, previousPos, PhysicsBodyHandle{}, Vector3::Zero, Vector3(0.0f, 9.0f, 0.0f),
+                     Vector3(0.0f, 0.0f, 1.0f), false, 0.0f, 0.0f);
+                for (int link = 1; link < 6; ++link)
+                {
+                    const Vector3 position(0.0f, 8.6f - 0.8f * static_cast<float>(link), 0.0f);
+                    const PhysicsBodyHandle body = box(position, Vector3(0.15f, 0.35f, 0.15f), 1.0f);
+                    const Vector3 at(0.0f, position.y + 0.4f, 0.0f);
+                    const bool limited = link % 2 == 1;
+                    join(JointType::Hinge, previous, previousPos, body, position, at,
+                         (link % 3 == 0) ? Vector3(1.0f, 0.0f, 0.0f) : Vector3(0.0f, 0.0f, 1.0f), limited, -0.6f, 0.9f);
+                    previous = body;
+                    previousPos = position;
+                }
+                chainEnd = previous;
+
+                // The piston: a base box and a rod that slides along y between -0.2 and 0.4
+                const Vector3 basePos(4.0f, 0.5f, 0.0f);
+                const PhysicsBodyHandle base = box(basePos, Vector3(0.5f, 0.5f, 0.5f), 4.0f);
+                const Vector3 rodPos(4.0f, 1.6f, 0.0f);
+                piston = box(rodPos, Vector3(0.15f, 0.6f, 0.15f), 0.5f);
+                join(JointType::Slider, base, basePos, piston, rodPos, Vector3(4.0f, 1.0f, 0.0f), Vector3(0.0f, 1.0f, 0.0f), true,
+                     -0.2f, 0.4f);
+
+                // The welded pair, dropped turned onto the floor
+                const Vector3 leftPos(-4.0f, 3.0f, 1.0f);
+                const Vector3 rightPos(-3.2f, 3.0f, 1.0f);
+                const PhysicsBodyHandle left = box(leftPos, Vector3(0.4f, 0.2f, 0.3f), 1.5f);
+                const PhysicsBodyHandle right = box(rightPos, Vector3(0.4f, 0.2f, 0.3f), 1.0f);
+                join(JointType::Fixed, left, leftPos, right, rightPos, Vector3(-3.6f, 3.0f, 1.0f), Vector3(1.0f, 0.0f, 0.0f),
+                     false, 0.0f, 0.0f);
+                backend.SetAngularVelocity(left, Vector3(0.3f, 0.0f, 0.8f));
+
+                // The rope: a sphere on a Distance joint (0.5 to 2.0) from the world point (2, 6, -2)
+                const Vector3 bobPos(3.0f, 5.0f, -2.0f);
+                bob = backend.CreateDynamicBody(bobPos, Math::Quaternion::Identity, 0.8f, nullptr, false);
+                backend.AddSphereCollider(bob, nullptr, 0.3f, Vector3::Zero, material);
+                bodies.push_back(bob);
+                join(JointType::Distance, bob, bobPos, PhysicsBodyHandle{}, Vector3::Zero, Vector3(2.0f, 6.0f, -2.0f),
+                     Vector3(0.0f, 0.0f, 1.0f), true, 0.5f, 2.0f);
+            }
+
+            // The inputs of tick `tick` (1-based); a different variant is a different (wrong) guess of them
+            void Input(JoltBackend &backend, const int tick, const int variant) const
+            {
+                if (tick % 30 == 5)
+                {
+                    const float sign = ((tick / 30) % 2 == 0) ? 1.0f : -1.0f;
+                    backend.AddImpulse(chainEnd, Vector3(sign * (variant == 0 ? 2.0f : 0.5f), 0.0f, 0.8f));
+                }
+                if (tick % 45 == 20)
+                {
+                    backend.AddImpulse(bob, variant == 0 ? Vector3(1.5f, 0.5f, 1.0f) : Vector3(-1.0f, 1.0f, 0.0f));
+                }
+                if (tick % 60 == 30)
+                {
+                    backend.AddImpulse(piston, Vector3(0.0f, variant == 0 ? 3.0f : 1.0f, 0.0f));
+                }
+            }
+        };
+
+        // 11. Joints: the joint rig with its inputs
+        void SceneJoints(JoltBackend &backend, std::vector<Record> &out)
+        {
+            JointRig rig;
+            rig.Build(backend);
+            for (int tick = 1; tick <= kTicks; ++tick)
+            {
+                rig.Input(backend, tick, 0);
+                Tick(backend);
+                if (tick % kInterval == 0)
+                {
+                    Add(out, "joints", "state", tick, StateHash(backend, rig.bodies));
+                }
+            }
+        }
+
+        // 12. A large pile: 400 mixed boxes, spheres and capsules in layers of 25 (the size of the bench's largest scene)
+        void SceneLargePile(IPhysicsBackend &backend, std::vector<Record> &out)
+        {
+            std::vector<PhysicsBodyHandle> bodies;
+            AddFloor(backend, bodies);
+            const PhysicsMaterial material = PhysicsMaterial::Default();
+            Lcg lcg;
+            for (int i = 0; i < 400; ++i)
+            {
+                const int column = i % 5;
+                const int row = (i / 5) % 5;
+                const int layer = i / 25;
+                const float jitterX = lcg.Next();
+                const float jitterZ = lcg.Next();
+                const float spin = lcg.Next();
+                const float x = 1.3f * static_cast<float>(column - 2) + 0.3f * (jitterX - 0.5f);
+                const float y = 1.0f + 1.4f * static_cast<float>(layer);
+                const float z = 1.3f * static_cast<float>(row - 2) + 0.3f * (jitterZ - 0.5f);
+                const PhysicsBodyHandle body =
+                    backend.CreateDynamicBody(Vector3(x, y, z), Math::Quaternion::Identity, 1.0f, nullptr, false);
+                switch (i % 3)
+                {
+                case 0:
+                    backend.AddBoxCollider(body, nullptr, Vector3(0.45f, 0.45f, 0.45f), Vector3::Zero, material);
+                    break;
+                case 1:
+                    backend.AddSphereCollider(body, nullptr, 0.45f, Vector3::Zero, material);
+                    break;
+                default:
+                    backend.AddCapsuleCollider(body, nullptr, 0.25f, 1.0f, Vector3::Zero, material);
+                    break;
+                }
+                backend.SetAngularVelocity(body, Vector3(0.0f, spin - 0.5f, 0.0f));
+                bodies.push_back(body);
+            }
+            for (int tick = 1; tick <= kTicks; ++tick)
+            {
+                Tick(backend);
+                if (tick % kInterval == 0)
+                {
+                    Add(out, "large_pile", "state", tick, StateHash(backend, bodies));
+                }
+            }
+        }
+
+        // 13. Fast projectiles: every 12 ticks a small sphere is fired at 40 to 70 units per second into a stack of boxes
+        // behind a thin static wall with a gap; each lives 150 ticks and is destroyed
+        void SceneProjectiles(IPhysicsBackend &backend, std::vector<Record> &out)
+        {
+            std::vector<PhysicsBodyHandle> bodies;
+            AddFloor(backend, bodies);
+            const PhysicsMaterial material = PhysicsMaterial::Default();
+            for (const float z : {-2.0f, 2.0f})
+            {
+                const PhysicsBodyHandle wall =
+                    backend.CreateStaticBody(Vector3(4.0f, 1.5f, z), Math::Quaternion::Identity, nullptr);
+                backend.AddBoxCollider(wall, nullptr, Vector3(0.05f, 1.5f, 1.4f), Vector3::Zero, material);
+                bodies.push_back(wall);
+            }
+            for (int level = 0; level < 5; ++level)
+            {
+                for (int column = 0; column < 3; ++column)
+                {
+                    const PhysicsBodyHandle box = backend.CreateDynamicBody(
+                        Vector3(7.0f, 0.4f + 0.81f * static_cast<float>(level), -0.8f + 0.8f * static_cast<float>(column)),
+                        Math::Quaternion::Identity, 1.0f, nullptr, false);
+                    backend.AddBoxCollider(box, nullptr, Vector3(0.4f, 0.4f, 0.4f), Vector3::Zero, material);
+                    bodies.push_back(box);
+                }
+            }
+            struct Shot
+            {
+                PhysicsBodyHandle body;
+                int bornAt = 0;
+            };
+            std::vector<Shot> shots;
+            Lcg lcg;
+            for (int tick = 1; tick <= kTicks; ++tick)
+            {
+                if (tick % 12 == 1)
+                {
+                    const float speedDraw = lcg.Next();
+                    const float aimDraw = lcg.Next();
+                    const float heightDraw = lcg.Next();
+                    const PhysicsBodyHandle shot = backend.CreateDynamicBody(
+                        Vector3(-6.0f, 0.5f + 2.5f * heightDraw, 0.0f), Math::Quaternion::Identity, 0.2f, nullptr, false);
+                    backend.AddSphereCollider(shot, nullptr, 0.1f, Vector3::Zero, material);
+                    backend.SetVelocity(shot, Vector3(40.0f + 30.0f * speedDraw, 1.0f, 3.0f * (aimDraw - 0.5f)));
+                    shots.push_back(Shot{shot, tick});
+                    bodies.push_back(shot);
+                }
+                while (!shots.empty() && tick - shots.front().bornAt >= 150)
+                {
+                    const PhysicsBodyHandle gone = shots.front().body;
+                    backend.DestroyBody(gone);
+                    std::erase(bodies, gone);
+                    shots.erase(shots.begin());
+                }
+                Tick(backend);
+                if (tick % kInterval == 0)
+                {
+                    Add(out, "projectiles", "state", tick, StateHash(backend, bodies));
+                }
+            }
+        }
+
+        // A deterministic single-threaded Jolt backend, the one every corpus scene runs on
+        void InitSingle(JoltBackend &backend)
+        {
+            backend.SetDeterministic(true);
+            EXPECT_TRUE(backend.Initialize());
+        }
+
         // ===== scenes 9 and 10: a world with inputs, for the snapshot and the rollback =====
 
         struct Mixed
@@ -1050,6 +1285,199 @@ namespace N2PhysicsTests
                     << "the rolled-back world differs from the straight run at tick " << done;
             }
         }
+    }
+
+    TEST_F(PhysicsDeterminismCorpusTest, Scene11Joints)
+    {
+        JoltBackend backend;
+        InitSingle(backend);
+        SceneJoints(backend, JoltRecords());
+    }
+
+    TEST_F(PhysicsDeterminismCorpusTest, Scene12LargePile)
+    {
+        JoltBackend backend;
+        InitSingle(backend);
+        SceneLargePile(backend, JoltRecords());
+    }
+
+    TEST_F(PhysicsDeterminismCorpusTest, Scene13Projectiles)
+    {
+        JoltBackend backend;
+        InitSingle(backend);
+        SceneProjectiles(backend, JoltRecords());
+    }
+
+    // 14. Rollback with joints: scene 10's save, mispredict for 8 ticks, restore and run 10 ticks again, on the joint rig
+    // of scene 11. Its hashes must equal a straight run's at every recorded tick; the recorded ones are the rolled-back
+    // world's.
+    TEST_F(PhysicsDeterminismCorpusTest, Scene14JointRollback)
+    {
+        std::vector<std::uint64_t> straightHashes(kTicks / kInterval + 1, 0);
+        {
+            JoltBackend backend;
+            InitSingle(backend);
+            JointRig rig;
+            rig.Build(backend);
+            for (int tick = 1; tick <= kTicks; ++tick)
+            {
+                rig.Input(backend, tick, 0);
+                Tick(backend);
+                if (tick % kInterval == 0)
+                {
+                    straightHashes[static_cast<std::size_t>(tick / kInterval)] = backend.HashState().value_or(0);
+                }
+            }
+        }
+        JoltBackend backend;
+        InitSingle(backend);
+        JointRig rig;
+        rig.Build(backend);
+        for (int base = 0; base < kTicks; base += 10)
+        {
+            std::vector<std::byte> saved;
+            ASSERT_TRUE(backend.SaveState(saved));
+            for (int tick = base + 1; tick <= base + 8; ++tick)
+            {
+                rig.Input(backend, tick, 1);
+                Tick(backend);
+            }
+            ASSERT_TRUE(backend.RestoreState(saved));
+            for (int tick = base + 1; tick <= base + 10; ++tick)
+            {
+                rig.Input(backend, tick, 0);
+                Tick(backend);
+            }
+            const int done = base + 10;
+            if (done % kInterval == 0)
+            {
+                const std::uint64_t hash = backend.HashState().value_or(0);
+                Add(JoltRecords(), "joint_rollback", "state", done, hash);
+                EXPECT_EQ(hash, straightHashes[static_cast<std::size_t>(done / kInterval)])
+                    << "the rolled-back joint rig differs from the straight run at tick " << done;
+            }
+        }
+    }
+
+    // ===== #381 item 7: the corpus scenes do not depend on Jolt's worker thread count =====
+
+    // Each scene that runs on a backend of its own (all but 6, which runs on the Application's, and 9 and 10, whose world
+    // is the rollback test's) is run on the single-threaded job system the corpus uses and on the thread-pool job system
+    // with 1 and 3 worker threads, in this process. Every recorded hash must be the same. These hashes are not written to
+    // the corpus file and are not compared with other legs: what this proves is that one binary gives the same state with
+    // any worker count; the preset still runs single-threaded (docs/physics.html). Skipped on the web (no thread pool).
+    TEST(PhysicsCorpusThreadsTest, TheCorpusScenesGiveTheSameHashesWithAnyWorkerThreadCount)
+    {
+#ifdef N2ENGINE_SINGLE_THREADED
+        GTEST_SKIP() << "the web build has no thread pool: the single-threaded job system is the only one";
+#else
+        using SceneFn = void (*)(JoltBackend &, std::vector<Record> &);
+        struct Entry
+        {
+            const char *name;
+            SceneFn run;
+        };
+        const Entry scenes[] = {
+            {"free_fall", [](JoltBackend &b, std::vector<Record> &o) { SceneFreeFall(b, o); }},
+            {"box_stack", [](JoltBackend &b, std::vector<Record> &o) { SceneBoxStack(b, o); }},
+            {"pile", [](JoltBackend &b, std::vector<Record> &o) { ScenePile(b, o); }},
+            {"compound", [](JoltBackend &b, std::vector<Record> &o) { SceneCompound(b, o); }},
+            {"kinematic_platform", [](JoltBackend &b, std::vector<Record> &o) { SceneKinematicPlatform(b, o); }},
+            {"queries", [](JoltBackend &b, std::vector<Record> &o) { SceneQueries(b, o); }},
+            {"spawn_despawn", [](JoltBackend &b, std::vector<Record> &o) { SceneSpawnDespawn(b, o); }},
+            {"joints", [](JoltBackend &b, std::vector<Record> &o) { SceneJoints(b, o); }},
+            {"large_pile", [](JoltBackend &b, std::vector<Record> &o) { SceneLargePile(b, o); }},
+            {"projectiles", [](JoltBackend &b, std::vector<Record> &o) { SceneProjectiles(b, o); }},
+        };
+        std::size_t compared = 0;
+        for (const Entry &scene : scenes)
+        {
+            std::vector<Record> single;
+            {
+                JoltBackend backend;
+                InitSingle(backend);
+                ASSERT_TRUE(backend.UsesSingleThreadedJobSystem());
+                scene.run(backend, single);
+            }
+            ASSERT_FALSE(single.empty()) << scene.name;
+            for (const int workers : {1, 3})
+            {
+                std::vector<Record> pooled;
+                JoltBackend backend;
+                backend.SetDeterministic(false);
+                backend.SetWorkerThreadsForTesting(workers);
+                ASSERT_TRUE(backend.Initialize());
+                ASSERT_FALSE(backend.UsesSingleThreadedJobSystem());
+                scene.run(backend, pooled);
+                ASSERT_EQ(pooled.size(), single.size()) << scene.name << ", " << workers << " workers";
+                for (std::size_t i = 0; i < single.size(); ++i)
+                {
+                    EXPECT_EQ(pooled[i].hash, single[i].hash) << scene.name << " " << single[i].kind << " tick " << single[i].tick
+                                                              << " with " << workers << " worker threads";
+                    ++compared;
+                }
+                std::printf("[CORPUS-THREADS] %s workers=%d concurrency=%d records=%zu last=%s single=%s\n", scene.name, workers,
+                            backend.GetJobSystemConcurrency(), pooled.size(), Hex(pooled.back().hash).c_str(),
+                            Hex(single.back().hash).c_str());
+                std::fflush(stdout);
+            }
+        }
+        EXPECT_GE(compared, 200u);
+#endif
+    }
+
+    // The joint rollback of scene 14 under worker threads: saved, mispredicted, restored and run again on a 3-worker pool,
+    // it reaches the single-threaded straight run's hashes
+    TEST(PhysicsCorpusThreadsTest, AJointRollbackUnderWorkerThreadsReachesTheSingleThreadedStraightRun)
+    {
+#ifdef N2ENGINE_SINGLE_THREADED
+        GTEST_SKIP() << "the web build has no thread pool";
+#else
+        std::vector<std::uint64_t> straight;
+        {
+            JoltBackend backend;
+            InitSingle(backend);
+            JointRig rig;
+            rig.Build(backend);
+            for (int tick = 1; tick <= 300; ++tick)
+            {
+                rig.Input(backend, tick, 0);
+                Tick(backend);
+                if (tick % kInterval == 0)
+                {
+                    straight.push_back(backend.HashState().value_or(0));
+                }
+            }
+        }
+        JoltBackend backend;
+        backend.SetDeterministic(false);
+        backend.SetWorkerThreadsForTesting(3);
+        ASSERT_TRUE(backend.Initialize());
+        JointRig rig;
+        rig.Build(backend);
+        std::vector<std::uint64_t> rolled;
+        for (int base = 0; base < 300; base += 10)
+        {
+            std::vector<std::byte> saved;
+            ASSERT_TRUE(backend.SaveState(saved));
+            for (int tick = base + 1; tick <= base + 8; ++tick)
+            {
+                rig.Input(backend, tick, 1);
+                Tick(backend);
+            }
+            ASSERT_TRUE(backend.RestoreState(saved));
+            for (int tick = base + 1; tick <= base + 10; ++tick)
+            {
+                rig.Input(backend, tick, 0);
+                Tick(backend);
+            }
+            if ((base + 10) % kInterval == 0)
+            {
+                rolled.push_back(backend.HashState().value_or(0));
+            }
+        }
+        EXPECT_EQ(rolled, straight);
+#endif
     }
 
 #ifdef N2ENGINE_PHYSX_ENABLED
