@@ -917,7 +917,12 @@ namespace N2Engine::Network
         std::vector<std::uint32_t> parked;
         for (const auto &entry : _world.Parked())
         {
-            if (!wanted.contains(entry.first) && !parkedThere.contains(entry.first))
+            if (const auto there = parkedThere.find(entry.first); there != parkedThere.end())
+            {
+                // Parked here too: with the other peer's reason and tick, so both release it at the same tick
+                (void)_world.Repark(NetworkId{entry.first}, there->second->reason, there->second->tick);
+            }
+            else if (!wanted.contains(entry.first))
             {
                 parked.push_back(entry.first);
             }
@@ -943,6 +948,18 @@ namespace N2Engine::Network
                 return std::unexpected(
                     std::format("net object {} (prefab {}) could not be instantiated: {}", id, prefab, spawned.error()));
             }
+            // What Spawn keeps for a fresh instance, so a later spawn of this id may take it back from the pool here as it
+            // does on the other peer (an object parked as SpawnUndone, for one)
+            GameObject &made = (*spawned)->GetGameObject();
+            Pristine pristine;
+            pristine.active = made.IsActive();
+            pristine.values = CaptureObjectValues(_layouts.Get(NetworkId{id}, made), made);
+            if (const Positionable *const positionable = made.GetPositionable(); positionable != nullptr)
+            {
+                pristine.transform = positionable->GetLocalTransform();
+            }
+            pristine.descendants = DescendantTransforms(made);
+            _pristine[id] = std::move(pristine);
             if (_physics == nullptr || handles.empty())
             {
                 return {};
@@ -1004,12 +1021,17 @@ namespace N2Engine::Network
         }
         scene->ProcessDestroyed();
 
-        // The 2D part's world must be here before anything changes (it was made by the scene's or the spawned objects' 2D
-        // components, which attached above)
+        // The 2D world is the scene's or was made when the instantiated objects' 2D components attached above, so it is
+        // checked again here (the world has changed by now: a failed join leaves it changed, and the session ends)
         Physics2D::Physics2DWorld *const world2D = Live2DWorld(_world);
         if (snapshot.hasPhysics2d && world2D == nullptr)
         {
             return std::unexpected(std::string("the snapshot has a 2D physics part but this scene has no 2D world"));
+        }
+        if (!snapshot.hasPhysics2d && world2D != nullptr)
+        {
+            return std::unexpected(std::string("the objects of the snapshot made a 2D physics world here and the snapshot "
+                                               "has none (the other peer's build or scene has no 2D world)"));
         }
 
         WorldSnapshot objectsOnly = snapshot;
@@ -1089,6 +1111,45 @@ namespace N2Engine::Network
             {
                 rename(saved.id, saved.bodies2d);
             }
+            // Every 2D node's pose as saved: transforms are not replicated values, and the restore below writes back only
+            // the poses of enabled dynamic bodies, so a static or disabled body's object (a wall the game moved after
+            // spawning it, a parked shot) would keep the pose its prefab gave it here
+            const auto place = [this](const std::uint32_t id, const std::vector<WorldSnapshot::Object::Body2D> &bodies)
+            {
+                NetworkObject *object = _world.Find(NetworkId{id});
+                if (object == nullptr)
+                {
+                    const NetworkWorld::ParkedObject *const parked = _world.FindParked(NetworkId{id});
+                    object = parked != nullptr ? parked->object : nullptr;
+                }
+                if (object == nullptr || bodies.empty())
+                {
+                    return;
+                }
+                const std::vector<GameObject *> nodes = NodesOf(object->GetGameObject());
+                std::set<std::uint32_t> placed;
+                for (const WorldSnapshot::Object::Body2D &body : bodies)
+                {
+                    GameObject *const node = body.node < nodes.size() ? nodes[body.node] : nullptr;
+                    if (node == nullptr || !placed.insert(body.node).second)
+                    {
+                        continue; // a node's first body carries its pose
+                    }
+                    if (Positionable *const positionable = node->GetPositionable(); positionable != nullptr)
+                    {
+                        positionable->SetPositionAndRotation(body.position, body.rotation);
+                    }
+                }
+            };
+            for (const WorldSnapshot::Object &saved : snapshot.objects)
+            {
+                place(saved.id, saved.bodies2d);
+            }
+            for (const WorldSnapshot::Parked &saved : snapshot.parked)
+            {
+                place(saved.id, saved.bodies2d);
+            }
+
             const Physics2D::Physics2DWorld::JoinRestore2D joined = world2D->RestoreStateForJoin(
                 std::span<const std::byte>(snapshot.physics2d.data(), snapshot.physics2d.size()), renames);
             using Status = Physics2D::Physics2DWorld::JoinRestore2D::Status;
@@ -1105,7 +1166,9 @@ namespace N2Engine::Network
             }
             else
             {
-                // This build cannot read the image: the networked objects' 2D bodies go where they were, at their speeds
+                // This build cannot read the image: the networked objects' 2D bodies are where they were (placed above)
+                // and get their speeds
+                result.image2dRefused = true;
                 for (const WorldSnapshot::Object &saved : snapshot.objects)
                 {
                     NetworkObject *const object = _world.Find(NetworkId{saved.id});
@@ -1120,11 +1183,7 @@ namespace N2Engine::Network
                         GameObject *const node = body.node < nodes.size() ? nodes[body.node] : nullptr;
                         if (node == nullptr || !placed.insert(body.node).second)
                         {
-                            continue; // a node's first body carries its pose and its Rigidbody2D's velocities
-                        }
-                        if (Positionable *const positionable = node->GetPositionable(); positionable != nullptr)
-                        {
-                            positionable->SetPositionAndRotation(body.position, body.rotation);
+                            continue; // a node's first body carries its Rigidbody2D's velocities
                         }
                         if (Physics2D::Rigidbody2D *const rigidbody = node->GetComponent<Physics2D::Rigidbody2D>();
                             rigidbody != nullptr && rigidbody->GetHandle().IsValid())

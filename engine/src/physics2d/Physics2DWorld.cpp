@@ -54,6 +54,7 @@ namespace N2Engine::Physics2D
 #include <format>
 #include <limits>
 #include <map>
+#include <ranges>
 #include <set>
 #include <span>
 #include <unordered_map>
@@ -1038,14 +1039,28 @@ namespace N2Engine::Physics2D
                 // handles before anything moves, so a chain of renames (a to b, b to c) is not confused.
                 std::map<PhysicsBodyHandle, PhysicsBodyHandle, HandleLess> target;
                 std::set<PhysicsBodyHandle, HandleLess> taken;
+                // A body whose rename names a handle another body already took (a state that does not fit this world): it
+                // is not the state's body under any handle, so it loses its body rather than keep a handle of the state
+                std::set<PhysicsBodyHandle, HandleLess> refused;
                 for (const BodyRename &rename : renames)
                 {
-                    if (_bodies.contains(rename.here) && rename.saved.IsValid() && !taken.contains(rename.saved) &&
-                        !target.contains(rename.here))
+                    if (!_bodies.contains(rename.here) || target.contains(rename.here))
+                    {
+                        continue;
+                    }
+                    if (rename.saved.IsValid() && !taken.contains(rename.saved))
                     {
                         target.emplace(rename.here, rename.saved);
                         taken.insert(rename.saved);
                     }
+                    else
+                    {
+                        refused.insert(rename.here);
+                    }
+                }
+                for (const PhysicsBodyHandle &handle : target | std::views::keys)
+                {
+                    refused.erase(handle);
                 }
                 std::map<PhysicsBodyHandle, BodyRecord, HandleLess> renamed;
                 std::vector<std::pair<Rigidbody2D *, PhysicsBodyHandle>> rigidbodies;
@@ -1069,7 +1084,7 @@ namespace N2Engine::Physics2D
                 {
                     const auto to = target.find(entry.first);
                     const bool moves = to != target.end();
-                    if (!moves && !taken.contains(entry.first))
+                    if (!moves && !taken.contains(entry.first) && !refused.contains(entry.first))
                     {
                         renamed.emplace(entry.first, std::move(entry.second));
                         continue;
@@ -1077,7 +1092,7 @@ namespace N2Engine::Physics2D
                     BodyRecord &record = entry.second;
                     if (!moves)
                     {
-                        // Its handle is another body's in the state
+                        // Its handle is another body's in the state, or its rename did not fit
                         if (record.rigidbody)
                         {
                             record.rigidbody->OnBodyLost();

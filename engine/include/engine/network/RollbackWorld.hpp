@@ -161,6 +161,8 @@ namespace N2Engine::Network
         std::size_t lost2d = 0;
         /// 2D bodies of the snapshot no component here owns: removed after the restore
         std::size_t removed2d = 0;
+        /// This build could not read the snapshot's Box2D image (another Box2D version, precision or layout)
+        bool image2dRefused = false;
         std::size_t spawned = 0;
         /// Objects parked here because they are parked in the snapshot (WorldSnapshot::parked): this world's objects
         /// among them count in `removed` too, the instantiated ones do not count in `spawned`

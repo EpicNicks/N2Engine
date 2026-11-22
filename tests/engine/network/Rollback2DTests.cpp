@@ -416,6 +416,72 @@ TEST(Rollback2DJoinTest, ALateJoinerTakesTheSerialised2DStateExactlyAndRunsOnInS
     RestFrame();
 }
 
+// A spawned object whose only 2D body is a collider's static one (no Rigidbody2D) and that the game moved after spawning:
+// its transform is no replicated value and Box2D writes back only dynamic bodies' poses, so the joiner places it from the
+// snapshot's saved pose; a parked one is placed too
+TEST(Rollback2DJoinTest, AJoinerPlacesAStaticSpawnedWallWhereTheOtherPeerMovedIt)
+{
+    Shot2DPrefab shots;
+    RegisterTestComponents();
+    const GameObject::Ptr wallRoot = GameObject::Create("Wall2DPrefab");
+    wallRoot->CreatePositionable();
+    wallRoot->AddComponent<NetworkObject>();
+    wallRoot->AddComponent<Physics2D::BoxCollider2D>()->SetHalfExtents(Math::Vector2(0.5f, 2.0f));
+    ASSERT_TRUE(PrefabManager::RegisterPrefab("Wall2DPrefab", wallRoot));
+    Application::GetInstance().Set3DPhysicsBackend(nullptr);
+
+    std::vector<std::uint8_t> bytes;
+    std::uint32_t wallId = 0;
+    std::uint32_t parkedId = 0;
+    {
+        Game2D game;
+        RollbackWorld rollback(game.world, nullptr);
+        Scene &scene = SceneManager::GetCurSceneRef();
+        auto wall = rollback.Spawn("Wall2DPrefab", 1, 0);
+        ASSERT_TRUE(wall.has_value()) << wall.error();
+        wallId = (*wall)->GetNetworkId().value;
+        auto gone = rollback.Spawn("Wall2DPrefab", 1, 0);
+        ASSERT_TRUE(gone.has_value()) << gone.error();
+        parkedId = (*gone)->GetNetworkId().value;
+        scene.ProcessAttachQueue();
+        rollback.CommitSpawns();
+        (*wall)->GetGameObject().GetPositionable()->SetPosition(Math::Vector3(5.0f, 3.0f, 0.0f));
+        (*gone)->GetGameObject().GetPositionable()->SetPosition(Math::Vector3(-6.0f, 2.0f, 0.0f));
+        ASSERT_TRUE(rollback.Despawn(NetworkId{parkedId}, 0));
+        ASSERT_EQ(Application::GetInstance().StepTicks(1), 1u); // the moved bodies follow their transforms
+        scene.ProcessAttachQueue();
+        scene.ProcessDestroyed();
+        WorldSnapshot snapshot;
+        ASSERT_TRUE(rollback.Save(1, snapshot));
+        ASSERT_EQ(snapshot.parked.size(), 1u);
+        bytes = SerializeWorldSnapshot(snapshot);
+    }
+    RestFrame();
+    {
+        Game2D joiner;
+        RollbackWorld rollback(joiner.world, nullptr);
+        const auto decoded = DeserializeWorldSnapshot(bytes);
+        ASSERT_TRUE(decoded.has_value()) << decoded.error();
+        const auto joined = rollback.RestoreForJoin(*decoded);
+        ASSERT_TRUE(joined.has_value()) << joined.error();
+        EXPECT_TRUE(joined->exactPhysics2d) << joined->lost2d << " lost, " << joined->removed2d << " removed";
+        NetworkObject *const wall = joiner.world.Find(NetworkId{wallId});
+        ASSERT_NE(wall, nullptr);
+        const Math::Vector3 at = wall->GetGameObject().GetPositionable()->GetPosition();
+        EXPECT_FLOAT_EQ(at.x, 5.0f);
+        EXPECT_FLOAT_EQ(at.y, 3.0f);
+        const NetworkWorld::ParkedObject *const parked = joiner.world.FindParked(NetworkId{parkedId});
+        ASSERT_NE(parked, nullptr) << "the despawned wall is parked here too";
+        EXPECT_EQ(parked->reason, NetworkWorld::ParkReason::Despawned);
+        EXPECT_EQ(parked->tick, 0u);
+        const Math::Vector3 parkedAt = parked->object->GetGameObject().GetPositionable()->GetPosition();
+        EXPECT_FLOAT_EQ(parkedAt.x, -6.0f);
+        EXPECT_FLOAT_EQ(parkedAt.y, 2.0f);
+    }
+    RestFrame();
+    PrefabManager::UnregisterPrefab("Wall2DPrefab");
+}
+
 // What a joiner whose 2D bodies do not match is told, and what a 2D part it cannot use does
 TEST(Rollback2DJoinTest, AJoinThatCannotTakeThe2DPartExactlySaysSoAndTheSpectatorRuleApplies)
 {

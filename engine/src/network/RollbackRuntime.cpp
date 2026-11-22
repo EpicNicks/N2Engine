@@ -132,21 +132,30 @@ namespace N2Engine::Network
         {
             return {};
         }
+        const std::string what2D =
+            !inexact2D ? std::string()
+            : joined.image2dRefused
+                ? std::string("this build could not read the snapshot's Box2D image (another Box2D version, precision or "
+                              "layout), so the 2D bodies were put back from their saved poses and velocities")
+                : std::format("the 2D physics world took the snapshot's 2D part, but {} 2D bodies here and {} of the "
+                              "snapshot did not match (see the log)",
+                              joined.lost2d, joined.removed2d);
         if (!inexact3D)
         {
-            const std::string what = std::format(
-                "the 2D physics world did not take the snapshot's 2D part exactly (another build's Box2D image, or {} 2D "
-                "bodies here and {} of the snapshot that did not match, see the log)",
-                joined.lost2d, joined.removed2d);
             if (allowInexactPhysics)
             {
-                Logger::Warn("Spectating: " + what + ", so this view may drift from the players' simulation "
+                Logger::Warn("Spectating: " + what2D + ", so this view may drift from the players' simulation "
                              "(allowInexactPhysics)");
                 return {};
             }
-            return std::unexpected(what + ", so this spectator would run a simulation that may drift from the players' "
-                                          "without anything noticing; set RollbackRuntimeOptions::allowInexactPhysics to "
-                                          "run such a view anyway");
+            return std::unexpected(what2D + ", so this spectator would run a simulation that may drift from the players' "
+                                            "without anything noticing; set RollbackRuntimeOptions::allowInexactPhysics to "
+                                            "run such a view anyway");
+        }
+        if (inexact2D)
+        {
+            // Both parts are inexact: say so for the 2D one too, then the 3D rule as before
+            Logger::Warn("Spectating: " + what2D);
         }
         if (allowInexactPhysics)
         {

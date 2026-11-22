@@ -276,6 +276,18 @@ namespace N2Engine::Network
         return true;
     }
 
+    bool NetworkWorld::Repark(const NetworkId id, const ParkReason reason, const std::uint32_t tick)
+    {
+        const auto found = _parked.find(id.value);
+        if (found == _parked.end())
+        {
+            return false;
+        }
+        found->second.reason = reason;
+        found->second.tick = tick;
+        return true;
+    }
+
     NetworkObject *NetworkWorld::Unpark(const NetworkId id, const bool reactivate)
     {
         const auto found = _parked.find(id.value);
