@@ -8,6 +8,7 @@
 #include "engine/Layers.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <format>
 #include <stdexcept>
 #include <vector>
@@ -151,6 +152,22 @@ namespace N2Engine::Scripting::Bindings
             {
                 return RefOrNil(go.Pin()->FindChildRecursive(name));
             },
+            "GetChildCount", [](const GameObjectRef &go)
+            {
+                return static_cast<std::int64_t>(go.Pin()->GetChildCount());
+            },
+            // 1-based, as Lua arrays (and GetChildren's) are; nil out of range
+            "GetChild", [](const GameObjectRef &go, const std::int64_t index)
+            {
+                const GameObject::Ptr gameObject = go.Pin();
+                if (index < 1 || static_cast<std::uint64_t>(index) > gameObject->GetChildCount())
+                {
+                    return sol::optional<GameObjectRef>();
+                }
+                return RefOrNil(gameObject->GetChild(static_cast<size_t>(index - 1)));
+            },
+            // A snapshot in sibling order, so the script may reparent or destroy while it walks it
+            "GetChildren", [](const GameObjectRef &go) { return RefList(go.Pin()->GetChildren()); },
             "Destroy", [](const GameObjectRef &go)
             {
                 // Destroying an already destroyed object is a no-op, not an error

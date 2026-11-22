@@ -864,6 +864,19 @@ function GameObject:FindChild(name) end
 ---@return GameObject|nil
 function GameObject:FindChildRecursive(name) end
 
+---The number of direct children
+---@return integer
+function GameObject:GetChildCount() end
+
+---The direct child at a 1-based sibling index, nil out of range
+---@param index integer
+---@return GameObject|nil
+function GameObject:GetChild(index) end
+
+---The direct children in sibling order, as a plain array (a snapshot, not a live view)
+---@return GameObject[]
+function GameObject:GetChildren() end
+
 ---Destroy this GameObject (does nothing if it's already destroyed)
 function GameObject:Destroy() end
 
