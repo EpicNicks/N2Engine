@@ -12,6 +12,9 @@
 
 #include <math/DeterministicRandom.hpp>
 
+#include <math/Quaternion.hpp>
+#include <math/Vector3.hpp>
+
 #include "engine/Transform.hpp"
 #include "engine/physics/BodyState.hpp"
 #include "engine/physics/PhysicsHandle.hpp"
@@ -64,6 +67,28 @@ namespace N2Engine::Network
             /// handles (IPhysicsBackend::ClaimBodyHandles), so its bodies are the snapshot's and the physics part applies
             /// exactly (RestoreForJoin)
             std::vector<BodyHandle> bodyHandles;
+
+            /// One 2D body (Box2D) in the object's hierarchy: `node` as for BodyHandle. A node has one entry per body it
+            /// owns, in order: its Rigidbody2D's, then each Collider2D's own body (a collider without a Rigidbody2D makes a
+            /// static one); a collider on a Rigidbody2D's object shares that body and adds none.
+            struct Body2D
+            {
+                std::uint32_t node = 0;
+                Physics::PhysicsBodyHandle handle;
+                /// The node's world pose and the body's velocities when saved: what a joiner whose build cannot take the
+                /// Box2D image puts back instead (RestoreForJoin, exactPhysics2d false)
+                Math::Vector3 position;
+                Math::Quaternion rotation;
+                float linearVelocityX = 0.0f;
+                float linearVelocityY = 0.0f;
+                float angularVelocity = 0.0f;
+
+                friend bool operator==(const Body2D &, const Body2D &) = default;
+            };
+            /// The 2D bodies of the root and its descendants, when the scene has a 2D world. A late joiner gives each of
+            /// its own bodies of the same node the handle saved here (Physics2DWorld::RestoreStateForJoin), so the 2D part
+            /// applies to the right bodies even when the two peers made them in another order
+            std::vector<Body2D> bodies2d;
         };
 
         /// The state BEFORE tick `tick` runs (so the world after tick - 1 ticks)
@@ -72,12 +97,31 @@ namespace N2Engine::Network
         std::uint32_t nextId = 0;
         /// The live net objects, ascending by id
         std::vector<Object> objects;
+
+        /// An object parked when the snapshot was saved (despawned and not released yet, or a spawn a rollback undid): out
+        /// of the simulation, but its bodies are still in the physics worlds, disabled. Restore does not use this list (it
+        /// parks and unparks by itself); a late joiner makes and parks these objects too (RestoreForJoin), so its physics
+        /// worlds hold the same bodies, and Box2D's id pools then agree with the other peer's
+        struct Parked
+        {
+            std::uint32_t id = 0;
+            ClientId owner = kServerClientId;
+            bool spawned = false;
+            std::string prefab;
+            NetworkWorld::ParkReason reason = NetworkWorld::ParkReason::Despawned;
+            /// The tick it was parked at
+            std::uint32_t tick = 0;
+            std::vector<Object::BodyHandle> bodyHandles;
+            std::vector<Object::Body2D> bodies2d;
+        };
+        /// Ascending by id; no id of `objects` is in it
+        std::vector<Parked> parked;
         /// IPhysicsBackend::SaveState bytes; empty when the world has no snapshot-capable backend
         std::vector<std::byte> physics;
         bool hasPhysics = false;
         /// Physics2DWorld::SaveState bytes of the scene's 2D world (Box2D); hasPhysics2d is false when the scene had none.
-        /// In-process only: SerializeWorldSnapshot does not carry it (the format is unchanged), so a host with a 2D world
-        /// does not serve spectator snapshots and a late joiner's RestoreForJoin refuses a scene that has one
+        /// SerializeWorldSnapshot carries it (format 3), so a late joiner or spectator of a scene with a 2D world starts
+        /// from it (RestoreForJoin)
         std::vector<std::byte> physics2d;
         bool hasPhysics2d = false;
         /// The global seeded RNG stream (math/Random.hpp); nullopt when it was not seeded
@@ -87,10 +131,12 @@ namespace N2Engine::Network
     };
 
     /// The bytes of a snapshot that travel to a late joiner or a spectator (netcode C6): "N2WS", a format version (2: the
-    /// body handles were added), the tick, the id counter, the random streams, each object (id, owner, spawned and active
-    /// flags, prefab, layout hash, its replicated fields as CBOR, the root body state, its bodies' handles), the physics
-    /// bytes, and an FNV-1a 64-bit checksum of all of it.
-    /// Little-endian. The physics part is still the backend's own bytes: it restores only on the same build, and only
+    /// body handles were added; 3: the 2D part, each object's 2D bodies and the parked objects), the tick, the id counter,
+    /// the random streams, each object (id, owner, spawned and active flags, prefab, layout hash, its replicated fields as
+    /// CBOR, the root body state, its bodies' handles, its 2D bodies), each parked object (id, owner, spawned flag, park
+    /// reason and tick, prefab, its bodies' handles, its 2D bodies), the physics bytes, the 2D physics bytes, and an
+    /// FNV-1a 64-bit checksum of all of it.
+    /// Little-endian. The physics parts are still the backends' own bytes: they restore only on the same build, and only
     /// into a backend with the same bodies (see RestoreForJoin).
     [[nodiscard]] std::vector<std::uint8_t> SerializeWorldSnapshot(const WorldSnapshot &snapshot);
     /// The inverse. Every length is checked against the bytes present and against kMaxNetworkObjects and
@@ -106,7 +152,21 @@ namespace N2Engine::Network
         /// per-object body states, which is not the same simulation (contact caches, sleep timers, bodies of objects
         /// that are not networked are not carried)
         bool exactPhysics = false;
+        /// The 2D part (the snapshot's hasPhysics2d) was taken exactly: Box2D's world is the saved one and every 2D body
+        /// here matched one of it. False: this build could not read the Box2D image (the 2D bodies of the networked
+        /// objects were put back from their saved poses and velocities), or bodies did not match (lost2d, removed2d)
+        bool exactPhysics2d = false;
+        /// 2D bodies here that are not the snapshot's (a non-networked object made or renumbered differently): they lost
+        /// their body
+        std::size_t lost2d = 0;
+        /// 2D bodies of the snapshot no component here owns: removed after the restore
+        std::size_t removed2d = 0;
+        /// This build could not read the snapshot's Box2D image (another Box2D version, precision or layout)
+        bool image2dRefused = false;
         std::size_t spawned = 0;
+        /// Objects parked here because they are parked in the snapshot (WorldSnapshot::parked): this world's objects
+        /// among them count in `removed` too, the instantiated ones do not count in `spawned`
+        std::size_t parked = 0;
         std::size_t removed = 0;
         /// Bodies of the instantiated objects the backend was asked to create under the snapshot's handles
         std::size_t bodiesClaimed = 0;
@@ -182,8 +242,15 @@ namespace N2Engine::Network
         /// slot was taken here by a body the other peer does not have, a scene object's body has another handle here, a
         /// body of a non-networked object differs) the bodies of the objects' root Rigidbodies are set from the
         /// snapshot's body states instead and exactPhysics is false (RollbackRuntime then ends a spectator's session
-        /// unless the host allows it, RollbackRuntimeOptions::allowInexactPhysics). Errors: a scene object of the
-        /// snapshot missing here, a prefab that does not instantiate, anything Restore refuses.
+        /// unless the host allows it, RollbackRuntimeOptions::allowInexactPhysics). The objects parked in the snapshot
+        /// (WorldSnapshot::parked) are parked here too, made from their prefab first when this world lacks them, so the
+        /// physics worlds hold their disabled bodies as the other peer's do. The 2D part goes last: the 2D bodies of the
+        /// networked objects (live and parked) take the handles the snapshot gives them
+        /// (Physics2DWorld::RestoreStateForJoin) and Box2D's world becomes the saved one; exactPhysics2d says whether every
+        /// 2D body matched, and when this build cannot read the Box2D image the networked objects' 2D bodies are put back
+        /// from their saved poses and velocities instead. Errors: a scene object of the snapshot missing here, a prefab
+        /// that does not instantiate, a 2D part with no 2D world here or a 2D world here and no 2D part, a 2D state that
+        /// broke the world, anything Restore refuses.
         [[nodiscard]] std::expected<JoinRestoreResult, std::string> RestoreForJoin(const WorldSnapshot &snapshot);
 
         /// The simulation spawns `prefab` for `owner` at tick `tick`: the next net id, a parked object of that id and
@@ -232,6 +299,8 @@ namespace N2Engine::Network
         };
 
         [[nodiscard]] bool PhysicsActive() const;
+        /// Restore, with the 2D part left out when `with2D` is false (RestoreForJoin puts it back itself, renamed)
+        [[nodiscard]] std::expected<void, std::string> RestoreImpl(const WorldSnapshot &snapshot, bool with2D);
         /// A pooled object's Rigidbodies (the root's and its descendants') go back to their poses with zero velocities
         /// and awake
         void ResetBody(GameObject &gameObject) const;

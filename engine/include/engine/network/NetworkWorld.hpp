@@ -130,6 +130,9 @@ namespace N2Engine::Network
 
         /// Parks a registered object. False when `id` is not registered.
         bool Park(NetworkId id, ParkReason reason, std::uint32_t tick);
+        /// Gives a parked object another reason and tick (a late joiner takes the ones of the snapshot it joins from, so
+        /// it releases the object when the other peer does). False when `id` is not parked.
+        bool Repark(NetworkId id, ParkReason reason, std::uint32_t tick);
         /// Registers a parked object again and, with `reactivate`, restores its active flag (without it the GameObject stays
         /// inactive for the caller to activate); nullptr when `id` is not parked
         NetworkObject *Unpark(NetworkId id, bool reactivate = true);
