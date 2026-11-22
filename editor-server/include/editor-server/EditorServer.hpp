@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <unordered_set>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -87,6 +88,17 @@ namespace N2Engine::Editor
     {
         IO::ResourcePath resourcePath;
         std::filesystem::path file;
+    };
+
+    /// The hierarchy's and the inspector's prefab override marks (protocol 1.34.0): which objects and components of a
+    /// scene differ from their prefab, by UUID text
+    struct PrefabOverrideMarks
+    {
+        std::unordered_map<std::string, std::vector<std::string>> objectPaths;    // object -> its own overridden paths
+        std::unordered_map<std::string, std::vector<std::string>> componentPaths; // component -> its overridden paths
+        std::unordered_set<std::string> overridden;      // objects with a change of their own, and each changed instance's root
+        std::unordered_set<std::string> addedObjects;    // the roots of objects an instance added
+        std::unordered_set<std::string> addedComponents; // components an instance added
     };
 
     /// TCP host for the editor client.
@@ -1065,13 +1077,18 @@ namespace N2Engine::Editor
         // Prefab links (nested prefabs, protocol 1.33.0)
         void HandleGetPrefabOverrides(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleRevertPrefabOverrides(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleApplyPrefabOverrides(int clientSocket, const std::vector<uint8_t> &payload);
+        /// CreatePrefab of a link instance (since 1.34.0): writes a variant of its prefab and makes it an instance of that
+        void CreatePrefabVariant(int clientSocket, const std::shared_ptr<GameObject> &entity, const ResolvedScenePath &resolved);
         /// Every instance of the changed prefabs in the loaded scene (`previous`: prefab UUID text -> the content its
         /// instances were expanded from) is rebuilt from the prefab as it is now, keeping its overrides: one undo step.
         /// While a prefab stage is open the parked scene's instances wait for ClosePrefabStageNow.
         void PropagatePrefabChanges(std::unordered_map<std::string, nlohmann::json> previous);
         /// Replaces the outermost prefab link root `rootId` of the loaded scene by `link` expanded, as one undo step
-        /// `label` (through scene snapshots, so references into it resolve again by id)
-        EditOutcome RebuildPrefabInstance(const std::string &rootId, const nlohmann::json &link, const std::string &label);
+        /// `label` (through scene snapshots, so references into it resolve again by id). With `renumber` (old id -> new id), every
+        /// id string of the scene is rewritten through it afterwards: an instance whose objects get new ids
+        EditOutcome RebuildPrefabInstance(const std::string &rootId, const nlohmann::json &link, const std::string &label,
+                                          const std::unordered_map<std::string, std::string> *renumber = nullptr);
         // Host stats (protocol 1.28.0)
         void HandleGetEngineStats(int clientSocket, const std::vector<uint8_t> &payload);
         /// Answers PrefabStageInfo (GetPrefabStageInfo)
@@ -1588,6 +1605,15 @@ namespace N2Engine::Editor
         std::unordered_map<std::string, nlohmann::json> _pendingPrefabChanges;
         /// While ApplyPrefab's write is noted: the instance it applied (PropagatePrefabChanges rebuilds it bare)
         std::string _appliedInstance;
+        /// While ApplyPrefabOverrides' writes are noted: the instance it applied from and the link it keeps (what was
+        /// not applied), which PropagatePrefabChanges expands in place of the instance's own overrides
+        std::optional<std::pair<std::string, nlohmann::json>> _appliedLink;
+        /// Which objects and components of the loaded scene differ from their prefab, worked out once per scene revision
+        const PrefabOverrideMarks &CurrentOverrideMarks();
+        PrefabOverrideMarks _overrideMarks;
+        const void *_overrideMarksScene = nullptr;
+        uint32_t _overrideMarksRevision = 0;
+        bool _overrideMarksValid = false;
         // Starts numbering at the event epoch, a random number (see FrameTracker)
         FrameTracker _frames{_events.Epoch()};
         uint32_t _editorFramesRendered{0};

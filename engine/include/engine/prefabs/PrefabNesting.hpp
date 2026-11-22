@@ -104,6 +104,20 @@ namespace N2Engine::PrefabNesting
      * component of this link get back their id in the prefab (their prefabSource); objects and components the instance
      * added keep theirs; links inside it are collapsed into links, with their ids in the prefab; marks and the root's
      * prefabReference are removed. nullopt (logged) when the prefab can't be loaded or the data is not a link root.
+     *
+     * A VARIANT (a prefab whose root object is itself a link to a base prefab) stays one: the result is then that
+     * root link, with the instance's content as its changes to the base, so an Apply to a variant never copies the
+     * base into it.
      */
     [[nodiscard]] std::optional<nlohmann::json> InstanceAsPrefab(const nlohmann::json &instance, PrefabSource &source);
+
+    /// The id, in an expansion of the link whose root has id `link`, of what a change of that link names by `path`: an
+    /// id of the prefab (`rootSource`, the prefab root's own id, names the link root itself), or a path of ids "m/x"
+    /// through the prefab's own links, outer to inner. nullopt when the path is not one.
+    [[nodiscard]] std::optional<std::string> ResolveSourcePath(const std::string &link, const std::string &rootSource,
+                                                               const std::string &path);
+
+    /// Rewrites every string of `value` that is a key of `ids` (canonical UUID text) to its value, anywhere in the
+    /// JSON, except the values of "prefabSource" keys (ids in a prefab). Iterative, so any depth is safe.
+    void RenumberIds(nlohmann::json &value, const std::unordered_map<std::string, std::string> &ids);
 }

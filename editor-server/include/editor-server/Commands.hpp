@@ -754,10 +754,15 @@ namespace N2Engine::Editor::Protocol
     {
         /// The GameObject's UUID string
         std::string entityId;
+        /// Also unpack the prefab instances inside it, at any depth (since 1.34.0; trailing, default false)
+        bool completely = false;
 
         static UnpackPrefabCmd Deserialize(BufferReader &r)
         {
-            return {r.ReadString()};
+            UnpackPrefabCmd cmd;
+            cmd.entityId = r.ReadString();
+            cmd.completely = ReadTrailing(r, &BufferReader::ReadBool, false);
+            return cmd;
         }
     };
 
@@ -785,6 +790,26 @@ namespace N2Engine::Editor::Protocol
             RevertPrefabOverridesCmd cmd;
             cmd.entityId = r.ReadString();
             cmd.targets = ReadBoundedJson(r);
+            return cmd;
+        }
+    };
+
+    struct ApplyPrefabOverridesCmd
+    {
+        /// Any object of a prefab instance (since 1.34.0)
+        std::string entityId;
+        /// What to apply: entries as RevertPrefabOverrides' targets
+        nlohmann::json targets;
+        /// Which prefab of the link path receives them: 0 the outermost instance's prefab, 1 the prefab of the link
+        /// inside it that holds the target, and so on; -1 the innermost prefab that holds each target
+        int32_t level = -1;
+
+        static ApplyPrefabOverridesCmd Deserialize(BufferReader &r)
+        {
+            ApplyPrefabOverridesCmd cmd;
+            cmd.entityId = r.ReadString();
+            cmd.targets = ReadBoundedJson(r);
+            cmd.level = r.ReadI32();
             return cmd;
         }
     };

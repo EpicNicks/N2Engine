@@ -1097,7 +1097,10 @@ TEST_F(EditorPrefabTest, AnEditInsideANestedInstanceSavesAsAnOverrideOnTheOuterm
     EXPECT_EQ(info.at("rootId"), outer);
     EXPECT_EQ(info.at("prefab"), nestUuid);
     EXPECT_EQ(info.at("path"), "res://Nest.prefab");
-    EXPECT_EQ(info.at("overrides"), overrides);
+    json listed = info.at("overrides");
+    for (json &entry : listed)
+        entry.erase("objectId"); // since 1.34.0: the scene id of the object it names
+    EXPECT_EQ(listed, overrides);
 
     BufferWriter w;
     w.WriteString(deepLid);
@@ -1168,7 +1171,7 @@ TEST_F(EditorPrefabTest, AChangedPrefabUpdatesItsInstancesAsOneStepAndReferences
     EXPECT_EQ(Node(secondLid).at("name"), "Lid (applied)");
 }
 
-TEST_F(EditorPrefabTest, CreatePrefabWritesTheInstancesInsideAsLinksAndRefusesAVariant)
+TEST_F(EditorPrefabTest, CreatePrefabWritesTheInstancesInsideAsLinks)
 {
     const std::string crate = Create("Crate");
     (void)Create("Lid", crate);
@@ -1185,10 +1188,6 @@ TEST_F(EditorPrefabTest, CreatePrefabWritesTheInstancesInsideAsLinksAndRefusesAV
     EXPECT_EQ(inner.at("prefabInstance").at("prefab"), crateUuid) << "a link, not a copy";
     EXPECT_FALSE(inner.contains("children"));
     EXPECT_FALSE(shelfFile.at("rootObject").contains("prefabLinked")) << "no marks in a prefab file";
-
-    const Frame variant = CreatePrefabFrame(instance, "res://Variant.prefab");
-    EXPECT_NE(variant.type, AssetCreatedType);
-    EXPECT_NE(variant.Text().find("variant"), std::string::npos) << variant.Text();
 }
 
 TEST_F(EditorPrefabTest, TheStageShowsNestedLinksExpandedAndSavesThemAsLinks)
@@ -1225,4 +1224,262 @@ TEST_F(EditorPrefabTest, HelloAdvertisesPrefabNesting)
 {
     const auto capabilities = EditorServer::Capabilities();
     EXPECT_NE(std::find(capabilities.begin(), capabilities.end(), "prefabNesting"), capabilities.end());
+}
+
+// ==================== Override marks, Apply to a level, Unpack completely, variants (protocol 1.34.0) ====================
+
+namespace
+{
+    /// Crate (with a child Lid) as res://Crate.prefab, and Nest (a link to Crate called Inner) as res://Nest.prefab
+    struct NestedPrefabs
+    {
+        std::string crate, lid, crateUuid, crateLink, nestRoot, nestUuid;
+    };
+}
+
+class EditorPrefabLevelsTest : public EditorPrefabTest
+{
+protected:
+    NestedPrefabs MakeNested()
+    {
+        NestedPrefabs made;
+        made.crate = Create("Crate");
+        made.lid = Create("Lid", made.crate);
+        made.crateUuid = CreatePrefab(made.crate, "res://Crate.prefab");
+        made.crateLink = RandomId();
+        made.nestRoot = RandomId();
+        const json nest = {{"uuid", made.nestRoot}, {"name", "Nest"},
+                           {"children", json::array({LinkTo(made.crateLink, "Inner", made.crateUuid)})}};
+        WriteAsset("Nest.prefab", json{{"name", "Nest"}, {"rootObject", nest}}.dump(2) + "\n");
+        IO::ResourceLoader::Instance().RescanAssets();
+        made.nestUuid = IO::ResourceLoader::Instance().GetOrMintUUID(IO::ResourcePath("res://Nest.prefab")).ToString();
+        return made;
+    }
+
+    /// Opens a scene holding one link to Nest, "Nest 1" (id `outer`): its objects are Nest 1, Inner and Lid
+    void OpenNestScene(const NestedPrefabs &made, const std::string &outer)
+    {
+        WriteAsset("scenes/Linked.scene", SceneText(json::array({LinkTo(outer, "Nest 1", made.nestUuid)})));
+        IO::ResourceLoader::Instance().RescanAssets();
+        ASSERT_EQ(Execute(server, CommandType::OpenScene, Strings({"res://scenes/Linked.scene"})).type, SceneInfoType);
+        ASSERT_EQ(Names(), (std::vector<std::string>{"Nest 1", "Inner", "Lid"}));
+    }
+
+    std::string IdNamed(const std::string &name)
+    {
+        for (const json &node : Nodes())
+        {
+            if (node.at("name") == name)
+                return node.at("id");
+        }
+        ADD_FAILURE() << "no node " << name;
+        return {};
+    }
+
+    json Overrides(const std::string &id)
+    {
+        const Frame got = Execute(server, CommandType::GetPrefabOverrides, Strings({id}));
+        EXPECT_EQ(got.type, PrefabOverridesType) << got.Text();
+        if (got.type != PrefabOverridesType)
+            return json::object();
+        BufferReader r(got.payload);
+        return ReadJson(r);
+    }
+
+    Frame ApplyOverrides(const std::string &id, const json &targets, const int32_t level)
+    {
+        BufferWriter w;
+        w.WriteString(id);
+        WriteJson(w, targets);
+        w.WriteI32(level);
+        return Execute(server, CommandType::ApplyPrefabOverrides, w.Release());
+    }
+
+    Frame UnpackCompletely(const std::string &id)
+    {
+        BufferWriter w;
+        w.WriteString(id);
+        w.WriteBool(true);
+        return Execute(server, CommandType::UnpackPrefab, w.Release());
+    }
+};
+
+TEST_F(EditorPrefabLevelsTest, TheHierarchyAndTheInspectorMarkWhatDiffersFromThePrefab)
+{
+    const std::string crate = Create("Crate");
+    (void)Create("Lid", crate);
+    (void)Create("Hinge", crate);
+    (void)CreatePrefab(crate, "res://Crate.prefab");
+    ASSERT_EQ(Execute(server, CommandType::NewScene, Strings({"", "Marks"})).type, SceneInfoType);
+    const std::string instance = Instantiate("res://Crate.prefab");
+    const std::string instanceLid = IdNamed("Lid");
+    const std::string instanceHinge = IdNamed("Hinge");
+    EXPECT_FALSE(Node(instance).contains("overridden")) << "an untouched instance has no marks";
+    EXPECT_FALSE(Node(instanceLid).contains("overridden"));
+
+    SetName(instanceLid, "Open lid");
+    EXPECT_EQ(Node(instanceLid).at("overridden"), true);
+    EXPECT_EQ(Node(instance).at("overridden"), true) << "the root shows that the instance has changes";
+    EXPECT_FALSE(Node(instanceHinge).contains("overridden"));
+    EXPECT_FALSE(Node(instanceLid).contains("overrides")) << "the paths are the inspector's";
+    const json entity = GetEntity(instanceLid);
+    EXPECT_EQ(entity.at("header").at("overrides"), json::array({"name"}));
+    EXPECT_EQ(entity.at("header").at("overridden"), true);
+
+    // An object added under the instance
+    const std::string added = Create("Sticker", instance);
+    EXPECT_EQ(Node(added).at("prefabAdded"), true);
+
+    // Undone, the marks follow
+    (void)Step(CommandType::Undo);
+    (void)Step(CommandType::Undo);
+    EXPECT_FALSE(Node(instanceLid).contains("overridden"));
+    EXPECT_FALSE(Node(instance).contains("overridden"));
+}
+
+TEST_F(EditorPrefabLevelsTest, GetPrefabOverridesGivesTheLinkPathTheSceneIdsAndTheLevelsOfEachEntry)
+{
+    const NestedPrefabs made = MakeNested();
+    const std::string outer = RandomId();
+    OpenNestScene(made, outer);
+    const std::string deepLid = IdNamed("Lid");
+    SetName(deepLid, "Open lid");
+
+    const json info = Overrides(deepLid);
+    ASSERT_EQ(info.at("linkPath").size(), 2u) << info.dump();
+    EXPECT_EQ(info.at("linkPath")[0].at("rootId"), outer);
+    EXPECT_EQ(info.at("linkPath")[0].at("path"), "res://Nest.prefab");
+    EXPECT_EQ(info.at("linkPath")[1].at("path"), "res://Crate.prefab");
+    ASSERT_EQ(info.at("overrides").size(), 1u);
+    EXPECT_EQ(info.at("overrides")[0].at("objectId"), deepLid);
+    const json &levels = info.at("applyTo").at("overrides").at(0);
+    ASSERT_EQ(levels.size(), 2u) << "the lid is in Nest and in Crate";
+    EXPECT_EQ(levels[0].at("prefab"), made.nestUuid);
+    EXPECT_EQ(levels[1].at("prefab"), made.crateUuid);
+    EXPECT_EQ(levels[1].at("level"), 1);
+}
+
+TEST_F(EditorPrefabLevelsTest, ApplyToTheInnerPrefabChangesItForEveryInstance)
+{
+    const NestedPrefabs made = MakeNested();
+    const std::string outer = RandomId();
+    OpenNestScene(made, outer);
+    const std::string deepLid = IdNamed("Lid");
+    SetName(deepLid, "Open lid");
+    const std::string nestBefore = ReadFile(Assets() / "Nest.prefab");
+
+    const json target = json::array({{{"source", made.crateLink + "/" + made.lid}, {"path", "name"}}});
+    EXPECT_NE(ApplyOverrides(deepLid, target, 2).type, OkType) << "the lid is in two prefabs, levels 0 and 1";
+    const Frame applied = ApplyOverrides(deepLid, target, -1);
+    ASSERT_EQ(applied.type, OkType) << applied.Text();
+    const json crateFile = PrefabFileJson("Crate.prefab");
+    EXPECT_EQ(crateFile.at("rootObject").at("uuid"), made.crate) << "the prefab keeps its ids";
+    EXPECT_EQ(crateFile.at("rootObject").at("children").at(0).at("uuid"), made.lid);
+    EXPECT_EQ(crateFile.at("rootObject").at("children").at(0).at("name"), "Open lid");
+    EXPECT_EQ(ReadFile(Assets() / "Nest.prefab"), nestBefore) << "level -1: the innermost prefab only";
+
+    // The instance now equals its prefabs: nothing left to override, and its lid kept its id and the name
+    EXPECT_EQ(Node(deepLid).at("name"), "Open lid");
+    EXPECT_FALSE(Node(outer).contains("overridden"));
+    EXPECT_TRUE(Overrides(deepLid).at("overrides").empty());
+}
+
+TEST_F(EditorPrefabLevelsTest, ApplyToTheOuterPrefabWritesAnOverrideOfTheLinkInside)
+{
+    const NestedPrefabs made = MakeNested();
+    const std::string outer = RandomId();
+    OpenNestScene(made, outer);
+    const std::string deepLid = IdNamed("Lid");
+    SetName(deepLid, "Ajar lid");
+    const std::string crateBefore = ReadFile(Assets() / "Crate.prefab");
+
+    const Frame applied = ApplyOverrides(deepLid, json::array({{{"all", true}}}), 0);
+    ASSERT_EQ(applied.type, OkType) << applied.Text();
+    EXPECT_EQ(ReadFile(Assets() / "Crate.prefab"), crateBefore) << "level 0: Crate itself is not changed";
+    const json inner = PrefabFileJson("Nest.prefab").at("rootObject").at("children").at(0);
+    EXPECT_EQ(inner.at("uuid"), made.crateLink) << "the link inside keeps its id";
+    const json &overrides = inner.at("prefabInstance").at("overrides");
+    ASSERT_EQ(overrides.size(), 1u) << inner.dump();
+    EXPECT_EQ(overrides[0].at("source"), made.lid);
+    EXPECT_EQ(overrides[0].at("value"), "Ajar lid");
+    EXPECT_EQ(Node(deepLid).at("name"), "Ajar lid");
+    EXPECT_TRUE(Overrides(deepLid).at("overrides").empty());
+
+    // One undo step for the scene's update (the file stays as applied)
+    const std::string label = Step(CommandType::Undo);
+    EXPECT_NE(label.find("Nest 1"), std::string::npos) << label;
+}
+
+TEST_F(EditorPrefabLevelsTest, UnpackCompletelyLeavesNoLinkInsideAndIsOneUndoStep)
+{
+    const NestedPrefabs made = MakeNested();
+    const std::string outer = RandomId();
+    OpenNestScene(made, outer);
+
+    const Frame unpacked = UnpackCompletely(outer);
+    ASSERT_EQ(unpacked.type, OkType) << unpacked.Text();
+    for (const json &node : Nodes())
+    {
+        EXPECT_FALSE(node.contains("prefab")) << node.dump();
+        EXPECT_FALSE(node.contains("linkDepth")) << node.dump();
+    }
+    ASSERT_EQ(Execute(server, CommandType::SaveSceneToFile, Strings({"res://scenes/Linked.scene"})).type, SceneInfoType);
+    const std::string saved = ReadFile(Assets() / "scenes" / "Linked.scene");
+    EXPECT_EQ(saved.find("prefabInstance"), std::string::npos) << "plain objects, nothing linked";
+    EXPECT_EQ(saved.find("prefabReference"), std::string::npos);
+
+    EXPECT_EQ(Step(CommandType::Undo), "Unpack Prefab Completely Nest 1");
+    EXPECT_EQ(Node(outer).at("linkDepth"), 1);
+    EXPECT_EQ(Node(IdNamed("Lid")).at("linkDepth"), 2);
+}
+
+TEST_F(EditorPrefabLevelsTest, CreatePrefabOfAnInstanceMakesAVariantAndReferencesIntoItFollow)
+{
+    const std::string crate = Create("Crate");
+    const std::string lid = Create("Lid", crate);
+    const std::string crateUuid = CreatePrefab(crate, "res://Crate.prefab");
+    ASSERT_EQ(Execute(server, CommandType::NewScene, Strings({"", "Variants"})).type, SceneInfoType);
+    const std::string instance = Instantiate("res://Crate.prefab");
+    const std::string instanceLid = IdNamed("Lid");
+    SetName(instanceLid, "Open lid");
+    const auto holderObject = GameObject::Create("Holder");
+    LoadedScene().AddRootGameObject(holderObject);
+    holderObject->AddComponent<PrefabTestHolder>()->target =
+        LoadedScene().FindGameObjectByUUID(*Math::UUID::FromString(instanceLid)).get();
+    const std::string holderId = holderObject->GetUUID().ToString();
+
+    const std::string variantUuid = CreatePrefab(instance, "res://Open Crate.prefab");
+    ASSERT_FALSE(variantUuid.empty());
+    const json variant = PrefabFileJson("Open Crate.prefab").at("rootObject");
+    EXPECT_EQ(variant.at("prefabInstance").at("prefab"), crateUuid) << "a variant's root is a link to its base";
+    ASSERT_EQ(variant.at("prefabInstance").at("overrides").size(), 1u) << variant.dump();
+    EXPECT_EQ(variant.at("prefabInstance").at("overrides")[0].at("source"), lid);
+    EXPECT_NE(variant.at("uuid"), instance) << "the variant's root has an id of its own";
+
+    EXPECT_EQ(Node(instance).at("prefab"), variantUuid) << "the instance is now one of the variant";
+    EXPECT_FALSE(Node(instance).contains("overridden")) << "with nothing of its own";
+    const std::string newLid = IdNamed("Open lid");
+    EXPECT_NE(newLid, instanceLid) << "its objects take the ids an instance of the variant has";
+    const auto holder = LoadedScene().FindGameObjectByUUID(*Math::UUID::FromString(holderId));
+    ASSERT_NE(holder, nullptr);
+    ASSERT_NE(holder->GetComponent<PrefabTestHolder>()->target, nullptr);
+    EXPECT_EQ(holder->GetComponent<PrefabTestHolder>()->target->GetUUID().ToString(), newLid)
+        << "a reference into the instance follows its new ids";
+
+    // Applying an instance of the variant keeps the variant a link to its base
+    SetName(newLid, "Wide open lid");
+    ASSERT_EQ(Apply(instance).type, OkType);
+    const json reapplied = PrefabFileJson("Open Crate.prefab").at("rootObject");
+    EXPECT_EQ(reapplied.at("prefabInstance").at("prefab"), crateUuid);
+    EXPECT_EQ(reapplied.at("uuid"), variant.at("uuid"));
+    ASSERT_EQ(reapplied.at("prefabInstance").at("overrides").size(), 1u) << reapplied.dump();
+    EXPECT_EQ(reapplied.at("prefabInstance").at("overrides")[0].at("value"), "Wide open lid");
+    EXPECT_FALSE(reapplied.contains("children")) << "the base's objects are not copied in";
+
+    // Undone to before the variant: an instance of the base with its override, its old ids back
+    // (the Apply is no step: the rebuilt instance equals the prefab it now is)
+    EXPECT_EQ(Step(CommandType::Undo), "Rename Open lid");
+    EXPECT_EQ(Step(CommandType::Undo), "Create Prefab Variant Crate");
+    EXPECT_EQ(Node(instance).at("prefab"), crateUuid);
+    EXPECT_EQ(Node(instanceLid).at("name"), "Open lid");
 }
