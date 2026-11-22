@@ -660,6 +660,16 @@ namespace N2Engine::Scripting::Bindings
                 sprite->SetTexture(path ? LoadTextureOrThrow(*path, "Sprite2D:SetTexture") : nullptr);
             },
             "HasTexture", [](const Sprite2DRef &ref) { return ref.Pin()->GetTexture() != nullptr; },
+            // The texture's resource path (as SetTexture takes it), or nil without one
+            "GetTexture", [](const Sprite2DRef &ref) -> sol::optional<std::string>
+            {
+                const auto &texture = ref.Pin()->GetTexture();
+                if (!texture)
+                {
+                    return sol::nullopt;
+                }
+                return TexturePathForLua(*texture);
+            },
             // The texture's size in pixels, or nil without one (for an outline's padding maths)
             "GetTextureSize", [](const Sprite2DRef &ref) -> sol::optional<Math::Vector2>
             {

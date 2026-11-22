@@ -2514,6 +2514,9 @@ function Sprite2D:GetFlash() end
 function Sprite2D:SetTexture(path) end
 ---@return boolean
 function Sprite2D:HasTexture() end
+---The texture's resource path (as SetTexture takes it), or nil without one
+---@return string|nil
+function Sprite2D:GetTexture() end
 ---The texture's size in pixels, or nil without a texture
 ---@return Vector2|nil
 function Sprite2D:GetTextureSize() end

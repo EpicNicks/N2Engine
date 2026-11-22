@@ -154,6 +154,21 @@ TEST_F(LuaSpriteOutlineTest, FromAnotherSpriteItTakesThatSpritesTexture)
     EXPECT_EQ(ring->GetTexture(), Rendering::Texture::MakeOutline(body->GetTexture(), 2, Common::Color::Green));
 }
 
+// GetTexture gives back the path SetTexture took, so a script can copy one sprite's look onto another
+TEST_F(LuaSpriteOutlineTest, GetTextureReturnsThePathOrNil)
+{
+    Run(R"(
+        lua_outline_body:SetTexture(nil)
+        assert(lua_outline_body:GetTexture() == nil, "no texture: nil")
+        lua_outline_body:SetTexture("res://sprites/ship.bmp")
+        assert(lua_outline_body:GetTexture() == "res://sprites/ship.bmp", tostring(lua_outline_body:GetTexture()))
+        lua_outline_ring:SetTexture(lua_outline_body:GetTexture())
+        assert(lua_outline_ring:HasTexture())
+        lua_outline_body:SetTexture(nil)
+        assert(lua_outline_body:GetTexture() == nil)
+    )");
+}
+
 TEST_F(LuaSpriteOutlineTest, ABadSourceOrWidthIsAnErrorAndKeepsTheTexture)
 {
     Run(R"(lua_outline_ring:SetOutlineTextureOf("res://sprites/ship.bmp", 1, Color.Red))");

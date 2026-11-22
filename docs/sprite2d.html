@@ -205,7 +205,7 @@ body:SetFlash(Color(1, 1, 1, 0.8))
 -- ... a few frames later:
 body:SetFlash(Color(0, 0, 0, 0))
 icon:SetSaturation(0)</code></pre>
-<p>Every field has a setter and a getter with the C++ name. <code>SetTexture</code> takes a <code>res://</code> path or <code>nil</code>; <code>SetVertices</code> takes an array of <code>Vector2</code>. Annotations are in <code>engine-api.lua</code>.</p>
+<p>Every field has a setter and a getter with the C++ name. <code>SetTexture</code> takes a <code>res://</code> path or <code>nil</code>, and <code>GetTexture</code> <span class="badge">PR #431</span> returns that path (<code>nil</code> without a texture); <code>SetVertices</code> takes an array of <code>Vector2</code>. Annotations are in <code>engine-api.lua</code>.</p>
 <p><span class="badge">PR #369</span> <code>GetTextureSize()</code> is the texture's size in pixels as a <code>Vector2</code>, or <code>nil</code> without a texture. <code>SetOutlineTextureOf(source, widthPixels, color)</code> sets the sprite's texture to <a href="#texture-outline">the outline</a> of <code>source</code>, a <code>res://</code> path or another <code>Sprite2D</code> (its texture). A source that does not load, a <code>Sprite2D</code> with no texture, any other source, or a width that is not a whole number from 0 to 256 raises an error naming <code>Sprite2D:SetOutlineTextureOf</code> and keeps the sprite's texture.</p>
 
 <h2 id="not-yet">Not yet</h2>
