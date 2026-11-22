@@ -475,6 +475,52 @@ TEST(RollbackRuntimeSnapshotTest, ASerialisedSnapshotRoundTripsExactlyAndCorrupt
     EXPECT_FALSE(DeserializeWorldSnapshot(flipped).has_value()) << "the checksum";
     EXPECT_FALSE(DeserializeWorldSnapshot(std::span<const std::uint8_t>(bytes.data(), bytes.size() - 1)).has_value());
     EXPECT_FALSE(DeserializeWorldSnapshot(std::span<const std::uint8_t>(bytes.data(), 10)).has_value());
+
+    // Format 3: the 2D part, each object's 2D bodies and the parked objects travel too (set by hand: this world has no 2D)
+    WorldSnapshot with2D = snapshot;
+    with2D.objects[1].bodies2d = {
+        {0, Physics::PhysicsBodyHandle{4, 1}, Math::Vector3(1.5f, -2.0f, 0.0f), Math::Quaternion(0.6f, 0.0f, 0.0f, 0.8f), 0.25f, -3.0f, 1.5f},
+        {0, Physics::PhysicsBodyHandle{6, 2}, Math::Vector3(1.5f, -2.0f, 0.0f), Math::Quaternion(0.6f, 0.0f, 0.0f, 0.8f), 0.0f, 0.0f, 0.0f},
+        {3, Physics::PhysicsBodyHandle{9, 7}, Math::Vector3(0.0f, 4.0f, 1.0f), Math::Quaternion(), 0.0f, 1.0f, 0.0f}};
+    with2D.hasPhysics2d = true;
+    with2D.physics2d = {std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4}};
+    WorldSnapshot::Parked parked;
+    parked.id = snapshot.objects.back().id + 5;
+    parked.owner = 2;
+    parked.spawned = true;
+    parked.prefab = "ShotPrefab";
+    parked.reason = NetworkWorld::ParkReason::Despawned;
+    parked.tick = at - 2;
+    parked.bodyHandles = {{0, Physics::PhysicsBodyHandle{3, 1}}};
+    parked.bodies2d = {{0, Physics::PhysicsBodyHandle{12, 3}, Math::Vector3(2.0f, 2.0f, 0.0f), Math::Quaternion(), 0.0f, 0.0f, 0.0f}};
+    with2D.parked = {parked};
+    const std::vector<std::uint8_t> bytes2D = SerializeWorldSnapshot(with2D);
+    const auto back2D = DeserializeWorldSnapshot(bytes2D);
+    ASSERT_TRUE(back2D.has_value()) << back2D.error();
+    EXPECT_TRUE(back2D->hasPhysics2d);
+    EXPECT_EQ(back2D->physics2d, with2D.physics2d);
+    EXPECT_EQ(back2D->objects[1].bodies2d, with2D.objects[1].bodies2d);
+    ASSERT_EQ(back2D->parked.size(), 1u);
+    EXPECT_EQ(back2D->parked[0].id, parked.id);
+    EXPECT_EQ(back2D->parked[0].owner, parked.owner);
+    EXPECT_EQ(back2D->parked[0].spawned, parked.spawned);
+    EXPECT_EQ(back2D->parked[0].prefab, parked.prefab);
+    EXPECT_EQ(back2D->parked[0].reason, parked.reason);
+    EXPECT_EQ(back2D->parked[0].tick, parked.tick);
+    EXPECT_EQ(back2D->parked[0].bodyHandles, parked.bodyHandles);
+    EXPECT_EQ(back2D->parked[0].bodies2d, parked.bodies2d);
+    EXPECT_EQ(SerializeWorldSnapshot(*back2D), bytes2D) << "the form is canonical";
+
+    // A 2D flag without 2D bytes, a parked object that is also live, and 2D bodies out of node order are refused
+    WorldSnapshot flagOnly = snapshot;
+    flagOnly.hasPhysics2d = true;
+    EXPECT_FALSE(DeserializeWorldSnapshot(SerializeWorldSnapshot(flagOnly)).has_value());
+    WorldSnapshot twice = with2D;
+    twice.parked[0].id = snapshot.objects[0].id;
+    EXPECT_FALSE(DeserializeWorldSnapshot(SerializeWorldSnapshot(twice)).has_value());
+    WorldSnapshot unordered = with2D;
+    std::swap(unordered.objects[1].bodies2d[0], unordered.objects[1].bodies2d[2]);
+    EXPECT_FALSE(DeserializeWorldSnapshot(SerializeWorldSnapshot(unordered)).has_value());
 }
 
 TEST(RollbackRuntimeSnapshotTest, ALateJoinerRestoresAnotherPeersSnapshotAndRunsOnInStep)

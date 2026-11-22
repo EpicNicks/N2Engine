@@ -47,7 +47,8 @@ namespace N2Engine::Network
         /// snapshot's (exactPhysics false: the bodies were set from per-object body states, which is not the same
         /// simulation, and a spectator reports no roots, so a drift would go unnoticed) ends its session as Failed. True
         /// runs it anyway, with a warning (a view that may drift; a spectator promoted later reports roots, so the relay
-        /// would then catch a drift as a desync).
+        /// would then catch a drift as a desync). The same holds for the 2D part (exactPhysics2d false: this build could
+        /// not read the Box2D image, or 2D bodies did not match).
         bool allowInexactPhysics = false;
     };
 
@@ -101,10 +102,12 @@ namespace N2Engine::Network
 
         /// What a spectator's join does with RestoreForJoin's result (the session's join hook): nothing to say for an
         /// exact restore or a snapshot without a physics part; an error (which fails the session) for an inexact one,
-        /// unless `allowInexactPhysics`, which logs a warning instead
+        /// unless `allowInexactPhysics`, which logs a warning instead. The 2D part (snapshotHasPhysics2d, exactPhysics2d)
+        /// follows the same rule.
         [[nodiscard]] static std::expected<void, std::string> CheckJoinPhysics(const JoinRestoreResult &joined,
                                                                                bool snapshotHasPhysics,
-                                                                               bool allowInexactPhysics);
+                                                                               bool allowInexactPhysics,
+                                                                               bool snapshotHasPhysics2d = false);
 
         /// The load-time lint of netcode design 9.2 (the N7 contract: state a rollback, a late joiner or a promoted
         /// spectator needs must be a declared `replicated = true` field): for each script of the scene, once per script

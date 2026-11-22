@@ -81,7 +81,7 @@ namespace N2Engine::Network
                 return std::unexpected(joined.error());
             }
             _join = *joined;
-            return CheckJoinPhysics(*joined, snapshot.hasPhysics, allowInexact);
+            return CheckJoinPhysics(*joined, snapshot.hasPhysics, allowInexact, snapshot.hasPhysics2d);
         };
         session.buildTree = [this](const std::uint32_t tick)
         { return BuildStateHashTree(_world, _rollback.Layouts(), tick, _physics); };
@@ -123,11 +123,30 @@ namespace N2Engine::Network
 
     std::expected<void, std::string> RollbackRuntime::CheckJoinPhysics(const JoinRestoreResult &joined,
                                                                        const bool snapshotHasPhysics,
-                                                                       const bool allowInexactPhysics)
+                                                                       const bool allowInexactPhysics,
+                                                                       const bool snapshotHasPhysics2d)
     {
-        if (joined.exactPhysics || !snapshotHasPhysics)
+        const bool inexact3D = snapshotHasPhysics && !joined.exactPhysics;
+        const bool inexact2D = snapshotHasPhysics2d && !joined.exactPhysics2d;
+        if (!inexact3D && !inexact2D)
         {
             return {};
+        }
+        if (!inexact3D)
+        {
+            const std::string what = std::format(
+                "the 2D physics world did not take the snapshot's 2D part exactly (another build's Box2D image, or {} 2D "
+                "bodies here and {} of the snapshot that did not match, see the log)",
+                joined.lost2d, joined.removed2d);
+            if (allowInexactPhysics)
+            {
+                Logger::Warn("Spectating: " + what + ", so this view may drift from the players' simulation "
+                             "(allowInexactPhysics)");
+                return {};
+            }
+            return std::unexpected(what + ", so this spectator would run a simulation that may drift from the players' "
+                                          "without anything noticing; set RollbackRuntimeOptions::allowInexactPhysics to "
+                                          "run such a view anyway");
         }
         if (allowInexactPhysics)
         {

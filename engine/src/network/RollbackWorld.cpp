@@ -89,6 +89,106 @@ namespace N2Engine::Network
             return false;
         }
 
+        /// The root (node 0) and its descendants in GetChildrenRecursive order (node k is the (k-1)th)
+        std::vector<GameObject *> NodesOf(GameObject &root)
+        {
+            std::vector<GameObject *> nodes{&root};
+            if (root.GetChildCount() > 0)
+            {
+                for (const GameObject::Ptr &child : root.GetChildrenRecursive())
+                {
+                    nodes.push_back(child.get());
+                }
+            }
+            return nodes;
+        }
+
+        /// The 2D bodies a node owns, in the order WorldSnapshot::Object::Body2D lists them: its Rigidbody2D's, then each
+        /// Collider2D's own (a collider on the Rigidbody2D's body adds nothing)
+        std::vector<Physics::PhysicsBodyHandle> Bodies2DOf(const GameObject &node)
+        {
+            std::vector<Physics::PhysicsBodyHandle> out;
+            const auto add = [&out](const Physics::PhysicsBodyHandle handle)
+            {
+                if (handle.IsValid() && std::ranges::find(out, handle) == out.end())
+                {
+                    out.push_back(handle);
+                }
+            };
+            for (const Physics2D::Rigidbody2D *const body : node.GetComponents<Physics2D::Rigidbody2D>())
+            {
+                add(body->GetHandle());
+            }
+            for (const Physics2D::Collider2D *const collider : node.GetComponents<Physics2D::Collider2D>())
+            {
+                add(collider->GetHandle());
+            }
+            return out;
+        }
+
+        /// Every Rigidbody's body handle in the hierarchy, so a late joiner can create the same ones
+        void NoteBodyHandles(GameObject &root, std::vector<WorldSnapshot::Object::BodyHandle> &out)
+        {
+            const auto note = [&out](const std::uint32_t node, const GameObject &target)
+            {
+                if (const Physics::Rigidbody *const body = target.GetComponent<Physics::Rigidbody>();
+                    body != nullptr && body->GetHandle().IsValid())
+                {
+                    out.push_back(WorldSnapshot::Object::BodyHandle{node, body->GetHandle()});
+                }
+            };
+            note(0, root);
+            // The hierarchy walk only for an object that has children: this runs at every save of a rollback window
+            if (root.GetChildCount() > 0)
+            {
+                std::uint32_t node = 1;
+                for (const GameObject::Ptr &child : root.GetChildrenRecursive())
+                {
+                    if (child)
+                    {
+                        note(node, *child);
+                    }
+                    ++node;
+                }
+            }
+        }
+
+        /// Every 2D body in the hierarchy, with the pose and velocities a joiner that cannot take the Box2D image falls
+        /// back on
+        void NoteBodies2D(GameObject &root, std::vector<WorldSnapshot::Object::Body2D> &out)
+        {
+            const std::vector<GameObject *> nodes = NodesOf(root);
+            for (std::uint32_t node = 0; node < nodes.size(); ++node)
+            {
+                if (nodes[node] == nullptr)
+                {
+                    continue;
+                }
+                const GameObject &target = *nodes[node];
+                const Positionable *const positionable = target.GetPositionable();
+                const Physics2D::Rigidbody2D *const rigidbody = target.GetComponent<Physics2D::Rigidbody2D>();
+                for (const Physics::PhysicsBodyHandle handle : Bodies2DOf(target))
+                {
+                    WorldSnapshot::Object::Body2D body;
+                    body.node = node;
+                    body.handle = handle;
+                    if (positionable != nullptr)
+                    {
+                        body.position = positionable->GetPosition();
+                        body.rotation = positionable->GetRotation();
+                    }
+                    if (rigidbody != nullptr && rigidbody->GetHandle() == handle)
+                    {
+                        const Math::Vector2 velocity = rigidbody->GetLinearVelocity();
+                        body.linearVelocityX = velocity.x;
+                        body.linearVelocityY = velocity.y;
+                        body.angularVelocity = rigidbody->GetAngularVelocity();
+                    }
+                    out.push_back(body);
+                }
+            }
+        }
+
         std::vector<std::optional<Transform>> DescendantTransforms(const GameObject &root)
         {
             std::vector<std::optional<Transform>> out;
@@ -104,11 +204,16 @@ namespace N2Engine::Network
         // ===== Snapshot bytes =====
 
         constexpr std::uint32_t kSnapshotMagic = 0x5357324Eu; // "N2WS" little-endian
-        /// 2: each object carries its bodies' handles (a late joiner creates the same ones)
-        constexpr std::uint32_t kSnapshotFormat = 2;
+        /// 2: each object carries its bodies' handles (a late joiner creates the same ones). 3: the 2D (Box2D) part and
+        /// each object's 2D bodies
+        constexpr std::uint32_t kSnapshotFormat = 3;
         /// The most body handles one object's record carries (a hierarchy with more Rigidbodies is cut there; the rest
         /// get handles as usual on a joiner)
         constexpr std::size_t kMaxBodyHandlesPerObject = 1024;
+        /// The same for 2D bodies
+        constexpr std::size_t kMaxBodies2DPerObject = 1024;
+        /// Bytes of one Body2D record: node, handle (2), position (3), rotation (4), velocities (3)
+        constexpr std::size_t kBody2DBytes = 4 * 13;
 
         std::uint64_t Fnv1a(const std::span<const std::uint8_t> bytes)
         {
@@ -213,6 +318,90 @@ namespace N2Engine::Network
             bool _ok = true;
         };
 
+        void WriteVector(Writer &writer, const Math::Vector3 &value);
+
+        /// An object's bodies' handles and its 2D bodies (format 3), each list cut at its cap
+        void WriteBodies(Writer &writer, const std::vector<WorldSnapshot::Object::BodyHandle> &handles,
+                         const std::vector<WorldSnapshot::Object::Body2D> &bodies2d)
+        {
+            const std::size_t count = std::min<std::size_t>(handles.size(), kMaxBodyHandlesPerObject);
+            writer.U16(static_cast<std::uint16_t>(count));
+            for (std::size_t i = 0; i < count; ++i)
+            {
+                writer.U32(handles[i].node);
+                writer.U32(handles[i].handle.index);
+                writer.U32(handles[i].handle.generation);
+            }
+            const std::size_t count2D = std::min<std::size_t>(bodies2d.size(), kMaxBodies2DPerObject);
+            writer.U16(static_cast<std::uint16_t>(count2D));
+            for (std::size_t i = 0; i < count2D; ++i)
+            {
+                const WorldSnapshot::Object::Body2D &body = bodies2d[i];
+                writer.U32(body.node);
+                writer.U32(body.handle.index);
+                writer.U32(body.handle.generation);
+                WriteVector(writer, body.position);
+                writer.F32(body.rotation.GetW());
+                writer.F32(body.rotation.GetX());
+                writer.F32(body.rotation.GetY());
+                writer.F32(body.rotation.GetZ());
+                writer.F32(body.linearVelocityX);
+                writer.F32(body.linearVelocityY);
+                writer.F32(body.angularVelocity);
+            }
+        }
+
+        Math::Vector3 ReadVector(Reader &reader);
+
+        /// The inverse of WriteBodies; the error names what is wrong
+        std::expected<void, std::string> ReadBodies(Reader &reader, const std::uint32_t id,
+                                                    std::vector<WorldSnapshot::Object::BodyHandle> &handles,
+                                                    std::vector<WorldSnapshot::Object::Body2D> &bodies2d)
+        {
+            const std::uint16_t count = reader.U16();
+            if (!reader.Ok() || static_cast<std::size_t>(count) > kMaxBodyHandlesPerObject ||
+                static_cast<std::size_t>(count) > reader.Remaining() / 12)
+            {
+                return std::unexpected(std::format("net object {}: its body handle count is impossible", id));
+            }
+            for (std::uint16_t h = 0; h < count; ++h)
+            {
+                WorldSnapshot::Object::BodyHandle record;
+                record.node = reader.U32();
+                record.handle.index = reader.U32();
+                record.handle.generation = reader.U32();
+                handles.push_back(record);
+            }
+            const std::uint16_t count2D = reader.U16();
+            if (!reader.Ok() || static_cast<std::size_t>(count2D) > kMaxBodies2DPerObject ||
+                static_cast<std::size_t>(count2D) > reader.Remaining() / kBody2DBytes)
+            {
+                return std::unexpected(std::format("net object {}: its 2D body count is impossible", id));
+            }
+            for (std::uint16_t b = 0; b < count2D; ++b)
+            {
+                WorldSnapshot::Object::Body2D body;
+                body.node = reader.U32();
+                body.handle.index = reader.U32();
+                body.handle.generation = reader.U32();
+                body.position = ReadVector(reader);
+                const float w = reader.F32();
+                const float x = reader.F32();
+                const float y = reader.F32();
+                const float z = reader.F32();
+                body.rotation = Math::Quaternion(w, x, y, z);
+                body.linearVelocityX = reader.F32();
+                body.linearVelocityY = reader.F32();
+                body.angularVelocity = reader.F32();
+                if (b > 0 && body.node < bodies2d.back().node)
+                {
+                    return std::unexpected(std::format("net object {}: its 2D bodies are not in node order", id));
+                }
+                bodies2d.push_back(body);
+            }
+            return {};
+        }
+
         void WriteVector(Writer &writer, const Math::Vector3 &value)
         {
             writer.F32(value.x);
@@ -254,6 +443,7 @@ namespace N2Engine::Network
         out.nextId = _world.NextId();
         out.objects.clear();
         out.objects.reserve(_world.Count());
+        const bool has2D = Live2DWorld(_world) != nullptr;
         for (const auto &entry : _world.Objects())
         {
             NetworkObject &object = *entry.second;
@@ -276,31 +466,35 @@ namespace N2Engine::Network
                         saved.body = state;
                     }
                 }
-                // Every body's handle, so a late joiner can create the same ones (the hierarchy walk only for an object
-                // that has children: this runs at every save of a rollback window)
-                const auto note = [&saved](const std::uint32_t node, GameObject &target)
-                {
-                    if (const Physics::Rigidbody *const body = target.GetComponent<Physics::Rigidbody>();
-                        body != nullptr && body->GetHandle().IsValid())
-                    {
-                        saved.bodyHandles.push_back(WorldSnapshot::Object::BodyHandle{node, body->GetHandle()});
-                    }
-                };
-                note(0, gameObject);
-                if (gameObject.GetChildCount() > 0)
-                {
-                    std::uint32_t node = 1;
-                    for (const GameObject::Ptr &child : gameObject.GetChildrenRecursive())
-                    {
-                        if (child)
-                        {
-                            note(node, *child);
-                        }
-                        ++node;
-                    }
-                }
+                NoteBodyHandles(gameObject, saved.bodyHandles);
+            }
+            if (has2D)
+            {
+                NoteBodies2D(gameObject, saved.bodies2d);
             }
             out.objects.push_back(std::move(saved));
+        }
+        out.parked.clear();
+        for (const auto &entry : _world.Parked())
+        {
+            NetworkObject &object = *entry.second.object;
+            GameObject &gameObject = object.GetGameObject();
+            WorldSnapshot::Parked saved;
+            saved.id = entry.first;
+            saved.owner = object.GetOwner();
+            saved.spawned = object.IsSpawned();
+            saved.prefab = object.GetPrefabName();
+            saved.reason = entry.second.reason;
+            saved.tick = entry.second.tick;
+            if (_physics != nullptr)
+            {
+                NoteBodyHandles(gameObject, saved.bodyHandles);
+            }
+            if (has2D)
+            {
+                NoteBodies2D(gameObject, saved.bodies2d);
+            }
+            out.parked.push_back(std::move(saved));
         }
         out.rng = Math::Random::SeededState();
         out.streams.clear();
@@ -336,21 +530,25 @@ namespace N2Engine::Network
 
     std::expected<void, std::string> RollbackWorld::Restore(const WorldSnapshot &snapshot)
     {
+        return RestoreImpl(snapshot, true);
+    }
+
+    std::expected<void, std::string> RollbackWorld::RestoreImpl(const WorldSnapshot &snapshot, const bool with2D)
+    {
         if (snapshot.hasPhysics && !PhysicsActive())
         {
             return std::unexpected(std::string("the snapshot has a physics part but this world has no snapshot-capable backend"));
         }
 
         Physics2D::Physics2DWorld *const world2D = Live2DWorld(_world);
-        if (snapshot.hasPhysics2d && world2D == nullptr)
+        if (with2D && snapshot.hasPhysics2d && world2D == nullptr)
         {
             return std::unexpected(std::string("the snapshot has a 2D physics part but this scene has no 2D world"));
         }
-        if (!snapshot.hasPhysics2d && world2D != nullptr)
+        if (with2D && !snapshot.hasPhysics2d && world2D != nullptr)
         {
             return std::unexpected(std::string("the scene has a 2D physics world that did not exist when the snapshot was "
-                                               "saved (or the snapshot came over the wire, which does not carry 2D "
-                                               "physics): it cannot be rewound to a state without it. Create the 2D world "
+                                               "saved: it cannot be rewound to a state without it. Create the 2D world "
                                                "before the session starts"));
         }
 
@@ -456,7 +654,7 @@ namespace N2Engine::Network
             }
             _physics->SyncTransforms();
         }
-        if (snapshot.hasPhysics2d)
+        if (with2D && snapshot.hasPhysics2d)
         {
             // Last, like the 3D part: it writes the bodies' poses back to their transforms
             if (!world2D->RestoreState(std::span<const std::byte>(snapshot.physics2d.data(), snapshot.physics2d.size())))
@@ -666,6 +864,11 @@ namespace N2Engine::Network
         {
             return std::unexpected(std::string("the snapshot holds a different number of random streams than are registered"));
         }
+        if (!snapshot.hasPhysics2d && scene->GetPhysics2DWorld() != nullptr)
+        {
+            return std::unexpected(std::string("this scene has a 2D physics world and the snapshot has none (the other peer "
+                                               "made its scene without one): it is not this scene"));
+        }
         std::set<std::uint32_t> wanted;
         for (const WorldSnapshot::Object &saved : snapshot.objects)
         {
@@ -679,7 +882,17 @@ namespace N2Engine::Network
             }
         }
 
-        // What this world has and the snapshot does not: gone on the other peers (a despawn, a destroyed scene object)
+        std::map<std::uint32_t, const WorldSnapshot::Parked *> parkedThere;
+        for (const WorldSnapshot::Parked &parked : snapshot.parked)
+        {
+            if (!wanted.contains(parked.id))
+            {
+                parkedThere.emplace(parked.id, &parked);
+            }
+        }
+
+        // What this world has and the snapshot does not hold live: parked there (parked here the same way, so its bodies
+        // stay, disabled, as on the other peer) or gone there (a despawn released since, a destroyed scene object)
         std::vector<std::uint32_t> extras;
         for (const auto &entry : _world.Objects())
         {
@@ -690,13 +903,21 @@ namespace N2Engine::Network
         }
         for (const std::uint32_t id : extras)
         {
-            (void)_world.Despawn(NetworkId{id});
+            if (const auto there = parkedThere.find(id); there != parkedThere.end())
+            {
+                (void)_world.Park(NetworkId{id}, there->second->reason, there->second->tick);
+                ++result.parked;
+            }
+            else
+            {
+                (void)_world.Despawn(NetworkId{id});
+            }
             ++result.removed;
         }
         std::vector<std::uint32_t> parked;
         for (const auto &entry : _world.Parked())
         {
-            if (!wanted.contains(entry.first))
+            if (!wanted.contains(entry.first) && !parkedThere.contains(entry.first))
             {
                 parked.push_back(entry.first);
             }
@@ -712,33 +933,22 @@ namespace N2Engine::Network
         // What the snapshot has and this world does not: spawned on the other peers before the snapshot. Each of its
         // Rigidbodies' bodies is to be created under the handle it has in the snapshot.
         std::vector<Physics::BodyHandleClaim> claims;
-        for (const WorldSnapshot::Object &saved : snapshot.objects)
+        const auto instantiate = [this, &claims](const std::uint32_t id, const std::string &prefab, const ClientId owner,
+                                                 const std::vector<WorldSnapshot::Object::BodyHandle> &handles)
+            -> std::expected<void, std::string>
         {
-            if (_world.Find(NetworkId{saved.id}) != nullptr || _world.FindParked(NetworkId{saved.id}) != nullptr)
-            {
-                continue;
-            }
-            const auto spawned = _world.SpawnInstance(NetworkId{saved.id}, saved.prefab, saved.owner);
+            const auto spawned = _world.SpawnInstance(NetworkId{id}, prefab, owner);
             if (!spawned.has_value())
             {
-                return std::unexpected(std::format("net object {} (prefab {}) could not be instantiated: {}", saved.id,
-                                                   saved.prefab, spawned.error()));
+                return std::unexpected(
+                    std::format("net object {} (prefab {}) could not be instantiated: {}", id, prefab, spawned.error()));
             }
-            ++result.spawned;
-            if (_physics == nullptr || saved.bodyHandles.empty())
+            if (_physics == nullptr || handles.empty())
             {
-                continue;
+                return {};
             }
-            GameObject &root = (*spawned)->GetGameObject();
-            std::vector<GameObject *> nodes{&root};
-            if (root.GetChildCount() > 0)
-            {
-                for (const GameObject::Ptr &child : root.GetChildrenRecursive())
-                {
-                    nodes.push_back(child.get());
-                }
-            }
-            for (const WorldSnapshot::Object::BodyHandle &body : saved.bodyHandles)
+            const std::vector<GameObject *> nodes = NodesOf((*spawned)->GetGameObject());
+            for (const WorldSnapshot::Object::BodyHandle &body : handles)
             {
                 GameObject *const node = body.node < nodes.size() ? nodes[body.node] : nullptr;
                 const Physics::Rigidbody *const rigidbody = node != nullptr ? node->GetComponent<Physics::Rigidbody>() : nullptr;
@@ -747,6 +957,34 @@ namespace N2Engine::Network
                     claims.push_back(Physics::BodyHandleClaim{rigidbody, body.handle});
                 }
             }
+            return {};
+        };
+        for (const WorldSnapshot::Object &saved : snapshot.objects)
+        {
+            if (_world.Find(NetworkId{saved.id}) != nullptr || _world.FindParked(NetworkId{saved.id}) != nullptr)
+            {
+                continue;
+            }
+            if (auto made = instantiate(saved.id, saved.prefab, saved.owner, saved.bodyHandles); !made.has_value())
+            {
+                return std::unexpected(made.error());
+            }
+            ++result.spawned;
+        }
+        // The spawned objects parked there are made too, and parked once their bodies exist (a scene object parked there
+        // and missing here was destroyed here: there is nothing to make it from)
+        std::vector<const WorldSnapshot::Parked *> toPark;
+        for (const auto &[id, parked] : parkedThere)
+        {
+            if (!parked->spawned || _world.Find(NetworkId{id}) != nullptr || _world.FindParked(NetworkId{id}) != nullptr)
+            {
+                continue;
+            }
+            if (auto made = instantiate(id, parked->prefab, parked->owner, parked->bodyHandles); !made.has_value())
+            {
+                return std::unexpected(made.error());
+            }
+            toPark.push_back(parked);
         }
         // Their bodies come into existence here
         result.bodiesClaimed = claims.size();
@@ -759,12 +997,25 @@ namespace N2Engine::Network
         {
             _physics->ClaimBodyHandles(std::span<const Physics::BodyHandleClaim>{});
         }
+        for (const WorldSnapshot::Parked *const parked : toPark)
+        {
+            (void)_world.Park(NetworkId{parked->id}, parked->reason, parked->tick);
+            ++result.parked;
+        }
         scene->ProcessDestroyed();
+
+        // The 2D part's world must be here before anything changes (it was made by the scene's or the spawned objects' 2D
+        // components, which attached above)
+        Physics2D::Physics2DWorld *const world2D = Live2DWorld(_world);
+        if (snapshot.hasPhysics2d && world2D == nullptr)
+        {
+            return std::unexpected(std::string("the snapshot has a 2D physics part but this scene has no 2D world"));
+        }
 
         WorldSnapshot objectsOnly = snapshot;
         objectsOnly.hasPhysics = false;
         objectsOnly.physics.clear();
-        if (const auto restored = Restore(objectsOnly); !restored.has_value())
+        if (const auto restored = RestoreImpl(objectsOnly, false); !restored.has_value())
         {
             return std::unexpected(restored.error());
         }
@@ -793,6 +1044,97 @@ namespace N2Engine::Network
         if (_physics != nullptr)
         {
             _physics->SyncTransforms();
+        }
+
+        if (snapshot.hasPhysics2d)
+        {
+            // Last, as in Restore: it writes the 2D bodies' poses to their transforms. The bodies of the networked objects
+            // take the handles the snapshot gives them, matched by net id, node and order (the two peers may have made them
+            // in another order); the rest keep theirs (a scene object made the same way on both).
+            std::vector<Physics2D::Physics2DWorld::BodyRename> renames;
+            const auto rename = [this, &renames](const std::uint32_t id, const std::vector<WorldSnapshot::Object::Body2D> &bodies)
+            {
+                NetworkObject *object = _world.Find(NetworkId{id});
+                if (object == nullptr)
+                {
+                    const NetworkWorld::ParkedObject *const parked = _world.FindParked(NetworkId{id});
+                    object = parked != nullptr ? parked->object : nullptr;
+                }
+                if (object == nullptr || bodies.empty())
+                {
+                    return;
+                }
+                const std::vector<GameObject *> nodes = NodesOf(object->GetGameObject());
+                std::size_t at = 0;
+                while (at < bodies.size())
+                {
+                    const std::uint32_t node = bodies[at].node;
+                    const std::vector<Physics::PhysicsBodyHandle> here = node < nodes.size() && nodes[node] != nullptr
+                                                                             ? Bodies2DOf(*nodes[node])
+                                                                             : std::vector<Physics::PhysicsBodyHandle>{};
+                    for (std::size_t k = 0; at < bodies.size() && bodies[at].node == node; ++k, ++at)
+                    {
+                        if (k < here.size())
+                        {
+                            renames.push_back(Physics2D::Physics2DWorld::BodyRename{here[k], bodies[at].handle});
+                        }
+                    }
+                }
+            };
+            for (const WorldSnapshot::Object &saved : snapshot.objects)
+            {
+                rename(saved.id, saved.bodies2d);
+            }
+            for (const WorldSnapshot::Parked &saved : snapshot.parked)
+            {
+                rename(saved.id, saved.bodies2d);
+            }
+            const Physics2D::Physics2DWorld::JoinRestore2D joined = world2D->RestoreStateForJoin(
+                std::span<const std::byte>(snapshot.physics2d.data(), snapshot.physics2d.size()), renames);
+            using Status = Physics2D::Physics2DWorld::JoinRestore2D::Status;
+            if (joined.status == Status::Broken)
+            {
+                return std::unexpected(std::string("the 2D physics world refused the snapshot's 2D part after the restore "
+                                                   "began (see the log); this world must not be used"));
+            }
+            result.lost2d = joined.lost;
+            result.removed2d = joined.removed;
+            if (joined.status == Status::Restored)
+            {
+                result.exactPhysics2d = joined.lost == 0 && joined.removed == 0;
+            }
+            else
+            {
+                // This build cannot read the image: the networked objects' 2D bodies go where they were, at their speeds
+                for (const WorldSnapshot::Object &saved : snapshot.objects)
+                {
+                    NetworkObject *const object = _world.Find(NetworkId{saved.id});
+                    if (object == nullptr)
+                    {
+                        continue;
+                    }
+                    const std::vector<GameObject *> nodes = NodesOf(object->GetGameObject());
+                    std::set<std::uint32_t> placed;
+                    for (const WorldSnapshot::Object::Body2D &body : saved.bodies2d)
+                    {
+                        GameObject *const node = body.node < nodes.size() ? nodes[body.node] : nullptr;
+                        if (node == nullptr || !placed.insert(body.node).second)
+                        {
+                            continue; // a node's first body carries its pose and its Rigidbody2D's velocities
+                        }
+                        if (Positionable *const positionable = node->GetPositionable(); positionable != nullptr)
+                        {
+                            positionable->SetPositionAndRotation(body.position, body.rotation);
+                        }
+                        if (Physics2D::Rigidbody2D *const rigidbody = node->GetComponent<Physics2D::Rigidbody2D>();
+                            rigidbody != nullptr && rigidbody->GetHandle().IsValid())
+                        {
+                            rigidbody->SetLinearVelocity(Math::Vector2(body.linearVelocityX, body.linearVelocityY));
+                            rigidbody->SetAngularVelocity(body.angularVelocity);
+                        }
+                    }
+                }
+            }
         }
         return result;
     }
@@ -845,19 +1187,29 @@ namespace N2Engine::Network
                 WriteVector(writer, body.angularVelocity);
                 writer.U8(body.sleeping ? 1 : 0);
             }
-            const std::size_t handles = std::min<std::size_t>(object.bodyHandles.size(), kMaxBodyHandlesPerObject);
-            writer.U16(static_cast<std::uint16_t>(handles));
-            for (std::size_t i = 0; i < handles; ++i)
-            {
-                writer.U32(object.bodyHandles[i].node);
-                writer.U32(object.bodyHandles[i].handle.index);
-                writer.U32(object.bodyHandles[i].handle.generation);
-            }
+            WriteBodies(writer, object.bodyHandles, object.bodies2d);
+        }
+        writer.U32(static_cast<std::uint32_t>(snapshot.parked.size()));
+        for (const WorldSnapshot::Parked &parked : snapshot.parked)
+        {
+            writer.U32(parked.id);
+            writer.U32(parked.owner);
+            writer.U8(parked.spawned ? 1 : 0);
+            writer.U8(static_cast<std::uint8_t>(parked.reason));
+            writer.U32(parked.tick);
+            const std::size_t prefabBytes = std::min<std::size_t>(parked.prefab.size(), 0xFFFFu);
+            writer.U16(static_cast<std::uint16_t>(prefabBytes));
+            writer.Bytes(std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t *>(parked.prefab.data()), prefabBytes));
+            WriteBodies(writer, parked.bodyHandles, parked.bodies2d);
         }
         writer.U8(snapshot.hasPhysics ? 1 : 0);
         writer.U32(static_cast<std::uint32_t>(snapshot.physics.size()));
         writer.Bytes(std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t *>(snapshot.physics.data()),
                                                    snapshot.physics.size()));
+        writer.U8(snapshot.hasPhysics2d ? 1 : 0);
+        writer.U32(static_cast<std::uint32_t>(snapshot.physics2d.size()));
+        writer.Bytes(std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t *>(snapshot.physics2d.data()),
+                                                   snapshot.physics2d.size()));
         writer.U64(Fnv1a(out));
         return out;
     }
@@ -967,33 +1319,76 @@ namespace N2Engine::Network
                 state.sleeping = reader.U8() != 0;
                 object.body = state;
             }
-            const std::uint16_t handles = reader.U16();
-            if (!reader.Ok() || static_cast<std::size_t>(handles) > kMaxBodyHandlesPerObject ||
-                static_cast<std::size_t>(handles) > reader.Remaining() / 12)
+            if (auto bodies = ReadBodies(reader, object.id, object.bodyHandles, object.bodies2d); !bodies.has_value())
             {
-                return std::unexpected(std::format("net object {}: its body handle count is impossible", object.id));
-            }
-            for (std::uint16_t h = 0; h < handles; ++h)
-            {
-                WorldSnapshot::Object::BodyHandle record;
-                record.node = reader.U32();
-                record.handle.index = reader.U32();
-                record.handle.generation = reader.U32();
-                object.bodyHandles.push_back(record);
+                return std::unexpected(bodies.error());
             }
             snapshot.objects.push_back(std::move(object));
+        }
+        const std::uint32_t parkedCount = reader.U32();
+        if (!reader.Ok() || parkedCount > kMaxNetworkObjects)
+        {
+            return std::unexpected(std::string("the snapshot holds more parked objects than kMaxNetworkObjects"));
+        }
+        std::set<std::uint32_t> live;
+        for (const WorldSnapshot::Object &object : snapshot.objects)
+        {
+            live.insert(object.id);
+        }
+        for (std::uint32_t i = 0; i < parkedCount; ++i)
+        {
+            WorldSnapshot::Parked parked;
+            parked.id = reader.U32();
+            parked.owner = reader.U32();
+            parked.spawned = reader.U8() != 0;
+            const std::uint8_t reason = reader.U8();
+            parked.tick = reader.U32();
+            const std::uint16_t prefabBytes = reader.U16();
+            const std::span<const std::uint8_t> prefab = reader.Bytes(prefabBytes);
+            if (!reader.Ok())
+            {
+                return std::unexpected(std::format("the snapshot is cut short in parked object {}", i));
+            }
+            if (parked.id == 0 || (i > 0 && parked.id <= snapshot.parked.back().id) || live.contains(parked.id))
+            {
+                return std::unexpected(std::string("the snapshot's parked objects are not in ascending id order, or one is "
+                                                   "also live"));
+            }
+            if (reason > static_cast<std::uint8_t>(NetworkWorld::ParkReason::SpawnUndone))
+            {
+                return std::unexpected(std::format("parked object {}: unknown park reason {}", parked.id, reason));
+            }
+            parked.reason = static_cast<NetworkWorld::ParkReason>(reason);
+            parked.prefab.assign(reinterpret_cast<const char *>(prefab.data()), prefab.size());
+            if (auto bodies = ReadBodies(reader, parked.id, parked.bodyHandles, parked.bodies2d); !bodies.has_value())
+            {
+                return std::unexpected(bodies.error());
+            }
+            snapshot.parked.push_back(std::move(parked));
         }
         snapshot.hasPhysics = reader.U8() != 0;
         const std::uint32_t physicsBytes = reader.U32();
         const std::span<const std::uint8_t> physics = reader.Bytes(physicsBytes);
+        snapshot.hasPhysics2d = reader.U8() != 0;
+        const std::uint32_t physics2dBytes = reader.U32();
+        const std::span<const std::uint8_t> physics2d = reader.Bytes(physics2dBytes);
         if (!reader.Ok() || reader.Remaining() != 0)
         {
-            return std::unexpected(std::string("the snapshot is cut short or has bytes after its physics part"));
+            return std::unexpected(std::string("the snapshot is cut short or has bytes after its 2D physics part"));
+        }
+        if (snapshot.hasPhysics2d == physics2d.empty())
+        {
+            return std::unexpected(std::string("the snapshot's 2D physics flag does not match its 2D physics bytes"));
         }
         snapshot.physics.resize(physics.size());
         if (!physics.empty())
         {
             std::memcpy(snapshot.physics.data(), physics.data(), physics.size());
+        }
+        snapshot.physics2d.resize(physics2d.size());
+        if (!physics2d.empty())
+        {
+            std::memcpy(snapshot.physics2d.data(), physics2d.data(), physics2d.size());
         }
         return snapshot;
     }

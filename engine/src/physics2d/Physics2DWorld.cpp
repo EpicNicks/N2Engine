@@ -54,6 +54,7 @@ namespace N2Engine::Physics2D
 #include <format>
 #include <limits>
 #include <map>
+#include <set>
 #include <span>
 #include <unordered_map>
 #include <utility>
@@ -1001,7 +1002,147 @@ namespace N2Engine::Physics2D
                 return true;
             }
 
-            [[nodiscard]] bool RestoreState(const std::span<const std::byte> in) override
+            [[nodiscard]] bool RestoreState(const std::span<const std::byte> in) override { return RestoreImpl(in, nullptr); }
+
+            [[nodiscard]] JoinRestore2D RestoreStateForJoin(const std::span<const std::byte> in,
+                                                            const std::span<const BodyRename> renames) override
+            {
+                JoinRestore2D result;
+                // Box2D refuses an image of another version, precision or layout before it touches the world: compare the
+                // image's 16-byte header (magic, version, layout hash, flags) with one of this world's own, so a refusal
+                // is told apart from a payload that breaks the world halfway
+                {
+                    StateReader header{in};
+                    if (header.U32() != kStateMagic || header.U32() != kStateVersion)
+                    {
+                        Logger::Warn("2D physics: the joined state is not one of this build's 2D worlds");
+                        return result;
+                    }
+                    const std::uint32_t imageSize = header.U32();
+                    const std::span<const std::byte> image = header.Take(imageSize);
+                    const int ownSize = b2World_GetSnapshot(_world, nullptr, 0);
+                    std::vector<std::uint8_t> own(static_cast<std::size_t>(std::max(ownSize, 0)));
+                    constexpr std::size_t kHeaderBytes = 16;
+                    if (!header.ok || image.size() < kHeaderBytes || own.size() < kHeaderBytes ||
+                        b2World_GetSnapshot(_world, own.data(), ownSize) != ownSize ||
+                        std::memcmp(image.data(), own.data(), kHeaderBytes) != 0)
+                    {
+                        Logger::Warn("2D physics: the joined state's Box2D image is not one this build reads (another Box2D "
+                                     "version, precision or layout); the 2D world is left as this peer built it");
+                        return result;
+                    }
+                }
+
+                // Every renamed body takes the handle the state gives it, with its components; one that is not renamed keeps
+                // its own unless a renamed body takes it (then it is not the state's body and loses it). Worked out from the
+                // handles before anything moves, so a chain of renames (a to b, b to c) is not confused.
+                std::map<PhysicsBodyHandle, PhysicsBodyHandle, HandleLess> target;
+                std::set<PhysicsBodyHandle, HandleLess> taken;
+                for (const BodyRename &rename : renames)
+                {
+                    if (_bodies.contains(rename.here) && rename.saved.IsValid() && !taken.contains(rename.saved) &&
+                        !target.contains(rename.here))
+                    {
+                        target.emplace(rename.here, rename.saved);
+                        taken.insert(rename.saved);
+                    }
+                }
+                std::map<PhysicsBodyHandle, BodyRecord, HandleLess> renamed;
+                std::vector<std::pair<Rigidbody2D *, PhysicsBodyHandle>> rigidbodies;
+                std::vector<std::pair<Collider2D *, PhysicsBodyHandle>> colliders;
+                const auto collidersOf = [](const BodyRecord &record, const PhysicsBodyHandle handle)
+                {
+                    std::vector<Collider2D *> out;
+                    if (record.owner)
+                    {
+                        for (Collider2D *collider : record.owner->GetComponents<Collider2D>())
+                        {
+                            if (collider->GetHandle() == handle)
+                            {
+                                out.push_back(collider);
+                            }
+                        }
+                    }
+                    return out;
+                };
+                for (auto &entry : _bodies)
+                {
+                    const auto to = target.find(entry.first);
+                    const bool moves = to != target.end();
+                    if (!moves && !taken.contains(entry.first))
+                    {
+                        renamed.emplace(entry.first, std::move(entry.second));
+                        continue;
+                    }
+                    BodyRecord &record = entry.second;
+                    if (!moves)
+                    {
+                        // Its handle is another body's in the state
+                        if (record.rigidbody)
+                        {
+                            record.rigidbody->OnBodyLost();
+                        }
+                        for (Collider2D *collider : collidersOf(record, entry.first))
+                        {
+                            collider->OnBodyLost();
+                        }
+                        ++result.lost;
+                        continue;
+                    }
+                    if (record.rigidbody)
+                    {
+                        rigidbodies.emplace_back(record.rigidbody, to->second);
+                    }
+                    for (Collider2D *collider : collidersOf(record, entry.first))
+                    {
+                        colliders.emplace_back(collider, to->second);
+                    }
+                    record.id = BodyIdOf(to->second);
+                    renamed.emplace(to->second, std::move(record));
+                }
+                for (const auto &[rigidbody, handle] : rigidbodies)
+                {
+                    rigidbody->OnBodyRenamed(handle);
+                }
+                for (const auto &[collider, handle] : colliders)
+                {
+                    collider->OnBodyRenamed(handle);
+                }
+                _bodies = std::move(renamed);
+                // The shape records name the old handles; RestoreImpl rebuilds them, the touches and the targets from the state
+                _shapes.clear();
+                _colliderShapes.clear();
+                _targeted.clear();
+
+                RestoreCounts counts;
+                result.status = RestoreImpl(in, &counts) ? JoinRestore2D::Status::Restored : JoinRestore2D::Status::Broken;
+                result.lost += counts.lost;
+                result.removed = counts.removed;
+                return result;
+            }
+
+            struct RestoreCounts
+            {
+                std::size_t lost = 0;
+                std::size_t removed = 0;
+            };
+
+            /// This world's id for a body handle (a state from another peer names that peer's world in its ids)
+            [[nodiscard]] b2BodyId BodyIdOf(const PhysicsBodyHandle handle) const
+            {
+                b2BodyId id{};
+                id.index1 = static_cast<int32_t>(handle.index);
+                id.world0 = static_cast<uint16_t>(_world.index1 - 1);
+                id.generation = static_cast<uint16_t>(handle.generation);
+                return id;
+            }
+            /// A shape key of a state, moved into this world (unchanged for a state this world saved)
+            [[nodiscard]] ShapeKey Rehome(const ShapeKey key) const
+            {
+                return (key & ~0xFFFF0000ull) | (static_cast<std::uint64_t>(static_cast<uint16_t>(_world.index1 - 1)) << 16);
+            }
+
+            [[nodiscard]] bool RestoreImpl(const std::span<const std::byte> in, RestoreCounts *const counts)
             {
                 StateReader reader{in};
                 if (reader.U32() != kStateMagic || reader.U32() != kStateVersion)
@@ -1051,7 +1192,7 @@ namespace N2Engine::Physics2D
                     for (std::uint32_t s = 0; s < shapeCount; ++s)
                     {
                         SavedShape shape;
-                        shape.key = reader.U64();
+                        shape.key = Rehome(reader.U64());
                         shape.ordinal = reader.U32();
                         body.shapes.push_back(shape);
                     }
@@ -1059,6 +1200,17 @@ namespace N2Engine::Physics2D
                 }
                 ContactTracker2D::TouchMap collisions = reader.Touches();
                 ContactTracker2D::TouchMap triggers = reader.Touches();
+                for (ContactTracker2D::TouchMap *const touches : {&collisions, &triggers})
+                {
+                    for (auto &entry : *touches)
+                    {
+                        for (ContactTracker2D::ShapePair &pair : entry.second)
+                        {
+                            pair.onA = Rehome(pair.onA);
+                            pair.onB = Rehome(pair.onB);
+                        }
+                    }
+                }
                 const bool resyncTriggers = reader.U8() != 0;
                 if (!reader.ok || reader.Remaining() != 0)
                 {
@@ -1079,7 +1231,7 @@ namespace N2Engine::Physics2D
                 std::vector<b2BodyId> destroyed;
                 for (const SavedBody &savedBody : saved)
                 {
-                    const b2BodyId id = b2LoadBodyId(savedBody.id);
+                    const b2BodyId id = BodyIdOf(ToHandle(b2LoadBodyId(savedBody.id)));
                     const PhysicsBodyHandle handle = ToHandle(id);
                     auto node = _bodies.extract(handle);
                     if (node.empty())
@@ -1088,6 +1240,7 @@ namespace N2Engine::Physics2D
                         continue;
                     }
                     BodyRecord record = std::move(node.mapped());
+                    record.id = id;
                     record.enabled = savedBody.enabled;
                     record.type = static_cast<BodyType2D>(savedBody.type);
                     record.fixedRotation = savedBody.fixedRotation;
@@ -1101,6 +1254,10 @@ namespace N2Engine::Physics2D
                 for (auto &entry : _bodies)
                 {
                     BodyRecord &lost = entry.second;
+                    if (counts != nullptr)
+                    {
+                        ++counts->lost;
+                    }
                     if (lost.rigidbody)
                     {
                         lost.rigidbody->OnBodyLost();
@@ -1119,6 +1276,10 @@ namespace N2Engine::Physics2D
                 for (const b2BodyId id : destroyed)
                 {
                     b2DestroyBody(id);
+                }
+                if (counts != nullptr)
+                {
+                    counts->removed += destroyed.size();
                 }
                 _bodies = std::move(bodies);
 
@@ -1746,10 +1907,10 @@ namespace N2Engine::Physics2D
     {
         if (Application::GetInstance().GetSimulationMode() == SimulationMode::Deterministic)
         {
-            Logger::Warn("A 2D physics world was created in Deterministic mode. It is in the desync hash and in rollback "
-                         "snapshots, but a serialised snapshot (a late joiner or spectator) does not carry it, so such a "
-                         "scene cannot be joined late, and a rollback needs a strict floating-point build "
-                         "(docs/physics2d.html#network)");
+            Logger::Warn("A 2D physics world was created in Deterministic mode. It is in the desync hash, in rollback "
+                         "snapshots and in the serialised snapshot a late joiner or spectator starts from, but peers agree "
+                         "only on a strict floating-point build, and a joiner takes Box2D's state exactly only from the "
+                         "same build (docs/physics2d.html#network)");
         }
         return std::make_shared<Box2DWorld>();
     }

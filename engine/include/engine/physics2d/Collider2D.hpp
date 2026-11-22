@@ -56,6 +56,9 @@ namespace N2Engine::Physics2D
             _shapeAttached = false;
             _world.reset();
         }
+        /// A late joiner's restore (Physics2DWorld::RestoreStateForJoin) gave this component's body the handle the
+        /// joined state names it by
+        void OnBodyRenamed(const Physics::PhysicsBodyHandle handle) { _handle = handle; }
         /// The shape description the world was last given (what the rollback restore rebuilds its records from)
         [[nodiscard]] ShapeDesc2D DescribeShape() const { return Describe(); }
 

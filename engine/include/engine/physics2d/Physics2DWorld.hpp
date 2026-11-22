@@ -149,5 +149,37 @@ namespace N2Engine::Physics2D
         /// destroyed body is not restored). The bodies' transforms are written from the restored poses, as after a step.
         /// False for bytes that are not a state of this world's bodies; the world must then not be used.
         [[nodiscard]] virtual bool RestoreState(std::span<const std::byte> in) = 0;
+
+        /// A body of this world (its handle here) and the handle the peer that saved a state gave the same body
+        struct BodyRename
+        {
+            PhysicsBodyHandle here;
+            PhysicsBodyHandle saved;
+        };
+        struct JoinRestore2D
+        {
+            enum class Status : std::uint8_t
+            {
+                /// The state was taken: Box2D's world is the saved one (less `removed` bodies)
+                Restored,
+                /// The image is not one this build reads (another Box2D version, precision or layout); nothing changed
+                Refused,
+                /// The state was not consistent with this world after the restore began; the world must not be used
+                Broken
+            };
+            Status status = Status::Refused;
+            /// Bodies of this world that are not in the state, or whose handle the state gives another body: they lost
+            /// their body (OnBodyLost)
+            std::size_t lost = 0;
+            /// Bodies of the state that no component here owns: removed again after the restore
+            std::size_t removed = 0;
+        };
+        /// For a late joiner or spectator (RollbackWorld::RestoreForJoin): RestoreState of a state ANOTHER peer saved, whose
+        /// bodies carry that peer's handles. Each `renames` entry names a body here by the handle the state gives it
+        /// (the bodies of networked objects, matched by net id and hierarchy position); a body named in no entry keeps its
+        /// handle (a scene object loaded the same way on both peers). The image is checked against this build's first
+        /// (Refused leaves the world as it was); otherwise the result is RestoreState's, with the counts of what did not match.
+        [[nodiscard]] virtual JoinRestore2D RestoreStateForJoin(std::span<const std::byte> in,
+                                                                std::span<const BodyRename> renames) = 0;
     };
 }

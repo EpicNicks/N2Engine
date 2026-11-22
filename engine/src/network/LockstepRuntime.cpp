@@ -1108,14 +1108,6 @@ namespace N2Engine::Network
                 tick = scheduler_->CurrentTick();
                 have = options_.save(tick, snapshot);
             }
-            if (have && snapshot.hasPhysics2d)
-            {
-                // The serialised snapshot does not carry Box2D's state: a joiner would start without it and drift
-                Logger::Warn("A spectator asked for a snapshot but the scene has a 2D physics world, whose state a serialised "
-                             "snapshot does not carry: the request is not answered (docs/physics2d.html#rollback)");
-                snapshotRequest_.reset();
-                have = false;
-            }
             if (have)
             {
                 OutgoingSnapshot out;
