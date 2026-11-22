@@ -131,6 +131,9 @@ namespace N2Engine::Rendering
         /// The fragment stage (every line after the exact `#stage fragment` line, joined with LF) and the file line number of its first
         /// line, as the cook's parser reads them. False when there is no such line
         [[nodiscard]] bool GetStage(std::string &source, int &firstLine) const;
+        /// The custom vertex stage (stage 9d: every line after the exact `#stage vertex` line up to the next stage line, joined with
+        /// LF) and the file line number of its first line, as the cook's parser reads them. False when there is no such line
+        [[nodiscard]] bool GetVertexStage(std::string &source, int &firstLine) const;
 
     private:
         bool Parse(std::string_view text, std::string_view debugName);

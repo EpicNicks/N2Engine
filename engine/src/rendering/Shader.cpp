@@ -430,6 +430,48 @@ namespace N2Engine::Rendering
         return true;
     }
 
+    bool Shader::GetVertexStage(std::string &source, int &firstLine) const
+    {
+        std::size_t begin = 0;
+        int line = 1;
+        while (begin <= _text.size())
+        {
+            const std::size_t end = _text.find('\n', begin);
+            const std::string_view lineText = std::string_view(_text).substr(
+                begin, end == std::string::npos ? std::string::npos : end - begin);
+            if (lineText == "#stage vertex")
+            {
+                firstLine = line + 1;
+                source = end == std::string::npos ? std::string() : _text.substr(end + 1);
+                // Each stage runs to the next stage line: an authored WebGPU module may follow (the fragment stage comes first)
+                for (std::size_t at = 0; at < source.size();)
+                {
+                    const std::size_t lineEnd = source.find('\n', at);
+                    const std::string_view candidate = std::string_view(source).substr(
+                        at, lineEnd == std::string::npos ? std::string::npos : lineEnd - at);
+                    if (candidate == "#stage wgsl" || candidate == "#stage fragment")
+                    {
+                        source.resize(at > 0 ? at - 1 : 0);
+                        break;
+                    }
+                    if (lineEnd == std::string::npos)
+                    {
+                        break;
+                    }
+                    at = lineEnd + 1;
+                }
+                return true;
+            }
+            if (end == std::string::npos)
+            {
+                break;
+            }
+            begin = end + 1;
+            ++line;
+        }
+        return false;
+    }
+
     bool Shader::GetStage(std::string &source, int &firstLine) const
     {
         std::size_t begin = 0;
@@ -453,7 +495,8 @@ namespace N2Engine::Rendering
                         at, lineEnd == std::string::npos ? std::string::npos : lineEnd - at);
                     if (candidate == wgslStage || candidate == vertexStage)
                     {
-                        source.resize(at);
+                        // The cook joins the stage's lines with LF, so a stage cut by the next stage line has no final LF
+                        source.resize(at > 0 ? at - 1 : 0);
                         break;
                     }
                     if (lineEnd == std::string::npos)
@@ -877,13 +920,6 @@ namespace N2Engine::Rendering
         return std::nullopt;
 #else
         using Renderer::Common::UserShaderTarget;
-        if (NeedsCook())
-        {
-            why = _hasVertexStage
-                ? "it has a custom vertex stage, which is only made by the cook (tools/n2shader; the project's build and the editor do it)"
-                : "it has a cube or 3D texture parameter, whose lookups are only made by the cook (tools/n2shader; the project's build and the editor do it)";
-            return std::nullopt;
-        }
         if (target == UserShaderTarget::WebGpu)
         {
             why = "WGSL is made by the cook (Tint is not linked into the engine): the web ships cooked WGSL";
@@ -924,13 +960,29 @@ namespace N2Engine::Rendering
                 try
                 {
                     const nlohmann::json manifest = nlohmann::json::parse(manifestBytes->begin(), manifestBytes->end());
-                    const nlohmann::json &payload = manifest.at("payloads").at(payloadKey);
-                    const auto bytes = ReadFileBytes(entry / payload.at("file").get<std::string>());
-                    if (bytes && UserShaderCompiler::Sha256Hex(bytes->data(), bytes->size()) == payload.at("sha256").get<std::string>())
+                    // Every payload the entry names (the fragment one, and a custom vertex stage's), each read and checked
+                    // against its hash before the blob is made from them
+                    const auto readChecked = [&](const std::string &file) -> std::expected<std::vector<std::uint8_t>, std::string>
                     {
-                        auto blob = BlobFromManifest(
-                            manifest, [&](const std::string &) -> std::expected<std::vector<std::uint8_t>, std::string> { return *bytes; },
-                            target, ignored);
+                        for (const auto &[name, payload] : manifest.at("payloads").items())
+                        {
+                            (void)name;
+                            if (payload.at("file").get<std::string>() != file)
+                            {
+                                continue;
+                            }
+                            const auto bytes = ReadFileBytes(entry / file);
+                            if (bytes && UserShaderCompiler::Sha256Hex(bytes->data(), bytes->size()) == payload.at("sha256").get<std::string>())
+                            {
+                                return *bytes;
+                            }
+                            return std::unexpected(std::string("a cached payload does not match its hash"));
+                        }
+                        return std::unexpected(std::string("the cache entry names no such payload"));
+                    };
+                    if (manifest.at("payloads").contains(payloadKey))
+                    {
+                        auto blob = BlobFromManifest(manifest, readChecked, target, ignored);
                         if (blob)
                         {
                             return blob;
@@ -955,7 +1007,11 @@ namespace N2Engine::Rendering
         {
             std::error_code error;
             std::filesystem::create_directories(entry, error);
-            if (!error && WriteFileAtomically(entry / compiled->payloadFile, compiled->payload.data(), compiled->payload.size()) &&
+            const bool vertexWritten = compiled->vertexPayloadFile.empty() ||
+                WriteFileAtomically(entry / compiled->vertexPayloadFile, compiled->vertexPayload.data(), compiled->vertexPayload.size());
+            // The manifest last: an entry is used only once every payload it names is in place
+            if (!error && vertexWritten &&
+                WriteFileAtomically(entry / compiled->payloadFile, compiled->payload.data(), compiled->payload.size()) &&
                 WriteFileAtomically(entry / "manifest.json", compiled->manifest.data(), compiled->manifest.size()))
             {
                 PruneCache(cache);
@@ -966,7 +1022,15 @@ namespace N2Engine::Rendering
         {
             const nlohmann::json manifest = nlohmann::json::parse(compiled->manifest);
             auto blob = BlobFromManifest(
-                manifest, [&](const std::string &) -> std::expected<std::vector<std::uint8_t>, std::string> { return compiled->payload; },
+                manifest,
+                [&](const std::string &file) -> std::expected<std::vector<std::uint8_t>, std::string>
+                {
+                    if (!compiled->vertexPayloadFile.empty() && file == compiled->vertexPayloadFile)
+                    {
+                        return compiled->vertexPayload;
+                    }
+                    return compiled->payload;
+                },
                 target, manifestError);
             if (blob)
             {

@@ -128,6 +128,83 @@ TEST(UserShaderCompilerTest, TheOpenGlTextIsByteForByteWhatTheCookWrote)
     }
 }
 
+// The user-shader follow-up: a custom vertex stage (stage 9d) and the atlas lookups (stage 9e) in the twin. The OpenGL texts of the
+// cooked fixtures vertexshift (fragment and vertex) and atlas are the cook's, byte for byte
+TEST(UserShaderCompilerTest, TheVertexStageAndAtlasTextsAreByteForByteWhatTheCookWrote)
+{
+    using N2Engine::Rendering::UserShaderCompiler::BuildVertexSource;
+    for (const std::string name : {"vertexshift", "atlas"})
+    {
+        const auto shader = LoadFixture(name);
+        ASSERT_NE(shader, nullptr);
+        std::string error;
+        const auto text = BuildSource(UserShaderTarget::OpenGl, *shader, name + ".n2shader", error);
+        ASSERT_TRUE(text.has_value()) << name << ": " << error;
+        EXPECT_EQ(*text, ReadText(Dir() + name + "/shader.gl.frag")) << name;
+    }
+    const auto shader = LoadFixture("vertexshift");
+    ASSERT_NE(shader, nullptr);
+    std::string error;
+    const auto vertex = BuildVertexSource(UserShaderTarget::OpenGl, *shader, "vertexshift.n2shader", error);
+    ASSERT_TRUE(vertex.has_value()) << error;
+    EXPECT_EQ(*vertex, ReadText(Dir() + "vertexshift/shader.gl.vert"));
+    // The SPIR-V targets wrap the fragment so it reads every varying the vertex stage writes
+    const auto vulkan = BuildSource(UserShaderTarget::Vulkan, *shader, "vertexshift.n2shader", error);
+    ASSERT_TRUE(vulkan.has_value()) << error;
+    EXPECT_NE(vulkan->find("#define main n2_user_main\n"), std::string::npos);
+    EXPECT_NE(vulkan->find("n2_user_main();"), std::string::npos);
+    EXPECT_FALSE(BuildVertexSource(UserShaderTarget::OpenGl, *LoadFixture("solid"), "solid.n2shader", error).has_value())
+        << "no vertex stage, no vertex text";
+}
+
+TEST(UserShaderCompilerTest, TheVertexStageAndAtlasSpirvAreTheCooksBytesWithTheSameGlslang)
+{
+    using N2Engine::Rendering::UserShaderCompiler::CompilerId;
+    using N2Engine::Rendering::UserShaderCompiler::IsAvailable;
+    if (!IsAvailable())
+    {
+        GTEST_SKIP() << "this build has no glslang (N2ENGINE_RUNTIME_SHADER_COMPILER)";
+    }
+    const Restore restore;
+    RenderSettings::SetShaderCacheDirectory({});
+    RenderSettings::SetRuntimeShaderCompile(true);
+    const auto bytesOf = [](const std::vector<std::uint32_t> &words)
+    {
+        std::vector<std::uint8_t> out;
+        for (const std::uint32_t word : words)
+        {
+            for (int shift = 0; shift < 32; shift += 8)
+            {
+                out.push_back(static_cast<std::uint8_t>(word >> shift));
+            }
+        }
+        return out;
+    };
+    for (const std::string name : {"vertexshift", "atlas"})
+    {
+        const auto shader = LoadFixture(name);
+        ASSERT_NE(shader, nullptr);
+        std::string error;
+        const auto blob = shader->MakeBlob(UserShaderTarget::Vulkan, error);
+        ASSERT_TRUE(blob.has_value()) << name << ": " << error;
+        EXPECT_TRUE(Renderer::Common::ValidateUserShaderBlob(*blob, UserShaderTarget::Vulkan).empty()) << name;
+        EXPECT_EQ(blob->vertexSpirv.empty(), name != "vertexshift") << name;
+        const nlohmann::json manifest = nlohmann::json::parse(ReadText(Dir() + name + "/manifest.json"));
+        const std::string cookedWith = manifest.at("tools").at("glslang").get<std::string>();
+        if (cookedWith != CompilerId())
+        {
+            std::cout << "[  NOTE  ] " << name << ": cooked with '" << cookedWith << "', this build has '" << CompilerId() << "'\n";
+            continue;
+        }
+        EXPECT_EQ(bytesOf(blob->fragmentSpirv), ReadBytes(Dir() + name + "/shader.vulkan.frag.spv")) << name;
+        if (name == "vertexshift")
+        {
+            EXPECT_EQ(bytesOf(blob->vertexSpirv), ReadBytes(Dir() + "vertexshift/shader.vulkan.vert.spv"))
+                << "the vertex stage: the same glslang and flags (-S vert) must give the cook's bytes";
+        }
+    }
+}
+
 TEST(UserShaderCompilerTest, TheVulkanAndWebGpuTextsShareTheUserCodeAndTheBlock)
 {
     const auto shader = LoadFixture("solid");

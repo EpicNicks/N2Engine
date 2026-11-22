@@ -409,6 +409,11 @@ namespace N2Engine::Rendering::UserShaderCompiler
                 {
                     text += std::format("const int {} = {};\n", param.name, param.slot);
                 }
+                // a texture3d's slice count, for n2_texture3D(slot, depth, uvw)
+                if (param.type == ShaderParamType::Texture3D)
+                {
+                    text += std::format("const int {}_depth = {};\n", param.name, param.depth);
+                }
             }
             return text;
         }
@@ -510,10 +515,79 @@ namespace N2Engine::Rendering::UserShaderCompiler
             ? std::format("#line {} 1\n", firstLine)
             : std::format("#line {} \"{}\"\n", firstLine, LinePath(citePath));
         const BlockLayout layout = LayoutBlock(shader.GetParams());
-        // The NaN shims follow the prelude when the stage names isnan or isinf (the cook's usesNanChecks: a plain word search)
+        // The NaN shims follow the prelude when the stage names isnan or isinf (the cook's usesNanChecks: a plain word search), then
+        // the atlas lookups when the header has a cube or a texture3d (usesAtlasTextures)
+        std::string nanShims = UsesNanChecks(source) ? ReadTemplate("nan-shims.glsl").value_or("") : std::string();
+        const bool atlas = std::ranges::any_of(shader.GetParams(), [](const ShaderParam &param)
+                                               { return param.type == ShaderParamType::Cube || param.type == ShaderParamType::Texture3D; });
+        if (atlas)
+        {
+            const auto atlasText = ReadTemplate("texture-atlas.glsl");
+            if (!atlasText)
+            {
+                error = "no prelude template named texture-atlas.glsl";
+                return std::nullopt;
+            }
+            nanShims += *atlasText;
+        }
+        // With a custom vertex stage the SPIR-V targets' fragment reads all five varyings (the author's main is renamed for a
+        // generated one that reads them and calls it), so no vertex output goes unread
+        const bool wrap = shader.HasVertexStage() && target != UserShaderTarget::OpenGl;
+        const std::string rename = wrap ? "#define main n2_user_main\n" : "";
+        const std::string trailer = wrap
+            ? "#undef main\nvoid main() {\n    float n2_sink = n2_UV.x + n2_Color.x + n2_WorldPos.x + n2_Normal.x + n2_Tangent.x;\n    n2_user_main();\n}\n"
+            : "";
+        return std::format("{}// n2shader contract {}, target {}\n{}{}{}{}{}{}\n{}", head, Renderer::Common::kUserShaderContractVersion,
+                           TargetName(target), prelude, nanShims, MaterialSection(target, layout, shader.GetParams()), rename, lineDirective,
+                           source, trailer);
+    }
+
+    std::optional<std::string> BuildVertexSource(const UserShaderTarget target, const Shader &shader, const std::string_view citePath,
+                                                 std::string &error)
+    {
+        std::string source;
+        int firstLine = 0;
+        if (!shader.GetVertexStage(source, firstLine))
+        {
+            error = "the shader has no `#stage vertex` block";
+            return std::nullopt;
+        }
+        const char *templateName = target == UserShaderTarget::Vulkan  ? "vertex-vulkan.glsl"
+                                   : target == UserShaderTarget::WebGpu ? "vertex-webgpu.glsl"
+                                                                        : "vertex-opengl.glsl";
+        const auto templateText = ReadTemplate(templateName);
+        if (!templateText)
+        {
+            error = std::string("no prelude template named ") + templateName;
+            return std::nullopt;
+        }
+        std::string prelude;
+        if (!ExpandTemplate(*templateText, false, {}, 0, prelude, error))
+        {
+            return std::nullopt;
+        }
+        const std::string head = target == UserShaderTarget::OpenGl ? "#version 330 core\n"
+                                                                    : "#version 450\n#extension GL_GOOGLE_cpp_style_line_directive : enable\n";
+        const std::string lineDirective = target == UserShaderTarget::OpenGl
+            ? std::format("#line {} 2\n", firstLine)
+            : std::format("#line {} \"{}\"\n", firstLine, LinePath(citePath));
         const std::string nanShims = UsesNanChecks(source) ? ReadTemplate("nan-shims.glsl").value_or("") : std::string();
-        return std::format("{}// n2shader contract {}, target {}\n{}{}{}{}{}\n", head, Renderer::Common::kUserShaderContractVersion,
-                           TargetName(target), prelude, nanShims, MaterialSection(target, layout, shader.GetParams()), lineDirective, source);
+        // The Material block only: a texture is a fragment-stage resource in v1
+        std::vector<ShaderParam> blockParams;
+        for (const ShaderParam &param : shader.GetParams())
+        {
+            if (!IsTextureParam(param.type))
+            {
+                blockParams.push_back(param);
+            }
+        }
+        const BlockLayout layout = LayoutBlock(blockParams);
+        const std::string material = MaterialSection(target, layout, blockParams);
+        constexpr std::string_view trailer =
+            "void main() {\n    n2_DefaultVertex();\n    n2_vertex();\n    if (!n2_positionSet) {\n        n2_SetPosition(n2_Projection * n2_View * vec4(n2_WorldPos, 1.0));\n    }\n}\n";
+        return std::format("{}// n2shader contract {}, target {}, vertex stage\n{}{}{}{}{}\n{}", head,
+                           Renderer::Common::kUserShaderContractVersion, TargetName(target), prelude, nanShims, material, lineDirective,
+                           source, trailer);
     }
 
     std::string CacheKey(const UserShaderTarget target, const Shader &shader)
@@ -633,16 +707,18 @@ namespace N2Engine::Rendering::UserShaderCompiler
             return std::nullopt;
         }
 
-        std::expected<std::vector<std::uint32_t>, std::string> CompileVulkan(const std::string &text, const BlockLayout &layout)
+        std::expected<std::vector<std::uint32_t>, std::string> CompileVulkan(const std::string &text, const BlockLayout &layout,
+                                                                             const EShLanguage stage = EShLangFragment)
         {
             const std::lock_guard lock(CompilerMutex());
             EnsureProcess();
-            // The cook's flags: `glslangValidator -V --target-env vulkan1.1 -S frag` (Vulkan semantics, SPIR-V 1.3, no optimizer)
+            // The cook's flags: `glslangValidator -V --target-env vulkan1.1 -S frag` (or `-S vert` for a custom vertex stage):
+            // Vulkan semantics, SPIR-V 1.3, no optimizer
             constexpr auto messages = static_cast<EShMessages>(EShMsgSpvRules | EShMsgVulkanRules);
-            glslang::TShader shader(EShLangFragment);
+            glslang::TShader shader(stage);
             const char *strings[1] = {text.c_str()};
             shader.setStrings(strings, 1);
-            shader.setEnvInput(glslang::EShSourceGlsl, EShLangFragment, glslang::EShClientVulkan, 100);
+            shader.setEnvInput(glslang::EShSourceGlsl, stage, glslang::EShClientVulkan, 100);
             shader.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_1);
             shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_3);
             if (!shader.parse(GetDefaultResources(), 110, false, messages))
@@ -667,7 +743,7 @@ namespace N2Engine::Rendering::UserShaderCompiler
             spv::SpvBuildLogger logger;
             glslang::SpvOptions options;
             options.disableOptimizer = true;
-            glslang::GlslangToSpv(*program.getIntermediate(EShLangFragment), spirv, &logger, &options);
+            glslang::GlslangToSpv(*program.getIntermediate(stage), spirv, &logger, &options);
             if (spirv.empty())
             {
                 return std::unexpected("glslang made no SPIR-V: " + logger.getAllMessages());
@@ -705,10 +781,24 @@ namespace N2Engine::Rendering::UserShaderCompiler
         const BlockLayout layout = LayoutBlock(shader.GetParams());
 
         Compiled compiled;
+        std::optional<std::string> vertexText;
+        if (shader.HasVertexStage())
+        {
+            vertexText = BuildVertexSource(target, shader, citePath, error);
+            if (!vertexText)
+            {
+                return std::unexpected(error);
+            }
+        }
         if (target == UserShaderTarget::OpenGl)
         {
             compiled.payloadFile = "shader.gl.frag";
             compiled.payload.assign(text->begin(), text->end());
+            if (vertexText)
+            {
+                compiled.vertexPayloadFile = "shader.gl.vert";
+                compiled.vertexPayload.assign(vertexText->begin(), vertexText->end());
+            }
         }
         else
         {
@@ -718,14 +808,36 @@ namespace N2Engine::Rendering::UserShaderCompiler
             {
                 return std::unexpected(spirv.error());
             }
-            compiled.payloadFile = "shader.vulkan.frag.spv";
-            compiled.payload.reserve(spirv->size() * 4);
-            for (const std::uint32_t word : *spirv)
+            const auto toBytes = [](const std::vector<std::uint32_t> &words, std::vector<std::uint8_t> &bytes)
             {
-                for (int shift = 0; shift < 32; shift += 8)
+                bytes.reserve(words.size() * 4);
+                for (const std::uint32_t word : words)
                 {
-                    compiled.payload.push_back(static_cast<std::uint8_t>(word >> shift));
+                    for (int shift = 0; shift < 32; shift += 8)
+                    {
+                        bytes.push_back(static_cast<std::uint8_t>(word >> shift));
+                    }
                 }
+            };
+            compiled.payloadFile = "shader.vulkan.frag.spv";
+            toBytes(*spirv, compiled.payload);
+            if (vertexText)
+            {
+                std::vector<ShaderParam> blockParams;
+                for (const ShaderParam &param : shader.GetParams())
+                {
+                    if (!IsTextureParam(param.type))
+                    {
+                        blockParams.push_back(param);
+                    }
+                }
+                auto vertexSpirv = CompileVulkan(*vertexText, LayoutBlock(blockParams), EShLangVertex);
+                if (!vertexSpirv)
+                {
+                    return std::unexpected("the vertex stage: " + vertexSpirv.error());
+                }
+                compiled.vertexPayloadFile = "shader.vulkan.vert.spv";
+                toBytes(*vertexSpirv, compiled.vertexPayload);
             }
 #else
             return std::unexpected("this build has no glslang (N2ENGINE_RUNTIME_SHADER_COMPILER)");
@@ -748,6 +860,10 @@ namespace N2Engine::Rendering::UserShaderCompiler
             if (IsTextureParam(param.type))
             {
                 entry["slot"] = param.slot;
+                if (param.type == ShaderParamType::Texture3D)
+                {
+                    entry["depth"] = param.depth;
+                }
             }
             else
             {
@@ -761,6 +877,14 @@ namespace N2Engine::Rendering::UserShaderCompiler
         manifest["payloads"][TargetName(target)] = {{"file", compiled.payloadFile},
                                                     {"bytes", compiled.payload.size()},
                                                     {"sha256", Sha256Hex(compiled.payload.data(), compiled.payload.size())}};
+        if (!compiled.vertexPayloadFile.empty())
+        {
+            manifest["vertexStage"] = true;
+            manifest["payloads"][std::string(TargetName(target)) + "Vertex"] = {
+                {"file", compiled.vertexPayloadFile},
+                {"bytes", compiled.vertexPayload.size()},
+                {"sha256", Sha256Hex(compiled.vertexPayload.data(), compiled.vertexPayload.size())}};
+        }
         if (target == UserShaderTarget::Vulkan)
         {
             manifest["compiler"] = CompilerId();
