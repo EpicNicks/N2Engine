@@ -1,4 +1,4 @@
-Continue work on N2Engine (GitHub EpicNicks/N2Engine at E:\Code\Projects\N2Engine, C++23 Unity-like engine, Windows/MSVC + Linux x86_64/arm64 + a web/Emscripten player, CMake) and its editor frontend (EpicNicks/N2Engine-Electron-Frontend, Preact + Electron, has CI, at E:\Code\Projects\N2EngineWebFrontend). The orchestrator lives in orchestrator/ in the engine repo (items/, ledger/, lib/, tools/, proposals/, project-memory/). This file is the live handoff: the newest dated "Current state" section below is the state of the project (as of 2026-11-23 nothing of the last goal run is open, no agent is running, and the only open PR is frontend #69, held for the user's live Electron check); older sections are history, newest first. Standing rules and how the pipeline works are at the end.
+Continue work on N2Engine (GitHub EpicNicks/N2Engine at E:\Code\Projects\N2Engine, C++23 Unity-like engine, Windows/MSVC + Linux x86_64/arm64 + a web/Emscripten player, CMake) and its editor frontend (EpicNicks/N2Engine-Electron-Frontend, Preact + Electron, has CI, at E:\Code\Projects\N2EngineWebFrontend). The orchestrator lives in orchestrator/ in the engine repo (items/, ledger/, lib/, tools/, proposals/, project-memory/). This file is the live handoff: the newest dated "Current state" section below is the state of the project (as of 2026-11-23 nothing of the last goal run is open, no agent is running, and no PR is open in either repo: frontend #69 was merged after the user's live Electron check); older sections are history, newest first. Standing rules and how the pipeline works are at the end.
 
 Read the memory index first, then orchestrator/README.md and the LAST entries of orchestrator/project-memory/pending-minor-defects.md (the source of truth for what merged and why) and orchestrator-lessons.md. Do not read agent transcripts; read only the ledger files of items you need.
 
@@ -25,7 +25,7 @@ The goal run of 2026-11-22/23 is DONE: nine goals, one PR each, every code PR me
 - The #422 browser checks.
 - The #427 saves in a browser: save then reload, a private window, the quota warning, the pagehide flush.
 - The GL shader checklist (user-shaders proposal section 16, with the stage 9 draws); the runtime-compiled vertex and atlas text of #439 has never been compiled by a GL driver either.
-- Frontend #69 (the inspector), held for a live Electron check.
+- ~~Frontend #69 (the inspector), held for a live Electron check.~~ Done 2026-11-23: the user ran the checklist (all passed); master merged in, merged as ebd7cbc0.
 - Never run in a real browser or Electron window: the late packs over a real network (#438), the nudge (frontend #83), the shader section (frontend #84).
 
 ## Current state (2026-11-22; read first)
