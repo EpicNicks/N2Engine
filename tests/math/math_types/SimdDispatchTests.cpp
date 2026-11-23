@@ -524,6 +524,138 @@ TEST_P(SimdDispatchTest, ElementwiseArithmeticIsBitIdenticalToScalar)
     }
 }
 
+// #381 item 10, the rest of the elementwise operations: Vector4's add, subtract, scalar multiply and Scale, Vector3's
+// Scale, and every elementwise batch of Vector3 and Vector4 for every count around the batch widths and at several start
+// offsets (the NEON fours, and the AVX pairs and eights on a build compiled with AVX, which every x86_64 native build is;
+// on a build without it the AVX tier runs the SSE path), on finite values and again on the edge values (signed zeros,
+// infinities, NaN). Each output lane is one IEEE operation on the same two inputs, so every tier must give the scalar
+// tier's bits (any NaN matches any NaN: a NaN's payload is not compared).
+TEST_P(SimdDispatchTest, ElementwiseVector4AndBatchesAreBitIdenticalToScalar)
+{
+    std::vector<Vector4> samples4 = EdgeCaseVectors4();
+    for (const Vector4 &v : SampleVectors4())
+        samples4.push_back(v);
+    for (size_t i = 0; i < samples4.size(); ++i)
+    {
+        const Vector4 &a = samples4[i];
+        const std::string at = " a=" + std::to_string(i);
+        ExpectIdenticalToScalar([&] { return a * -1.75f; }, "Vector4 ScalarMul" + at);
+        for (size_t j = 0; j < samples4.size(); ++j)
+        {
+            const Vector4 &b = samples4[j];
+            const std::string ab = at + " b=" + std::to_string(j);
+            ExpectIdenticalToScalar([&] { return a + b; }, "Vector4 Add" + ab);
+            ExpectIdenticalToScalar([&] { return a - b; }, "Vector4 Sub" + ab);
+            ExpectIdenticalToScalar([&] { return a.Scale(b); }, "Vector4 Scale" + ab);
+        }
+    }
+    std::vector<Vector3> samples3 = EdgeCaseVectors();
+    for (const Vector3 &v : SampleVectors())
+        samples3.push_back(v);
+    for (size_t i = 0; i < samples3.size(); ++i)
+    {
+        for (size_t j = 0; j < samples3.size(); ++j)
+        {
+            const Vector3 &a = samples3[i];
+            const Vector3 &b = samples3[j];
+            ExpectIdenticalToScalar([&] { return a.Scale(b); },
+                                    "Vector3 Scale a=" + std::to_string(i) + " b=" + std::to_string(j));
+        }
+    }
+
+    // The batches on the edge values: the edge vectors repeated until every batch width and tail is covered
+    std::vector<Vector3> edges3;
+    std::vector<Vector4> edges4;
+    while (edges3.size() < 40)
+    {
+        for (const Vector3 &v : EdgeCaseVectors())
+            edges3.push_back(v);
+    }
+    while (edges4.size() < 40)
+    {
+        for (const Vector4 &v : EdgeCaseVectors4())
+            edges4.push_back(v);
+    }
+    for (const size_t count : {size_t{1}, size_t{7}, size_t{8}, size_t{9}, size_t{17}})
+    {
+        const std::string at = " edges count=" + std::to_string(count);
+        ExpectIdenticalToScalar([&] {
+            std::vector<Vector3> out(count);
+            Vector3::AddBatch(edges3.data(), edges3.data() + 3, out.data(), count);
+            return out;
+        }, "Vector3 AddBatch" + at);
+        ExpectIdenticalToScalar([&] {
+            std::vector<Vector3> out(count);
+            Vector3::SubBatch(edges3.data(), edges3.data() + 3, out.data(), count);
+            return out;
+        }, "Vector3 SubBatch" + at);
+        ExpectIdenticalToScalar([&] {
+            std::vector<Vector3> out(count);
+            Vector3::ScalarMulBatch(edges3.data(), out.data(), -1.75f, count);
+            return out;
+        }, "Vector3 ScalarMulBatch" + at);
+        ExpectIdenticalToScalar([&] {
+            std::vector<Vector4> out(count);
+            Vector4::AddBatch(edges4.data(), edges4.data() + 3, out.data(), count);
+            return out;
+        }, "Vector4 AddBatch" + at);
+        ExpectIdenticalToScalar([&] {
+            std::vector<Vector4> out(count);
+            Vector4::SubBatch(edges4.data(), edges4.data() + 3, out.data(), count);
+            return out;
+        }, "Vector4 SubBatch" + at);
+        ExpectIdenticalToScalar([&] {
+            std::vector<Vector4> out(count);
+            Vector4::ScalarMulBatch(edges4.data(), out.data(), -1.75f, count);
+            return out;
+        }, "Vector4 ScalarMulBatch" + at);
+    }
+
+    const std::vector<Vector3> pool3 = VectorPool3(BATCH_POOL_SIZE);
+    const std::vector<Vector4> pool4 = VectorPool4(BATCH_POOL_SIZE);
+    for (const size_t count : BATCH_COUNTS)
+    {
+        for (const size_t offset : BATCH_OFFSETS)
+        {
+            const std::string at = " count=" + std::to_string(count) + " offset=" + std::to_string(offset);
+            const Vector3 *a3 = pool3.data() + offset;
+            const Vector3 *b3 = pool3.data() + offset + 16;
+            const Vector4 *a4 = pool4.data() + offset;
+            const Vector4 *b4 = pool4.data() + offset + 16;
+            ExpectIdenticalToScalar([&] {
+                std::vector<Vector3> out(count);
+                Vector3::AddBatch(a3, b3, out.data(), count);
+                return out;
+            }, "Vector3 AddBatch" + at);
+            ExpectIdenticalToScalar([&] {
+                std::vector<Vector3> out(count);
+                Vector3::SubBatch(a3, b3, out.data(), count);
+                return out;
+            }, "Vector3 SubBatch" + at);
+            ExpectIdenticalToScalar([&] {
+                std::vector<Vector3> out(count);
+                Vector3::ScalarMulBatch(a3, out.data(), -1.75f, count);
+                return out;
+            }, "Vector3 ScalarMulBatch" + at);
+            ExpectIdenticalToScalar([&] {
+                std::vector<Vector4> out(count);
+                Vector4::AddBatch(a4, b4, out.data(), count);
+                return out;
+            }, "Vector4 AddBatch" + at);
+            ExpectIdenticalToScalar([&] {
+                std::vector<Vector4> out(count);
+                Vector4::SubBatch(a4, b4, out.data(), count);
+                return out;
+            }, "Vector4 SubBatch" + at);
+            ExpectIdenticalToScalar([&] {
+                std::vector<Vector4> out(count);
+                Vector4::ScalarMulBatch(a4, out.data(), -1.75f, count);
+                return out;
+            }, "Vector4 ScalarMulBatch" + at);
+        }
+    }
+}
+
 TEST_P(SimdDispatchTest, Vector3BatchOperations)
 {
     // An odd count larger than 8 exercises both the AVX batches and their scalar tails

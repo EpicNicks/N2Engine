@@ -33,6 +33,11 @@ SCENES = [
     "spawn_despawn",
     "snapshot_roundtrip",
     "rollback",
+    # #381 item 7: joints, a 400-body pile, fast projectiles, a rollback with joints
+    "joints",
+    "large_pile",
+    "projectiles",
+    "joint_rollback",
 ]
 FORMAT = 1
 ARTIFACT_FILE = "determinism-hashes.json"
