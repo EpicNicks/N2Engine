@@ -18,6 +18,7 @@
 #include <renderer/common/IMaterial.hpp>
 
 #include "engine/Logger.hpp"
+#include "engine/Time.hpp"
 #include "engine/io/Resources.hpp"
 #include "engine/io/Vfs.hpp"
 #include "engine/rendering/RenderSettings.hpp"
@@ -590,6 +591,30 @@ namespace N2Engine::Rendering
         Changed(true); // a new texture: a new GPU material
     }
 
+    std::optional<std::array<float, 4>> Material::EngineFilledParam(const ShaderParam &param) const
+    {
+        if (param.type == ShaderParamType::Float)
+        {
+            if (param.name == TimeParam)
+            {
+                return std::array<float, 4>{Time::GetUnscaledTime(), 0.0f, 0.0f, 0.0f};
+            }
+            if (param.name == ScaledTimeParam)
+            {
+                return std::array<float, 4>{Time::GetTime(), 0.0f, 0.0f, 0.0f};
+            }
+            if (param.name == SaturationParam)
+            {
+                return std::array<float, 4>{_saturation, 0.0f, 0.0f, 0.0f};
+            }
+        }
+        else if ((param.type == ShaderParamType::Color || param.type == ShaderParamType::Vec4) && param.name == FlashParam)
+        {
+            return std::array<float, 4>{_flash.r, _flash.g, _flash.b, _flash.a};
+        }
+        return std::nullopt;
+    }
+
     void Material::ApplyShaderParams(Renderer::Common::IMaterial &target, const Common::Color &tint) const
     {
         for (const ShaderParam &param : _shader->GetParams())
@@ -608,6 +633,10 @@ namespace N2Engine::Rendering
                     v = {_baseColor.r, _baseColor.g, _baseColor.b, _baseColor.a};
                 }
                 v = {v[0] * tint.r, v[1] * tint.g, v[2] * tint.b, v[3] * tint.a};
+            }
+            else if (const std::optional<std::array<float, 4>> engineValue = EngineFilledParam(param))
+            {
+                v = *engineValue; // u_Time, u_ScaledTime, u_Saturation, u_Flash: the engine's, whatever was set
             }
             switch (param.type)
             {

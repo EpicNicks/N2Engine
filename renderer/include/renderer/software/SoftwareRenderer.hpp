@@ -132,8 +132,9 @@ namespace Renderer::Software
         using Common::IRenderer::DrawMesh; // the default-state overload
         /// Records the draw, with a copy of what it reads from the material (SWMaterialSnapshot), so later
         /// changes to the material don't affect it, as on OpenGL. EndFrame rasterizes the frame's draws in
-        /// the order OrderDraws gives (DrawOrder.hpp). depthTest, depthWrite and cull are honoured per draw; blend is ignored, as
-        /// this renderer has no blending (a Transparent-queue draw is drawn opaque, without writing depth).
+        /// the order OrderDraws gives (DrawOrder.hpp). depthTest, depthWrite and cull are honoured per draw; blend is ignored
+        /// (a Transparent-queue draw is drawn opaque, without writing depth) unless the draw also sets RenderState::softwareBlend,
+        /// which blends it (SupportsOptInBlending).
         /// One exception: a draw with the text shader alpha-tests, and writes depth wherever it covers a
         /// pixel and depthTest is on, whatever depthWrite says (see SWShaderType::Text).
         void DrawMesh(Common::IMesh *mesh, const float *modelMatrix, Common::IMaterial *material,
@@ -169,8 +170,11 @@ namespace Renderer::Software
         [[nodiscard]] bool SupportsStageDim() const override { return true; }
         /// Every pixel a draw writes inside (or outside) its RenderState::tint's circle gets the tint's saturation
         [[nodiscard]] bool SupportsScreenTint() const override { return true; }
-        /// Blended draws are drawn opaque, without writing depth
+        /// Blended draws are drawn opaque, without writing depth, unless they opt in (RenderState::softwareBlend)
         [[nodiscard]] bool SupportsBlending() const override { return false; }
+        /// A blended draw with RenderState::softwareBlend (Sprite2D's) is blended on the CPU by its blend function (BlendFuncFor: alpha,
+        /// additive, premultiplied, multiply), after its dim and tint, into the 8-bit colour buffer as a GPU blends into RGBA8
+        [[nodiscard]] bool SupportsOptInBlending() const override { return true; }
         /// Counts each draw as RecordDraw queues it (before the depth sort), clipped to the mesh's indices
         [[nodiscard]] bool SupportsRenderCounters() const override { return true; }
 
