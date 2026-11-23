@@ -317,3 +317,99 @@ TEST_F(LuaParticleSystemTest, ABurstAskedForBeforeTheSceneAttachesIsEmittedWhenI
     SceneManager::GetCurSceneRef().ProcessAttachQueue();
     EXPECT_EQ(Eval<int>("lua_ps:GetAliveCount()"), 8);
 }
+
+// ---------------------------------------------------------------- issue #445
+
+TEST_F(LuaParticleSystemTest, ShapesRotationAndRenderModeAreSetAndRead)
+{
+    Run(R"(
+        lua_fx = GameObject.Create("LuaFx")
+        lua_ps = lua_fx:AddComponent("ParticleSystem")
+        lua_ps:SetShape("Box")
+        lua_ps:SetEmitFromEdge(true)
+        lua_ps:SetBoxSize(Vector3(1, 2, 3))
+        lua_ps:SetStartRotation(-15, 30)
+        lua_ps:SetAngularVelocity(90, 180)
+        lua_ps:SetRenderMode("Stretched")
+        lua_ps:SetStretch(3, 0.5)
+    )");
+    const auto fx = Lua()["lua_fx"].get<GameObjectRef>().Lock();
+    ASSERT_NE(fx, nullptr);
+    const auto *ps = fx->GetComponent<ParticleSystem>();
+    ASSERT_NE(ps, nullptr);
+    EXPECT_EQ(ps->shape, Particles::EmitterShape::Box);
+    EXPECT_TRUE(ps->emitFromEdge);
+    EXPECT_FLOAT_EQ(ps->boxSize.z, 3.0f);
+    EXPECT_FLOAT_EQ(ps->startRotationMin, -15.0f);
+    EXPECT_FLOAT_EQ(ps->startRotationMax, 30.0f);
+    EXPECT_FLOAT_EQ(ps->angularVelocityMin, 90.0f);
+    EXPECT_FLOAT_EQ(ps->angularVelocityMax, 180.0f);
+    EXPECT_EQ(ps->renderMode, Particles::ParticleRenderMode::Stretched);
+    EXPECT_FLOAT_EQ(ps->lengthScale, 3.0f);
+    EXPECT_FLOAT_EQ(ps->speedScale, 0.5f);
+
+    EXPECT_EQ(Eval<std::string>("lua_ps:GetShape()"), "Box");
+    EXPECT_TRUE(Eval<bool>("lua_ps:GetEmitFromEdge()"));
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ps:GetBoxSize().y"), 2.0f);
+    EXPECT_FLOAT_EQ(Eval<float>("select(2, lua_ps:GetStartRotation())"), 30.0f);
+    EXPECT_FLOAT_EQ(Eval<float>("select(1, lua_ps:GetAngularVelocity())"), 90.0f);
+    EXPECT_EQ(Eval<std::string>("lua_ps:GetRenderMode()"), "Stretched");
+    EXPECT_FLOAT_EQ(Eval<float>("select(2, lua_ps:GetStretch())"), 0.5f);
+    for (const char *shape : {"Circle", "Edge", "Cone", "Sphere"})
+    {
+        Run(std::string("lua_ps:SetShape('") + shape + "')");
+        EXPECT_EQ(Eval<std::string>("lua_ps:GetShape()"), shape);
+    }
+    for (const char *mode : {"HorizontalBillboard", "VerticalBillboard", "Billboard"})
+    {
+        Run(std::string("lua_ps:SetRenderMode('") + mode + "')");
+        EXPECT_EQ(Eval<std::string>("lua_ps:GetRenderMode()"), mode);
+    }
+    const std::string error = RunExpectingError("lua_ps:SetRenderMode('Mesh')");
+    EXPECT_NE(error.find("Stretched"), std::string::npos) << "the error lists the options: " << error;
+    EXPECT_EQ(ps->renderMode, Particles::ParticleRenderMode::Billboard) << "and changes nothing";
+}
+
+TEST_F(LuaParticleSystemTest, KillsAndAMovedBurstOnAPlayingScene)
+{
+    PlayScene(R"(
+        lua_fx = GameObject.Create("LuaFx")
+        lua_ps = lua_fx:AddComponent("ParticleSystem")
+        lua_ps:SetPlayOnAwake(false)
+        lua_ps:SetLifetime(10, 10)
+        lua_ps:SetSpeed(0, 0)
+        lua_ps:SetShapeRadius(0)
+        SceneManager.GetCurrentScene():AddRootGameObject(lua_fx)
+    )");
+
+    // Moved and burst in the same frame: the burst starts at the new position
+    Run(R"(
+        lua_ps:EmitBurst(4)
+        lua_fx:GetPositionable():SetPosition(Vector3(5, 0, 2))
+        lua_ps:EmitBurst(3)
+    )");
+    EXPECT_EQ(Eval<int>("lua_ps:GetAliveCount()"), 7);
+    EXPECT_EQ(Eval<int>("#lua_ps:GetParticles()"), 7);
+    EXPECT_EQ(Eval<int>("#lua_ps:GetParticles(2)"), 2) << "at most the count asked for";
+    EXPECT_EQ(Eval<int>("#lua_ps:GetParticles(-1)"), 0);
+    Run(R"(
+        lua_moved = 0
+        for _, p in ipairs(lua_ps:GetParticles()) do
+            if p.position.x == 5 and p.position.z == 2 and p.age == 0 and p.velocity.y == 0 and p.rotation == 0 then
+                lua_moved = lua_moved + 1
+            end
+        end
+    )");
+    EXPECT_EQ(Eval<int>("lua_moved"), 3);
+
+    // A circle in the XY plane around the new position takes the three (their z of 2 doesn't matter)
+    EXPECT_EQ(Eval<int>("lua_ps:KillInCircle(Vector2(5, 0), 0.5)"), 3);
+    EXPECT_EQ(Eval<int>("lua_ps:KillInCircle(Vector3(0, 0, 99), 0.5)"), 4) << "a Vector3 centre: its z is ignored";
+    EXPECT_NE(RunExpectingError("lua_ps:KillInCircle(5, 0.5)").find("Vector2"), std::string::npos);
+    Run("lua_ps:EmitBurst(2)");
+    EXPECT_EQ(Eval<int>("lua_ps:KillInSphere(Vector3(5, 0, 2), 0.1)"), 2);
+    Run("lua_ps:EmitBurst(2)");
+    EXPECT_EQ(Eval<int>("lua_ps:KillInBox(Vector3(6, 1, 3), Vector3(4, -1, 1))"), 2);
+    EXPECT_EQ(Eval<int>("lua_ps:GetAliveCount()"), 0);
+    Run("lua_moved = nil");
+}

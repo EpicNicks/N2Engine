@@ -1091,8 +1091,38 @@ function ParticleSystem:Stop() end
 function ParticleSystem:Clear() end
 
 ---Starts `count` particles now, playing or not. Particles beyond maxParticles are dropped (one warning in the log).
+---They start at the object's pose at the call: a burst right after the object moved, in the same frame, starts at the new position.
 ---@param count integer
 function ParticleSystem:EmitBurst(count) end
+
+---Removes the living particles inside a circle in the XY plane, at any depth (the 2D case). Emission is unaffected.
+---@param center Vector2|Vector3 a Vector3's z is ignored
+---@param radius number
+---@return integer killed how many it removed (0 before the system has started)
+function ParticleSystem:KillInCircle(center, radius) end
+
+---Removes the living particles inside a sphere
+---@param center Vector3
+---@param radius number
+---@return integer killed
+function ParticleSystem:KillInSphere(center, radius) end
+
+---Removes the living particles inside the box between two corners, along the world axes (corners in any order)
+---@param cornerA Vector3
+---@param cornerB Vector3
+---@return integer killed
+function ParticleSystem:KillInBox(cornerA, cornerB) end
+
+---@class ParticleInfo
+---@field position Vector3 world position
+---@field velocity Vector3 world units per second (estimated on the WebGPU backend)
+---@field age number the age as a fraction of the lifetime, 0 to 1
+---@field rotation number degrees
+
+---A copy of the living particles, at most `max` of them and at most 1024 a call
+---@param max integer|nil default 1024
+---@return ParticleInfo[]
+function ParticleSystem:GetParticles(max) end
 
 ---@return boolean
 function ParticleSystem:IsPlaying() end
@@ -1146,11 +1176,41 @@ function ParticleSystem:SetBurstCount(count) end
 ---@return integer
 function ParticleSystem:GetBurstCount() end
 
----@param shape "Cone"|"Sphere" a cone along the object's +Y axis, or a sphere (default Cone). An unknown name raises an error.
+---@param shape "Cone"|"Sphere"|"Circle"|"Edge"|"Box" a cone along the object's +Y axis, a sphere, a disc in the XY plane moving outwards in it (2D), a line along X of length 2 * radius moving along +Y within the cone angle in the XY plane (2D), or a box of BoxSize moving within the cone (default Cone). An unknown name raises an error.
 function ParticleSystem:SetShape(shape) end
 
----@return "Cone"|"Sphere"
+---@return "Cone"|"Sphere"|"Circle"|"Edge"|"Box"
 function ParticleSystem:GetShape() end
+
+---@param fromEdge boolean start on the shape's outline (the cone's rim, the sphere's surface, the circle's rim, the box's faces) instead of inside it (default false)
+function ParticleSystem:SetEmitFromEdge(fromEdge) end
+
+---@return boolean
+function ParticleSystem:GetEmitFromEdge() end
+
+---@param size Vector3 the Box shape's full size along the object's local axes (default 1, 1, 1)
+function ParticleSystem:SetBoxSize(size) end
+
+---@return Vector3
+function ParticleSystem:GetBoxSize() end
+
+---Each particle's start rotation is picked from this range; it turns the quad (not a Stretched one)
+---@param min number degrees (default 0)
+---@param max number degrees (default 0)
+function ParticleSystem:SetStartRotation(min, max) end
+
+---@return number min
+---@return number max
+function ParticleSystem:GetStartRotation() end
+
+---Each particle's angular velocity is picked from this range
+---@param min number degrees per second (default 0)
+---@param max number degrees per second (default 0)
+function ParticleSystem:SetAngularVelocity(min, max) end
+
+---@return number min
+---@return number max
+function ParticleSystem:GetAngularVelocity() end
 
 ---@param radius number the cone's base disc, or the sphere, in world units (default 0)
 function ParticleSystem:SetShapeRadius(radius) end
@@ -1231,6 +1291,21 @@ function ParticleSystem:SetBlendMode(mode) end
 
 ---@return "Alpha"|"Additive"
 function ParticleSystem:GetBlendMode() end
+
+---@param mode "Billboard"|"Stretched"|"HorizontalBillboard"|"VerticalBillboard" Billboard faces the camera (default); Stretched stretches along the velocity; HorizontalBillboard lies flat facing up; VerticalBillboard stands upright and turns about Y to the camera. An unknown name raises an error.
+function ParticleSystem:SetRenderMode(mode) end
+
+---@return "Billboard"|"Stretched"|"HorizontalBillboard"|"VerticalBillboard"
+function ParticleSystem:GetRenderMode() end
+
+---Stretched: the quad's length is size * lengthScale + speed * speedScale (its width is the size)
+---@param lengthScale number default 2
+---@param speedScale number default 0
+function ParticleSystem:SetStretch(lengthScale, speedScale) end
+
+---@return number lengthScale
+---@return number speedScale
+function ParticleSystem:GetStretch() end
 
 ---@param path string|nil an image file, e.g. "res://particles/spark.png"; nil draws plain colours. A path that doesn't load raises an error and keeps the current texture.
 function ParticleSystem:SetTexture(path) end

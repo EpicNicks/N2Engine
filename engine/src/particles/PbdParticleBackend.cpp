@@ -49,9 +49,13 @@ namespace N2Engine::Particles
             staging.phases[index] = staging.phases[last];
             age[index] = age[last];
             lifetime[index] = lifetime[last];
+            rotation[index] = rotation[last];
+            spin[index] = spin[last];
         }
         age.pop_back();
         lifetime.pop_back();
+        rotation.pop_back();
+        spin.pop_back();
         --count;
     }
 
@@ -204,6 +208,14 @@ namespace N2Engine::Particles
                                           const std::span<const Math::Vector3> positions,
                                           const std::span<const Math::Vector3> velocities)
     {
+        return SpawnWithSpin(handle, positions, velocities, {});
+    }
+
+    std::size_t PbdParticleBackend::SpawnWithSpin(const Physics::ParticleSystemHandle handle,
+                                                  const std::span<const Math::Vector3> positions,
+                                                  const std::span<const Math::Vector3> velocities,
+                                                  const std::span<const Math::Vector2> spins)
+    {
         System *system = Find(handle);
         if (!system || _failed)
         {
@@ -219,6 +231,8 @@ namespace N2Engine::Particles
             system->staging.phases[slot] = system->phase;
             system->age.push_back(0.0f);
             system->lifetime.push_back(system->random.Range(system->params.lifetimeMin, system->params.lifetimeMax));
+            system->rotation.push_back(i < spins.size() ? Finite(spins[i].x, 0.0f) : 0.0f);
+            system->spin.push_back(i < spins.size() ? Finite(spins[i].y, 0.0f) : 0.0f);
         }
         system->count += static_cast<std::uint32_t>(count);
         if (count > 0)
@@ -239,6 +253,8 @@ namespace N2Engine::Particles
         system->count = 0;
         system->age.clear();
         system->lifetime.clear();
+        system->rotation.clear();
+        system->spin.clear();
         if (hadParticles)
         {
             Upload(*system, kPbdNothing); // the active count drops to 0; no data to send
@@ -320,5 +336,53 @@ namespace N2Engine::Particles
             v.z = p.z;
             v.w = std::clamp(system->age[i] / system->lifetime[i], 0.0f, 1.0f);
         }
+    }
+
+    void PbdParticleBackend::CopyMotion(const Physics::ParticleSystemHandle handle, std::vector<Math::Vector4> &out) const
+    {
+        out.clear();
+        const System *system = Find(handle);
+        if (!system)
+        {
+            return;
+        }
+        out.resize(system->count);
+        for (std::uint32_t i = 0; i < system->count; ++i)
+        {
+            const PbdVec4 &u = system->staging.velocities[i];
+            Math::Vector4 &v = out[i];
+            v.x = u.x;
+            v.y = u.y;
+            v.z = u.z;
+            v.w = system->rotation[i] + system->spin[i] * system->age[i];
+        }
+    }
+
+    std::size_t PbdParticleBackend::Kill(const Physics::ParticleSystemHandle handle, const Physics::ParticleRegion &region)
+    {
+        System *system = Find(handle);
+        if (!system || _failed)
+        {
+            return 0;
+        }
+        std::size_t killed = 0;
+        for (std::uint32_t i = 0; i < system->count;)
+        {
+            const PbdVec4 &p = system->staging.positions[i];
+            if (region.Contains(p.x, p.y, p.z))
+            {
+                system->Remove(i); // the last living particle moved into slot i: look at it next
+                ++killed;
+            }
+            else
+            {
+                ++i;
+            }
+        }
+        if (killed > 0)
+        {
+            Upload(*system, kPbdPositions | kPbdVelocities);
+        }
+        return killed;
     }
 }

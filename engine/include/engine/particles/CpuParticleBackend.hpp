@@ -49,6 +49,10 @@ namespace N2Engine::Particles
         void Step(float dt) override;
         [[nodiscard]] std::size_t GetAliveCount(Physics::ParticleSystemHandle handle) const override;
         void CopyPositions(Physics::ParticleSystemHandle handle, std::vector<Math::Vector4> &out) const override;
+        std::size_t SpawnWithSpin(Physics::ParticleSystemHandle handle, std::span<const Math::Vector3> positions,
+                                  std::span<const Math::Vector3> velocities, std::span<const Math::Vector2> spins) override;
+        void CopyMotion(Physics::ParticleSystemHandle handle, std::vector<Math::Vector4> &out) const override;
+        std::size_t Kill(Physics::ParticleSystemHandle handle, const Physics::ParticleRegion &region) override;
 
         /// How many systems exist (for tests and diagnostics)
         [[nodiscard]] std::size_t GetSystemCount() const { return _systems.size(); }
@@ -63,6 +67,7 @@ namespace N2Engine::Particles
             std::vector<float> px, py, pz;
             std::vector<float> vx, vy, vz;
             std::vector<float> age, lifetime;
+            std::vector<float> rotation, spin; // the start rotation and the angular velocity, radians (per second)
 
             [[nodiscard]] std::size_t Count() const { return age.size(); }
             void Remove(std::size_t index);
