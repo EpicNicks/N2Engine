@@ -18,7 +18,7 @@ The goal run of 2026-11-22/23 is DONE: nine goals, one PR each, every code PR me
 - **#440** (c77fdbfc, goal 9): `Texture::MakeOutline`'s distance transform keeps its column distances clamped in two bytes a pixel (was eight); `orchestrator/proposals/web-threads-424.md` (#424 write-up only, no threaded build).
 - **Next free protocol minor: 1.36.0. Next free snapshot format: 4.** No wire version moved.
 - **Sizes:** size-profile `wasm.brotli` 2,155,662 before the run (master 1beea4a9); PR heads 2,156,412 to 2,158,456, #438 2,158,108 (limit 2,420,000); speed 2,550,841 to 2,554,940 (limit 2,730,000). No budget was touched.
-- **Worktrees:** every worktree of the run is removed; the main checkout is still on the stale `docs-design-decision-cards` (left alone).
+- **Worktrees and checkouts:** no worktree remains in either repo besides the main checkouts, and both main checkouts are on master (2026-11-23). The engine checkout's stale uncommitted `CONTINUE.md` section and untracked old `user-shaders-execution-notes.md` were dropped, since master holds the newer versions. The frontend checkout left #82's merged branch.
 
 **Still needs the user:**
 - The #149 live-host pass (`orchestrator/proposals/live-host-verification-149.md`).
