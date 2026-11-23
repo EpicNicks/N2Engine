@@ -2,6 +2,32 @@ Continue work on N2Engine (GitHub EpicNicks/N2Engine at E:\Code\Projects\N2Engin
 
 Read the memory index first, then orchestrator/README.md and the LAST entries of orchestrator/project-memory/pending-minor-defects.md (the source of truth for what merged and why) and orchestrator-lessons.md. Do not read agent transcripts; read only the ledger files of items you need.
 
+## Current state (2026-11-23; read first)
+
+The goal run of 2026-11-22/23 is DONE: nine goals, one PR each, every code PR merged with a merge commit after all checks were green and a high `/code-review` whose findings were fixed before the merge. Nothing of the run is open.
+
+- **#433** (1beea4a9, docs): the ledger of nested prefabs and the worktree cleanup (goal 1). Frontend **#82** merged (b1891dcd).
+- **#434** (817ef875, goal 2, #381 item 1 gap): snapshot format **2 -> 3**. Serialised snapshots carry the Box2D state, each object's 2D bodies (`Body2D`) and the parked objects (`WorldSnapshot::parked`). `RestoreForJoin` parks what the snapshot parked, places the networked 2D nodes, renames the joiner's 2D bodies to the snapshot's handles (`Physics2DWorld::RestoreStateForJoin`), and falls back to the saved poses and velocities when the build cannot read the image (`exactPhysics2d` false). Late join and spectating of 2D scenes work: `Rollback2DJoinTest` and a spectator in `Rollback2DApplicationTest`. **Next free snapshot format: 4.**
+- **Goal 3** needed no PR: item 6 (joints for Jolt and PhysX) was already merged in #391 to #396; item 5 is settled on option 1 of `proposals/lua-state-and-joints-381.md`, the session lint `RollbackRuntime::LuaStateWarnings` already on master (no Lua snapshot).
+- **#435** (f6e5bdb4, goal 4): `PhysicsBackendBenchTest` (Jolt and PhysX on a settled pile, an active pile and hinge chains at 25/100/400 bodies, 1000 raycasts, the Jolt snapshot cost) printed as job-summary tables on five legs (`scripts/physics-bench-summary.py`); `PhysicsCorpusThreadsTest` (10 corpus scenes on 0, 1 and 3 Jolt workers, a joint rollback on 3); corpus 10 -> 14 scenes, golden 162 records.
+- **#436** (66172a48, goal 5 item 10): Vector4 add/subtract/scalar multiply/Scale, Vector3 Scale and the elementwise batches are bit-exact in every SIMD tier; `docs/math.html#simd-why-tolerance` says why the rest is tolerance-only. Frontend **#83** (90c4c114, item 8): the nudge after the first NetworkObject with preset none (item 8's other parts were #386).
+- **#381 CLOSED** with a comment mapping items 1 to 10 to PRs.
+- **#437** (aa4caf6e, goal 6): the iOS first-frame check is retried once (a run that ended before 55 s is a real failure, not retried); the GCC leg builds and tests a project with scripting and network both off (`tests/projects/no_scripting_network`); the web job is a `matrix.profile` of dev, size and speed (the browser gate reads the size leg's package; PhysX web cache saved by dev only).
+- **#438** (79ac911a, goal 7, #425 CLOSED): `[WEB-TTFF]` from the Chromium gate (a "Time to first frame" step in the browser job; first measurement on SwiftShader: page ready 492 ms, first frame 905 ms, Start click to first frame 360 ms); late packs (`build.web.lateAssets` folders left out of `index.data`, cooked to `late-N.n2pack`, fetched after the first frame with three tries, mounted through `LatePacks`; Lua `Assets.IsAvailable`, `PendingCount`, `FailedCount`; `tests/projects/web_late_assets` run in the size leg: index.data 1,248 B with late-0.n2pack 1,155 B fetched after the start); exceptions and RTTI NOT trimmed (82 try blocks and 29 RTTI uses the engine needs: `docs/web-build.html#exceptions-rtti`).
+- **#439** (c0153cb1, goal 8): the runtime compiler builds the vertex stage and the atlas lookups, its text byte-identical to the cook's; **protocol 1.35.0**: `SetComponentFields` takes `shaderState` (Hello capability `shaderState`). Frontend **#84** (65963b34, pins c0153cb1): the inspector's shader section.
+- **#440** (c77fdbfc, goal 9): `Texture::MakeOutline`'s distance transform keeps its column distances clamped in two bytes a pixel (was eight); `orchestrator/proposals/web-threads-424.md` (#424 write-up only, no threaded build).
+- **Next free protocol minor: 1.36.0. Next free snapshot format: 4.** No wire version moved.
+- **Sizes:** size-profile `wasm.brotli` 2,155,662 before the run (master 1beea4a9); PR heads 2,156,412 to 2,158,456, #438 2,158,108 (limit 2,420,000); speed 2,550,841 to 2,554,940 (limit 2,730,000). No budget was touched.
+- **Worktrees:** every worktree of the run is removed; the main checkout is still on the stale `docs-design-decision-cards` (left alone).
+
+**Still needs the user:**
+- The #149 live-host pass (`orchestrator/proposals/live-host-verification-149.md`).
+- The #422 browser checks.
+- The #427 saves in a browser: save then reload, a private window, the quota warning, the pagehide flush.
+- The GL shader checklist (user-shaders proposal section 16, with the stage 9 draws); the runtime-compiled vertex and atlas text of #439 has never been compiled by a GL driver either.
+- Frontend #69 (the inspector), held for a live Electron check.
+- Never run in a real browser or Electron window: the late packs over a real network (#438), the nudge (frontend #83), the shader section (frontend #84).
+
 ## Current state (2026-11-22; read first)
 
 Nested prefabs (proposal `orchestrator/proposals/prefab-nesting.md`, decisions taken by the user on 2026-11-20) are ALL MERGED, engine and frontend:
@@ -14,7 +40,7 @@ Nested prefabs (proposal `orchestrator/proposals/prefab-nesting.md`, decisions t
 - **Frontend #81** (merged 2026-11-22, pins 1.34.0): prefab links and overrides in the hierarchy and inspector. **Frontend #82** (merged 2026-11-22 by this session, b1891dcd, 3 of 3 green, no protocol change): override marks and Revert on N objects in the multi-object inspector; MCP tools `n2_get_prefab_overrides`, `n2_revert_prefab_overrides`, `n2_apply_prefab_overrides` (asks first). Not run in a real Electron window.
 - **Next free protocol minor: 1.35.0.**
 - **Worktree cleanup: DONE.** `git worktree list` shows only the main checkout and `.claude/worktrees` is empty (2026-11-22); E: has 17 GB free of 477 GB. The local branches of the merged worktrees are still there (all merged or pushed); they cost no disk. The main checkout is still on the stale `docs-design-decision-cards` with the superseded uncommitted CONTINUE.md edit and the untracked old `user-shaders-execution-notes.md` (left alone).
-- **A goal run started on 2026-11-22** (#381 items 1 gap, 5 to 8 and 10; CI follow-ups; #425; user shader follow-ups); its results go in a later section.
+- **The goal run of 2026-11-22** is recorded in the 2026-11-23 section above.
 
 ## Current state (2026-11-21; read first)
 
