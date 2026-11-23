@@ -123,9 +123,11 @@ set(N2ENGINE_NETWORK_TESTS
     network/RollbackTests.cpp
     network/StateHashTests.cpp
     network/n2net/N2NetLockstepTests.cpp
+    physics/RollbackJointTests.cpp
     physics/RollbackPhysicsTests.cpp
     replay/InputFrameMappingTests.cpp
     replay/LockstepReplayTests.cpp
+    scripting/LuaMaterialInstanceTests.cpp
     scripting/LuaPrefabSpawnTests.cpp
     scripting/LuaReplicationTests.cpp
     scripting/LuaStateHashTests.cpp
