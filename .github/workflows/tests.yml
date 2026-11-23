@@ -2252,6 +2252,7 @@ jobs:
       # index.data leaves the folder out, late-0.n2pack holds it, the node smoke fetches and mounts it once the player runs
       #, and the sizes show what the first download no longer carries
       - name: Build and run a project with late packs
+        if: matrix.profile == 'size'
         run: |
           set -e -o pipefail
           . "$HOME/emsdk/emsdk_env.sh"
