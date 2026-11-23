@@ -1,0 +1,17 @@
+{
+  "build": {
+    "modules": {
+      "scripting": false,
+      "network": false
+    }
+  },
+  "engineVersion": "1.0.0",
+  "formatVersion": 1,
+  "name": "no_scripting_network",
+  "projectId": "cec5cc57-d2e0-55e7-aaa1-a0f8574ec64d",
+  "scenes": [
+    "res://scenes/Main.scene"
+  ],
+  "settings": {},
+  "startupScene": "res://scenes/Main.scene"
+}

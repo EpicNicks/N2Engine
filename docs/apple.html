@@ -225,7 +225,7 @@ node tools/n2build/n2build.mjs build  --target macos --project path/to/game</cod
 <p>The <code>apple</code> jobs in <code>.github/workflows/tests.yml</code> run on <code>macos-15</code>, with the same commands as the game workflow:</p>
 <ul>
 <li><strong>macOS:</strong> builds lua_project's package (Debug) and runs it for 60 frames with <code>--headless</code>, then 60 frames with <code>--renderer vulkan</code> in a window on MoltenVK, loaded from beside the player. The runner is a virtual machine: its paravirtual GPU runs MoltenVK, but it has no OpenGL context. The OpenGL window on a Mac is checklist item 5.</li>
-<li><strong>iOS:</strong> builds the simulator app (Debug), checks its bundle (the pack and the bundle identifier), and runs it in the simulator. The run must log a first frame and a frame rate.</li>
+<li><strong>iOS:</strong> builds the simulator app (Debug), checks its bundle (the pack and the bundle identifier), and runs it in the simulator. The run must log a first frame (with the renderer) and a frame rate; when one of those lines is missing (a slow simulator start can let the first-frame line go by before the log stream attaches), the run is tried once more, and a failing run is not retried.</li>
 </ul>
 <p>The <code>Apple measurements</code> workflow is separate and on demand (<a href="#measured">above</a>).</p>
 <div class="callout note">
