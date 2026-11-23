@@ -99,16 +99,19 @@ namespace N2Engine::Rendering
             return (a % b != 0 && a < 0) ? quotient - 1 : quotient;
         }
 
+        // MakeOutline refuses a width past MaxOutlineWidth, so a clamped column distance always fits in two bytes
+        static_assert(Texture::MaxOutlineWidth + 1 <= 0xFFFF);
+
         /**
          * Which pixels of a `width` x `height` grid lie within `radius` (Euclidean) of a pixel of `solid`: the exact squared
          * distance transform of Meijster, Roerdink and Hesselink (2000), two linear passes, so the cost does not grow with
          * the radius. `solid` and the result are row-major, one byte per pixel (0 or 1).
+         *
+         * The column distances are kept clamped to radius + 1 in `Distance` (uint16_t: two bytes a pixel, where they used to
+         * be eight): a pixel further than the radius along its column can never be within the radius of it, so the result
+         * is the same as with unclamped distances (min over i of (x - i)^2 + min(g, r + 1)^2 is at most r^2 exactly when
+         * the unclamped minimum is).
          */
-        /// Distance: the type the column distances are kept in, one per pixel (the memory the transform needs): a distance is
-        /// clamped to radius + 1, since a pixel further than the radius along its column can never be within the radius of
-        /// it, so the result is the same as with unclamped distances (min over i of (x - i)^2 + min(g, r + 1)^2 is at most
-        /// r^2 exactly when the unclamped minimum is). With radius + 1 below 65536 the distances fit in two bytes a pixel
-        /// instead of eight.
         template <typename Distance>
         std::vector<std::uint8_t> DilateMaskWith(const std::vector<std::uint8_t> &solid, const std::size_t width,
                                                  const std::size_t height, const std::int64_t radius)
@@ -194,19 +197,11 @@ namespace N2Engine::Rendering
             return result;
         }
 
-        /// DilateMaskWith in the smallest distance type the radius allows
+        /// DilateMaskWith with two-byte column distances (the radius is at most MaxOutlineWidth)
         std::vector<std::uint8_t> DilateMask(const std::vector<std::uint8_t> &solid, const std::size_t width,
                                              const std::size_t height, const std::int64_t radius)
         {
-            if (radius + 1 <= 0xFFFF)
-            {
-                return DilateMaskWith<std::uint16_t>(solid, width, height, radius);
-            }
-            if (radius + 1 <= 0xFFFFFFFFll)
-            {
-                return DilateMaskWith<std::uint32_t>(solid, width, height, radius);
-            }
-            return DilateMaskWith<std::int64_t>(solid, width, height, radius);
+            return DilateMaskWith<std::uint16_t>(solid, width, height, radius);
         }
 
         struct OutlineCacheEntry

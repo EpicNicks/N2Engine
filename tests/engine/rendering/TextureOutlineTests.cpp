@@ -228,6 +228,32 @@ TEST_F(TextureOutlineTest, MatchesTheDefinitionOnALargerShapeAtSeveralWidths)
     }
 }
 
+// The column distances are clamped to the width + 1: a tall, mostly empty column whose nearest solid texel is exactly the
+// width and the width + 1 away, with an off-axis texel beside it, and the widest outline on a small shape
+TEST_F(TextureOutlineTest, MatchesTheDefinitionAtTheClampOfTheColumnDistances)
+{
+    constexpr std::uint32_t width = 5;
+    constexpr std::uint32_t height = 24;
+    std::vector<Rgba> texels(width * height, kClear);
+    texels[0 * width + 2] = kOpaqueRed;  // top of the middle column
+    texels[23 * width + 2] = kOpaqueRed; // its bottom
+    texels[11 * width + 4] = kOpaqueRed; // off-axis, beside the column's middle
+    const auto source = MakeSource(width, height, texels);
+    ASSERT_NE(source, nullptr);
+    for (const int outlineWidth : {4, 5, 6, 7, 10, 11, 12})
+    {
+        const auto outline = Texture::MakeOutline(source, outlineWidth, kGreen);
+        ASSERT_NE(outline, nullptr) << outlineWidth;
+        EXPECT_EQ(Picture(*outline, kGreenBytes), BruteForce(width, height, texels, outlineWidth)) << "width " << outlineWidth;
+    }
+    std::vector<Rgba> dot(1, kOpaqueRed);
+    const auto tiny = MakeSource(1, 1, dot);
+    ASSERT_NE(tiny, nullptr);
+    const auto widest = Texture::MakeOutline(tiny, Texture::MaxOutlineWidth, kGreen);
+    ASSERT_NE(widest, nullptr);
+    EXPECT_EQ(Picture(*widest, kGreenBytes), BruteForce(1, 1, dot, Texture::MaxOutlineWidth));
+}
+
 TEST_F(TextureOutlineTest, AFullyTransparentSourceGivesAFullyTransparentPaddedTexture)
 {
     const auto source = MakeSource(3, 2, std::vector<Rgba>(6, Rgba{255, 255, 255, 0}));
