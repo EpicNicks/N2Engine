@@ -62,4 +62,12 @@ namespace N2Engine::Physics2D
         Physics2DWorld *world = CurrentWorld();
         return world ? world->OverlapBox(center, halfExtents, angleRadians, hits, layerMask, triggers) : 0;
     }
+
+    bool PickRay(const Math::Vector3 &origin, const Math::Vector3 &direction, RaycastHit2D &hit, const float maxDistance,
+                 const std::uint32_t layerMask, const Physics::QueryTriggers triggers)
+    {
+        hit = RaycastHit2D{};
+        Physics2DWorld *world = CurrentWorld();
+        return world && world->PickRay(origin, direction, hit, maxDistance, layerMask, triggers);
+    }
 }
