@@ -888,7 +888,7 @@ function GameObject:Destroy() end
 ---Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CharacterController", "Joint", "Rigidbody2D", "BoxCollider2D",
 ---"CircleCollider2D", "PolygonCollider2D", "CubeRenderer",
 ---"SphereRenderer", "QuadRenderer", "Sprite2D", "MeshRenderer", "TextRenderer", "ParticleSystem", "SoftBody", "Light", "AudioSource", "AudioListener",
----"LuaComponent", "RectTransform", "Canvas", "Image", "UIText", "Button". Unknown names raise an error.
+---"LuaComponent", "RectTransform", "Canvas", "Image", "UIText", "Button", "RectMask", "ScrollView". Unknown names raise an error.
 ---@param typeName string
 ---@return Component
 function GameObject:AddComponent(typeName) end
@@ -1932,6 +1932,94 @@ function Button:GetOnClickListenerCount() end
 ---@return boolean whether it did
 function Button:Click() end
 
+---Clips everything below its object to its object's rect, for drawing and for the pointer (issue #445). Nested masks
+---clip to the overlap. No settings of its own: enable or disable it with SetActive.
+---@class RectMask : Component
+RectMask = {}
+
+---A scrollable view (issue #445): moves its content (a child RectTransform) with the mouse wheel, a drag (touch on the
+---web player) and optional scrollbar handles. The normalized position is x 0 left .. 1 right, y 0 bottom .. 1 top.
+---@class ScrollView : Component
+ScrollView = {}
+---@return number x
+---@return number y
+function ScrollView:GetNormalizedPosition() end
+---Moves the content there (clamped to 0..1 unless "Unrestricted") and stops any movement
+---@param x number
+---@param y number
+function ScrollView:SetNormalizedPosition(x, y) end
+---@return number
+function ScrollView:GetHorizontalNormalizedPosition() end
+---@param x number
+function ScrollView:SetHorizontalNormalizedPosition(x) end
+---@return number
+function ScrollView:GetVerticalNormalizedPosition() end
+---@param y number
+function ScrollView:SetVerticalNormalizedPosition(y) end
+---@return boolean
+function ScrollView:GetHorizontal() end
+---@param enabled boolean
+function ScrollView:SetHorizontal(enabled) end
+---@return boolean
+function ScrollView:GetVertical() end
+---@param enabled boolean
+function ScrollView:SetVertical(enabled) end
+---@return "Unrestricted"|"Elastic"|"Clamped"
+function ScrollView:GetMovementType() end
+---An unknown name raises an error and changes nothing
+---@param type "Unrestricted"|"Elastic"|"Clamped"
+function ScrollView:SetMovementType(type) end
+---@return number seconds an elastic view takes to spring back
+function ScrollView:GetElasticity() end
+---@param seconds number
+function ScrollView:SetElasticity(seconds) end
+---@return boolean
+function ScrollView:GetInertia() end
+---@param inertia boolean
+function ScrollView:SetInertia(inertia) end
+---@return number the share of the speed left after a second of coasting
+function ScrollView:GetDecelerationRate() end
+---@param rate number
+function ScrollView:SetDecelerationRate(rate) end
+---@return number canvas units per wheel notch
+function ScrollView:GetScrollSensitivity() end
+---@param sensitivity number
+function ScrollView:SetScrollSensitivity(sensitivity) end
+---@return number canvas units the pointer moves before a drag starts
+function ScrollView:GetDragThreshold() end
+---@param threshold number
+function ScrollView:SetDragThreshold(threshold) end
+---@return Vector2 canvas units per second
+function ScrollView:GetVelocity() end
+---@param velocity Vector2
+function ScrollView:SetVelocity(velocity) end
+function ScrollView:StopMovement() end
+---A wheel step, as the mouse wheel over the view does
+---@param x number notches
+---@param y number notches, +y up (shows content further up)
+function ScrollView:Scroll(x, y) end
+---@return RectTransform|nil
+function ScrollView:GetContent() end
+---@param content RectTransform|nil nil uses the first child with a RectTransform
+function ScrollView:SetContent(content) end
+---@return RectTransform|nil
+function ScrollView:GetVerticalScrollbar() end
+---@param handle RectTransform|nil a handle placed inside its parent's rect (the track)
+function ScrollView:SetVerticalScrollbar(handle) end
+---@return RectTransform|nil
+function ScrollView:GetHorizontalScrollbar() end
+---@param handle RectTransform|nil
+function ScrollView:SetHorizontalScrollbar(handle) end
+---Calls fn(x, y) with the normalized position whenever the content moves. An error in fn is logged.
+---@param fn fun(x: number, y: number)
+---@return integer id for RemoveOnValueChanged
+function ScrollView:AddOnValueChanged(fn) end
+---@param id integer
+function ScrollView:RemoveOnValueChanged(id) end
+function ScrollView:ClearOnValueChanged() end
+---@return integer
+function ScrollView:GetOnValueChangedListenerCount() end
+
 ---@class UI
 UI = {}
 
@@ -1961,6 +2049,14 @@ function UI.CreateText(name, text) end
 ---@param label? string defaults to "Button"
 ---@return GameObject
 function UI.CreateButton(name, label) end
+
+---A 300 x 200 element with a dark Image, a RectMask and a ScrollView, a "Content" child (put the items in it) and a
+---scrollbar per enabled axis (issue #445)
+---@param name? string defaults to "ScrollView"
+---@param vertical? boolean defaults to true
+---@param horizontal? boolean defaults to false
+---@return GameObject
+function UI.CreateScrollView(name, vertical, horizontal) end
 
 ---@class Scene
 ---@field sceneName string The name of this scene

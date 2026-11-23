@@ -465,7 +465,7 @@ TEST_F(LeftOutModuleTest, UIKeepsItsDataDrawsNothingIsNeverHitAndWarnsAtMostOnce
 
 TEST_F(LeftOutModuleTest, UIComponentsAreRegisteredWithEveryField)
 {
-    for (const char *type : {"Canvas", "RectTransform", "Image", "UIText", "Button"})
+    for (const char *type : {"Canvas", "RectTransform", "Image", "UIText", "Button", "RectMask", "ScrollView"})
     {
         EXPECT_TRUE(ComponentRegistry::Instance().IsRegistered(type)) << type;
     }

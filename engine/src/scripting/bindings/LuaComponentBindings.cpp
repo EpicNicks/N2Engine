@@ -58,7 +58,9 @@
 #include "engine/ui/Button.hpp"
 #include "engine/ui/Canvas.hpp"
 #include "engine/ui/Image.hpp"
+#include "engine/ui/RectMask.hpp"
 #include "engine/ui/RectTransform.hpp"
+#include "engine/ui/ScrollView.hpp"
 #include "engine/ui/UIText.hpp"
 
 namespace N2Engine::Scripting::Bindings
@@ -152,6 +154,8 @@ namespace N2Engine::Scripting::Bindings
                 {"Image", MakeAccess<UI::Image>()},
                 {"UIText", MakeAccess<UI::UIText>()},
                 {"Button", MakeAccess<UI::Button>()},
+                {"RectMask", MakeAccess<UI::RectMask>()},
+                {"ScrollView", MakeAccess<UI::ScrollView>()},
             };
             return table;
         }

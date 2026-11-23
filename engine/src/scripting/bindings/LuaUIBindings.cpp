@@ -15,7 +15,9 @@
 #include "engine/ui/Canvas.hpp"
 #include "engine/ui/Image.hpp"
 #include "engine/ui/Rect.hpp"
+#include "engine/ui/RectMask.hpp"
 #include "engine/ui/RectTransform.hpp"
+#include "engine/ui/ScrollView.hpp"
 #include "engine/ui/UISystem.hpp"
 #include "engine/ui/UIText.hpp"
 
@@ -75,6 +77,63 @@ namespace N2Engine::Scripting::Bindings
                 return object.as<ComponentRef<UI::UIText>>().Pin().get();
             }
             throw std::runtime_error("Button:SetTargetGraphic: expected an Image, a UIText or nil");
+        }
+
+        /// A RectTransform handle from Lua, or nullptr for nil; any other value is an error naming `where`
+        UI::RectTransform *RectTransformFromLua(const sol::object &object, const char *where)
+        {
+            if (!object.valid() || object.get_type() == sol::type::lua_nil)
+            {
+                return nullptr;
+            }
+            if (object.is<ComponentRef<UI::RectTransform>>())
+            {
+                return object.as<ComponentRef<UI::RectTransform>>().Pin().get();
+            }
+            throw std::runtime_error(std::string(where) + ": expected a RectTransform or nil");
+        }
+
+        /// A RectTransform as a Lua handle, or nil
+        sol::object RectTransformToLua(UI::RectTransform *rectTransform, lua_State *state)
+        {
+            if (!rectTransform)
+            {
+                return sol::make_object(state, sol::lua_nil);
+            }
+            return ComponentToLua(*rectTransform, state);
+        }
+
+        /// "Unrestricted", "Elastic" or "Clamped"; anything else is an error
+        UI::ScrollMovementType ParseMovementType(const std::string &name)
+        {
+            if (name == "Unrestricted")
+            {
+                return UI::ScrollMovementType::Unrestricted;
+            }
+            if (name == "Elastic")
+            {
+                return UI::ScrollMovementType::Elastic;
+            }
+            if (name == "Clamped")
+            {
+                return UI::ScrollMovementType::Clamped;
+            }
+            throw std::runtime_error("ScrollView:SetMovementType: unknown movement type \"" + name +
+                                     "\" (expected \"Unrestricted\", \"Elastic\" or \"Clamped\")");
+        }
+
+        std::string MovementTypeName(const UI::ScrollMovementType type)
+        {
+            switch (type)
+            {
+            case UI::ScrollMovementType::Unrestricted:
+                return "Unrestricted";
+            case UI::ScrollMovementType::Clamped:
+                return "Clamped";
+            case UI::ScrollMovementType::Elastic:
+                break;
+            }
+            return "Elastic";
         }
     }
 
@@ -353,6 +412,89 @@ namespace N2Engine::Scripting::Bindings
             "Click", Forward<ButtonRef, &UI::Button::Click>()
         );
 
+        // ===== RectMask (issue #445): clips its object's descendants to its rect; no settings of its own =====
+        BindComponentType<UI::RectMask>(lua, "RectMask");
+
+        // ===== ScrollView (issue #445) =====
+        using ScrollViewRef = ComponentRef<UI::ScrollView>;
+        BindComponentType<UI::ScrollView>(
+            lua, "ScrollView",
+            // The normalized position: x 0 left .. 1 right, y 0 bottom .. 1 top
+            "GetNormalizedPosition", [](const ScrollViewRef &c)
+            {
+                const Math::Vector2 position = c.Pin()->GetNormalizedPosition();
+                return std::make_tuple(position.x, position.y);
+            },
+            "SetNormalizedPosition", [](const ScrollViewRef &c, const float x, const float y)
+            {
+                c.Pin()->SetNormalizedPosition(Math::Vector2{x, y});
+            },
+            "GetHorizontalNormalizedPosition", [](const ScrollViewRef &c) { return c.Pin()->GetNormalizedPosition().x; },
+            "SetHorizontalNormalizedPosition", Forward<ScrollViewRef, &UI::ScrollView::SetHorizontalNormalizedPosition>(),
+            "GetVerticalNormalizedPosition", [](const ScrollViewRef &c) { return c.Pin()->GetNormalizedPosition().y; },
+            "SetVerticalNormalizedPosition", Forward<ScrollViewRef, &UI::ScrollView::SetVerticalNormalizedPosition>(),
+            "GetHorizontal", Forward<ScrollViewRef, &UI::ScrollView::GetHorizontal>(),
+            "SetHorizontal", Forward<ScrollViewRef, &UI::ScrollView::SetHorizontal>(),
+            "GetVertical", Forward<ScrollViewRef, &UI::ScrollView::GetVertical>(),
+            "SetVertical", Forward<ScrollViewRef, &UI::ScrollView::SetVertical>(),
+            // "Unrestricted", "Elastic" or "Clamped"; an unknown name raises an error and changes nothing
+            "GetMovementType", [](const ScrollViewRef &c) { return MovementTypeName(c.Pin()->GetMovementType()); },
+            "SetMovementType", [](const ScrollViewRef &c, const std::string &name)
+            {
+                const UI::ScrollMovementType type = ParseMovementType(name);
+                c.Pin()->SetMovementType(type);
+            },
+            "GetElasticity", Forward<ScrollViewRef, &UI::ScrollView::GetElasticity>(),
+            "SetElasticity", Forward<ScrollViewRef, &UI::ScrollView::SetElasticity>(),
+            "GetInertia", Forward<ScrollViewRef, &UI::ScrollView::GetInertia>(),
+            "SetInertia", Forward<ScrollViewRef, &UI::ScrollView::SetInertia>(),
+            "GetDecelerationRate", Forward<ScrollViewRef, &UI::ScrollView::GetDecelerationRate>(),
+            "SetDecelerationRate", Forward<ScrollViewRef, &UI::ScrollView::SetDecelerationRate>(),
+            "GetScrollSensitivity", Forward<ScrollViewRef, &UI::ScrollView::GetScrollSensitivity>(),
+            "SetScrollSensitivity", Forward<ScrollViewRef, &UI::ScrollView::SetScrollSensitivity>(),
+            "GetDragThreshold", Forward<ScrollViewRef, &UI::ScrollView::GetDragThreshold>(),
+            "SetDragThreshold", Forward<ScrollViewRef, &UI::ScrollView::SetDragThreshold>(),
+            "GetVelocity", Forward<ScrollViewRef, &UI::ScrollView::GetVelocity>(),
+            "SetVelocity", Forward<ScrollViewRef, &UI::ScrollView::SetVelocity>(),
+            "StopMovement", Forward<ScrollViewRef, &UI::ScrollView::StopMovement>(),
+            // A wheel step in notches (+y up), as the mouse wheel over the view does
+            "Scroll", [](const ScrollViewRef &c, const float x, const float y) { c.Pin()->Scroll(Math::Vector2{x, y}); },
+            // The content used (a RectTransform), or nil; SetContent(nil) goes back to the first child
+            "GetContent", [](const ScrollViewRef &c, const sol::this_state state)
+            { return RectTransformToLua(c.Pin()->GetContent(), state.lua_state()); },
+            "SetContent", [](const ScrollViewRef &c, const sol::object &content)
+            {
+                UI::RectTransform *rectTransform = RectTransformFromLua(content, "ScrollView:SetContent");
+                c.Pin()->SetContent(rectTransform);
+            },
+            "GetVerticalScrollbar", [](const ScrollViewRef &c, const sol::this_state state)
+            { return RectTransformToLua(c.Pin()->GetVerticalScrollbar(), state.lua_state()); },
+            "SetVerticalScrollbar", [](const ScrollViewRef &c, const sol::object &handle)
+            {
+                UI::RectTransform *rectTransform = RectTransformFromLua(handle, "ScrollView:SetVerticalScrollbar");
+                c.Pin()->SetVerticalScrollbar(rectTransform);
+            },
+            "GetHorizontalScrollbar", [](const ScrollViewRef &c, const sol::this_state state)
+            { return RectTransformToLua(c.Pin()->GetHorizontalScrollbar(), state.lua_state()); },
+            "SetHorizontalScrollbar", [](const ScrollViewRef &c, const sol::object &handle)
+            {
+                UI::RectTransform *rectTransform = RectTransformFromLua(handle, "ScrollView:SetHorizontalScrollbar");
+                c.Pin()->SetHorizontalScrollbar(rectTransform);
+            },
+            // fn(x, y) whenever the content moves, with the new normalized position; returns an id for
+            // RemoveOnValueChanged. An error in it is logged. A listener a component script added stops with that component.
+            "AddOnValueChanged", [](const ScrollViewRef &c, sol::protected_function callback) -> std::size_t
+            {
+                const auto scrollView = c.Pin();
+                auto call = MakeScriptCallback<float, float>(std::move(callback), "ScrollView.OnValueChanged");
+                return scrollView->AddOnValueChanged([call = std::move(call)](const Math::Vector2 position)
+                                                     { call(position.x, position.y); });
+            },
+            "RemoveOnValueChanged", Forward<ScrollViewRef, &UI::ScrollView::RemoveOnValueChanged>(),
+            "ClearOnValueChanged", Forward<ScrollViewRef, &UI::ScrollView::ClearOnValueChanged>(),
+            "GetOnValueChangedListenerCount", Forward<ScrollViewRef, &UI::ScrollView::GetOnValueChangedListenerCount>()
+        );
+
         // ===== UI (global) =====
         lua["UI"] = lua.create_table_with(
             // A new root object on the UI layer with a Canvas; mode "WorldSpace" also gives it a Positionable
@@ -379,6 +521,15 @@ namespace N2Engine::Scripting::Bindings
                 {
                     return GameObjectRef::Owning(UI::UISystem::CreateText(name, text));
                 }
+            ),
+            // Issue #445: a 300 x 200 view with a RectMask, a ScrollView, a "Content" child and scrollbars
+            "CreateScrollView", sol::overload(
+                []() { return GameObjectRef::Owning(UI::UISystem::CreateScrollView()); },
+                [](const std::string &name) { return GameObjectRef::Owning(UI::UISystem::CreateScrollView(name)); },
+                [](const std::string &name, const bool vertical)
+                { return GameObjectRef::Owning(UI::UISystem::CreateScrollView(name, vertical)); },
+                [](const std::string &name, const bool vertical, const bool horizontal)
+                { return GameObjectRef::Owning(UI::UISystem::CreateScrollView(name, vertical, horizontal)); }
             ),
             // An element with an Image, a Button and a centred "Label" child showing the label
             "CreateButton", sol::overload(

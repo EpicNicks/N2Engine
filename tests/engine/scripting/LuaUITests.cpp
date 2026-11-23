@@ -317,3 +317,43 @@ TEST_F(LuaUITest, MakesAWorldSpaceCanvas)
 
     Run("lua_ui_world_go = nil; lua_ui_world = nil; lua_ui_overlay_go = nil; lua_ui_overlay = nil");
 }
+
+TEST_F(LuaUITest, ScrollViewAndRectMask)
+{
+    // Issue #445
+    const auto scene = Scene::Create("LuaUI_Scroll");
+    Run(R"(
+        lua_ui_scroll_canvas = UI.CreateCanvas("ScrollCanvas")
+        lua_ui_scroll_go = UI.CreateScrollView("List")
+        lua_ui_scroll_canvas:AddChild(lua_ui_scroll_go)
+        lua_ui_scroll = lua_ui_scroll_go:GetComponent("ScrollView")
+        lua_ui_scroll_log = {}
+        lua_ui_scroll:AddOnValueChanged(function(x, y) lua_ui_scroll_log[#lua_ui_scroll_log + 1] = y end)
+    )");
+    const sol::object canvasObject = Lua()["lua_ui_scroll_canvas"];
+    ASSERT_TRUE(canvasObject.valid());
+    scene->AddRootGameObject(canvasObject.as<GameObjectRef>().Pin());
+    static_cast<void>(UI::UISystem::CollectGraphics(*scene, Vector2i{800, 600}));
+
+    EXPECT_TRUE(Eval<bool>("lua_ui_scroll_go:GetComponent('RectMask') ~= nil"));
+    EXPECT_TRUE(Eval<bool>("lua_ui_scroll:GetVertical()"));
+    EXPECT_EQ(Eval<std::string>("lua_ui_scroll:GetMovementType()"), "Elastic");
+    EXPECT_FLOAT_EQ(Eval<float>("select(2, lua_ui_scroll:GetNormalizedPosition())"), 1.0f);
+    EXPECT_TRUE(Eval<bool>("lua_ui_scroll:GetContent() ~= nil"));
+    EXPECT_TRUE(Eval<bool>("lua_ui_scroll:GetVerticalScrollbar() ~= nil"));
+    EXPECT_TRUE(Eval<bool>("lua_ui_scroll:GetHorizontalScrollbar() == nil"));
+
+    Run(R"(
+        lua_ui_scroll:SetVerticalNormalizedPosition(0.5)
+        lua_ui_scroll:SetMovementType("Clamped")
+        lua_ui_scroll:Scroll(0, 100)
+    )");
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_scroll:GetVerticalNormalizedPosition()"), 1.0f) << "clamped at the top";
+    EXPECT_EQ(Eval<int>("#lua_ui_scroll_log"), 2);
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_scroll_log[1]"), 0.5f);
+    EXPECT_EQ(Eval<int>("lua_ui_scroll:GetOnValueChangedListenerCount()"), 1);
+    EXPECT_FALSE(Lua().safe_script(R"(lua_ui_scroll:SetMovementType("Bouncy"))", sol::script_pass_on_error).valid());
+    EXPECT_EQ(Eval<std::string>("lua_ui_scroll:GetMovementType()"), "Clamped");
+
+    Run("lua_ui_scroll_canvas = nil; lua_ui_scroll_go = nil; lua_ui_scroll = nil; lua_ui_scroll_log = nil");
+}
