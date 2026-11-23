@@ -99,36 +99,45 @@ namespace N2Engine::Rendering
             return (a % b != 0 && a < 0) ? quotient - 1 : quotient;
         }
 
+        // MakeOutline refuses a width past MaxOutlineWidth, so a clamped column distance always fits in two bytes
+        static_assert(Texture::MaxOutlineWidth + 1 <= 0xFFFF);
+
         /**
          * Which pixels of a `width` x `height` grid lie within `radius` (Euclidean) of a pixel of `solid`: the exact squared
          * distance transform of Meijster, Roerdink and Hesselink (2000), two linear passes, so the cost does not grow with
          * the radius. `solid` and the result are row-major, one byte per pixel (0 or 1).
+         *
+         * The column distances are kept clamped to radius + 1 in `Distance` (uint16_t: two bytes a pixel, where they used to
+         * be eight): a pixel further than the radius along its column can never be within the radius of it, so the result
+         * is the same as with unclamped distances (min over i of (x - i)^2 + min(g, r + 1)^2 is at most r^2 exactly when
+         * the unclamped minimum is).
          */
-        std::vector<std::uint8_t> DilateMask(const std::vector<std::uint8_t> &solid, const std::size_t width,
-                                             const std::size_t height, const std::int64_t radius)
+        template <typename Distance>
+        std::vector<std::uint8_t> DilateMaskWith(const std::vector<std::uint8_t> &solid, const std::size_t width,
+                                                 const std::size_t height, const std::int64_t radius)
         {
             const auto m = static_cast<std::int64_t>(width);
             const auto n = static_cast<std::int64_t>(height);
-            // Further than any real distance and than the radius (so a column with no solid pixel never counts as within
-            // it), and still squarable in 64 bits
-            const std::int64_t infinity = m + n + radius + 1;
+            // A column with no solid pixel within the radius: further than the radius, so it never counts as within it
+            const std::int64_t infinity = radius + 1;
 
-            // Phase 1: g(x, y) = the distance along column x to the nearest solid pixel (infinity for none)
-            std::vector<std::int64_t> g(width * height, infinity);
+            // Phase 1: g(x, y) = the distance along column x to the nearest solid pixel, clamped to infinity
+            std::vector<Distance> g(width * height, static_cast<Distance>(infinity));
             const auto at = [width](const std::int64_t x, const std::int64_t y)
             { return static_cast<std::size_t>(y) * width + static_cast<std::size_t>(x); };
             for (std::int64_t x = 0; x < m; ++x)
             {
-                g[at(x, 0)] = solid[at(x, 0)] ? 0 : infinity;
+                g[at(x, 0)] = static_cast<Distance>(solid[at(x, 0)] ? 0 : infinity);
                 for (std::int64_t y = 1; y < n; ++y)
                 {
-                    g[at(x, y)] = solid[at(x, y)] ? 0 : std::min(infinity, g[at(x, y - 1)] + 1);
+                    g[at(x, y)] = static_cast<Distance>(
+                        solid[at(x, y)] ? 0 : std::min<std::int64_t>(infinity, static_cast<std::int64_t>(g[at(x, y - 1)]) + 1));
                 }
                 for (std::int64_t y = n - 2; y >= 0; --y)
                 {
                     if (g[at(x, y + 1)] < g[at(x, y)])
                     {
-                        g[at(x, y)] = g[at(x, y + 1)] + 1;
+                        g[at(x, y)] = static_cast<Distance>(static_cast<std::int64_t>(g[at(x, y + 1)]) + 1);
                     }
                 }
             }
@@ -143,7 +152,7 @@ namespace N2Engine::Rendering
             const std::int64_t radiusSquared = radius * radius;
             for (std::int64_t y = 0; y < n; ++y)
             {
-                const auto gi = [&](const std::int64_t i) { return g[at(i, y)]; };
+                const auto gi = [&](const std::int64_t i) { return static_cast<std::int64_t>(g[at(i, y)]); };
                 const auto f = [&](const std::int64_t x, const std::int64_t i) { return (x - i) * (x - i) + gi(i) * gi(i); };
                 const auto sep = [&](const std::int64_t i, const std::int64_t u)
                 { return FloorDiv(u * u - i * i + gi(u) * gi(u) - gi(i) * gi(i), 2 * (u - i)); };
@@ -186,6 +195,13 @@ namespace N2Engine::Rendering
                 }
             }
             return result;
+        }
+
+        /// DilateMaskWith with two-byte column distances (the radius is at most MaxOutlineWidth)
+        std::vector<std::uint8_t> DilateMask(const std::vector<std::uint8_t> &solid, const std::size_t width,
+                                             const std::size_t height, const std::int64_t radius)
+        {
+            return DilateMaskWith<std::uint16_t>(solid, width, height, radius);
         }
 
         struct OutlineCacheEntry
