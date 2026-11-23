@@ -23,14 +23,23 @@ function option(name) {
 const loader = option('--loader');
 const profile = option('--profile') ?? 'dev';
 const precompress = args.includes('--precompress');
+const latePacksFile = option('--late-packs');
 if (!fs.existsSync(dir) || !loader || !fs.existsSync(loader)) {
   console.error('usage: web-package-finalize.mjs <package folder> --loader <n2-loader.js> [--profile dev|size|speed] [--precompress]');
   process.exit(2);
 }
 
-const compressible = new Set(['.html', '.js', '.wasm', '.data']);
+const compressible = new Set(['.html', '.js', '.wasm', '.data', '.n2pack']);
 for (const name of fs.readdirSync(dir)) {
   if (/\.(br|gz)$/.test(name) || name === 'manifest.json') fs.rmSync(path.join(dir, name));
+}
+// #425: a late pack of an earlier build that this one does not name (the list was dropped or changed) goes too
+const namedLate = new Set();
+if (latePacksFile) {
+  for (const pack of JSON.parse(fs.readFileSync(latePacksFile, 'utf8')).packs ?? []) namedLate.add(pack.file);
+}
+for (const name of fs.readdirSync(dir)) {
+  if (/^late-\d+\.n2pack$/.test(name) && !namedLate.has(name)) fs.rmSync(path.join(dir, name));
 }
 fs.copyFileSync(loader, path.join(dir, 'n2-loader.js'));
 
@@ -89,5 +98,17 @@ const manifest = {
   precompressed: precompress,
   files,
 };
+// #425: the late packs (docs/web-build.html#late-packs), which the loader fetches after the start, in order
+if (latePacksFile) {
+  const late = JSON.parse(fs.readFileSync(latePacksFile, 'utf8'));
+  const packs = Array.isArray(late.packs) ? late.packs : [];
+  for (const pack of packs) {
+    if (!files[pack.file]) {
+      console.error(`web-package-finalize: the late pack ${pack.file} (${pack.folder}) is not in ${dir}`);
+      process.exit(1);
+    }
+  }
+  manifest.latePacks = packs.map((pack) => ({ file: pack.file, folder: pack.folder }));
+}
 fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 console.log(`web package ${dir}: ${Object.keys(files).length} files, profile ${profile}, ${precompress ? 'with .br/.gz siblings' : 'no precompressed siblings'}, manifest.json written`);

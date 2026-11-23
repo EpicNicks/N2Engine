@@ -24,8 +24,10 @@ if (!budgets) {
   process.exit(2);
 }
 
+// #425: the late packs are fetched after the start, so the first download ("initial") does not count them
+const late = new Set((manifest.latePacks ?? []).map((pack) => pack.file));
 function measure(kind, size) {
-  const entries = Object.entries(manifest.files).filter(([name]) => (kind === 'initial' ? true : name.endsWith(`.${kind}`)));
+  const entries = Object.entries(manifest.files).filter(([name]) => (kind === 'initial' ? !late.has(name) : name.endsWith(`.${kind}`)));
   if (entries.length === 0) return null;
   let sum = 0;
   for (const [, entry] of entries) {

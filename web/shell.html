@@ -127,6 +127,8 @@
   }
 
   var engine = null;
+  // The loader, kept for the late packs it fetches after the start (#425)
+  var pageLoader = null;
   var moduleSettings = {
     noInitialRun: true,
     canvas: canvas,
@@ -174,7 +176,7 @@
     // older than the build's manifest.json
     var indexScript = document.querySelector('script[src*="index.js"]');
     var indexVersion = indexScript && /[?&]v=([0-9a-f]+)/.exec(indexScript.getAttribute('src') || '');
-    var loader = N2Loader.create({
+    var loader = pageLoader = N2Loader.create({
       indexJsVersion: indexVersion ? indexVersion[1] : null,
       onProgress: onProgress,
       onEvent: function (name, detail) { log('loader: ' + name + (detail && detail.reason ? ' (' + detail.reason + ')' : '')); }
@@ -224,6 +226,8 @@
     try {
       started = true;
       engine.callMain(['--renderer', renderer]);
+      // #425: the folders of build.web.lateAssets, fetched now that the game runs (none: nothing is fetched)
+      if (pageLoader && typeof pageLoader.fetchLatePacks === 'function') pageLoader.fetchLatePacks(engine);
     } catch (error) {
       // callMain's own unwinding for a main that does not return is handled inside it; anything else is a failure
       showError(String(error && error.message ? error.message : error));

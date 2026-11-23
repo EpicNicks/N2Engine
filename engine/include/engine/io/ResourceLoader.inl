@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <format>
 
+#include "engine/io/LatePacks.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/Vfs.hpp"
 #include "ResourceUUID.hpp"
@@ -23,6 +24,14 @@ namespace N2Engine::IO
         auto metaIt = _metadata.find(resourcePath);
         if (metaIt == _metadata.end())
         {
+            if (LatePacks::IsPending(Resolve(resourcePath)))
+            {
+                // A folder the web package fetches after the start (build.web.lateAssets), not here yet
+                Logger::Error(std::format("{} is in a late pack that has not arrived yet: wait for Assets.IsAvailable before "
+                                          "loading it (docs/web-build.html#late-packs)",
+                                          resourcePath.ToString()));
+                return nullptr;
+            }
             Logger::Error(std::format("Resource not found: {}", resourcePath.ToString()));
             return nullptr;
         }
