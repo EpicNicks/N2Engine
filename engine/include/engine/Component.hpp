@@ -5,6 +5,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -97,6 +98,10 @@ namespace N2Engine
         /// value of the wrong type: the editor server checks a copy first, so a request is all or nothing. References
         /// are resolved through `resolver` (the caller runs its ResolveAll). The default sets nothing.
         virtual void SetEditorFields(const nlohmann::json & /*values*/, ReferenceResolver * /*resolver*/) {}
+
+        /// Whether `key` is an optional state member of this component (SerializableComponent::RegisterOptionalState, such as a
+        /// Sprite2D's shaderState): saved only when set, in no field schema, but settable by the editor (protocol 1.35.0)
+        [[nodiscard]] virtual bool HasOptionalState(std::string_view /*key*/) const { return false; }
 
         /// The editor changed these fields (the keys of the JSON, a container's own key for one inside it), after
         /// SetEditorFields: a component with state derived from them rebuilds it here. Edit-mode components are

@@ -600,6 +600,18 @@ namespace N2Engine
             }
         }
 
+        [[nodiscard]] bool HasOptionalState(const std::string_view key) const override
+        {
+            for (const MemberSerializer &member : _members)
+            {
+                if (member.unlisted && member.name == key)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         /**
          * Calls the deserialiser of exactly the members `values` has a key for, so a field it doesn't mention keeps
          * its value (the reference-list deserialisers clear their list when the key is missing, which loading a
