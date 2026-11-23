@@ -265,7 +265,8 @@ TEST(UserShaderCompilerTest, AnAuthoredWgslBlockIsNotPartOfTheGlslTheDesktopTarg
     int firstLine = 0;
     ASSERT_TRUE(shader->GetStage(stage, firstLine));
     EXPECT_EQ(firstLine, 3);
-    EXPECT_EQ(stage, "void main() { n2_FragColor = vec4(1.0); }\n");
+    // The cook joins the stage's lines with LF, so a stage that a later stage line ends has no final LF
+    EXPECT_EQ(stage, "void main() { n2_FragColor = vec4(1.0); }");
     for (const UserShaderTarget target : {UserShaderTarget::Vulkan, UserShaderTarget::OpenGl})
     {
         std::string error;

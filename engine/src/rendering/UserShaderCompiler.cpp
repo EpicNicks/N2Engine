@@ -731,7 +731,9 @@ namespace N2Engine::Rendering::UserShaderCompiler
             {
                 return std::unexpected(TrimLog(program.getInfoLog()));
             }
-            if (!program.buildReflection())
+            // Every member of every block, read or not (the cook's spirv-cross lists them all): a parameter only the other stage
+            // uses (a custom vertex stage's) is still declared at its offset here
+            if (!program.buildReflection(EShReflectionDefault | EShReflectionAllBlockVariables))
             {
                 return std::unexpected("glslang could not reflect the compiled shader");
             }

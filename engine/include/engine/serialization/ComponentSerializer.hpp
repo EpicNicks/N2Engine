@@ -600,12 +600,6 @@ namespace N2Engine
             }
         }
 
-        /**
-         * Calls the deserialiser of exactly the members `values` has a key for, so a field it doesn't mention keeps
-         * its value (the reference-list deserialisers clear their list when the key is missing, which loading a
-         * whole component relies on and an edit of one field mustn't trigger). A field with a range is clamped.
-         * Keys that aren't members are ignored here: the editor server rejects them first (ValidateFieldValues).
-         */
         [[nodiscard]] bool HasOptionalState(const std::string_view key) const override
         {
             for (const MemberSerializer &member : _members)
@@ -618,6 +612,12 @@ namespace N2Engine
             return false;
         }
 
+        /**
+         * Calls the deserialiser of exactly the members `values` has a key for, so a field it doesn't mention keeps
+         * its value (the reference-list deserialisers clear their list when the key is missing, which loading a
+         * whole component relies on and an edit of one field mustn't trigger). A field with a range is clamped.
+         * Keys that aren't members are ignored here: the editor server rejects them first (ValidateFieldValues).
+         */
         void SetEditorFields(const nlohmann::json &values, ReferenceResolver *resolver) override
         {
             if (!values.is_object())

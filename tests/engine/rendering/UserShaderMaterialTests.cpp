@@ -1359,12 +1359,21 @@ TEST(AtlasTextureTest, AMaterialHoldsTheirTexturesAndWritesThemInAMatFile)
     EXPECT_TRUE(capture.Mentions("does not fit this setter"));
 }
 
-TEST(AtlasTextureTest, TheRuntimeCompileDoesNotBuildThemAndSaysSo)
+// Since the user-shader follow-up the runtime compile embeds the atlas lookups: OpenGL draws such a shader without cooked data
+TEST(AtlasTextureTest, TheRuntimeCompileBuildsTheAtlasLookups)
 {
     auto shader = FixtureShader("atlas");
     ASSERT_NE(shader, nullptr);
     shader->SetCookedDirectory(fs::temp_directory_path() / "n2-no-cooked-data-here");
     std::string error;
-    EXPECT_FALSE(shader->MakeBlob(UserShaderTarget::OpenGl, error).has_value());
-    EXPECT_TRUE(error.find("cube or 3D texture") != std::string::npos || error.find("web ships") != std::string::npos) << error;
+    const auto blob = shader->MakeBlob(UserShaderTarget::OpenGl, error);
+#if defined(__EMSCRIPTEN__)
+    EXPECT_FALSE(blob.has_value());
+    EXPECT_NE(error.find("web ships"), std::string::npos) << error;
+#else
+    ASSERT_TRUE(blob.has_value()) << error;
+    EXPECT_NE(blob->fragmentGlsl.find("n2_textureCube"), std::string::npos);
+    EXPECT_NE(blob->fragmentGlsl.find("u_Vol_depth"), std::string::npos);
+    EXPECT_TRUE(Renderer::Common::ValidateUserShaderBlob(*blob, UserShaderTarget::OpenGl).empty());
+#endif
 }

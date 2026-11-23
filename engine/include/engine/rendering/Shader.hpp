@@ -97,11 +97,12 @@ namespace N2Engine::Rendering
         [[nodiscard]] const std::vector<ShaderParam> &GetParams() const { return _params; }
         [[nodiscard]] const ShaderParam *FindParam(std::string_view name) const;
         [[nodiscard]] bool UsesLighting() const { return _usesLighting; }
-        /// Whether the file has a `#stage vertex` block (a custom vertex stage, stage 9d). Such a shader draws from its cooked payloads
-        /// only: the runtime compile (the C++ twin of the cook) does not build vertex stages
+        /// Whether the file has a `#stage vertex` block (a custom vertex stage, stage 9d). The cook and the runtime compile (the C++
+        /// twin) both build it
         [[nodiscard]] bool HasVertexStage() const { return _hasVertexStage; }
-        /// Whether the shader draws from cooked payloads only: a custom vertex stage or a cube or 3D texture parameter (their lookup
-        /// functions are in the cook's prelude, which the runtime compile's C++ twin does not embed)
+        /// Whether the shader uses a stage-9d or 9e feature (a custom vertex stage, a cube or 3D texture parameter). Since the
+        /// user-shader follow-up the runtime compile builds both, so this no longer means "cooked only"; kept for the tests and tools
+        /// that tell such shaders apart
         [[nodiscard]] bool NeedsCook() const { return _hasVertexStage || _hasAtlasTexture; }
         [[nodiscard]] const ShaderStateHints &GetStateHints() const { return _state; }
         /// The file it was loaded from (empty for one made with FromSource)

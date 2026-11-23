@@ -1106,6 +1106,11 @@ namespace N2Engine::Editor
                     {
                         continue;
                     }
+                    // Only shaderState has a validator; another optional state stays refused until it gets one
+                    if (key != "shaderState")
+                    {
+                        return std::unexpected(std::format("'{}' can't be set from the editor", EditorServer::SanitizeForLog(key)));
+                    }
                     if (!value.is_null() && !value.is_object())
                     {
                         return std::unexpected(std::format("'{}' must be an object or null", EditorServer::SanitizeForLog(key)));
@@ -1206,6 +1211,15 @@ namespace N2Engine::Editor
             // A reference the copy didn't keep (an asset that isn't there or isn't of the field's type, a component
             // that isn't a T) was dropped by its deserialiser; the request is refused rather than half kept
             const nlohmann::json copied = scratch->Serialize();
+            // A shader asked for that the copy did not keep (it would not load, or its header is broken) is refused too
+            for (const auto &[key, value] : optionalStates.items())
+            {
+                if (value.is_object() && !copied.contains(key))
+                {
+                    return std::unexpected(std::format("'{}': the shader could not be used (see the host's log)",
+                                                       EditorServer::SanitizeForLog(key)));
+                }
+            }
             for (const Given &one : given)
             {
                 if (!one.field->container.empty() || !copied.contains(one.field->name))
@@ -1254,7 +1268,11 @@ namespace N2Engine::Editor
             nlohmann::json after = component.Serialize();
             for (const auto &[key, value] : values.items())
             {
-                if (!before.contains(key) || !after.contains(key) || before.at(key) != after.at(key))
+                // An optional state missing on both sides (no shader set) did not change
+                const bool changed = component.HasOptionalState(key)
+                    ? before.value(key, nlohmann::json()) != after.value(key, nlohmann::json())
+                    : (!before.contains(key) || !after.contains(key) || before.at(key) != after.at(key));
+                if (changed)
                 {
                     changedKeys.push_back(key);
                 }
