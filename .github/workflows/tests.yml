@@ -2114,7 +2114,7 @@ jobs:
 
       # #425: a project that lists build.web.lateAssets (tests/projects/web_late_assets: assets/late fetched after the start).
       # index.data leaves the folder out, late-0.n2pack holds it, the node smoke fetches and mounts it once the player runs
-      # (late-pack-ready and "Late pack arrived"), and the sizes show what the first download no longer carries
+      #, and the sizes show what the first download no longer carries
       - name: Build and run a project with late packs
         run: |
           set -e -o pipefail

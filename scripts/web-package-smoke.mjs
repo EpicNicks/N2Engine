@@ -16,7 +16,7 @@
 //    WebAudio: the player must run with the audio subsystem failed in its health (stage 4).
 // 3. Late packs (#425, docs/web-build.html#late-packs): a package whose project lists build.web.lateAssets also holds
 //    late-<n>.n2pack (and, precompressed, their siblings), named in manifest.json's latePacks. Once the player runs, the
-//    loader's fetchLatePacks must fetch and mount every one (late-pack-ready, and the player's "Late pack arrived" line).
+//    loader's fetchLatePacks must fetch and mount every one (late-pack-ready, the player's mount answering yes).
 //
 // This is not a browser: nothing here proves the canvas, the input events, the page or the hosting work. See
 // docs/web-checklist.html for what a person has to check.
@@ -188,9 +188,10 @@ try {
   expect(framesRun === frames, `the player ran ${framesRun} frames, expected ${frames}`);
   if (latePacks.length > 0) {
     const mounted = lateDone ? await lateDone : 0;
+    // A mount counts only when the player's n2_mount_late_pack said so (its folder registered, the pack read and mounted); the
+    // player's own "Late pack arrived" line is an Info line, which the size profile's log level does not print
     expect(mounted === latePacks.length, `${mounted} of ${latePacks.length} late packs were mounted (events: ${loaderEvents})`);
-    expect(output.filter((line) => line.includes('Late pack arrived')).length === latePacks.length,
-      `the player did not log "Late pack arrived" once per late pack`);
+    expect(loaderEvents.filter((event) => event === 'late-pack-ready').length === latePacks.length, `loader events: ${loaderEvents}`);
   }
 } catch (error) {
   problems.push(String(error?.message ?? error));
