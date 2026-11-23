@@ -13,8 +13,9 @@ plan and the state left when Claude's session reached its usage limit.
 - [Proposals](proposals/): the other saved design plans and verification lists.
 - [Latest progress log](project-memory/pending-minor-defects.md): read the last
   entries first; these are newer than the dated handoff documents.
-- [Latest saved handoff](CONTINUE-2026-10-22.md) and
-  [older handoff](CONTINUE.md): historical workflow instructions and queue
+- [Live handoff](CONTINUE.md): read its newest dated "Current state" section
+  first (older sections are history). [CONTINUE-2026-10-22.md](CONTINUE-2026-10-22.md)
+  is a frozen earlier handoff: historical workflow instructions and queue
   snapshots, whose status sections may be out of date.
 - [Orchestration lessons](project-memory/orchestrator-lessons.md): operational
   context recovered from the session's project memory.

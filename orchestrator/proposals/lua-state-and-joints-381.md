@@ -1,5 +1,7 @@
 # #381 items 5 and 6: Lua state outside replicated fields, and joints
 
+**Outcome (2026-11-23):** item 5 settled on option 1 below (the lint `RollbackRuntime::LuaStateWarnings` plus the desync detector; no Lua snapshot); item 6 was built as the joint component for Jolt and PhysX in #391 to #396. #381 is closed.
+
 Assessed against master after PR #380. Both items are design work, not small fixes, so this is a proposal and no engine code changed.
 
 ## Item 5: Lua state outside declared replicated fields

@@ -1,5 +1,7 @@
 # Jolt and PhysX measurements, and what #381 items 7 and 10 settle
 
+**Outcome (2026-11-23):** item 7 done in #435 (this bench runs in CI and prints Jolt-vs-PhysX and the Jolt snapshot cost as job-summary tables; `PhysicsCorpusThreadsTest` on 10 corpus scenes; the corpus grew to 14 scenes); item 10 done in #385 and #436 (elementwise ops bit-exact in every SIMD tier, the rest recorded in `docs/math.html#simd-why-tolerance`). #381 is closed. The numbers below are this one-machine measurement; the CI tables are the current ones.
+
 Measured on one Windows 10 machine, MSVC Release, `N2ENGINE_STRICT_FP` at its default for Windows (off), both backends
 with `SetDeterministic(true)` (single-threaded). One run, so treat the numbers as an order of magnitude, not a benchmark
 suite. Harness: `tests/engine/physics/PhysicsBackendBenchTests.cpp` (prints `[BENCH]` lines, asserts only that every
