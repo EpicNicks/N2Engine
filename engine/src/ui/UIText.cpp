@@ -347,6 +347,46 @@ namespace N2Engine::UI
         return result;
     }
 
+    Text::TextLayout UIText::ClipLayout(const Text::TextLayout &layout, const Text::Rect &clip,
+                                        std::vector<Common::Color> *quadColors)
+    {
+        Text::TextLayout result = layout;
+        result.quads.clear();
+        const bool colored = quadColors && quadColors->size() == layout.quads.size();
+        std::vector<Common::Color> colors;
+        for (std::size_t q = 0; q < layout.quads.size(); ++q)
+        {
+            const Text::GlyphQuad &quad = layout.quads[q];
+            const Text::Rect &p = quad.position;
+            const Text::Rect cut{std::max(p.minX, clip.minX), std::max(p.minY, clip.minY), std::min(p.maxX, clip.maxX),
+                                 std::min(p.maxY, clip.maxY)};
+            if (cut.IsEmpty() || p.IsEmpty())
+            {
+                continue; // outside the clip
+            }
+            Text::GlyphQuad kept = quad;
+            if (!(cut == p))
+            {
+                // uv is y-down: the quad's top edge (maxY) is at uv.minY
+                const float uPerX = quad.uv.Width() / p.Width();
+                const float vPerY = quad.uv.Height() / p.Height();
+                kept.position = cut;
+                kept.uv = Text::Rect{quad.uv.minX + (cut.minX - p.minX) * uPerX, quad.uv.minY + (p.maxY - cut.maxY) * vPerY,
+                                     quad.uv.maxX - (p.maxX - cut.maxX) * uPerX, quad.uv.maxY - (cut.minY - p.minY) * vPerY};
+            }
+            result.quads.push_back(kept);
+            if (colored)
+            {
+                colors.push_back((*quadColors)[q]);
+            }
+        }
+        if (colored)
+        {
+            *quadColors = std::move(colors);
+        }
+        return result;
+    }
+
     void UIText::RenderUI(Renderer::Common::IRenderer *renderer, const Rect &rect,
                           const Renderer::Common::RenderState &state, const Matrix4 &canvasToWorld)
     {
@@ -420,8 +460,38 @@ namespace N2Engine::UI
             _colorsChanged = false;
         }
         const Text::TextLayout &drawn = moved ? _offsetLayout : layout;
-        _resources.Draw(_layoutCache.GetFont(), drawn, _meshVersion, model.Data(), GetDrawColor(), _effects, state,
-                        "UIText", _quadColors);
+
+        // Issue #445: a RectMask's clip, in the layout's space, only when it cuts some glyph (text inside it draws as
+        // without one). A new clip is a new mesh; the clipped copy is made once per mesh version.
+        std::optional<Text::Rect> clip;
+        if (_renderClip)
+        {
+            const Math::Vector2 anchor = GetAnchor(rect);
+            const Text::Rect local{_renderClip->XMin() - anchor.x, _renderClip->YMin() - anchor.y,
+                                   _renderClip->XMax() - anchor.x, _renderClip->YMax() - anchor.y};
+            const bool cuts = std::ranges::any_of(drawn.quads, [&local](const Text::GlyphQuad &quad)
+            {
+                const Text::Rect &p = quad.position;
+                return p.minX < local.minX || p.minY < local.minY || p.maxX > local.maxX || p.maxY > local.maxY;
+            });
+            if (cuts)
+            {
+                clip = local;
+            }
+        }
+        if (clip != _drawnClip)
+        {
+            _drawnClip = clip;
+            ++_meshVersion;
+        }
+        if (clip && _clippedVersion != _meshVersion)
+        {
+            _clippedColors = _quadColors;
+            _clippedLayout = ClipLayout(drawn, *clip, &_clippedColors);
+            _clippedVersion = _meshVersion;
+        }
+        _resources.Draw(_layoutCache.GetFont(), clip ? _clippedLayout : drawn, _meshVersion, model.Data(), GetDrawColor(),
+                        _effects, state, "UIText", clip ? _clippedColors : _quadColors);
 #endif
     }
 

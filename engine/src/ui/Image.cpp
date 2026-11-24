@@ -1,5 +1,6 @@
 #include "engine/ui/Image.hpp"
 
+#include <cstdint>
 #include <utility>
 
 #include <renderer/common/BlendCutOut.hpp>
@@ -78,6 +79,81 @@ namespace N2Engine::UI
         return model;
     }
 
+    std::optional<Image::Quad> Image::ClipQuad(const Quad &quad, const Rect &clip)
+    {
+        const Rect visible = Rect::Intersect(quad.position, clip);
+        if (!visible.HasArea() || !quad.position.HasArea())
+        {
+            return std::nullopt;
+        }
+        // The same share of the texture as of the rect, on each side
+        const float uPerX = quad.uv.width / quad.position.width;
+        const float vPerY = quad.uv.height / quad.position.height;
+        Quad result;
+        result.position = visible;
+        result.uv = Rect{quad.uv.x + (visible.x - quad.position.x) * uPerX, quad.uv.y + (visible.y - quad.position.y) * vPerY,
+                         visible.width * uPerX, visible.height * vPerY};
+        return result;
+    }
+
+    std::vector<Image::Quad> Image::BuildQuads(const Rect &rect, const std::optional<Rect> &clip) const
+    {
+        std::vector<Quad> quads;
+        if (!clip || clip->ContainsRect(rect))
+        {
+            return quads; // the plain unit quad
+        }
+        const std::optional<Quad> clipped = ClipQuad(Quad{rect}, *clip);
+        quads.push_back(clipped ? *clipped : Quad{Rect{rect.x, rect.y, 0.0f, 0.0f}});
+        return quads;
+    }
+
+    Renderer::Common::IMesh *Image::EnsureQuadMesh(Renderer::Common::IRenderer *renderer, const std::vector<Quad> &quads,
+                                                   const Math::Vector2 &origin)
+    {
+        // Relative to the rect's corner, so moving the rect alone changes only the model matrix
+        std::vector<Quad> local = quads;
+        for (Quad &quad : local)
+        {
+            quad.position.x -= origin.x;
+            quad.position.y -= origin.y;
+        }
+        if (_quadMesh && local == _quadMeshQuads)
+        {
+            return _quadMesh;
+        }
+        Renderer::Common::MeshData data;
+        data.vertices.reserve(local.size() * 4);
+        data.indices.reserve(local.size() * 6);
+        for (const Quad &quad : local)
+        {
+            const auto base = static_cast<std::uint32_t>(data.vertices.size());
+            const Rect &p = quad.position;
+            const Rect &t = quad.uv;
+            // Counter-clockwise seen from +z, as the unit quad
+            data.vertices.push_back({{p.XMin(), p.YMin(), 0.0f}, {0.0f, 0.0f, 1.0f}, {t.XMin(), t.YMin()}, {1.0f, 1.0f, 1.0f, 1.0f}});
+            data.vertices.push_back({{p.XMax(), p.YMin(), 0.0f}, {0.0f, 0.0f, 1.0f}, {t.XMax(), t.YMin()}, {1.0f, 1.0f, 1.0f, 1.0f}});
+            data.vertices.push_back({{p.XMax(), p.YMax(), 0.0f}, {0.0f, 0.0f, 1.0f}, {t.XMax(), t.YMax()}, {1.0f, 1.0f, 1.0f, 1.0f}});
+            data.vertices.push_back({{p.XMin(), p.YMax(), 0.0f}, {0.0f, 0.0f, 1.0f}, {t.XMin(), t.YMax()}, {1.0f, 1.0f, 1.0f, 1.0f}});
+            data.indices.insert(data.indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
+        }
+        if (data.vertices.empty())
+        {
+            return nullptr;
+        }
+        // In place where the backend can; otherwise a new mesh
+        if (!_quadMesh || !renderer->UpdateMesh(_quadMesh, data))
+        {
+            if (_quadMesh)
+            {
+                renderer->DestroyMesh(_quadMesh);
+            }
+            _quadMesh = renderer->CreateMesh(data);
+        }
+        _quadMeshQuads = _quadMesh ? std::move(local) : std::vector<Quad>{};
+        return _quadMesh;
+    }
+
     bool Image::EnsureResources(Renderer::Common::IRenderer *renderer)
     {
         if (_mesh && _material)
@@ -125,12 +201,18 @@ namespace N2Engine::UI
             {
                 _renderer->DestroyMaterial(_material);
             }
+            if (_quadMesh)
+            {
+                _renderer->DestroyMesh(_quadMesh);
+            }
         }
         // The sprite's share of its texture: destroyed with the last share, and only on a renderer that exists
         _spriteTexture.Release(true);
         _shaderSlot.Release(true); // the user shader's GPU material, likewise
         _mesh = nullptr;
         _material = nullptr;
+        _quadMesh = nullptr;
+        _quadMeshQuads.clear();
         _renderer = nullptr;
         _rendererLifetime.reset();
     }
@@ -161,6 +243,26 @@ namespace N2Engine::UI
             return;
         }
 
+        // The geometry: the unit quad over the rect, or (issue #445) the quads a RectMask's clip leaves
+        Renderer::Common::IMesh *mesh = _mesh;
+        Matrix4 local = ModelMatrixFor(rect);
+        if (const std::vector<Quad> quads = BuildQuads(rect, _renderClip); !quads.empty())
+        {
+            if (quads.size() == 1 && !quads.front().position.HasArea())
+            {
+                return; // clipped away
+            }
+            const Math::Vector2 origin{rect.x, rect.y};
+            mesh = EnsureQuadMesh(renderer, quads, origin);
+            if (!mesh)
+            {
+                return;
+            }
+            local = Matrix4::identity();
+            local(0, 3) = origin.x;
+            local(1, 3) = origin.y;
+        }
+
         // A user shader draws the sprite through the slot's own Material (a raw texture is not an asset a Material can hold, so it
         // keeps the standard path). The standard path below is not touched when there is no shader.
         if (_shaderSlot.HasShader() && !_texture)
@@ -172,7 +274,7 @@ namespace N2Engine::UI
             {
                 Renderer::Common::RenderState shaderState = state;
                 Rendering::MeshDrawing::ApplyBlendMode(shaderState, *_shaderSlot.GetMaterial());
-                renderer->DrawMesh(_mesh, ComposeModel(canvasToWorld, ModelMatrixFor(rect)).Data(), gpu, shaderState);
+                renderer->DrawMesh(mesh, ComposeModel(canvasToWorld, local).Data(), gpu, shaderState);
             }
             return;
         }
@@ -198,8 +300,8 @@ namespace N2Engine::UI
         _material->SetFloat("uSaturation", Renderer::Common::ColorEffects::ClampSaturation(_saturation));
         _material->SetVec4("uFlash", flash.r, flash.g, flash.b, flash.a);
 
-        const Matrix4 model = ComposeModel(canvasToWorld, ModelMatrixFor(rect));
-        renderer->DrawMesh(_mesh, model.Data(), _material, state);
+        const Matrix4 model = ComposeModel(canvasToWorld, local);
+        renderer->DrawMesh(mesh, model.Data(), _material, state);
 #endif
     }
 
