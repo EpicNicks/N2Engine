@@ -253,6 +253,22 @@ namespace N2Engine::Rendering
         /// The values set so far (not the defaults), by parameter name
         [[nodiscard]] const std::map<std::string, MaterialParamValue> &GetParams() const { return _params; }
 
+        /**
+         * Reserved parameter names the engine fills on every draw of a user shader that declares them (issue #445; docs/user-shaders.html,
+         * "Engine-filled parameters"), so a script never sets them: a value set for one (a setter, a .mat, a scene's shaderState) is kept
+         * but not used. Only with the type given; a parameter of that name and another type is an ordinary one. Nothing changes for a
+         * shader that does not declare them, and they cost nothing there.
+         */
+        /// float: seconds since the application started, unscaled (Time::GetUnscaledTime), so a pause or hit-stop (timeScale 0)
+        /// does not freeze an effect
+        static constexpr std::string_view TimeParam = "u_Time";
+        /// float: seconds of game time, scaled (Time::GetTime): stops with timeScale 0, slows with it
+        static constexpr std::string_view ScaledTimeParam = "u_ScaledTime";
+        /// float: the colour effect's saturation (GetSaturation; a Sprite2D's own), 1 meaning no change
+        static constexpr std::string_view SaturationParam = "u_Saturation";
+        /// color or vec4: the colour effect's flash (GetFlash; a Sprite2D's own), alpha 0 meaning none
+        static constexpr std::string_view FlashParam = "u_Flash";
+
         [[nodiscard]] bool IsBlended() const { return _alphaMode == AlphaMode::Blend; }
         /// Goes up by one on every change; 1 for a new material, made at runtime or loaded
         [[nodiscard]] std::uint64_t GetVersion() const { return _version; }
@@ -296,6 +312,9 @@ namespace N2Engine::Rendering
         const ShaderParam *MatchParam(std::string_view name, std::initializer_list<ShaderParamType> accepted, const char *setter);
         /// The user-shader half of ApplyUniforms
         void ApplyShaderParams(Renderer::Common::IMaterial &target, const Common::Color &tint) const;
+        /// The value the engine gives `param` when it is one of the reserved names it fills (TimeParam and the others, with the type
+        /// they need), else nullopt
+        [[nodiscard]] std::optional<std::array<float, 4>> EngineFilledParam(const ShaderParam &param) const;
 
         std::shared_ptr<Shader> _shader;
         std::map<std::string, MaterialParamValue> _params; // the values set; a parameter not here has its default
