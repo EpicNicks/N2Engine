@@ -75,6 +75,7 @@ namespace
         {
             RenderState state = RenderState::Transparent();
             state.cull = CullMode::None;
+            state.depthTest = false; // the same plane as the quad under it, which wrote its depth
             state.additive = additive;
             state.variant = variant;
             state.softwareBlend = optIn;
