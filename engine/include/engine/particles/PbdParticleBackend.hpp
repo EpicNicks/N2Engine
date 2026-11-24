@@ -56,6 +56,13 @@ namespace N2Engine::Particles
         void Step(float dt) override { static_cast<void>(dt); }
         [[nodiscard]] std::size_t GetAliveCount(Physics::ParticleSystemHandle handle) const override;
         void CopyPositions(Physics::ParticleSystemHandle handle, std::vector<Math::Vector4> &out) const override;
+        std::size_t SpawnWithSpin(Physics::ParticleSystemHandle handle, std::span<const Math::Vector3> positions,
+                                  std::span<const Math::Vector3> velocities, std::span<const Math::Vector2> spins) override;
+        /// The velocities of the host mirror (as of the last scene step or spawn) and the rotations
+        void CopyMotion(Physics::ParticleSystemHandle handle, std::vector<Math::Vector4> &out) const override;
+        /// Removes the particles of the mirror inside the region (the last living particle moves into each slot) and
+        /// uploads the compacted mirror when any died
+        std::size_t Kill(Physics::ParticleSystemHandle handle, const Physics::ParticleRegion &region) override;
 
         /// After the scene stepped by `dt` seconds (and fetchResults returned): refreshes the mirrors from the GPU,
         /// ages the particles and removes the dead
@@ -85,6 +92,8 @@ namespace N2Engine::Particles
             float invMass = 1.0f;
             std::vector<float> age;
             std::vector<float> lifetime;
+            std::vector<float> rotation; // start rotation, radians
+            std::vector<float> spin;     // angular velocity, radians per second
 
             void Remove(std::uint32_t index);
         };
