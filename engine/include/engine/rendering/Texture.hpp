@@ -68,6 +68,15 @@ namespace N2Engine::Rendering
             std::uint32_t width, std::uint32_t height, std::span<const std::uint8_t> rgbaPixels,
             const Renderer::Common::TextureOptions &options = Renderer::Common::TextureOptions::Default());
 
+        /**
+         * A render target (issue #445; docs/post-processing.html): a texture whose pixels live on the GPU only, made there with
+         * IRenderer::CreateRenderTexture (through the GPU cache, like any texture) and filled by IRenderer::CaptureFrame
+         * (RenderTexture::Capture). It has no CPU pixels (GetPixels is empty) but counts as loaded, so a Sprite2D, a UI Image or
+         * a material draws it like any texture. Linear, clamped, no mipmaps, never sRGB. nullptr (and an error logged) for a
+         * zero size or a side over Renderer::Common::MaxRenderTextureSize. Usually made through RenderTexture::Create.
+         */
+        [[nodiscard]] static std::shared_ptr<Texture> CreateRenderTarget(std::uint32_t width, std::uint32_t height);
+
         /// A texture decoded from an image file's bytes (PNG, JPEG, TGA or BMP) with `settings`. nullptr, and an
         /// error logged naming `debugName`, if it doesn't decode or is over the size caps.
         [[nodiscard]] static std::shared_ptr<Texture> CreateFromEncoded(std::span<const std::uint8_t> fileBytes,
@@ -125,7 +134,9 @@ namespace N2Engine::Rendering
         static constexpr std::string_view ResourceTypeName = "Texture";
         [[nodiscard]] std::string GetResourceType() const override { return std::string(ResourceTypeName); }
 
-        [[nodiscard]] bool IsLoaded() const { return !_pixels.empty(); }
+        [[nodiscard]] bool IsLoaded() const { return !_pixels.empty() || _renderTarget; }
+        /// Made by CreateRenderTarget: its pixels are on the GPU only
+        [[nodiscard]] bool IsRenderTarget() const { return _renderTarget; }
         [[nodiscard]] std::uint32_t GetWidth() const { return _width; }
         [[nodiscard]] std::uint32_t GetHeight() const { return _height; }
         /// Always 4 (RGBA)
@@ -146,6 +157,7 @@ namespace N2Engine::Rendering
         std::vector<std::uint8_t> _pixels;
         TextureSettings _settings;
         std::string _sourcePath;
+        bool _renderTarget = false;
     };
 
     /// The loader registered for .png, .jpg, .jpeg, .tga and .bmp

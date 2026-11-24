@@ -347,6 +347,29 @@ namespace Renderer::WebGpu
         std::uint64_t size = 0;
     };
 
+    /// Post-processing and render textures (issue #445; WebGpuPostProcess.cpp): made on the first use, released by Shutdown
+    struct PostResources
+    {
+        ShaderModuleRef module;
+        BindGroupLayoutRef groupLayout; // binding 0 the parameters (uniform), 1 the source, 2 the bloom, 3 the sampler
+        PipelineLayoutRef pipelineLayout;
+        RenderPipelineRef offscreenPipeline; // colour only (the bloom textures, a capture's render texture)
+        RenderPipelineRef framePipeline;     // the frame's pass (colour and depth; no depth test or write)
+        SamplerRef sampler;                  // linear, clamped to the edge
+        bool failed = false;
+        // Sized to the frame: the copy of the colour target and the two half-size bloom textures
+        TextureRef scene;
+        TextureViewRef sceneView;
+        TextureRef bloomA;
+        TextureViewRef bloomAView;
+        TextureRef bloomB;
+        TextureViewRef bloomBView;
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
+        /// The textures CreateRenderTexture made (still alive)
+        std::vector<const Common::ITexture*> renderTextures;
+    };
+
     /// The renderer's number of built-in shaders and of material textures (base + the four AuxTexture slots)
     inline constexpr std::size_t kShaderCount = ShaderInterface::kBuiltInShaderCount;
     inline constexpr std::size_t kTextureSlots = ShaderInterface::kSamplerCount;
@@ -457,6 +480,9 @@ namespace Renderer::WebGpu
         std::unordered_map<std::uint64_t, ComputeRead> computeReads;
         CommandEncoderRef computeEncoder;
         std::uint64_t nextComputeId = 1;
+
+        // ---- Post-processing and render textures (issue #445)
+        PostResources post;
     };
 
     /// WebGpuResources.cpp: the texture-making part of CreateTexture, without registering it (CreateTexture registers it; the
@@ -464,7 +490,7 @@ namespace Renderer::WebGpu
     /// caller gives it one). Null on failure, logged to stderr
     std::unique_ptr<WebGpuTexture> MakeTexture(WebGpuRenderer::State& state, const std::uint8_t* data, std::uint32_t width,
                                                std::uint32_t height, std::uint32_t channels,
-                                               const Common::TextureOptions& options);
+                                               const Common::TextureOptions& options, bool renderAttachment = false);
 
     /// WebGpuResources.cpp: the cached sampler for `key`, made on first use; null on failure
     WGPUSampler FindOrCreateSampler(WebGpuRenderer::State& state, const SamplerKey& key);

@@ -13,6 +13,7 @@
 #include <utility>
 
 #include <assetimport/ImageDecoder.hpp>
+#include <renderer/common/PostProcess.hpp>
 
 #include "engine/Logger.hpp"
 #include "engine/io/ResourceLoader.hpp"
@@ -307,6 +308,27 @@ namespace N2Engine::Rendering
         texture->_width = width;
         texture->_height = height;
         texture->_pixels.assign(rgbaPixels.begin(), rgbaPixels.end());
+        texture->_settings.filter = options.filter;
+        texture->_settings.wrap = options.wrap;
+        texture->_settings.mipmaps = options.mipmaps;
+        return texture;
+    }
+
+    std::shared_ptr<Texture> Texture::CreateRenderTarget(const std::uint32_t width, const std::uint32_t height)
+    {
+        if (width == 0 || height == 0 || width > Renderer::Common::MaxRenderTextureSize ||
+            height > Renderer::Common::MaxRenderTextureSize)
+        {
+            Logger::Error(std::format("Texture::CreateRenderTarget: {} x {} is not a render texture size (1 to {} a side)", width,
+                                      height, Renderer::Common::MaxRenderTextureSize));
+            return nullptr;
+        }
+        auto texture = std::make_shared<Texture>();
+        texture->_width = width;
+        texture->_height = height;
+        texture->_renderTarget = true;
+        const Renderer::Common::TextureOptions options = Renderer::Common::RenderTextureOptions();
+        texture->_settings.srgb = false;
         texture->_settings.filter = options.filter;
         texture->_settings.wrap = options.wrap;
         texture->_settings.mipmaps = options.mipmaps;

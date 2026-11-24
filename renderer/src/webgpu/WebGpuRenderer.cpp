@@ -942,6 +942,7 @@ namespace Renderer::WebGpu
         state.lastReadbackWidth = 0;
         state.lastReadbackHeight = 0;
         DestroyComputeResourcesLocked(); // every compute id made so far names nothing from here (the counter goes on)
+        state.post = PostResources{}; // the post-processing pipelines and textures (issue #445)
         DestroyAllResources(); // meshes, textures, materials, pipelines, the ring: all released before the device is
         DestroyTargets();
         state.queue.Reset();
@@ -1001,19 +1002,19 @@ namespace Renderer::WebGpu
 #endif
     }
 
-    bool WebGpuRenderer::BeginPass()
+    bool WebGpuRenderer::BeginPass(const bool load)
     {
         State& state = *_state;
         WGPURenderPassColorAttachment color = WGPU_RENDER_PASS_COLOR_ATTACHMENT_INIT;
         color.view = state.colorView.Get();
-        color.loadOp = WGPULoadOp_Clear;
+        color.loadOp = load ? WGPULoadOp_Load : WGPULoadOp_Clear;
         color.storeOp = WGPUStoreOp_Store;
         color.clearValue = {static_cast<double>(_clearColor[0]), static_cast<double>(_clearColor[1]),
                             static_cast<double>(_clearColor[2]), static_cast<double>(_clearColor[3])};
 
         WGPURenderPassDepthStencilAttachment depth = WGPU_RENDER_PASS_DEPTH_STENCIL_ATTACHMENT_INIT;
         depth.view = state.depthView.Get();
-        depth.depthLoadOp = WGPULoadOp_Clear;
+        depth.depthLoadOp = load ? WGPULoadOp_Load : WGPULoadOp_Clear;
         depth.depthStoreOp = WGPUStoreOp_Store;
         depth.depthClearValue = 1.0f;
 

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Post-processing and render textures · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+<li><a href="design-decisions.html">Design decisions</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="physics2d.html">2D physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="sprite2d.html">Sprites &amp; 2D shapes</a></li>
+<li><a href="post-processing.html" aria-current="page">Post-processing &amp; render textures</a></li>
+<li><a href="user-shaders.html">User shaders</a></li>
+<li><a href="particles.html">Particles</a></li>
+<li><a href="soft-bodies.html">Soft bodies</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+<li><a href="netcode.html">Netcode (n2net)</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+<li><a href="editor-extensions.html">Lua editor extensions</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="editor.html">Editor projects</a></li>
+<li><a href="mcp.html">MCP bridge (n2-mcp)</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+<li><a href="web-build.html">Web build</a></li>
+<li><a href="project-modules.html">Project modules</a></li>
+<li><a href="build-targets.html">Build targets</a></li>
+<li><a href="platform.html">The platform layer</a></li>
+<li><a href="packs.html">Packs &amp; the virtual filesystem</a></li>
+<li><a href="android.html">Android</a></li>
+<li><a href="apple.html">iOS &amp; macOS</a></li>
+<li><a href="private-targets.html">Private targets</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Post-processing and render textures</h1>
+<p class="lead">A <code>PostProcessStack</code> component gives a scene full-screen effects: bloom, colour inversion, chromatic aberration and a vignette. A <code>RenderTexture</code> is a texture a frame can be drawn into, for a snapshot of the scene shown on a sprite or UI image. Both are from <a href="https://github.com/EpicNicks/N2Engine/issues/445">issue #445</a> and work on every renderer (OpenGL, Vulkan, WebGPU and software).</p>
+
+<h2 id="stack">PostProcessStack</h2>
+<p>Add it to any object of the scene (<code>go:AddComponent("PostProcessStack")</code>, or in the inspector). The first active one the scene finds is used. A scene with none, or with every effect off, draws exactly as before and runs no extra pass. The fields are saved with the scene.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Field</th><th>Default</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>bloom</code></td><td>false</td><td>Glow around the bright parts</td></tr>
+<tr><td><code>bloomThreshold</code></td><td>0.7</td><td>The brightness (the largest of r, g, b) above which a pixel glows. 0 makes everything glow, 1 nothing</td></tr>
+<tr><td><code>bloomIntensity</code></td><td>1</td><td>How much of the blurred glow is added back, 0 to 16</td></tr>
+<tr><td><code>bloomIterations</code></td><td>4</td><td>Blur passes, 1 to 8. The glow widens with each, and each costs two half-resolution passes</td></tr>
+<tr><td><code>bloomTint</code></td><td>white</td><td>Multiplies the glow's colour. Alpha is ignored</td></tr>
+<tr><td><code>invert</code></td><td>0</td><td>0 (none) to 1 (a full negative)</td></tr>
+<tr><td><code>chromaticAberration</code></td><td>0</td><td>Red and blue fringes, 0 to 0.25, as a fraction of the distance from the screen centre (0.02 is strong)</td></tr>
+<tr><td><code>vignette</code></td><td>0</td><td>Darkened corners, 0 to 1, starting 0.3 of the way out</td></tr>
+</tbody>
+</table>
+</div>
+<p>Out-of-range values are clamped when a frame uses them, and a value that is not finite takes its default.</p>
+
+<h2 id="order">Order and what it covers</h2>
+<ol>
+<li>Chromatic aberration: the red channel is read from a point moved away from the screen centre, blue from one moved towards it.</li>
+<li>Bloom: the parts brighter than <code>bloomThreshold</code> are taken at half resolution, blurred <code>bloomIterations</code> times (a 9-tap Gaussian across and then down, spread one texel further each pass) and added back times <code>bloomIntensity</code> and <code>bloomTint</code>.</li>
+<li>Invert, then vignette.</li>
+</ol>
+<ul>
+<li>The effects run over the scene and <strong>before the screen-space UI</strong>, so a HUD is not bloomed.</li>
+<li>Alpha is the frame's, untouched.</li>
+<li>Frames are 8-bit, so a bloom sum is clamped to 0..1: the threshold is what picks out the "bright" parts. A neon look wants bright colours (full-value hues, or additive sprites) on a dark background.</li>
+<li>The GPU backends keep the half-resolution bloom images in 8 bits, the software renderer (a CPU path, a few full-frame passes) in floats, so the pictures agree to within a few levels, not bit for bit.</li>
+<li>A renderer without post-processing (a test fake) logs one warning and draws the scene unprocessed. <code>Graphics.CanPostProcess()</code> tells a script whether the renderer runs it.</li>
+</ul>
+
+<h2 id="render-textures">Render textures</h2>
+<p><code>RenderTexture.new(width, height)</code> makes a texture of 1 to 8192 on a side: linear filtering, clamped to the edge, no mipmaps, opaque, transparent black until the first capture. Its first row is the bottom of the frame, so it shows upright.</p>
+<ul>
+<li><code>camera:RenderToTexture(texture)</code> fills it once with the next frame's scene, after post-processing and without the screen-space UI, scaled to its size.</li>
+<li><code>camera:SetTargetTexture(texture)</code> copies every frame's scene into it (<code>nil</code> stops); the frame still shows on the screen. <code>GetTargetTexture()</code> returns it.</li>
+<li>Show it with <code>sprite:SetRenderTexture(texture)</code> or <code>image:SetRenderTexture(texture)</code> (<code>nil</code> for none). <code>sprite:GetTexture()</code> then returns <code>""</code>, since it has no path.</li>
+<li><code>texture:GetWidth()</code>, <code>GetHeight()</code> and <code>GetCaptureCount()</code> (how many captures succeeded).</li>
+</ul>
+<p>The GPU texture is freed with its last user: the <code>RenderTexture</code> object and every sprite or image showing it. A capture needs an open frame and a renderer that supports it; otherwise it does nothing and the capture count stays put.</p>
+
+<h2 id="lua">From Lua</h2>
+<pre><code>local fx = camera_object:AddComponent("PostProcessStack")
+fx:Set({ bloom = true, bloomThreshold = 0.6, bloomIntensity = 1.5,
+         bloomTint = Color(0.6, 0.9, 1, 1), vignette = 0.4 })
+print(fx:Get().bloomIterations) -- 4
+
+-- A snapshot of the scene, shown on a sprite next frame (a zoom-out prestige)
+local snap = RenderTexture.new(512, 512)
+camera:RenderToTexture(snap)
+-- ... the next frame:
+sprite:SetRenderTexture(snap)</code></pre>
+<p><code>Set</code> changes the fields given and leaves the others. A field of the wrong type or an unknown name is an error and changes nothing.</p>
+
+<h2 id="not-yet">Not yet</h2>
+<p>Post-processing runs once over the whole scene frame, not per camera, and there is no user-written post shader, depth of field or tone mapping. A render texture holds an 8-bit picture, not HDR.</p>
+
+<div class="page-footer">
+<span>Describes the post-processing and render-texture work of issue #445.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+<script src="assets/search.js" defer></script>
+</body>
+</html>

@@ -1,4 +1,7 @@
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <memory>
 #include <format>
 #include <limits>
 #include <stdexcept>
@@ -9,6 +12,9 @@
 #include <renderer/common/Renderer.hpp>
 
 #include "engine/Application.hpp"
+#include "engine/common/Color.hpp"
+#include "engine/rendering/PostProcessStack.hpp"
+#include "engine/rendering/RenderTexture.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/scripting/bindings/LuaBindings.hpp"
 
@@ -18,6 +24,9 @@
 //
 // The Graphics table: what the renderer the game runs on can do (effects design, decision E). Graphics.CanBlend() is false on
 // the software renderer (the web's fallback), which cannot blend, so a game can skip soft glow sprites there.
+//
+// Issue #445 (docs/post-processing.html): the PostProcessStack component (Set{...}, Get()), RenderTexture.new(width, height) and
+// Graphics.CanPostProcess().
 namespace N2Engine::Scripting::Bindings
 {
     namespace
@@ -128,6 +137,126 @@ namespace N2Engine::Scripting::Bindings
             table["inside"] = tint.inside;
             return table;
         }
+
+        [[noreturn]] void FailPost(const std::string &message)
+        {
+            throw std::runtime_error("PostProcessStack:Set: " + message);
+        }
+
+        float PostNumber(const sol::object &value, const std::string &key)
+        {
+            if (value.get_type() != sol::type::number)
+            {
+                FailPost(std::format("{} must be a number", key));
+            }
+            const double number = value.as<double>();
+            if (!std::isfinite(number) || std::fabs(number) > static_cast<double>(std::numeric_limits<float>::max()))
+            {
+                FailPost(std::format("{} must be a finite number", key));
+            }
+            return static_cast<float>(number);
+        }
+
+        /// PostProcessStack:Set{bloom = true, bloomThreshold = 0.7, ...}: only the fields given change; each is type-checked and
+        /// an unknown one is an error (a failed call changes nothing). Out-of-range numbers are kept and clamped when a frame
+        /// uses them, as the inspector's are
+        void SetPostProcess(Rendering::PostProcessStack &stack, const sol::object &argument)
+        {
+            if (argument.get_type() != sol::type::table)
+            {
+                FailPost("takes a table: stack:Set{bloom = true, bloomIntensity = 1.5}");
+            }
+            Renderer::Common::PostProcessSettings settings = stack.GetSettings();
+            for (const auto &pair : argument.as<sol::table>())
+            {
+                if (pair.first.get_type() != sol::type::string)
+                {
+                    FailPost("the keys must be field names");
+                }
+                const std::string key = pair.first.as<std::string>();
+                if (key == "bloom")
+                {
+                    if (pair.second.get_type() != sol::type::boolean)
+                    {
+                        FailPost("bloom must be a boolean");
+                    }
+                    settings.bloom = pair.second.as<bool>();
+                }
+                else if (key == "bloomThreshold")
+                {
+                    settings.bloomThreshold = PostNumber(pair.second, key);
+                }
+                else if (key == "bloomIntensity")
+                {
+                    settings.bloomIntensity = PostNumber(pair.second, key);
+                }
+                else if (key == "bloomIterations")
+                {
+                    const float iterations = PostNumber(pair.second, key);
+                    if (iterations != std::floor(iterations))
+                    {
+                        FailPost("bloomIterations must be a whole number");
+                    }
+                    settings.bloomIterations = static_cast<int>(std::clamp(iterations, -1000.0f, 1000.0f));
+                }
+                else if (key == "bloomTint")
+                {
+                    if (!pair.second.is<Common::Color>())
+                    {
+                        FailPost("bloomTint must be a Color");
+                    }
+                    const Common::Color tint = pair.second.as<Common::Color>();
+                    settings.bloomTint[0] = tint.r;
+                    settings.bloomTint[1] = tint.g;
+                    settings.bloomTint[2] = tint.b;
+                }
+                else if (key == "invert")
+                {
+                    settings.invert = PostNumber(pair.second, key);
+                }
+                else if (key == "chromaticAberration")
+                {
+                    settings.chromaticAberration = PostNumber(pair.second, key);
+                }
+                else if (key == "vignette")
+                {
+                    settings.vignette = PostNumber(pair.second, key);
+                }
+                else
+                {
+                    FailPost(std::format("unknown field '{}' (the fields are bloom, bloomThreshold, bloomIntensity, "
+                                         "bloomIterations, bloomTint, invert, chromaticAberration, vignette)",
+                                         key));
+                }
+            }
+            stack.SetSettings(settings);
+        }
+
+        sol::table GetPostProcess(const Rendering::PostProcessStack &stack, const sol::this_state state)
+        {
+            sol::table table = sol::state_view(state).create_table();
+            table["bloom"] = stack.bloom;
+            table["bloomThreshold"] = stack.bloomThreshold;
+            table["bloomIntensity"] = stack.bloomIntensity;
+            table["bloomIterations"] = stack.bloomIterations;
+            table["bloomTint"] = Common::Color(stack.bloomTint);
+            table["invert"] = stack.invert;
+            table["chromaticAberration"] = stack.chromaticAberration;
+            table["vignette"] = stack.vignette;
+            return table;
+        }
+
+        /// A whole number from 1 to MaxRenderTextureSize, else a Lua error naming it
+        std::uint32_t TextureSide(const double value, const char *name)
+        {
+            if (!std::isfinite(value) || value != std::floor(value) || value < 1.0 ||
+                value > static_cast<double>(Renderer::Common::MaxRenderTextureSize))
+            {
+                throw std::runtime_error(std::format("RenderTexture.new: {} must be a whole number from 1 to {}", name,
+                                                     Renderer::Common::MaxRenderTextureSize));
+            }
+            return static_cast<std::uint32_t>(value);
+        }
     }
 
     void BindScreen(LuaRuntime &runtime)
@@ -145,7 +274,35 @@ namespace N2Engine::Scripting::Bindings
             },
             "GetTint", [](const sol::this_state state) { return GetTint(state); }
         );
+        using PostProcessRef = ComponentRef<Rendering::PostProcessStack>;
+        BindComponentType<Rendering::PostProcessStack>(
+            lua, "PostProcessStack",
+            "Set", [](const PostProcessRef &ref, const sol::object &argument) { SetPostProcess(*ref.Pin(), argument); },
+            "Get", [](const PostProcessRef &ref, const sol::this_state state) { return GetPostProcess(*ref.Pin(), state); }
+        );
+
+        lua.new_usertype<Rendering::RenderTexture>(
+            "RenderTexture", sol::no_constructor,
+            "new", [](const double width, const double height) {
+                std::shared_ptr<Rendering::RenderTexture> texture =
+                    Rendering::RenderTexture::Create(TextureSide(width, "width"), TextureSide(height, "height"));
+                if (!texture)
+                {
+                    throw std::runtime_error("RenderTexture.new: could not make the texture");
+                }
+                return texture;
+            },
+            "GetWidth", [](const Rendering::RenderTexture &texture) { return texture.GetWidth(); },
+            "GetHeight", [](const Rendering::RenderTexture &texture) { return texture.GetHeight(); },
+            "GetCaptureCount", [](const Rendering::RenderTexture &texture) { return texture.GetCaptureCount(); }
+        );
+
         lua["Graphics"] = lua.create_table_with(
+            // Whether the renderer runs PostProcessStack effects and render-texture captures (all four backends do)
+            "CanPostProcess", []() {
+                const Renderer::Common::IRenderer *renderer = Application::GetInstance().GetWindow().GetRenderer();
+                return renderer != nullptr && renderer->SupportsPostProcess();
+            },
             // True without a renderer (a headless run draws nothing, so nothing is lost either way)
             "CanBlend", []() {
                 const Renderer::Common::IRenderer *renderer = Application::GetInstance().GetWindow().GetRenderer();

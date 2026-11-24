@@ -44,6 +44,8 @@
 #include "engine/rendering/Sprite2D.hpp"
 #include "engine/io/Resources.hpp"
 #include "engine/rendering/Light.hpp"
+#include "engine/rendering/PostProcessStack.hpp"
+#include "engine/rendering/RenderTexture.hpp"
 #include "engine/rendering/Material.hpp"
 #include "engine/rendering/Shader.hpp"
 #include "engine/rendering/Mesh.hpp"
@@ -142,6 +144,7 @@ namespace N2Engine::Scripting::Bindings
                 {"MeshRenderer", MakeAccess<Rendering::MeshRenderer>()},
                 {"TextRenderer", MakeAccess<Rendering::TextRenderer>()},
                 {"ParticleSystem", MakeAccess<Rendering::ParticleSystem>()},
+                {"PostProcessStack", MakeAccess<Rendering::PostProcessStack>()},
                 {"SoftBody", MakeAccess<Physics::SoftBody>()},
                 {"Light", MakeAccess<Rendering::Light>()},
                 {"AudioSource", MakeAccess<Audio::AudioSource>()},
@@ -675,6 +678,11 @@ namespace N2Engine::Scripting::Bindings
             {
                 const auto sprite = ref.Pin();
                 sprite->SetTexture(path ? LoadTextureOrThrow(*path, "Sprite2D:SetTexture") : nullptr);
+            },
+            // A RenderTexture (issue #445) to show, nil for none: what it captures shows on the sprite, upright
+            "SetRenderTexture", [](const Sprite2DRef &ref, const sol::optional<std::shared_ptr<Rendering::RenderTexture>> &texture)
+            {
+                ref.Pin()->SetTexture(texture && *texture ? (*texture)->GetTexture() : nullptr);
             },
             "HasTexture", [](const Sprite2DRef &ref) { return ref.Pin()->GetTexture() != nullptr; },
             // The texture's resource path (as SetTexture takes it), or nil without one

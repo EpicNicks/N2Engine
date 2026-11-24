@@ -24,6 +24,7 @@
 #include "engine/rendering/Light.hpp"
 #include "engine/rendering/MeshRenderer.hpp"
 #include "engine/rendering/ParticleSystem.hpp"
+#include "engine/rendering/PostProcessStack.hpp"
 #include "engine/rendering/TextRenderer.hpp"
 #include "engine/scripting/LuaComponent.hpp"
 #include "engine/ui/Button.hpp"
@@ -74,6 +75,7 @@ namespace N2Engine
         Add<Rendering::MeshRenderer>(registry, "MeshRenderer");
         Add<Rendering::TextRenderer>(registry, "TextRenderer");
         Add<Rendering::ParticleSystem>(registry, "ParticleSystem");
+        Add<Rendering::PostProcessStack>(registry, "PostProcessStack");
         Add<Physics::SoftBody>(registry, "SoftBody");
         Add<Scripting::LuaComponent>(registry, "LuaComponent");
         Add<UI::Canvas>(registry, "Canvas");

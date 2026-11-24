@@ -8,8 +8,15 @@
 #include <math/VectorN.hpp>
 #include <math/Quaternion.hpp>
 
+#include <memory>
+
 namespace N2Engine
 {
+    namespace Rendering
+    {
+        class RenderTexture;
+    }
+
     using Matrix4 = Math::Matrix<float, 4, 4>;
     using Vector2i = Math::VectorN<int, 2>; // as in Window.hpp
 
@@ -149,6 +156,18 @@ namespace N2Engine
         {
             return _rotation;
         }
+
+        /**
+         * A render texture this camera's frame is copied into every frame (issue #445; docs/post-processing.html), after the
+         * scene and its post-processing and before the screen-space UI; null (the default) for none. The engine has one main
+         * camera, so the frame still shows on the screen as well: the texture is a copy of it (Unity's targetTexture would
+         * take the camera off the screen). For a single snapshot, Application::RequestCapture (Lua: Camera:RenderToTexture).
+         */
+        void SetTargetTexture(std::shared_ptr<Rendering::RenderTexture> texture) { _targetTexture = std::move(texture); }
+        [[nodiscard]] const std::shared_ptr<Rendering::RenderTexture> &GetTargetTexture() const { return _targetTexture; }
+
+    private:
+        std::shared_ptr<Rendering::RenderTexture> _targetTexture;
     };
 
     // Helper function

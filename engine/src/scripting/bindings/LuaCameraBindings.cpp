@@ -3,6 +3,7 @@
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/Camera.hpp"
 #include "engine/Window.hpp"
+#include "engine/rendering/RenderTexture.hpp"
 
 #include <math/Ray.hpp>
 
@@ -116,7 +117,24 @@ namespace N2Engine::Scripting::Bindings
                     viewport = Vector2i{*width, *height};
                 }
                 return cam.ScreenPointToRay(Math::Vector2(x, y), viewport);
-            }
+            },
+
+            // Render textures (issue #445; docs/post-processing.html). RenderToTexture(rt): rt gets the next frame's scene once
+            // (after post-processing, without the screen-space UI). SetTargetTexture(rt or nil): rt gets it every frame; the
+            // frame still shows on the screen
+            "RenderToTexture", [](const Camera&, const std::shared_ptr<Rendering::RenderTexture>& texture)
+            {
+                if (!texture)
+                {
+                    throw std::runtime_error("Camera:RenderToTexture: takes a RenderTexture");
+                }
+                Application::GetInstance().RequestCapture(texture);
+            },
+            "SetTargetTexture", [](Camera& cam, const sol::optional<std::shared_ptr<Rendering::RenderTexture>>& texture)
+            {
+                cam.SetTargetTexture(texture ? *texture : nullptr);
+            },
+            "GetTargetTexture", [](const Camera& cam) { return cam.GetTargetTexture(); }
         );
         
         // ===== Camera Global Access =====

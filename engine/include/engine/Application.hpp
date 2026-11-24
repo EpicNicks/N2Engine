@@ -3,6 +3,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include <renderer/common/RenderState.hpp>
 
@@ -97,8 +98,14 @@ namespace N2Engine
         std::weak_ptr<const void> _tintBackdropLifetime;
         Renderer::Common::IMesh *_tintBackdropMesh = nullptr;
         Renderer::Common::IMaterial *_tintBackdropMaterial = nullptr;
+        // One-shot captures (RequestCapture) waiting for the next scene pass
+        std::vector<std::shared_ptr<Rendering::RenderTexture>> _pendingCaptures;
+        bool _postProcessWarned = false;
 
     private:
+        /// After the scene pass, before the UI: the scene's PostProcessStack, then the camera's target texture and the
+        /// pending captures (issue #445)
+        void ApplyScenePostEffects(Scene &scene, Renderer::Common::IRenderer *renderer, const Camera &camera);
         /// Under a screen tint that covers only part of the frame, draws the clear colour again as a full-screen quad
         /// with the tint (depth not tested or written, before any scene draw), so the bare background inside the circle
         /// is tinted as the scene is. False when the renderer cannot make the quad
@@ -247,6 +254,18 @@ namespace N2Engine
         void SetScreenTint(const Renderer::Common::ScreenTint &tint);
         void ClearScreenTint() { _screenTint = Renderer::Common::ScreenTint{}; }
         [[nodiscard]] const Renderer::Common::ScreenTint& GetScreenTint() const { return _screenTint; }
+
+        /**
+         * Fills `texture` once with the next frame's scene (issue #445; docs/post-processing.html): at the end of the next
+         * Render's scene pass, after its post-processing and before the screen-space UI (RenderTexture::Capture). A texture
+         * asked for twice before that frame is captured once. Null is ignored. Lua: Camera:RenderToTexture(rt). Shutdown
+         * forgets the requests.
+         */
+        void RequestCapture(std::shared_ptr<Rendering::RenderTexture> texture);
+        /// The captures still waiting for a frame
+        [[nodiscard]] std::size_t GetPendingCaptureCount() const { return _pendingCaptures.size(); }
+        /// Forgets the captures still waiting
+        void ClearPendingCaptures() { _pendingCaptures.clear(); }
 
         [[nodiscard]] Camera* GetMainCamera() const;
         Window& GetWindow();

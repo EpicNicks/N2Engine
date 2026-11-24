@@ -10,6 +10,7 @@
 
 #include "VulkanDraw.hpp"
 #include "VulkanResources.hpp"
+#include "VulkanPostProcess.hpp"
 
 // Stage A of the Vulkan backend (#43): meshes, textures, samplers, staging uploads, blit mipmaps and deferred deletion.
 //
@@ -874,6 +875,7 @@ void VulkanRenderer::DestroyTexture(ITexture* texture)
     std::vector<RetiredResource> items{resource}; // the sampler stays in the cache
     Dispose(*_resources, _device, CanFreeRetiredNow(), RetireSlot(), items);
     _resources->textures.erase(it);
+    std::erase(_post->renderTextures, texture);
     {
         std::lock_guard idLock(_draw->textureIdMutex);
         _draw->textureIds.erase(texture);

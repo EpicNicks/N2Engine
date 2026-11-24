@@ -237,7 +237,8 @@ namespace Renderer::WebGpu
 
     std::unique_ptr<WebGpuTexture> MakeTexture(WebGpuRenderer::State& state, const std::uint8_t* data,
                                                const std::uint32_t width, const std::uint32_t height,
-                                               const std::uint32_t channels, const TextureOptions& options)
+                                               const std::uint32_t channels, const TextureOptions& options,
+                                               const bool renderAttachment)
     {
         if (width > state.maxTextureDimension || height > state.maxTextureDimension)
         {
@@ -282,6 +283,10 @@ namespace Renderer::WebGpu
         descriptor.label = ToView("N2Engine texture");
         // CopySrc as well, so the test hook can read the levels back
         descriptor.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst | WGPUTextureUsage_CopySrc;
+        if (renderAttachment)
+        {
+            descriptor.usage |= WGPUTextureUsage_RenderAttachment; // a render texture (issue #445): CaptureFrame draws into it
+        }
         descriptor.dimension = WGPUTextureDimension_2D;
         descriptor.size = {width, height, 1};
         descriptor.format = format;
@@ -413,6 +418,7 @@ namespace Renderer::WebGpu
             }
             group = uses ? state.materialGroups.erase(group) : std::next(group);
         }
+        std::erase(state.post.renderTextures, texture);
         state.textures.erase(it);
         {
             std::lock_guard idLock(state.textureIdMutex);

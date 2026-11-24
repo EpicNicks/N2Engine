@@ -10,6 +10,7 @@
 #include "engine/scripting/ScriptCallback.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/rendering/Shader.hpp"
+#include "engine/rendering/RenderTexture.hpp"
 #include "engine/rendering/Texture.hpp"
 #include "engine/ui/Button.hpp"
 #include "engine/ui/Canvas.hpp"
@@ -140,6 +141,11 @@ namespace N2Engine::Scripting::Bindings
         BindComponentType<UI::Image>(
             lua, "Image",
             "GetColor", Forward<ImageRef, &UI::UIGraphic::GetColor>(),
+            // A RenderTexture (issue #445) to show as the image's sprite, nil for none
+            "SetRenderTexture", [](const ImageRef &ref, const sol::optional<std::shared_ptr<Rendering::RenderTexture>> &texture)
+            {
+                ref.Pin()->SetSprite(texture && *texture ? (*texture)->GetTexture() : nullptr);
+            },
             // A user shader (a .n2shader path) for this image, nil for the standard one; the shader's parameters are set on the
             // MaterialInstance of GetMaterialInstance (nil without a shader). Runtime only: not saved in the scene
             "SetShader", [](const ImageRef &ref, const sol::optional<std::string> path)

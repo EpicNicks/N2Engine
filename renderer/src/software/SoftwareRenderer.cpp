@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <span>
 #include <vector>
 
 #include "renderer/common/LightingMath.hpp"
@@ -1128,6 +1129,8 @@ void SoftwareRenderer::Shutdown()
     m_renderThread.Stop();
 
     m_drawQueue.clear();
+    m_frameOps.clear();
+    m_renderTextures.clear();
     m_meshes.clear();
     m_textures.clear();
     m_materials.clear();
@@ -1178,6 +1181,7 @@ void SoftwareRenderer::Clear(float r, float g, float b, float a)
 void SoftwareRenderer::BeginFrame()
 {
     m_drawQueue.clear();
+    m_frameOps.clear();
     ResetRenderCounters();
 }
 
@@ -1191,13 +1195,15 @@ void SoftwareRenderer::EndFrame()
     // highlights could read a different frame's camera.
     auto queue = std::move(m_drawQueue);
     m_drawQueue.clear();   // moved-from -> guaranteed empty and reusable
+    auto ops = std::move(m_frameOps);
+    m_frameOps.clear();
 
     auto lighting = m_lighting;
     auto camPos   = m_cameraPos;
     const float cr = m_clearR, cg = m_clearG, cb = m_clearB, ca = m_clearA;
 
     m_renderThread.SubmitFrame({
-        [this, queue = std::move(queue),
+        [this, queue = std::move(queue), ops = std::move(ops),
          lighting = std::move(lighting), camPos, cr, cg, cb, ca]() mutable
         {
             // The snapshot is passed down, never written back to members: the main thread may already be
@@ -1225,12 +1231,34 @@ void SoftwareRenderer::EndFrame()
                 keys[i] = DrawOrderKey{ c.state, dx*dx + dy*dy + dz*dz };
             }
 
-            for (const size_t index : OrderDraws(keys))
+            // A post-process or capture (issue #445) splits the frame: the draws before it are ordered among
+            // themselves and rasterized, then it runs, then the rest follows
+            size_t segmentStart = 0;
+            const auto rasterizeUpTo = [&](const size_t end)
             {
-                const DrawCommand& cmd = queue[index];
-                RasterizeMesh(cmd.mesh, cmd.modelMatrix, cmd.view, cmd.proj, cmd.material, cmd.state, cmd.wireframe,
-                              cmd.firstIndex, cmd.indexCount, lighting, camPos);
+                const std::span<const DrawOrderKey> segment(keys.data() + segmentStart, end - segmentStart);
+                for (const size_t index : OrderDraws(segment))
+                {
+                    const DrawCommand& cmd = queue[segmentStart + index];
+                    RasterizeMesh(cmd.mesh, cmd.modelMatrix, cmd.view, cmd.proj, cmd.material, cmd.state, cmd.wireframe,
+                                  cmd.firstIndex, cmd.indexCount, lighting, camPos);
+                }
+                segmentStart = end;
+            };
+            for (const FrameOp& op : ops)
+            {
+                rasterizeUpTo(std::clamp(op.drawIndex, segmentStart, queue.size()));
+                if (op.captureTarget != nullptr)
+                {
+                    CopyColorTo(*op.captureTarget);
+                }
+                else
+                {
+                    Common::ApplyPostProcessCpu(m_colorBuffer.data(), static_cast<int>(m_width), static_cast<int>(m_height),
+                                                op.settings);
+                }
             }
+            rasterizeUpTo(queue.size());
 
             // NOTE: GL upload stays in Present() — GL context lives on the main thread.
         }
@@ -1385,6 +1413,7 @@ void SoftwareRenderer::DestroyTexture(ITexture *texture)
         // The frame in flight on the render thread may still be sampling this texture: let it finish first.
         // (Returns at once when no frame is in flight.)
         m_renderThread.WaitForFrame();
+        std::erase(m_renderTextures, texture);
         m_textures.erase(it);
     }
 }
@@ -1798,3 +1827,69 @@ void main(){ frag = texture(uTex, vUV); })";
 #endif
 
 void SoftwareRenderer::SetWireframe(bool e) { m_wireframe = e; }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Post-processing and render textures (issue #445)
+// ---------------------------------------------------------------------------------------------------------------------
+
+void SoftwareRenderer::ApplyPostProcess(const Common::PostProcessSettings &settings)
+{
+    const Common::PostProcessSettings sanitized = Common::PostProcessSettings::Sanitized(settings);
+    if (!sanitized.IsActive())
+    {
+        return;
+    }
+    m_frameOps.push_back(FrameOp{m_drawQueue.size(), nullptr, sanitized});
+}
+
+ITexture* SoftwareRenderer::CreateRenderTexture(const uint32_t width, const uint32_t height)
+{
+    if (width == 0 || height == 0 || width > Common::MaxRenderTextureSize || height > Common::MaxRenderTextureSize)
+    {
+        return nullptr;
+    }
+    const std::vector<uint8_t> pixels(static_cast<size_t>(width) * height * 4, 0);
+    ITexture *texture = CreateTexture(pixels.data(), width, height, 4, Common::RenderTextureOptions());
+    if (texture != nullptr)
+    {
+        m_renderTextures.push_back(texture);
+    }
+    return texture;
+}
+
+bool SoftwareRenderer::CaptureFrame(ITexture *target)
+{
+    if (target == nullptr || std::ranges::find(m_renderTextures, target) == m_renderTextures.end())
+    {
+        return false;
+    }
+    m_frameOps.push_back(FrameOp{m_drawQueue.size(), static_cast<SWTexture *>(target), {}});
+    return true;
+}
+
+void SoftwareRenderer::CopyColorTo(SWTexture &target) const
+{
+    if (m_width == 0 || m_height == 0 || target.channels != 4 || target.width == 0 || target.height == 0 ||
+        target.data.size() != static_cast<size_t>(target.width) * target.height * 4)
+    {
+        return;
+    }
+    // The colour buffer is stored top row first; the texture's first row is the bottom of the picture (v = 0)
+    for (uint32_t y = 0; y < target.height; ++y)
+    {
+        const uint32_t sourceRowFromBottom =
+            std::min(static_cast<uint32_t>((static_cast<uint64_t>(y) * m_height + m_height / 2) / target.height), m_height - 1);
+        const uint32_t *sourceRow = m_colorBuffer.data() + static_cast<size_t>(m_height - 1 - sourceRowFromBottom) * m_width;
+        uint8_t *out = target.data.data() + static_cast<size_t>(y) * target.width * 4;
+        for (uint32_t x = 0; x < target.width; ++x)
+        {
+            const uint32_t sx =
+                std::min(static_cast<uint32_t>((static_cast<uint64_t>(x) * m_width + m_width / 2) / target.width), m_width - 1);
+            const uint32_t packed = sourceRow[sx];
+            out[x * 4 + 0] = static_cast<uint8_t>(packed & 0xFFu);
+            out[x * 4 + 1] = static_cast<uint8_t>((packed >> 8) & 0xFFu);
+            out[x * 4 + 2] = static_cast<uint8_t>((packed >> 16) & 0xFFu);
+            out[x * 4 + 3] = 255;
+        }
+    }
+}

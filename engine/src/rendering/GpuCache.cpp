@@ -232,6 +232,15 @@ namespace N2Engine::Rendering
         {
             return {};
         }
+        if (texture->IsRenderTarget())
+        {
+            // Its pixels are on the GPU: one render texture per renderer, never an sRGB copy (which a capture would not fill)
+            return Acquire(renderer, ResourceKind::Texture, 0, texture,
+                           [&texture](IRenderer &target, std::vector<Handle> &) -> void *
+            {
+                return target.CreateRenderTexture(texture->GetWidth(), texture->GetHeight());
+            });
+        }
         return Acquire(renderer, ResourceKind::Texture, sRgb ? 1 : 0, texture,
                        [&texture, sRgb](IRenderer &target, std::vector<Handle> &) -> void *
         {

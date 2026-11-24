@@ -76,8 +76,8 @@ fi
 
 shopt -s nullglob
 shaders=("$root"/renderer/shaders/webgpu/*.wgsl)
-if [ "${#shaders[@]}" -ne 4 ]; then
-  echo "::error::expected unlit.wgsl, lit.wgsl, text.wgsl and user.wgsl under renderer/shaders/webgpu, found ${#shaders[@]} files"
+if [ "${#shaders[@]}" -ne 5 ]; then
+  echo "::error::expected unlit.wgsl, lit.wgsl, text.wgsl, user.wgsl and post.wgsl under renderer/shaders/webgpu, found ${#shaders[@]} files"
   exit 2
 fi
 # The canvas pass lives in the loader. Validate its exact runtime source too;

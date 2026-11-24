@@ -1705,6 +1705,10 @@ function Canvas:SetSize(size) end
 ---@class Image : Component
 Image = {}
 
+---Show a RenderTexture (issue #445) as the image's sprite, or nil for none
+---@param texture RenderTexture|nil
+function Image:SetRenderTexture(texture) end
+
 ---@return Color
 function Image:GetColor() end
 
@@ -2518,6 +2522,9 @@ function Sprite2D:GetFlash() end
 ---A res:// path to an image, or nil for a plain colour
 ---@param path string|nil
 function Sprite2D:SetTexture(path) end
+---Show a RenderTexture (issue #445), or nil for none. GetTexture then returns "" (it has no path)
+---@param texture RenderTexture|nil
+function Sprite2D:SetRenderTexture(texture) end
 ---@return boolean
 function Sprite2D:HasTexture() end
 ---The texture's resource path (as SetTexture takes it), or nil without one
@@ -3633,6 +3640,60 @@ Graphics = {}
 ---@return boolean
 function Graphics.CanBlend() end
 
+---Whether PostProcessStack effects and render-texture captures run (true on OpenGL, Vulkan, WebGPU and software; false
+---without a renderer) (issue #445)
+---@return boolean
+function Graphics.CanPostProcess() end
+
+-- ===== POST-PROCESSING AND RENDER TEXTURES (issue #445, docs/post-processing.html) =====
+
+---The fields of a PostProcessStack, as Set takes them (every one optional there) and Get returns them
+---@class PostProcessFields
+---@field bloom boolean|nil glow around the bright parts (default false)
+---@field bloomThreshold number|nil brightness (the largest of r, g, b) above which a pixel glows, 0 to 1 (default 0.7)
+---@field bloomIntensity number|nil how much glow is added back, 0 to 16 (default 1)
+---@field bloomIterations integer|nil blur passes, 1 to 8: the glow widens with each (default 4)
+---@field bloomTint Color|nil the glow's colour (default white)
+---@field invert number|nil 0 (none) to 1 (a full negative)
+---@field chromaticAberration number|nil red and blue fringes, 0 to 0.25 (0.02 is strong)
+---@field vignette number|nil darkened corners, 0 to 1
+
+---The scene's full-screen effects, run after the scene and before the screen-space UI (the HUD is not bloomed). The first
+---active PostProcessStack of the scene is used; add it with go:AddComponent("PostProcessStack"). Saved with the scene and
+---edited in the inspector.
+---@class PostProcessStack : Component
+PostProcessStack = {}
+
+---Change the fields given (the others stay). A field of the wrong type or an unknown one is an error and changes nothing;
+---out-of-range numbers are clamped when a frame uses them.
+---@param fields PostProcessFields
+function PostProcessStack:Set(fields) end
+
+---Every field as it is now
+---@return PostProcessFields
+function PostProcessStack:Get() end
+
+---A texture the frame can be drawn into: show it with Sprite2D:SetRenderTexture or Image:SetRenderTexture, and fill it with
+---Camera:RenderToTexture (once) or Camera:SetTargetTexture (every frame). Its first row is the bottom of the frame, so it
+---shows upright; it is opaque. Transparent black until the first capture.
+---@class RenderTexture
+RenderTexture = {}
+
+---@param width integer 1 to 8192
+---@param height integer 1 to 8192
+---@return RenderTexture
+function RenderTexture.new(width, height) end
+
+---@return integer
+function RenderTexture:GetWidth() end
+
+---@return integer
+function RenderTexture:GetHeight() end
+
+---How many times a frame was captured into it
+---@return integer
+function RenderTexture:GetCaptureCount() end
+
 -- ===== CAMERA =====
 
 ---@enum OrthographicResizeMode
@@ -3800,6 +3861,18 @@ function Camera:GetFOV() end
 ---@param height integer|nil
 ---@return Ray
 function Camera:ScreenPointToRay(x, y, width, height) end
+
+---Fill `texture` once with the next frame's scene (after post-processing, without the screen-space UI), scaled to its size.
+---For a snapshot, such as a zoom-out effect: show it on a sprite the next frame.
+---@param texture RenderTexture
+function Camera:RenderToTexture(texture) end
+
+---Copy every frame's scene into `texture` (nil stops). The frame still shows on the screen.
+---@param texture RenderTexture|nil
+function Camera:SetTargetTexture(texture) end
+
+---@return RenderTexture|nil
+function Camera:GetTargetTexture() end
 
 -- ===== DEBUG =====
 
