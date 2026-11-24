@@ -483,8 +483,10 @@ TEST_F(ExtensionHookTest, AHookHasNoFunctionOfACapabilityItDidNotDeclare)
 
 TEST_F(ExtensionHookTest, AHookIsCappedAtAThousandRequests)
 {
-    // The time of a thousand round trips is not what this test is about: the wall budget is made generous
-    ExtensionHost::SetHookBudgetForTest(20'000'000, 60000);
+    // The time of a thousand round trips is not what this test is about: the wall budget is made generous. Each request builds
+    // every component schema, and in Debug on the Windows CI runner a thousand took more than the earlier 60 s (the hook was
+    // stopped by its deadline before the request cap, so the log line was never written); a passing run is unaffected
+    ExtensionHost::SetHookBudgetForTest(20'000'000, 300000);
     TempProject project;
     project.Write("a.lua", HookExtension("Chatty", "\"scene.read\"",
                                          "    OnSceneSaved = function(info)\n"
