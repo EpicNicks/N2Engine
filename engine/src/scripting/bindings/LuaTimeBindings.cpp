@@ -4,6 +4,7 @@
 #include "engine/Logger.hpp"
 #include "engine/Time.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <format>
 
@@ -86,6 +87,13 @@ namespace N2Engine::Scripting::Bindings
 
             "fixedUnscaledDeltaTime", sol::property([](const LuaTime&) -> float {
                 return Time::GetFixedUnscaledDeltaTime();
+            }),
+
+            // Wall-clock time: Unix time, UTC seconds since 1970 as a float (sub-second precision). For offline
+            // progress and timestamps; not frame-aligned and not the same on two machines (never use it in
+            // simulation code of a network session). The user can change the system clock, so it can go backwards.
+            "unixTime", sol::property([](const LuaTime&) -> double {
+                return std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
             }),
 
             // Fixed ticks begun (read-only integer)

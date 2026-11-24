@@ -5,6 +5,7 @@
 #include "engine/io/ResourcePath.hpp"
 #include "engine/Logger.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <format>
@@ -39,6 +40,16 @@ namespace N2Engine::Scripting::Bindings
                 }
             }
             return true;
+        }
+
+        // file_clock has no portable conversion to system_clock before C++20 clock_cast, which not every standard
+        // library here has: shift by the offset between the two clocks now (exact to well under a millisecond)
+        double FileTimeToUnixSeconds(const fs::file_time_type written)
+        {
+            const auto system = std::chrono::system_clock::now() +
+                                std::chrono::duration_cast<std::chrono::system_clock::duration>(
+                                    written - fs::file_time_type::clock::now());
+            return std::chrono::duration<double>(system.time_since_epoch()).count();
         }
 
         // user://saves/<name>, or an empty path when the name is not allowed or there is no user data folder
@@ -126,6 +137,23 @@ namespace N2Engine::Scripting::Bindings
                 std::error_code ec;
                 return !path.empty() && fs::is_regular_file(path, ec);
             },
+            // When the file was last written, as Unix time (UTC seconds, a float), or nil when it does not exist.
+            // Compare it with Time.unixTime for offline progress.
+            "GetModifiedTime", [](const std::string &name) -> sol::optional<double>
+            {
+                const fs::path path = SavePath(name, "SaveData.GetModifiedTime");
+                std::error_code ec;
+                if (path.empty() || !fs::is_regular_file(path, ec))
+                {
+                    return sol::nullopt;
+                }
+                const fs::file_time_type written = fs::last_write_time(path, ec);
+                if (ec)
+                {
+                    return sol::nullopt;
+                }
+                return FileTimeToUnixSeconds(written);
+            },
             // Removes the file; true if it existed
             "Delete", [](const std::string &name)
             {
@@ -144,16 +172,35 @@ namespace N2Engine::Scripting::Bindings
                 return LuaToJson(value).dump(pretty.value_or(false) ? 2 : -1);
             },
             // JSON text as a Lua value (arrays as 1-based tables, null as nil), or nil and a message when the text
-            // is not JSON
-            "Decode", [](const std::string &text, sol::this_state state) -> std::tuple<sol::object, sol::object>
+            // is not JSON. options.numbers: "auto" (default; integers as Lua integers) or "float" (every number a
+            // Lua float, so arithmetic on large values never wraps)
+            "Decode", [](const std::string &text, const sol::optional<sol::table> options,
+                         sol::this_state state) -> std::tuple<sol::object, sol::object>
             {
                 sol::state_view lua(state);
+                JsonNumbers numbers = JsonNumbers::Auto;
+                if (options)
+                {
+                    const sol::object mode = (*options)["numbers"];
+                    if (mode.valid() && mode.get_type() != sol::type::lua_nil)
+                    {
+                        const std::string name = mode.is<std::string>() ? mode.as<std::string>() : std::string();
+                        if (name == "float")
+                        {
+                            numbers = JsonNumbers::Float;
+                        }
+                        else if (name != "auto")
+                        {
+                            throw std::runtime_error("Json.Decode: options.numbers is \"auto\" or \"float\"");
+                        }
+                    }
+                }
                 const nlohmann::json parsed = nlohmann::json::parse(text, nullptr, false);
                 if (parsed.is_discarded())
                 {
                     return {sol::lua_nil, sol::make_object(lua, std::string("Json.Decode: not valid JSON"))};
                 }
-                return {JsonToLua(parsed, lua, JsonMaxDepth, "Json.Decode"), sol::lua_nil};
+                return {JsonToLua(parsed, lua, JsonMaxDepth, "Json.Decode", numbers), sol::lua_nil};
             }
         );
     }
