@@ -3191,20 +3191,30 @@ function SaveData.Exists(name) end
 ---@return boolean existed
 function SaveData.Delete(name) end
 
+---When the file was last written, as Unix time (UTC seconds, the clock of Time.unixTime)
+---@param name string
+---@return number|nil seconds nil when the file does not exist
+function SaveData.GetModifiedTime(name) end
+
 ---@class Json
 Json = {}
 
----A Lua value as JSON text (a table with keys 1..n is an array; object keys are sorted)
+---A Lua value as JSON text (a table with keys 1..n is an array; object keys are sorted). Lua integers are written as
+---JSON integers and Lua floats as JSON floats (6/2 as 3.0), so a round trip keeps the subtype; NaN and inf become null.
 ---@param value any
 ---@param pretty boolean|nil indent with two spaces
 ---@return string
 function Json.Encode(value, pretty) end
 
+---@class JsonDecodeOptions
+---@field numbers? "auto"|"float" "auto" (default): integers as Lua integers; "float": every number a Lua float
+
 ---JSON text as a Lua value (null is nil), or nil and a message
 ---@param text string
+---@param options JsonDecodeOptions|nil
 ---@return any value
 ---@return string|nil message
-function Json.Decode(text) end
+function Json.Decode(text, options) end
 
 -- ===== INPUT =====
 
@@ -3495,6 +3505,7 @@ function GameObjectEvent:Unsubscribe(id) end
 ---@field unscaledDeltaTime number Time since last frame (unscaled)
 ---@field unscaledTime number Time since game start (unscaled)
 ---@field fixedUnscaledDeltaTime number Fixed timestep for physics (unscaled)
+---@field unixTime number Wall clock: UTC seconds since 1970 (read-only; differs between machines, never use in network simulation code)
 ---@field tick integer Fixed ticks begun so far (read-only): 0 before the first, N inside tick N's OnFixedUpdate
 ---@field timeScale number Time scale multiplier (1.0 = normal, 0.5 = slow motion, 0.0 = paused)
 Time = {}
