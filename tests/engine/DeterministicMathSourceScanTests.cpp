@@ -34,6 +34,8 @@ namespace
         {"src/particles/ParticleEmitter.cpp",
          "std::sin, std::cos and std::cbrt placing cosmetic particles: they are not part of the simulation state, which "
          "gameplay never reads, and an emitter has its own seeded generator for one machine"},
+        {"src/particles/ParticleBillboards.cpp",
+         "std::sin and std::cos turning particle quads by their rotation (issue #445): drawing only, never read by the simulation"},
     };
 
     std::string ReadFile(const fs::path &path)
