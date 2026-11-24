@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -7,6 +8,10 @@
 #include <math/UUID.hpp>
 
 #include "engine/Application.hpp"
+#include "engine/SimulationClock.hpp"
+#include "engine/Time.hpp"
+#include "engine/Window.hpp"
+#include "engine/config/ApplicationOptions.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/Logger.hpp"
 #include "engine/io/ResourceLoader.hpp"
@@ -54,6 +59,15 @@ protected:
                 return self.handle
             end
             return Starter
+        )");
+        // The same, with a raised InstructionBudget (issue #445): its coroutines' resumes get it too
+        WriteAsset("co/RaisedStarter.lua", R"(
+            local RaisedStarter = { InstructionBudget = 2000000 }
+            RaisedStarter.__index = RaisedStarter
+            function RaisedStarter:Start(...)
+                return self.component:StartCoroutine(co_body, ...)
+            end
+            return RaisedStarter
         )");
         IO::ResourceUUID::Initialize(Math::UUID::Random());
         IO::ResourceLoader::Instance().Initialize(s_root);
@@ -213,4 +227,136 @@ TEST_F(LuaScriptCoroutineTest, ThePlainCoroutineLibraryWorksAndIsBudgeted)
                                         sol::script_pass_on_error);
     EXPECT_FALSE(result.valid());
     LuaRuntime::Instance().SetLimits(saved);
+}
+
+TEST_F(LuaScriptCoroutineTest, WaitForSecondsRealtimeChecksItsValueAndAnythingElseIsStillAnError)
+{
+    EXPECT_FLOAT_EQ(Lua().safe_script("return WaitForSecondsRealtime(0.25).seconds").get<float>(), 0.25f);
+    for (const char *bad : {"WaitForSecondsRealtime(-1)", "WaitForSecondsRealtime(0/0)", "WaitForSecondsRealtime(math.huge)"})
+    {
+        EXPECT_FALSE(Lua().safe_script(std::string("return ") + bad, sol::script_pass_on_error).valid()) << bad;
+    }
+    // A table is not a wait
+    Define("function() coroutine.yield({ seconds = 1 }) co_log[#co_log+1] = 1 end");
+    sol::table self = _component->GetScriptInstance();
+    sol::object handle = self["Start"](self);
+    _scene->AdvanceCoroutines();
+    EXPECT_FALSE(handle.as<ScriptCoroutineHandle>().IsRunning());
+    EXPECT_EQ(LogSize(), 0);
+}
+
+TEST_F(LuaScriptCoroutineTest, ACoroutineOfAComponentWithARaisedBudgetGetsItOnEveryResume)
+{
+    const LuaLimits saved = LuaRuntime::Instance().GetLimits();
+    LuaRuntime::Instance().SetLimits({200'000, saved.maxBytes});
+    const auto go = GameObject::Create("RaisedRunner");
+    _scene->AddRootGameObject(go);
+    auto *raised = go->AddComponent<LuaComponent>();
+    raised->SetScript(IO::ResourcePath("res://co/RaisedStarter.lua"));
+    ASSERT_FALSE(raised->HasMissingScript());
+    EXPECT_EQ(raised->GetInstructionBudget(), 2'000'000u);
+    // About a million instructions after the first yield: five times the runtime's budget, half the raised one
+    Define("function() coroutine.yield() local x = 0 for i = 1, 200000 do x = x + 1 x = x + 1 x = x + 1 x = x + 1 end "
+           "co_log[#co_log+1] = x end");
+    sol::table raisedSelf = raised->GetScriptInstance();
+    sol::table plainSelf = _component->GetScriptInstance();
+    raisedSelf["Start"](raisedSelf);
+    plainSelf["Start"](plainSelf);
+    _scene->AdvanceCoroutines();
+    _scene->AdvanceCoroutines();
+    LuaRuntime::Instance().SetLimits(saved);
+    EXPECT_FALSE(raised->IsFaulted());
+    EXPECT_EQ(LogSize(), 1) << "only the raised component's coroutine finished its loop";
+    EXPECT_TRUE(_component->IsFaulted());
+}
+
+// coroutine.yield(WaitForSecondsRealtime(s)) (issue #445): frames of a known delta through Application::Tick, on a headless
+// software window as ApplicationTickTest runs them
+class LuaScriptCoroutineRealtimeTest : public LuaScriptCoroutineTest
+{
+protected:
+    void SetUp() override
+    {
+        Config::ApplicationOptions options;
+        options.renderBackend = Config::ApplicationOptions::RenderBackend::SOFTWARE;
+        options.isHeadless = true;
+        Window &window = Application::GetInstance().GetWindow();
+        ASSERT_TRUE(window.InitWindow(options)) << window.GetInitError();
+        Application::GetInstance().Set3DPhysicsBackend(nullptr);
+        Time::SetTimeScale(1.0f);
+        LuaScriptCoroutineTest::SetUp();
+    }
+
+    void TearDown() override
+    {
+        Time::SetTimeScale(1.0f);
+        Application &app = Application::GetInstance();
+        app.SetSimulationMode(SimulationMode::None);
+        app.GetSimulationClock().Reset();
+        // Other tests rely on the engine clock standing still: a frame of no time leaves the deltas at zero again
+        Frame(0.0);
+        LuaScriptCoroutineTest::TearDown();
+        app.GetWindow().Shutdown();
+    }
+
+    static void Frame(const double seconds)
+    {
+        TickOptions options;
+        options.render = false;
+        options.pollEvents = false;
+        options.deltaSeconds = seconds;
+        Application::GetInstance().Tick(options);
+    }
+
+    /// Starts a scaled and a realtime wait of 0.1 s side by side, runs `frames` frames of 0.06 s and returns the log
+    std::string RunBothWaits(const int frames)
+    {
+        Define("function(tag, wait) coroutine.yield(wait) co_log[#co_log+1] = tag end");
+        const sol::object realtimeWait = Lua().safe_script("return WaitForSecondsRealtime(0.1)").get<sol::object>();
+        sol::table self = _component->GetScriptInstance();
+        self["Start"](self, "scaled", 0.1);
+        self["Start"](self, "realtime", realtimeWait);
+        std::string log;
+        for (int frame = 0; frame < frames; ++frame)
+        {
+            Frame(0.06);
+        }
+        const sol::table entries = Lua()["co_log"];
+        for (std::size_t i = 1; i <= entries.size(); ++i)
+        {
+            log += entries[i].get<std::string>() + ";";
+        }
+        return log;
+    }
+};
+
+TEST_F(LuaScriptCoroutineRealtimeTest, ARealtimeWaitIgnoresTheTimeScaleAndAScaledOneFollowsIt)
+{
+    Time::SetTimeScale(0.0f); // hit-stop
+    // Frame 1 runs both bodies to their yield; frames 2 and 3 add 0.06 s of unscaled time each: 0.12 >= 0.1
+    EXPECT_EQ(RunBothWaits(2), "");
+    Frame(0.06);
+    std::string log;
+    const sol::table entries = Lua()["co_log"];
+    for (std::size_t i = 1; i <= entries.size(); ++i)
+    {
+        log += entries[i].get<std::string>() + ";";
+    }
+    EXPECT_EQ(log, "realtime;") << "the scaled wait stands still while timeScale is 0";
+
+    Time::SetTimeScale(1.0f);
+    Frame(0.06);
+    Frame(0.06);
+    EXPECT_EQ(Lua()["co_log"].get<sol::table>().size(), 2u) << "the scaled wait finishes once time runs again";
+}
+
+TEST_F(LuaScriptCoroutineRealtimeTest, ARealtimeWaitIsUnscaledFrameTimeInANetworkSimulationModeToo)
+{
+    // Coroutines run once per frame, outside the fixed ticks, in every mode: the realtime wait counts the same unscaled
+    // frame time there, and the scaled one still follows timeScale (which in a network mode only scales frame time)
+    Application::GetInstance().SetSimulationMode(SimulationMode::Deterministic);
+    Time::SetTimeScale(0.0f);
+    const std::uint64_t ticksBefore = Time::GetTick();
+    EXPECT_EQ(RunBothWaits(3), "realtime;");
+    EXPECT_GT(Time::GetTick(), ticksBefore) << "the ticks ran: timeScale does not pause a network mode";
 }

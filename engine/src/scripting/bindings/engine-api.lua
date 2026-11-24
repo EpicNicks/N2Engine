@@ -762,6 +762,30 @@ function Positionable:GetScale() end
 ---@param scale Vector3
 function Positionable:SetScale(scale) end
 
+---Get the position relative to the parent's Positionable (the world position for a root object)
+---@return Vector3
+function Positionable:GetLocalPosition() end
+
+---Set the position relative to the parent's Positionable
+---@param pos Vector3
+function Positionable:SetLocalPosition(pos) end
+
+---Get the rotation relative to the parent's Positionable
+---@return Quaternion
+function Positionable:GetLocalRotation() end
+
+---Set the rotation relative to the parent's Positionable
+---@param rot Quaternion
+function Positionable:SetLocalRotation(rot) end
+
+---Get the scale relative to the parent's Positionable
+---@return Vector3
+function Positionable:GetLocalScale() end
+
+---Set the scale relative to the parent's Positionable
+---@param scale Vector3
+function Positionable:SetLocalScale(scale) end
+
 ---Get forward direction
 ---@return Vector3
 function Positionable:GetForward() end
@@ -1624,6 +1648,9 @@ function TextRenderer:GetBounds() end
 ---the pointer methods OnMouseEnter, OnMouseOver, OnMouseExit, OnMouseDown, OnMouseDrag, OnMouseUp and
 ---OnMouseUpAsButton (no arguments; sent before OnUpdate to the object under the cursor, left button only).
 ---Inside those methods, self.gameObject and self.component are set.
+---The table may declare InstructionBudget = n (instructions): each call into the component, and each resume of a
+---coroutine it started, then gets n instead of the runtime's budget when n is larger (cut to 500000000).
+---Changes the script makes to its SerializableFields on self at runtime are not saved: a save writes the stored values.
 ---@class LuaComponent : Component
 LuaComponent = {}
 
@@ -1648,7 +1675,9 @@ function LuaComponent:GetScriptData() end
 function LuaComponent:GetScript() end
 
 ---Runs fn(...) as a coroutine of this object, resumed once per frame by its scheduler (the first resume is on the next
----update, not inside this call). Inside it, coroutine.yield() waits a frame and coroutine.yield(seconds) waits that long.
+---update, not inside this call). Inside it, coroutine.yield() waits a frame, coroutine.yield(seconds) waits that long in
+---scaled time, and coroutine.yield(WaitForSecondsRealtime(seconds)) waits that long in unscaled time.
+---Each resume gets the instruction budget (the script class's InstructionBudget when it declares a larger one).
 ---Stops with the object. Returns nil when none started (inactive object, script switched off).
 ---@param fn function
 ---@param ... any passed to fn
@@ -1666,6 +1695,13 @@ function ScriptCoroutine:Stop() end
 
 ---@return boolean true until it has finished, failed or been stopped
 function ScriptCoroutine:IsRunning() end
+
+---A wait in unscaled time, for coroutine.yield inside a StartCoroutine function: timeScale (hit-stop, a pause) does not
+---stretch it. Frame time in every simulation mode, like every coroutine wait.
+---@class WaitForSecondsRealtime
+---@field seconds number read-only
+---@overload fun(seconds: number): WaitForSecondsRealtime
+WaitForSecondsRealtime = {}
 
 ---@class Component
 Component = {}

@@ -9,6 +9,7 @@
 #include <format>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <numbers>
 #include <optional>
@@ -1319,6 +1320,19 @@ namespace N2Engine::Scripting::Bindings
         lua.new_usertype<ScriptCoroutineHandle>("ScriptCoroutine", sol::no_constructor,
             "Stop", &ScriptCoroutineHandle::Stop,
             "IsRunning", &ScriptCoroutineHandle::IsRunning);
+
+        // coroutine.yield(WaitForSecondsRealtime(s)) inside a StartCoroutine function waits s seconds of unscaled time
+        // (issue #445; docs/coroutines.html#lua). The value is checked here, so the resume can trust it.
+        lua.new_usertype<ScriptRealtimeWait>("WaitForSecondsRealtime",
+            sol::call_constructor, sol::factories([](const double seconds)
+            {
+                if (!std::isfinite(seconds) || seconds < 0.0)
+                {
+                    throw std::runtime_error("WaitForSecondsRealtime: the wait must be a finite number of seconds >= 0");
+                }
+                return ScriptRealtimeWait{static_cast<float>(std::min(seconds, static_cast<double>(std::numeric_limits<float>::max())))};
+            }),
+            "seconds", sol::readonly(&ScriptRealtimeWait::seconds));
 
         // ===== Material (global) and MaterialInstance: a .mat's values at runtime (user shaders, stage 5b) =====
         // Setters return true, or false with one warning when the name is not a parameter of the material's shader or the setter does not fit
