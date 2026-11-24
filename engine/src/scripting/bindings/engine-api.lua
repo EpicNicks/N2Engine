@@ -2722,6 +2722,14 @@ function Sprite2D:GetSaturation() end
 function Sprite2D:SetFlash(flash) end
 ---@return Color
 function Sprite2D:GetFlash() end
+---How the sprite mixes with what is behind it, on every renderer (the software one included): "Alpha" (the default),
+---"Additive" (adds its colour: glows, halos, neon) or "Multiply" (what is behind times its colour; alpha unused, so transparent
+---texels must be white). No user shader needed. With a user shader that declares a state.blend hint, the hint wins. Saved with
+---the scene. Another name is an error.
+---@param mode "Alpha"|"Additive"|"Multiply"
+function Sprite2D:SetBlendMode(mode) end
+---@return "Alpha"|"Additive"|"Multiply"
+function Sprite2D:GetBlendMode() end
 ---A res:// path to an image, or nil for a plain colour
 ---@param path string|nil
 function Sprite2D:SetTexture(path) end
@@ -3971,8 +3979,8 @@ function Screen.GetTint() end
 Graphics = {}
 
 ---False on the software renderer (the web player's fallback when the browser has no WebGPU), which cannot blend: a
----half-transparent pixel is drawn opaque or not at all, so a soft glow sprite becomes a hard disc. Skip such sprites
----when it is false. True on OpenGL, Vulkan and WebGPU, and without a renderer.
+---half-transparent pixel is drawn opaque or not at all, so a soft particle or UI image becomes a hard shape. Skip such
+---effects when it is false. Sprite2D is the exception: the software renderer blends sprites (Sprite2D:SetBlendMode). True on OpenGL, Vulkan and WebGPU, and without a renderer.
 ---@return boolean
 function Graphics.CanBlend() end
 
