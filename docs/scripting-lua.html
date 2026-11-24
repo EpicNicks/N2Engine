@@ -100,6 +100,7 @@
 <li><a href="#still-raw">What is still raw</a></li>
 <li><a href="#reload">Reloading scripts</a></li>
 <li><a href="#engine-api">The <code>engine-api.lua</code> annotation file</a></li>
+<li><a href="#camera-2d">The camera in 2D games</a></li>
 <li><a href="#examples">Example scripts</a></li>
 <li><a href="#tests">Tests</a></li>
 </ol>
@@ -752,6 +753,15 @@ return Fields
 <p>The editor reads these declarations: <code>GetLuaFields</code> lists them with their kinds (the declared <code>type</code>, else the default's type), and <code>SetComponentFields</code> sets them through <code>scriptData</code> <span class="badge">PR #93</span>. See <a href="serialization.html#reflection-lua">Reflection: LuaComponent</a> and <a href="editor.html#components">Components and the inspector</a>.</p>
 <p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::ExtractSerializableFields</code>, <code>LuaComponent::InjectFieldsIntoScript</code>, <code>LuaComponent::SetScriptData</code>, <code>LuaComponent::GetField</code>, <code>LuaComponent::SetField</code>; tests: <code>LuaScriptTest.SerializableFieldDefaultsAndOverrides</code>, <code>LuaRobustnessTest.ShorthandFieldDefaultsAreRead</code>, <code>LuaRobustnessTest.PartialVectorFieldDefaultsMissingAxesToZero</code></p>
 
+<h3 id="fields-runtime">Changes made while the game runs are not saved <span class="badge">issue #445</span></h3>
+<p>The scene file holds <code>scriptData</code>, the store described above, and nothing else: <code>LuaComponent::Serialize</code> writes <code>scriptData</code> as it is and never reads the instance table back. So:</p>
+<ul>
+<li><code>self.count = self.count + 1</code> in a callback changes the running instance only. Serializing the scene (the editor saving it, a rollback or prefab capture reading it) still writes the value <code>scriptData</code> holds, the one the scene was loaded with or the editor set. This is on purpose: <code>SerializableFields</code> are the <em>authored</em> values of a scene, the inspector's, not a save game.</li>
+<li>Game progress belongs in <a href="#save-data"><code>SaveData</code> and <code>Json</code></a>: write what must survive in a save, read it in <code>OnAttach</code>, and let the field be the default for a new game.</li>
+<li>A value set through <code>SetField</code> (C++) or the editor's <code>SetComponentFields</code> does go into <code>scriptData</code>, and is injected into the instance the next time the script is set.</li>
+</ul>
+<p>Tests: <code>LuaScriptTest.AFieldChangedWhileRunningIsNotWrittenToTheScene</code>.</p>
+
 <div class="callout note">
 <p class="callout-title">Note</p>
 <ul>
@@ -1284,6 +1294,24 @@ end</code></pre>
 <li>Script-side conventions are described only in prose on <code>LuaComponent</code>: the lifecycle methods (including <code>OnMouse*</code>), <code>SerializableFields</code> and the <code>OnCollision*</code>/<code>OnTrigger*</code> argument types have no annotations.</li>
 </ul>
 <p class="src">Source: <code>engine/src/scripting/bindings/engine-api.lua</code>; <code>engine/src/scripting/bindings/*.cpp</code>; <code>engine/src/scripting/LuaRuntime.cpp</code> — <code>RegisterBindings</code> (the <code>T.new</code> aliases match the file's <code>T.new</code> stubs)</p>
+
+<h2 id="camera-2d">The camera in 2D games <span class="badge">issue #445</span></h2>
+<p>A 2D game draws <a href="sprite2d.html">sprites</a> and <a href="ui.html">UI</a> with an orthographic camera, set from a script as <code>Camera.Main():SetOrthographic(left, right, bottom, top, near, far)</code>. The first four are world units from the camera's position: <code>(-4, 4, -3, 3)</code> shows 8 x 6 units. The camera looks down &minus;Z, so put it at a positive z and sprites at z 0 sit between the planes.</p>
+<pre class="lang-lua"><code>local cam = Camera.Main()
+cam:SetOrthographic(-8, 8, -4.5, 4.5, 0.1, 100)  -- 16 x 9 units
+cam:SetPosition(Vector3(0, 0, 10))
+cam:SetOrthographicResizeMode(OrthographicResizeMode.MaintainVertical)
+-- Pointer to world: a ray parallel to the view direction; its origin is the point on the near plane
+local p = Input.GetMousePosition()
+local ray = cam:ScreenPointToRay(p.x, p.y)
+local world = ray.origin                 -- for this unrotated camera, x and y are the world position under the cursor at any depth
+</code></pre>
+<ul>
+<li><strong>Resizing.</strong> When the window's size changes, the engine calls <code>UpdateAspectRatio</code> on the main camera. For an orthographic camera <code>OrthographicResizeMode</code> decides what moves: <code>MaintainVertical</code> (the default) keeps the height and widens or narrows the view, <code>MaintainHorizontal</code> keeps the width, <code>MaintainLarger</code> keeps whichever extent is larger so the picture is never cut. The view stays centred on the same point.</li>
+<li><strong>Picking with it.</strong> <code>Camera:ScreenPointToRay</code> is correct for an orthographic camera: the rays are parallel, with origins spread over the near plane (<a href="input.html#screen-point-to-ray">details</a>). A width and a height can be passed for a viewport that is not the window's.</li>
+<li><strong>Switching back.</strong> <code>Camera:SetPerspective(fov, aspect, near, far)</code>.</li>
+</ul>
+<p class="src">Source: <code>engine/src/scripting/bindings/LuaCameraBindings.cpp</code>; <code>engine/src/Camera.cpp</code> &mdash; <code>Camera::UpdateAspectRatio</code>, <code>Camera::ScreenPointToRay</code>; tests: <code>LuaPickingTest.RayAndScreenPointToRay</code>, <code>ScreenPointToRayTest.OrthographicRaysAreParallel</code>, <code>LuaPickingTest.AScriptSwitchesToAnOrthographicCamera</code>.</p>
 
 <h2 id="examples">Example scripts</h2>
 <h3 id="example-scene">Scene setup script</h3>
