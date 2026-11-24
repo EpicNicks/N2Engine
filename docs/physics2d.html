@@ -176,6 +176,7 @@
 <li>Triggers are hit by default.</li>
 <li>One difference: every distance is clamped to <code>kMaxSweepDistance</code>, rays included.</li>
 </ul>
+<p><span class="badge">issue #445</span> <strong>Picking.</strong> <code>PickRay(origin, direction, hit, ...)</code> takes a 3D ray, such as a camera's <code>ScreenPointToRay</code>, and returns the nearest collider containing the point where the ray crosses that collider's plane, <code>z =</code> its object's world z. It is what makes <code>OnMouse*</code> callbacks reach 2D colliders: see <a href="input.html#picking-2d">Picking 2D colliders</a>.</p>
 
 <h2 id="joints">Joints (the <code>Joint2D</code> component) <span class="badge">issue #445</span></h2>
 <p><code>Joint2D</code> (<code>engine/physics2d/Joint2D.hpp</code>) joins the 2D body of its own object (its <code>Rigidbody2D</code>'s, or a collider's own static body) to the body of <code>connectedBody</code>, or to the world when that is empty. It is the 2D twin of the 3D <a href="physics.html#joints"><code>Joint</code></a>: the same field names, the same zero-pose rule and the same lifecycle, on Box2D's joints.</p>
