@@ -22,7 +22,7 @@ namespace
         return LuaRuntime::Instance().GetState();
     }
 
-    void Run(const std::string &code)
+    void RunLua(const std::string &code)
     {
         ASSERT_TRUE(LuaRuntime::Instance().Initialize());
         const sol::protected_function_result result = Lua().safe_script(code, sol::script_pass_on_error);
@@ -49,7 +49,7 @@ namespace
 
 TEST(LuaGeometry2DTest, AScriptCanSetEveryLineField)
 {
-    Run(R"(
+    RunLua(R"(
         local go = GameObject.Create('LuaLine')
         local line = go:AddComponent('LineRenderer')
         line:SetPositions({Vector2(0, 0), Vector3(1, 0, 2), Vector2(1, 1)})
@@ -95,7 +95,7 @@ TEST(LuaGeometry2DTest, AScriptCanSetEveryLineField)
 
 TEST(LuaGeometry2DTest, AScriptCanSetEveryTrailField)
 {
-    Run(R"(
+    RunLua(R"(
         local go = GameObject.Create('LuaTrail')
         local trail = go:AddComponent('TrailRenderer')
         trail:SetTime(0.5)
@@ -127,7 +127,7 @@ TEST(LuaGeometry2DTest, AScriptCanSetEveryTrailField)
 
 TEST(LuaGeometry2DTest, AScriptBuildsAConcaveMeshAndShowsIt)
 {
-    Run(R"(
+    RunLua(R"(
         local l = {Vector2(0, 0), Vector2(2, 0), Vector2(2, 1), Vector2(1, 1), Vector2(1, 2), Vector2(0, 2)}
         local tris = Mesh.Triangulate(l)
         assert(#tris == 12)
@@ -207,7 +207,7 @@ TEST(LuaGeometry2DTest, EveryBadMeshIsALuaErrorThatSaysWhy)
     expectError("GameObject.Create('M'):AddComponent('MeshRenderer'):SetMesh(42)", "expected a ProceduralMesh");
 
     // A failed SetData keeps the mesh as it was
-    Run("bad_mesh = Mesh.Create({" + tri + ", indices = {1, 2, 3}}) "
+    RunLua("bad_mesh = Mesh.Create({" + tri + ", indices = {1, 2, 3}}) "
         "assert(not pcall(function() bad_mesh:SetData({" + tri + ", indices = {1, 2, 9}}) end)) "
         "assert(bad_mesh:GetIndexCount() == 3) bad_mesh = nil");
 }
