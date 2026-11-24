@@ -8,6 +8,8 @@
 #include <limits>
 #include <vector>
 
+#include <math/Vector3.hpp>
+
 #include "engine/Layers.hpp"
 #include "engine/physics/Raycast.hpp"
 #include "engine/physics2d/Physics2DTypes.hpp"
@@ -40,4 +42,11 @@ namespace N2Engine::Physics2D
     int OverlapBox(const Math::Vector2 &center, const Math::Vector2 &halfExtents, float angleRadians,
                    std::vector<OverlapHit2D> &hits, std::uint32_t layerMask = Layers::DefaultRaycastMask,
                    Physics::QueryTriggers triggers = Physics::QueryTriggers::Collide);
+
+    /// A 3D ray (a camera's ScreenPointToRay) against the 2D colliders, each in the plane z = its object's world z: the nearest
+    /// collider containing the point where the ray crosses its plane. `hit.distance` is along the 3D ray. Picking uses it
+    /// (Physics2DWorld::PickRay, docs/input.html#picking-2d).
+    bool PickRay(const Math::Vector3 &origin, const Math::Vector3 &direction, RaycastHit2D &hit, float maxDistance = kNoLimit,
+                 std::uint32_t layerMask = Layers::DefaultRaycastMask,
+                 Physics::QueryTriggers triggers = Physics::QueryTriggers::Collide);
 }
