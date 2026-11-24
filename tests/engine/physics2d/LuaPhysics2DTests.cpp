@@ -71,6 +71,16 @@ namespace
 
                 return Watcher
             )";
+            // Written here, before the loader scans the project: a script made later is not found by res://
+            std::ofstream(s_projectRoot / "assets" / "p2d" / "Breaker.lua") << R"(
+                local Breaker = {}
+                Breaker.__index = Breaker
+                function Breaker:OnJointBreak2D(joint)
+                    p2d_broken = (p2d_broken or 0) + 1
+                    p2d_broken_type = joint:GetJointType()
+                end
+                return Breaker
+            )";
             IO::ResourceLoader::Instance().Initialize(s_projectRoot);
         }
 
@@ -395,16 +405,6 @@ namespace
 
     TEST_F(LuaPhysics2DTest, AJoint2DFromAScriptHoldsBreaksAndCallsOnJointBreak2D)
     {
-        const fs::path script = s_projectRoot / "assets" / "p2d" / "Breaker.lua";
-        std::ofstream(script) << R"(
-            local Breaker = {}
-            Breaker.__index = Breaker
-            function Breaker:OnJointBreak2D(joint)
-                p2d_broken = (p2d_broken or 0) + 1
-                p2d_broken_type = joint:GetJointType()
-            end
-            return Breaker
-        )";
         Run(R"(
             p2d_broken, p2d_broken_type = nil
             local scene = SceneManager.GetCurrentScene()

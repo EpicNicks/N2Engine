@@ -137,7 +137,9 @@ TEST_F(Joint2DTest, AHingeMotorDrivesItsSpeedAndLimitsStopIt)
     const auto wheel = Body("Wheel", 0.0f, 0.0f);
     wheel->GetComponent<Rigidbody2D>()->SetGravityScale(0.0f);
     Joint2D *joint = ToWorld(wheel, JointType2D::Hinge, Vector2(0.0f, 0.0f));
-    joint->SetMotor(true, 90.0f, 1000.0f);
+    // A modest torque: the wheel needs about 0.01 to reach 90 degrees a second, and a limit holds it against that. Box2D solves a limit
+    // as a soft constraint after the motor, so a torque of 1000 on this 0.0025 inertia pushes straight through it.
+    joint->SetMotor(true, 90.0f, 0.05f);
     Step(20);
     EXPECT_NEAR(wheel->GetComponent<Rigidbody2D>()->GetAngularVelocity(), 3.14159265f / 2.0f, 0.05f) << "90 degrees a second";
 
