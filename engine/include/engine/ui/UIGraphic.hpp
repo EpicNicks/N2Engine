@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include <math/Matrix.hpp>
 #include <renderer/common/Renderer.hpp>
 #include <renderer/common/RenderState.hpp>
@@ -68,11 +70,21 @@ namespace N2Engine::UI
         [[nodiscard]] bool GetRaycastTarget() const { return _raycastTarget; }
         void SetRaycastTarget(const bool raycastTarget) { _raycastTarget = raycastTarget; }
 
+        /**
+         * The clip rect (canvas space) of the draw under way, issue #445: the intersection of the rects of the RectMask
+         * objects above this graphic (UIDrawItem::clip). UISystem sets it just before it calls RenderUI and clears it right
+         * after, so a RenderUI called directly (tests) draws unclipped. Image and UIText cut their geometry to it on the
+         * CPU, which every backend draws the same way; nothing outside it is drawn. Not serialized.
+         */
+        [[nodiscard]] const std::optional<Rect> &GetRenderClip() const { return _renderClip; }
+        void SetRenderClip(const std::optional<Rect> &clip) { _renderClip = clip; }
+
     protected:
         explicit UIGraphic(GameObject &gameObject);
 
         Common::Color _color{Common::Color::White};
         bool _raycastTarget = true;
         Common::Color _tint{Common::Color::White};
+        std::optional<Rect> _renderClip;
     };
 }
