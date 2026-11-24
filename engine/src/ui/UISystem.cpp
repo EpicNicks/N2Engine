@@ -16,6 +16,7 @@
 #include "engine/Logger.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/physics/Raycast.hpp"
+#include "engine/physics2d/Physics2DQueries.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/ui/Button.hpp"
 #include "engine/ui/Canvas.hpp"
@@ -480,6 +481,14 @@ namespace N2Engine::UI
             {
                 return nullptr;
             }
+        }
+        // A solid 2D collider in front of the canvas, by the same rule (each in the plane of its object's z)
+        Physics2D::RaycastHit2D hit2D;
+        if (Physics2D::PickRay(ray.origin, ray.direction, hit2D, hit.distance - BlockTolerance, physicsMask,
+                               Physics::QueryTriggers::Ignore) &&
+            hit2D.distance > StartInsideTolerance)
+        {
+            return nullptr;
         }
         return hit.gameObject;
 #endif
