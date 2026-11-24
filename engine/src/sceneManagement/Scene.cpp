@@ -18,6 +18,7 @@
 #include "engine/rendering/Light.hpp"
 #include "engine/rendering/RenderCamera.hpp"
 #include "engine/rendering/RenderSettings.hpp"
+#include "engine/rendering/SpriteBatcher.hpp"
 #include "engine/Logger.hpp"
 #include "engine/Positionable.hpp"
 
@@ -161,11 +162,22 @@ void Scene::Render(Renderer::Common::IRenderer *renderer, const Camera &camera, 
     {
         renderable->RenderInQueue(renderer, Renderer::Common::RenderState::Opaque(), RenderQueue::Opaque);
     }
+    // Consecutive sprites that look alike are drawn as one batch (issue #445); everything else draws itself, in the same order
+    if (!_spriteBatcher)
+    {
+        _spriteBatcher = std::make_unique<Rendering::SpriteBatcher>();
+    }
+    _spriteBatcher->BeginPass(*renderer, Renderer::Common::RenderState::Transparent());
     for (const TransparentEntry &entry : transparent)
     {
+        if (_spriteBatcher->Submit(*entry.renderable))
+        {
+            continue;
+        }
         entry.renderable->RenderInQueue(renderer, Renderer::Common::RenderState::Transparent(),
                                         RenderQueue::Transparent);
     }
+    _spriteBatcher->EndPass();
 }
 
 void Scene::CollectRenderablesRecursive(const std::shared_ptr<GameObject> &gameObject, std::vector<IRenderable *> &out,
