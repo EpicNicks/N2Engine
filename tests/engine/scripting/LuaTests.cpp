@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -255,6 +256,21 @@ TEST_F(LuaTest, TimeTickIsTheEnginesTickCounterAsAReadOnlyInteger)
     // Read-only: a write is an error and the counter is unchanged
     EXPECT_FALSE(Eval<bool>("pcall(function() Time.tick = 5 end)"));
     EXPECT_EQ(Eval<std::int64_t>("Time.tick"), static_cast<std::int64_t>(Time::GetTick()));
+}
+
+TEST_F(LuaTest, TimeUnixTimeIsTheWallClockInUtcSeconds)
+{
+    const auto toSeconds = [](const std::chrono::system_clock::time_point t)
+    { return std::chrono::duration<double>(t.time_since_epoch()).count(); };
+
+    const double before = toSeconds(std::chrono::system_clock::now());
+    const double unix = Eval<double>("Time.unixTime");
+    const double after = toSeconds(std::chrono::system_clock::now());
+    EXPECT_GE(unix, before - 0.001);
+    EXPECT_LE(unix, after + 0.001);
+    EXPECT_GT(unix, 1.7e9) << "seconds since 1970, not since the process started";
+    EXPECT_EQ(Eval<std::string>("math.type(Time.unixTime)"), "float");
+    EXPECT_FALSE(Eval<bool>("pcall(function() Time.unixTime = 5 end)")) << "read-only";
 }
 
 TEST_F(LuaTest, TimeScaleIsWritable)

@@ -208,6 +208,33 @@ TEST_F(LuaPickingTest, RayAndScreenPointToRay)
     Lua()["picking_camera"] = sol::lua_nil;
 }
 
+// docs/scripting-lua.html#camera-2d: a script makes the camera orthographic, and a resize keeps what the mode says
+TEST_F(LuaPickingTest, AScriptSwitchesToAnOrthographicCamera)
+{
+    Camera camera;
+    Lua()["docs_camera"] = &camera;
+    Run(R"(
+        docs_camera:SetOrthographic(-8, 8, -4.5, 4.5, 0.1, 100)
+        docs_camera:SetPosition(Vector3(0, 0, 10))
+        docs_camera:SetOrthographicResizeMode(OrthographicResizeMode.MaintainVertical)
+    )");
+    EXPECT_NEAR(Eval<float>("docs_camera:ScreenPointToRay(0, 0, 1600, 900).origin.x"), -8.0f, 1e-3f);
+    EXPECT_NEAR(Eval<float>("docs_camera:ScreenPointToRay(0, 0, 1600, 900).origin.y"), 4.5f, 1e-3f);
+    EXPECT_NEAR(Eval<float>("docs_camera:ScreenPointToRay(1600, 900, 1600, 900).origin.x"), 8.0f, 1e-3f);
+    EXPECT_NEAR(Eval<float>("docs_camera:ScreenPointToRay(800, 450, 1600, 900).direction.z"), -1.0f, 1e-3f);
+
+    // MaintainVertical: the height (9) stays, a 2:1 window shows 18 units across
+    Run("docs_camera:UpdateAspectRatio(2.0)");
+    EXPECT_NEAR(Eval<float>("docs_camera:ScreenPointToRay(0, 0, 1600, 800).origin.x"), -9.0f, 1e-3f);
+    EXPECT_NEAR(Eval<float>("docs_camera:ScreenPointToRay(0, 0, 1600, 800).origin.y"), 4.5f, 1e-3f);
+
+    // MaintainHorizontal: the width (18 now) stays, a square window shows 18 units up
+    Run("docs_camera:SetOrthographicResizeMode(OrthographicResizeMode.MaintainHorizontal); docs_camera:UpdateAspectRatio(1.0)");
+    EXPECT_NEAR(Eval<float>("docs_camera:ScreenPointToRay(0, 0, 900, 900).origin.x"), -9.0f, 1e-3f);
+    EXPECT_NEAR(Eval<float>("docs_camera:ScreenPointToRay(0, 0, 900, 900).origin.y"), 9.0f, 1e-3f);
+    Lua()["docs_camera"] = sol::lua_nil;
+}
+
 // Camera:LookAt from a script points the view (-Z) at the target, exactly as Camera::LookAt does in C++
 TEST_F(LuaPickingTest, CameraLookAtMatchesCpp)
 {

@@ -100,6 +100,7 @@
 <li><a href="#still-raw">What is still raw</a></li>
 <li><a href="#reload">Reloading scripts</a></li>
 <li><a href="#engine-api">The <code>engine-api.lua</code> annotation file</a></li>
+<li><a href="#camera-2d">The camera in 2D games</a></li>
 <li><a href="#examples">Example scripts</a></li>
 <li><a href="#tests">Tests</a></li>
 </ol>
@@ -572,22 +573,32 @@ end</code></pre>
 <p class="src">Source: <code>engine/CMakeLists.txt</code>; tests: <code>LuaHandleTest.BadArgumentsAreCleanErrors</code></p>
 
 <h2 id="save-data">Save data and JSON <span class="badge">PR #335</span></h2>
-<p>Scripts keep small text files in the project's user data folder, under <code>user://saves</code> (the folder <code>ProjectFile::UserDataPath</code> gives the project; a folder run without a project file uses the shared one). <code>io</code> and <code>os</code> stay closed: these four calls are the only file access a script has.</p>
+<p>Scripts keep small text files in the project's user data folder, under <code>user://saves</code> (the folder <code>ProjectFile::UserDataPath</code> gives the project; a folder run without a project file uses the shared one). <code>io</code> and <code>os</code> stay closed: these calls are the only file access a script has.</p>
 <div class="table-wrap"><table>
 <thead><tr><th>Call</th><th>Does</th></tr></thead>
 <tbody>
 <tr><td><code>SaveData.Write(name, text)</code></td><td>Writes the whole file: to <code>name.tmp</code> first, then renamed over the old file, so a crash never leaves half a save. Returns <code>true</code>, or <code>false</code> and a message (text over 1 MiB, a folder that cannot be written).</td></tr>
 <tr><td><code>SaveData.Read(name)</code></td><td>The file's text, or <code>nil</code> when it does not exist, cannot be read or is over 1 MiB (with a warning).</td></tr>
 <tr><td><code>SaveData.Exists(name)</code>, <code>SaveData.Delete(name)</code></td><td>Whether the file exists; removes it and returns whether it existed.</td></tr>
-<tr><td><code>Json.Encode(value [, pretty])</code></td><td>JSON text. A table whose keys are exactly 1..n is an array, any other table an object with its keys sorted; whole numbers stay integers; functions, userdata and cycles become <code>null</code> (<code>LuaToJson</code>). <code>pretty</code> indents with two spaces.</td></tr>
-<tr><td><code>Json.Decode(text)</code></td><td>A Lua value: objects and arrays as tables (arrays 1-based), integers as Lua integers, <code>null</code> as <code>nil</code>. Text that is not JSON returns <code>nil</code> and a message. Nesting deeper than 100 is a Lua error.</td></tr>
+<tr><td><code>SaveData.GetModifiedTime(name)</code> <span class="badge">issue #445</span></td><td>When the file was last written, as Unix time (UTC seconds, a float, the same clock as <code>Time.unixTime</code>), or <code>nil</code> when it does not exist. The file system's own timestamp, converted from its clock to the system clock, so it is as coarse as the file system stores it (FAT: 2 seconds).</td></tr>
+<tr><td><code>Json.Encode(value [, pretty])</code></td><td>JSON text. A table whose keys are exactly 1..n is an array, any other table an object with its keys sorted. A Lua integer is written as a JSON integer and a Lua float as a JSON float, a whole one with <code>.0</code> (<code>6/2</code> is <code>3.0</code>), so <code>Json.Decode</code> gives back the same subtype <span class="badge">issue #445</span>; floats use the shortest text that reads back to the same double, so they round-trip exactly; NaN and infinities have no JSON form and become <code>null</code>; functions, userdata and cycles become <code>null</code> (<code>LuaToJson</code>). <code>pretty</code> indents with two spaces.</td></tr>
+<tr><td><code>Json.Decode(text [, options])</code></td><td>A Lua value: objects and arrays as tables (arrays 1-based), integers (no fraction, no exponent) as Lua integers, other numbers as Lua floats, <code>null</code> as <code>nil</code>. <code>options.numbers = "float"</code> makes every number a Lua float, for saves written by other tools or by an older engine that wrote whole floats as integers; <code>"auto"</code> is the default and any other value is a Lua error <span class="badge">issue #445</span>. Text that is not JSON returns <code>nil</code> and a message. Nesting deeper than 100 is a Lua error.</td></tr>
 </tbody></table></div>
 <p>A save name is a plain file name: letters, digits, <code>_</code>, <code>-</code> and <code>.</code>, 1 to 64 characters, not starting with <code>.</code>. Anything else (a path, <code>..</code>, a space) is a Lua error, so a script cannot reach a file outside <code>user://saves</code>.</p>
 <pre class="lang-lua"><code>SaveData.Write("save.json", Json.Encode({ version = 1, unlocked = { 1, 3, 4 } }))
 local text = SaveData.Read("save.json")
 local save = text and Json.Decode(text) or { version = 1, unlocked = {} }
 </code></pre>
-<div class="callout note"><p class="callout-title">Note</p><p>On the web build <code>user://</code> is in the page's in-memory file system, so saves do not survive a reload (not persisted to IndexedDB yet).</p></div>
+<p>Large values such as idle-game currency should be floats: Lua integer arithmetic wraps silently past 2<sup>63</sup>, float arithmetic goes to <code>inf</code>. Write <code>coins = 0.0</code> rather than <code>0</code>; the float survives a save. A save written before issue #445 may hold such values as integers: decode it with <code>{ numbers = "float" }</code>.</p>
+<pre class="lang-lua"><code>-- Offline progress: time away since the save was written
+local text = SaveData.Read("save.json")
+if text then
+    local save = Json.Decode(text, { numbers = "float" })
+    local away = math.max(0, Time.unixTime - (save.savedAt or Time.unixTime))
+    save.coins = save.coins + save.perSecond * math.min(away, 8 * 3600)
+end
+</code></pre>
+<div class="callout note"><p class="callout-title">Note</p><p>On the web build <code>user://</code> is kept in IndexedDB (Emscripten&rsquo;s IDBFS), so saves survive a reload; when IndexedDB is unavailable the folder stays in memory for that page and one <code>saves:</code> line is logged. Details: <a href="web-build.html#saves">Web build: persistent saves</a>.</p></div>
 <p class="src">Source: <code>engine/src/scripting/bindings/LuaSaveDataBindings.cpp</code> (<code>BindSaveData</code>, <code>JsonToLua</code>); <code>engine/src/scripting/LuaJson.cpp</code> (<code>LuaToJson</code>); limits <code>SaveDataMaxNameLength</code>, <code>SaveDataMaxBytes</code>, <code>JsonMaxDepth</code> in <code>LuaBindings.hpp</code>; tests: <code>LuaSaveDataTest.*</code> (<code>tests/engine/scripting/LuaSaveDataTests.cpp</code>)</p>
 
 <h2 id="modules">Modules and <code>require</code></h2>
@@ -688,7 +699,7 @@ end
 <tr><td><code>OnCollisionEnter/Stay/Exit</code></td><td><code>Collision</code></td><td>After the physics step of each fixed step (see <a href="physics.html">Physics</a>)</td></tr>
 <tr><td><code>OnTriggerEnter/Stay/Exit</code></td><td><code>Trigger</code></td><td>Same as collisions</td></tr>
 <tr><td><code>OnCollisionEnter2D/Stay2D/Exit2D</code>, <code>OnTriggerEnter2D/Stay2D/Exit2D</code> <span class="badge">PR #314</span></td><td><code>Collision2D</code>, <code>Trigger2D</code></td><td>After the 2D step of each fixed step (see <a href="physics2d.html#lua">2D physics</a>)</td></tr>
-<tr><td><code>OnMouseEnter</code>, <code>OnMouseOver</code>, <code>OnMouseExit</code>, <code>OnMouseDown</code>, <code>OnMouseDrag</code>, <code>OnMouseUp</code>, <code>OnMouseUpAsButton</code> <span class="badge">PR #48</span></td><td></td><td>Once per frame, after the fixed steps and before <code>OnUpdate</code>, on the object under the cursor or the one holding the left button. The object needs a collider. Disabled components still get them; inactive objects don't. See <a href="input.html#picking">Picking</a>. Use <code>Input.GetMousePosition()</code> for the cursor.</td></tr>
+<tr><td><code>OnMouseEnter</code>, <code>OnMouseOver</code>, <code>OnMouseExit</code>, <code>OnMouseDown</code>, <code>OnMouseDrag</code>, <code>OnMouseUp</code>, <code>OnMouseUpAsButton</code> <span class="badge">PR #48</span></td><td></td><td>Once per frame, after the fixed steps and before <code>OnUpdate</code>, on the object under the cursor or the one holding the left button. The object needs a collider, 3D or <span class="badge">issue #445</span> 2D. Disabled components still get them; inactive objects don't. See <a href="input.html#picking">Picking</a>. Use <code>Input.GetMousePosition()</code> for the cursor.</td></tr>
 <tr><td><code>OnUpdate</code></td><td></td><td>Once per frame, after the fixed steps</td></tr>
 <tr><td><code>OnLateUpdate</code></td><td></td><td>Once per frame, after <code>OnUpdate</code> and coroutines</td></tr>
 <tr><td><code>OnEnable</code> / <code>OnDisable</code></td><td></td><td>When the GameObject's effective active state changes (<code>GameObject:SetActive</code> on it or an ancestor), only for components whose own enable flag is on</td></tr>
@@ -1162,13 +1173,13 @@ self.gameObject:SetLayer(Layers.NameToLayer("Player"))
 <p><code>LuaToJson(value)</code> (<code>engine/include/engine/scripting/LuaJson.hpp</code>) converts a Lua value for C++:</p>
 <ul>
 <li>booleans and strings map directly;</li>
-<li>numbers with an integral value below 2<sup>53</sup> become JSON integers (so <code>3.0</code> becomes <code>3</code>), others become floats;</li>
+<li>numbers keep their Lua subtype: an integer becomes a JSON integer, a float a JSON float (so <code>3.0</code> stays <code>3.0</code>); NaN and infinities become <code>null</code> <span class="badge">issue #445</span>. Until issue #445 whole floats below 2<sup>53</sup> became integers, which turned a large float currency value into a Lua integer on load;</li>
 <li>a table whose keys are exactly <code>1..n</code> becomes an array; any other table, including an empty one, becomes an object. Non-string keys are converted to their JSON text;</li>
 <li>functions, userdata (including vectors and handles) and <code>nil</code> become <code>null</code>;</li>
 <li>a table that contains itself, directly or indirectly, becomes <code>null</code> at the point it recurs, instead of overflowing the stack (PR #24). A table referenced twice without a cycle is converted twice.</li>
 </ul>
 <p><code>ActionMapJsonFromLua(actions)</code> builds the JSON <code>ActionMap::Deserialize</code> expects from <code>{ ["Action"] = { binding, ... } }</code>. It is what <code>Input.CreateActionMap</code> uses. Bindings keep their written order, and entries with a non-string key or a non-table value are skipped.</p>
-<p class="src">Source: <code>engine/src/scripting/LuaJson.cpp</code> — <code>LuaToJson</code>, <code>TableToJson</code>, <code>NumberToJson</code>, <code>ActionMapJsonFromLua</code>; tests: <code>LuaRobustnessTest.LuaToJsonSurvivesSelfReferencingTables</code>, <code>LuaSceneTest.LuaToJsonScalars</code>, <code>LuaSceneTest.LuaToJsonTables</code>, <code>LuaSceneTest.ActionMapJsonFromLuaKeepsBindingOrder</code>, <code>LuaSceneTest.ActionMapJsonFromLuaParsesAsActionMap</code></p>
+<p class="src">Source: <code>engine/src/scripting/LuaJson.cpp</code> — <code>LuaToJson</code>, <code>TableToJson</code>, <code>NumberToJson</code>, <code>ActionMapJsonFromLua</code>; tests: <code>LuaRobustnessTest.LuaToJsonSurvivesSelfReferencingTables</code>, <code>LuaSceneTest.LuaToJsonScalars</code>, <code>LuaSceneTest.LuaToJsonTables</code>, <code>LuaSaveDataTest.JsonKeepsTheNumberSubtype</code>, <code>LuaSceneTest.ActionMapJsonFromLuaKeepsBindingOrder</code>, <code>LuaSceneTest.ActionMapJsonFromLuaParsesAsActionMap</code></p>
 
 <h2 id="still-raw">What is still raw</h2>
 <p>Since <span class="badge">PR #31</span>, <code>Scene</code>, <code>ActionMap</code> and <code>InputAction</code> are <a href="#lifetime-handles">checked handles</a>. A few objects still reach Lua as plain pointers or references, on purpose: each lives until after scripts can no longer run, so there is nothing for a handle to check.</p>
@@ -1251,7 +1262,7 @@ self.gameObject:SetLayer(Layers.NameToLayer("Player"))
 <tr><td><code>Physics</code>, <code>RaycastHit</code> <span class="badge">PR #48</span></td><td>table / table shape</td><td><code>Raycast</code>, <code>RaycastAll</code>; the fields of a hit</td><td><code>LuaPhysicsBindings.cpp</code></td></tr>
 <tr><td><code>Event</code>, <code>WindowResizeEvent</code>, <code>GameObjectEvent</code></td><td>raw</td><td><code>Subscribe</code>/<code>Unsubscribe</code> (no global "Events" table)</td><td><code>LuaEventsBindings.cpp</code></td></tr>
 <tr><td><code>WaitForSecondsRealtime</code> <span class="badge">issue #445</span></td><td>value type</td><td><code>WaitForSecondsRealtime(seconds)</code>, read-only <code>seconds</code>: yielded from a <code>StartCoroutine</code> function, waits in unscaled time (<a href="coroutines.html#lua">Coroutines: Lua</a>)</td><td><code>LuaComponentBindings.cpp</code></td></tr>
-<tr><td><code>Time</code></td><td>object with properties</td><td><code>deltaTime</code>, <code>time</code>, <code>fixedDeltaTime</code>, unscaled variants; read-only integer <code>tick</code> (the fixed ticks begun; 0 before the first, N inside tick N's <code>OnFixedUpdate</code>) <span class="badge">PR #186</span>; writable <code>timeScale</code></td><td><code>LuaTimeBindings.cpp</code></td></tr>
+<tr><td><code>Time</code></td><td>object with properties</td><td><code>deltaTime</code>, <code>time</code>, <code>fixedDeltaTime</code>, unscaled variants; read-only float <code>unixTime</code>: the wall clock, UTC seconds since 1970 with sub-second precision, for offline progress and timestamps (not frame-aligned, differs between machines so never for simulation code of a network session, and moves if the user changes the system clock) <span class="badge">issue #445</span>; read-only integer <code>tick</code> (the fixed ticks begun; 0 before the first, N inside tick N's <code>OnFixedUpdate</code>) <span class="badge">PR #186</span>; writable <code>timeScale</code></td><td><code>LuaTimeBindings.cpp</code></td></tr>
 <tr><td><code>Application</code></td><td>table</td><td><code>Quit</code> (a request honoured at end of frame), <code>GetPlatform</code>, <code>GetCamera</code></td><td><code>LuaApplicationBindings.cpp</code></td></tr>
 <tr><td><code>Window</code>, <code>WindowMode</code></td><td>table / enum</td><td><code>Get</code>, <code>GetWidth/Height</code>, <code>SetTitle</code>, <code>SetMode</code>, <code>SetClearColor</code></td><td><code>LuaWindowBindings.cpp</code></td></tr>
 <tr><td><code>Graphics</code> (effects stage E1)</td><td>table</td><td><code>CanBlend()</code>: false on the software renderer, which cannot blend (see <a href="#graphics">below</a>)</td><td><code>LuaScreenBindings.cpp</code></td></tr>
@@ -1305,6 +1316,24 @@ end</code></pre>
 <li>Script-side conventions are described only in prose on <code>LuaComponent</code>: the lifecycle methods (including <code>OnMouse*</code>), <code>SerializableFields</code> and the <code>OnCollision*</code>/<code>OnTrigger*</code> argument types have no annotations.</li>
 </ul>
 <p class="src">Source: <code>engine/src/scripting/bindings/engine-api.lua</code>; <code>engine/src/scripting/bindings/*.cpp</code>; <code>engine/src/scripting/LuaRuntime.cpp</code> — <code>RegisterBindings</code> (the <code>T.new</code> aliases match the file's <code>T.new</code> stubs)</p>
+
+<h2 id="camera-2d">The camera in 2D games <span class="badge">issue #445</span></h2>
+<p>A 2D game draws <a href="sprite2d.html">sprites</a> and <a href="ui.html">UI</a> with an orthographic camera, set from a script as <code>Camera.Main():SetOrthographic(left, right, bottom, top, near, far)</code>. The first four are world units from the camera's position: <code>(-4, 4, -3, 3)</code> shows 8 x 6 units. The camera looks down &minus;Z, so put it at a positive z and sprites at z 0 sit between the planes.</p>
+<pre class="lang-lua"><code>local cam = Camera.Main()
+cam:SetOrthographic(-8, 8, -4.5, 4.5, 0.1, 100)  -- 16 x 9 units
+cam:SetPosition(Vector3(0, 0, 10))
+cam:SetOrthographicResizeMode(OrthographicResizeMode.MaintainVertical)
+-- Pointer to world: a ray parallel to the view direction; its origin is the point on the near plane
+local p = Input.GetMousePosition()
+local ray = cam:ScreenPointToRay(p.x, p.y)
+local world = ray.origin                 -- for this unrotated camera, x and y are the world position under the cursor at any depth
+</code></pre>
+<ul>
+<li><strong>Resizing.</strong> When the window's size changes, the engine calls <code>UpdateAspectRatio</code> on the main camera. For an orthographic camera <code>OrthographicResizeMode</code> decides what moves: <code>MaintainVertical</code> (the default) keeps the height and widens or narrows the view, <code>MaintainHorizontal</code> keeps the width, <code>MaintainLarger</code> keeps whichever extent is larger so the picture is never cut. The view stays centred on the same point.</li>
+<li><strong>Picking with it.</strong> <code>Camera:ScreenPointToRay</code> is correct for an orthographic camera: the rays are parallel, with origins spread over the near plane (<a href="input.html#screen-point-to-ray">details</a>). A width and a height can be passed for a viewport that is not the window's.</li>
+<li><strong>Switching back.</strong> <code>Camera:SetPerspective(fov, aspect, near, far)</code>.</li>
+</ul>
+<p class="src">Source: <code>engine/src/scripting/bindings/LuaCameraBindings.cpp</code>; <code>engine/src/Camera.cpp</code> &mdash; <code>Camera::UpdateAspectRatio</code>, <code>Camera::ScreenPointToRay</code>; tests: <code>LuaPickingTest.RayAndScreenPointToRay</code>, <code>ScreenPointToRayTest.OrthographicRaysAreParallel</code>, <code>LuaPickingTest.AScriptSwitchesToAnOrthographicCamera</code>.</p>
 
 <h2 id="examples">Example scripts</h2>
 <h3 id="example-scene">Scene setup script</h3>
