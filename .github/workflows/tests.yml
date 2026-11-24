@@ -1026,7 +1026,9 @@ jobs:
   metal-spike:
     name: metal spike (the Vulkan renderer on MoltenVK)
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    # macOS runners are scarce (5 concurrent on a public repo) and jobs queued for hours get dropped, failing PRs:
+    # skipped except on a manual run (Actions > Tests > Run workflow) until the queue pressure is dealt with
+    if: github.event_name == 'workflow_dispatch' && needs.changes.outputs.docs_only != 'true'
     runs-on: macos-15
     timeout-minutes: 75
     steps:
@@ -1103,7 +1105,9 @@ jobs:
   apple:
     name: apple (${{ matrix.target }}${{ matrix.moltenvk && ' with MoltenVK' || '' }} package of lua_project)
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    # macOS runners are scarce (5 concurrent on a public repo) and jobs queued for hours get dropped, failing PRs:
+    # skipped except on a manual run (Actions > Tests > Run workflow) until the queue pressure is dealt with
+    if: github.event_name == 'workflow_dispatch' && needs.changes.outputs.docs_only != 'true'
     runs-on: macos-15
     timeout-minutes: 90
     strategy:

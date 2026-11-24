@@ -531,6 +531,67 @@ TEST_F(WebGpuComputeTest, ParticlesDieAtTheEndOfTheirLifetimeAndTheirSlotsAreReu
     EXPECT_EQ(backend.GetSystemCount(), 0u);
 }
 
+TEST_F(WebGpuComputeTest, KillFreesTheParticlesInsideARegionAndMotionGivesVelocitiesAndRotations)
+{
+    // Issue #445: a kill frees the slots on the CPU and empties them on the GPU; CopyMotion gives a velocity (estimated
+    // from the copies) and the rotation of every particle, in CopyPositions' order
+    Particles::WebGpuParticleBackend backend(R().GetCompute(), R().GetLifetimeToken());
+    backend.SetMaxStepsInFlight(0);
+    ASSERT_TRUE(backend.IsHealthy());
+    auto desc = Desc(Physics::ParticleMaterial::Smoke, 5.0f);
+    desc.params.gravity = Math::Vector3(0.0f, 0.0f, 0.0f);
+    const auto handle = backend.CreateSystem(desc);
+    ASSERT_NE(handle, Physics::kInvalidParticleSystem);
+
+    // Ten particles in a row along X, far enough apart not to push each other, drifting up at 1 unit per second
+    std::vector<Math::Vector3> positions;
+    std::vector<Math::Vector3> velocities;
+    std::vector<Math::Vector2> spins;
+    for (int i = 0; i < 10; ++i)
+    {
+        positions.emplace_back(static_cast<float>(i) * 2.0f, 1.0f, 0.0f);
+        velocities.emplace_back(0.0f, 1.0f, 0.0f);
+        spins.emplace_back(0.5f, 2.0f);
+    }
+    ASSERT_EQ(backend.SpawnWithSpin(handle, positions, velocities, spins), 10u);
+    for (int step = 0; step < 5; ++step)
+    {
+        backend.Step(0.02f);
+        ASSERT_TRUE(backend.SyncForTest());
+    }
+
+    std::vector<Math::Vector4> motion;
+    backend.CopyMotion(handle, motion);
+    ASSERT_EQ(motion.size(), 10u);
+    for (const Math::Vector4 &m : motion)
+    {
+        // SyncForTest lands copies of the same state under two step counts, so the estimate here may read 0
+        EXPECT_TRUE(std::isfinite(m.y));
+        EXPECT_GE(m.y, -0.01f);
+        EXPECT_LE(m.y, 1.2f);
+        EXPECT_NEAR(m.x, 0.0f, 0.05f);
+        EXPECT_NEAR(m.w, 0.5f + 2.0f * 0.1f, 1e-3f) << "the start rotation plus the angular velocity times the age";
+    }
+
+    // The particles at x = 0, 2 and 4 are inside the circle
+    EXPECT_EQ(backend.Kill(handle, Physics::ParticleRegion{Physics::ParticleRegion::Shape::Circle,
+                                                           Math::Vector3(2.0f, 1.1f, 0.0f), 2.5f, Math::Vector3()}),
+              3u);
+    EXPECT_EQ(backend.GetAliveCount(handle), 7u);
+    backend.Step(0.02f);
+    ASSERT_TRUE(backend.SyncForTest());
+    std::vector<Math::Vector4> out;
+    backend.CopyPositions(handle, out);
+    ASSERT_EQ(out.size(), 7u);
+    for (const Math::Vector4 &p : out)
+    {
+        EXPECT_GT(p.x, 5.0f) << "only the particles outside the circle are left";
+    }
+    EXPECT_EQ(backend.Spawn(handle, positions, velocities), 10u) << "the killed slots are free again";
+    EXPECT_EQ(backend.GetAliveCount(handle), 17u);
+    backend.Destroy(handle);
+}
+
 TEST_F(WebGpuComputeTest, ParticleLifetimesMatchTheCpuBackends)
 {
     // The same seed draws the same lifetimes, and the CPU-side count of the WebGPU backend never waits for the GPU

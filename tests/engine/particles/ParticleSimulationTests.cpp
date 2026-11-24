@@ -987,3 +987,369 @@ TEST(ParticleBillboardsTest, ANegativeSizeCountsAsZero)
     ASSERT_EQ(mesh.vertices.size(), 4u);
     EXPECT_FLOAT_EQ(mesh.vertices[0].position[0], mesh.vertices[2].position[0]);
 }
+
+// ---------------------------------------------------------------- issue #445: shapes, rotation, motion, kills, render modes
+
+namespace
+{
+    float Length3(const Math::Vector3 &v)
+    {
+        return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+    }
+
+    Math::Vector4 Particle(const float x, const float y, const float z, const float age)
+    {
+        Math::Vector4 v;
+        v.x = x;
+        v.y = y;
+        v.z = z;
+        v.w = age;
+        return v;
+    }
+}
+
+TEST(ParticleEmitterTest, ACircleStartsInItsDiscInTheXYPlaneAndMovesOutwardsInThatPlane)
+{
+    EmitterShapeSettings shape;
+    shape.shape = EmitterShape::Circle;
+    shape.shapeRadius = 2.0f;
+    shape.speedMin = 1.0f;
+    shape.speedMax = 1.0f;
+    ParticleEmitter emitter(4);
+    std::vector<Math::Vector3> positions;
+    std::vector<Math::Vector3> velocities;
+    emitter.Generate(shape, Math::Vector3(1.0f, 1.0f, 3.0f), Math::Quaternion(), 300, positions, velocities);
+    ASSERT_EQ(positions.size(), 300u);
+    float nearest = 10.0f;
+    for (std::size_t i = 0; i < 300; ++i)
+    {
+        EXPECT_NEAR(positions[i].z, 3.0f, 1e-5f) << "in the XY plane";
+        EXPECT_NEAR(velocities[i].z, 0.0f, 1e-5f);
+        const float dx = positions[i].x - 1.0f;
+        const float dy = positions[i].y - 1.0f;
+        const float r = std::sqrt(dx * dx + dy * dy);
+        EXPECT_LE(r, 2.0f + 1e-4f);
+        nearest = std::min(nearest, r);
+        if (r > 0.05f)
+        {
+            EXPECT_GT(dx * velocities[i].x + dy * velocities[i].y, 0.0f) << "outwards";
+        }
+        EXPECT_NEAR(Length3(velocities[i]), 1.0f, 1e-4f);
+    }
+    EXPECT_LT(nearest, 1.0f) << "the disc is filled, not just its rim";
+
+    // From the edge: every particle on the rim
+    shape.emitFromEdge = true;
+    emitter.Generate(shape, Math::Vector3(), Math::Quaternion(), 100, positions, velocities);
+    for (const Math::Vector3 &p : positions)
+    {
+        EXPECT_NEAR(std::sqrt(p.x * p.x + p.y * p.y), 2.0f, 1e-4f);
+    }
+}
+
+TEST(ParticleEmitterTest, AnEdgeStartsOnItsLineAndShootsUpWithinTheFanInTheXYPlane)
+{
+    EmitterShapeSettings shape;
+    shape.shape = EmitterShape::Edge;
+    shape.shapeRadius = 3.0f;
+    shape.coneAngle = 20.0f;
+    shape.speedMin = 2.0f;
+    shape.speedMax = 2.0f;
+    ParticleEmitter emitter(5);
+    std::vector<Math::Vector3> positions;
+    std::vector<Math::Vector3> velocities;
+    emitter.Generate(shape, Math::Vector3(), Math::Quaternion(), 300, positions, velocities);
+    const float cosLimit = std::cos(20.0f * std::numbers::pi_v<float> / 180.0f);
+    float widest = 0.0f;
+    for (std::size_t i = 0; i < 300; ++i)
+    {
+        EXPECT_NEAR(positions[i].y, 0.0f, 1e-5f);
+        EXPECT_NEAR(positions[i].z, 0.0f, 1e-5f);
+        EXPECT_LE(std::abs(positions[i].x), 3.0f + 1e-4f);
+        widest = std::max(widest, std::abs(positions[i].x));
+        EXPECT_NEAR(velocities[i].z, 0.0f, 1e-5f) << "stays in the 2D plane";
+        EXPECT_GE(velocities[i].y / 2.0f, cosLimit - 1e-4f) << "within 20 degrees of +Y";
+    }
+    EXPECT_GT(widest, 2.5f);
+}
+
+TEST(ParticleEmitterTest, ABoxStartsInsideItOrOnItsFacesAndShootsAlongTheCone)
+{
+    EmitterShapeSettings shape;
+    shape.shape = EmitterShape::Box;
+    shape.boxSize = Math::Vector3(4.0f, 2.0f, 6.0f);
+    shape.coneAngle = 0.0f;
+    shape.speedMin = 1.0f;
+    shape.speedMax = 1.0f;
+    ParticleEmitter emitter(6);
+    std::vector<Math::Vector3> positions;
+    std::vector<Math::Vector3> velocities;
+    emitter.Generate(shape, Math::Vector3(), Math::Quaternion(), 400, positions, velocities);
+    bool inner = false;
+    for (std::size_t i = 0; i < 400; ++i)
+    {
+        const Math::Vector3 &p = positions[i];
+        EXPECT_LE(std::abs(p.x), 2.0f + 1e-4f);
+        EXPECT_LE(std::abs(p.y), 1.0f + 1e-4f);
+        EXPECT_LE(std::abs(p.z), 3.0f + 1e-4f);
+        inner = inner || (std::abs(p.x) < 1.5f && std::abs(p.y) < 0.5f && std::abs(p.z) < 2.5f);
+        EXPECT_NEAR(velocities[i].y, 1.0f, 1e-4f) << "a cone of 0 degrees: straight up";
+    }
+    EXPECT_TRUE(inner) << "the volume is used";
+
+    shape.emitFromEdge = true;
+    emitter.Generate(shape, Math::Vector3(), Math::Quaternion(), 400, positions, velocities);
+    int onEachAxis[3] = {0, 0, 0};
+    for (const Math::Vector3 &p : positions)
+    {
+        const bool onX = std::abs(std::abs(p.x) - 2.0f) < 1e-4f;
+        const bool onY = std::abs(std::abs(p.y) - 1.0f) < 1e-4f;
+        const bool onZ = std::abs(std::abs(p.z) - 3.0f) < 1e-4f;
+        EXPECT_TRUE(onX || onY || onZ) << "on a face: " << p.x << ", " << p.y << ", " << p.z;
+        onEachAxis[0] += onX ? 1 : 0;
+        onEachAxis[1] += onY ? 1 : 0;
+        onEachAxis[2] += onZ ? 1 : 0;
+    }
+    for (const int count : onEachAxis)
+    {
+        EXPECT_GT(count, 20) << "every pair of faces is used";
+    }
+}
+
+TEST(ParticleEmitterTest, FromTheEdgeTheSphereUsesItsSurfaceAndTheConeItsRim)
+{
+    EmitterShapeSettings shape;
+    shape.shape = EmitterShape::Sphere;
+    shape.shapeRadius = 1.5f;
+    shape.emitFromEdge = true;
+    ParticleEmitter emitter(8);
+    std::vector<Math::Vector3> positions;
+    std::vector<Math::Vector3> velocities;
+    emitter.Generate(shape, Math::Vector3(), Math::Quaternion(), 100, positions, velocities);
+    for (const Math::Vector3 &p : positions)
+    {
+        EXPECT_NEAR(Length3(p), 1.5f, 1e-4f);
+    }
+    shape.shape = EmitterShape::Cone;
+    emitter.Generate(shape, Math::Vector3(), Math::Quaternion(), 100, positions, velocities);
+    for (const Math::Vector3 &p : positions)
+    {
+        EXPECT_NEAR(std::sqrt(p.x * p.x + p.z * p.z), 1.5f, 1e-4f);
+        EXPECT_NEAR(p.y, 0.0f, 1e-5f);
+    }
+}
+
+TEST(ParticleEmitterTest, SpinsComeFromTheirRangesWithoutChangingThePositionsOrVelocities)
+{
+    EmitterShapeSettings shape;
+    shape.shapeRadius = 1.0f;
+    shape.coneAngle = 30.0f;
+    shape.startRotationMin = 90.0f;
+    shape.startRotationMax = 180.0f;
+    shape.angularVelocityMin = -45.0f;
+    shape.angularVelocityMax = 45.0f;
+    ParticleEmitter withSpins(11);
+    ParticleEmitter without(11);
+    std::vector<Math::Vector3> positionsA, velocitiesA, positionsB, velocitiesB;
+    std::vector<Math::Vector2> spins;
+    withSpins.Generate(shape, Math::Vector3(), Math::Quaternion(), 50, positionsA, velocitiesA, &spins);
+    without.Generate(shape, Math::Vector3(), Math::Quaternion(), 50, positionsB, velocitiesB);
+    ASSERT_EQ(spins.size(), 50u);
+    const float deg = std::numbers::pi_v<float> / 180.0f;
+    for (std::size_t i = 0; i < 50; ++i)
+    {
+        EXPECT_EQ(positionsA[i].x, positionsB[i].x) << "the rotations have a random stream of their own";
+        EXPECT_EQ(velocitiesA[i].y, velocitiesB[i].y);
+        EXPECT_GE(spins[i].x, 90.0f * deg - 1e-5f);
+        EXPECT_LE(spins[i].x, 180.0f * deg + 1e-5f);
+        EXPECT_GE(spins[i].y, -45.0f * deg - 1e-5f);
+        EXPECT_LE(spins[i].y, 45.0f * deg + 1e-5f);
+    }
+}
+
+TEST(CpuParticleBackendTest, CopyMotionGivesTheVelocityAndTheRotationAtTheParticlesAge)
+{
+    CpuParticleBackend backend;
+    ParticleParams params;
+    params.gravity = Math::Vector3(0.0f, 0.0f, 0.0f);
+    params.lifetimeMin = 10.0f;
+    params.lifetimeMax = 10.0f;
+    const ParticleSystemHandle handle = Make(backend, 10, 1, params);
+    const std::vector<Math::Vector3> positions{Math::Vector3(0.0f, 0.0f, 0.0f), Math::Vector3(1.0f, 0.0f, 0.0f)};
+    const std::vector<Math::Vector3> velocities{Math::Vector3(3.0f, 0.0f, 0.0f), Math::Vector3(0.0f, -2.0f, 0.0f)};
+    const std::vector<Math::Vector2> spins{Math::Vector2(0.5f, 2.0f)}; // the second particle has none
+    ASSERT_EQ(backend.SpawnWithSpin(handle, positions, velocities, spins), 2u);
+    for (int i = 0; i < 25; ++i)
+    {
+        backend.Step(kStep);
+    }
+    std::vector<Math::Vector4> motion;
+    backend.CopyMotion(handle, motion);
+    ASSERT_EQ(motion.size(), 2u);
+    EXPECT_FLOAT_EQ(motion[0].x, 3.0f);
+    EXPECT_NEAR(motion[0].w, 0.5f + 2.0f * 0.5f, 1e-4f);
+    EXPECT_FLOAT_EQ(motion[1].y, -2.0f);
+    EXPECT_FLOAT_EQ(motion[1].w, 0.0f) << "no spin given: no rotation";
+
+    backend.Clear(handle);
+    backend.CopyMotion(handle, motion);
+    EXPECT_TRUE(motion.empty());
+    backend.CopyMotion(ParticleSystemHandle{12345}, motion);
+    EXPECT_TRUE(motion.empty()) << "an unknown handle";
+}
+
+TEST(CpuParticleBackendTest, KillRemovesTheParticlesInsideARegionAndKeepsTheRest)
+{
+    CpuParticleBackend backend;
+    ParticleParams params;
+    params.lifetimeMin = 10.0f;
+    params.lifetimeMax = 10.0f;
+    const ParticleSystemHandle handle = Make(backend, 100, 1, params);
+    std::vector<Math::Vector3> positions;
+    std::vector<Math::Vector3> velocities;
+    std::vector<Math::Vector2> spins;
+    for (int i = 0; i < 10; ++i)
+    {
+        positions.emplace_back(static_cast<float>(i), 0.0f, static_cast<float>(i % 2) * 10.0f);
+        velocities.emplace_back(0.0f, 0.0f, 0.0f);
+        spins.emplace_back(static_cast<float>(i), 0.0f); // the rotation tells which particle survived
+    }
+    ASSERT_EQ(backend.SpawnWithSpin(handle, positions, velocities, spins), 10u);
+
+    using Physics::ParticleRegion;
+    // A circle in the XY plane takes particles at any z: x = 0, 1, 2
+    EXPECT_EQ(backend.Kill(handle, ParticleRegion{ParticleRegion::Shape::Circle, Math::Vector3(0.0f, 0.0f, 0.0f), 2.0f,
+                                                  Math::Vector3()}),
+              3u);
+    // A sphere does not: x = 3 to 5 near z = 0 means 4 only (3 and 5 are at z = 10)
+    EXPECT_EQ(backend.Kill(handle, ParticleRegion{ParticleRegion::Shape::Sphere, Math::Vector3(4.0f, 0.0f, 0.0f), 1.5f,
+                                                  Math::Vector3()}),
+              1u);
+    // A box: x 6 to 7 (z 0 and 10)
+    EXPECT_EQ(backend.Kill(handle, ParticleRegion{ParticleRegion::Shape::Box, Math::Vector3(6.5f, 0.0f, 5.0f), 0.0f,
+                                                  Math::Vector3(0.6f, 1.0f, 6.0f)}),
+              2u);
+    // Nothing in a negative radius, nor for an unknown handle
+    EXPECT_EQ(backend.Kill(handle, ParticleRegion{ParticleRegion::Shape::Sphere, Math::Vector3(8.0f, 0.0f, 0.0f), -1.0f,
+                                                  Math::Vector3()}),
+              0u);
+    EXPECT_EQ(backend.Kill(ParticleSystemHandle{12345}, ParticleRegion{}), 0u);
+
+    EXPECT_EQ(backend.GetAliveCount(handle), 4u);
+    std::vector<Math::Vector4> out;
+    std::vector<Math::Vector4> motion;
+    backend.CopyPositions(handle, out);
+    backend.CopyMotion(handle, motion);
+    ASSERT_EQ(out.size(), 4u);
+    ASSERT_EQ(motion.size(), 4u);
+    for (std::size_t i = 0; i < out.size(); ++i)
+    {
+        EXPECT_FLOAT_EQ(out[i].x, motion[i].w) << "positions and rotations moved together";
+        EXPECT_TRUE(out[i].x == 3.0f || out[i].x == 5.0f || out[i].x == 8.0f || out[i].x == 9.0f) << out[i].x;
+    }
+}
+
+TEST(ParticleBillboardsTest, AStretchedQuadLiesAlongTheVelocityAsTheCameraSeesIt)
+{
+    BillboardStyle style;
+    style.startSize = 1.0f;
+    style.endSize = 1.0f;
+    style.mode = ParticleRenderMode::Stretched;
+    style.lengthScale = 2.0f;
+    style.speedScale = 0.5f;
+    const std::vector<Math::Vector4> particles{Particle(0.0f, 0.0f, 0.0f, 0.0f)};
+    // Moving along +X (and towards the camera, which the camera can't see) at speed 4
+    const std::vector<Math::Vector4> motion{Particle(4.0f, 0.0f, 3.0f, 1.0f)};
+    Renderer::Common::MeshData mesh;
+    BuildBillboards(mesh, particles, Rendering::CameraBasis{}, style, motion);
+    ASSERT_EQ(mesh.vertices.size(), 4u);
+    const auto &v = mesh.vertices;
+    // up = +X, right = forward x up = (0, 0, -1) x (1, 0, 0) = (0, -1, 0); length 1 * 2 + 5 * 0.5 = 4.5, width 1
+    EXPECT_NEAR(v[0].position[0], -2.25f, 1e-5f) << "bottom-left: the tail";
+    EXPECT_NEAR(v[0].position[1], 0.5f, 1e-5f);
+    EXPECT_NEAR(v[2].position[0], 2.25f, 1e-5f) << "top-right: the front";
+    EXPECT_NEAR(v[2].position[1], -0.5f, 1e-5f);
+    for (const auto &vertex : v)
+    {
+        EXPECT_NEAR(vertex.position[2], 0.0f, 1e-5f) << "in the plane the camera faces";
+        EXPECT_FLOAT_EQ(vertex.normal[2], 1.0f);
+    }
+    EXPECT_FLOAT_EQ(v[2].texCoord[1], 1.0f) << "v = 1 at the front";
+
+    // Moving straight at the camera, or without motion: a plain billboard
+    const std::vector<Math::Vector4> head{Particle(0.0f, 0.0f, 5.0f, 0.0f)};
+    BuildBillboards(mesh, particles, Rendering::CameraBasis{}, style, head);
+    EXPECT_NEAR(mesh.vertices[2].position[0], 0.5f, 1e-5f);
+    EXPECT_NEAR(mesh.vertices[2].position[1], 0.5f, 1e-5f);
+    BuildBillboards(mesh, particles, Rendering::CameraBasis{}, style);
+    EXPECT_NEAR(mesh.vertices[2].position[0], 0.5f, 1e-5f);
+}
+
+TEST(ParticleBillboardsTest, TheRotationTurnsTheQuadCounterClockwiseAsTheCameraSeesIt)
+{
+    BillboardStyle style;
+    style.startSize = 2.0f;
+    style.endSize = 2.0f;
+    const std::vector<Math::Vector4> particles{Particle(0.0f, 0.0f, 0.0f, 0.0f)};
+    const std::vector<Math::Vector4> motion{Particle(0.0f, 0.0f, 0.0f, std::numbers::pi_v<float> / 2.0f)};
+    Renderer::Common::MeshData mesh;
+    BuildBillboards(mesh, particles, Rendering::CameraBasis{}, style, motion);
+    // A quarter turn: bottom-right (1, -1) goes to (1, 1)
+    EXPECT_NEAR(mesh.vertices[1].position[0], 1.0f, 1e-5f);
+    EXPECT_NEAR(mesh.vertices[1].position[1], 1.0f, 1e-5f);
+    EXPECT_NEAR(mesh.vertices[3].position[0], -1.0f, 1e-5f) << "top-left (-1, 1) goes to (-1, -1)";
+    EXPECT_NEAR(mesh.vertices[3].position[1], -1.0f, 1e-5f);
+
+    // A Stretched quad is not rotated
+    style.mode = ParticleRenderMode::Stretched;
+    style.lengthScale = 1.0f;
+    const std::vector<Math::Vector4> moving{Particle(0.0f, 2.0f, 0.0f, std::numbers::pi_v<float> / 2.0f)};
+    BuildBillboards(mesh, particles, Rendering::CameraBasis{}, style, moving);
+    EXPECT_NEAR(mesh.vertices[2].position[0], 1.0f, 1e-5f) << "along +Y, as an unrotated billboard";
+    EXPECT_NEAR(mesh.vertices[2].position[1], 1.0f, 1e-5f);
+}
+
+TEST(ParticleBillboardsTest, HorizontalQuadsLieFlatAndVerticalOnesStandUpright)
+{
+    BillboardStyle style;
+    style.startSize = 2.0f;
+    style.endSize = 2.0f;
+    style.mode = ParticleRenderMode::HorizontalBillboard;
+    // A camera looking down +X with +Z to its right
+    Rendering::CameraBasis camera;
+    camera.right = Math::Vector3(0.0f, 0.0f, 1.0f);
+    camera.up = Math::Vector3(0.0f, 1.0f, 0.0f);
+    camera.forward = Math::Vector3(1.0f, 0.0f, 0.0f);
+    const std::vector<Math::Vector4> particles{Particle(0.0f, 3.0f, 0.0f, 0.0f)};
+    Renderer::Common::MeshData mesh;
+    BuildBillboards(mesh, particles, camera, style);
+    for (const auto &vertex : mesh.vertices)
+    {
+        EXPECT_FLOAT_EQ(vertex.position[1], 3.0f) << "flat, whatever the camera";
+        EXPECT_FLOAT_EQ(vertex.normal[1], 1.0f) << "facing up";
+    }
+    EXPECT_FLOAT_EQ(mesh.vertices[2].position[0], 1.0f);
+    EXPECT_FLOAT_EQ(mesh.vertices[2].position[2], -1.0f);
+
+    // Vertical: a camera tilted down still gets an upright quad turned towards it
+    style.mode = ParticleRenderMode::VerticalBillboard;
+    camera.up = Math::Vector3(-0.6f, 0.8f, 0.0f);
+    camera.forward = Math::Vector3(0.8f, 0.6f, 0.0f);
+    BuildBillboards(mesh, particles, camera, style);
+    for (const auto &vertex : mesh.vertices)
+    {
+        EXPECT_NEAR(vertex.position[0], 0.0f, 1e-5f) << "upright in the plane facing the camera's heading";
+        EXPECT_NEAR(vertex.normal[0], -1.0f, 1e-5f);
+        EXPECT_NEAR(vertex.normal[1], 0.0f, 1e-5f);
+    }
+    EXPECT_NEAR(mesh.vertices[2].position[1], 4.0f, 1e-5f) << "top-right is straight up";
+    EXPECT_NEAR(mesh.vertices[2].position[2], 1.0f, 1e-5f);
+}
+
+TEST(ParticleBillboardsTest, TheRenderModeSavesByName)
+{
+    EXPECT_EQ(nlohmann::json(ParticleRenderMode::Stretched).get<std::string>(), "Stretched");
+    EXPECT_EQ(nlohmann::json("VerticalBillboard").get<ParticleRenderMode>(), ParticleRenderMode::VerticalBillboard);
+    EXPECT_EQ(nlohmann::json(EmitterShape::Box).get<std::string>(), "Box");
+    EXPECT_EQ(nlohmann::json("Circle").get<EmitterShape>(), EmitterShape::Circle);
+}

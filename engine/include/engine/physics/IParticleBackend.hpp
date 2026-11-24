@@ -1,11 +1,13 @@
 #pragma once
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string_view>
 #include <vector>
 
+#include <math/Vector2.hpp>
 #include <math/Vector3.hpp>
 #include <math/Vector4.hpp>
 
@@ -87,6 +89,43 @@ namespace N2Engine::Physics
     };
 
     /**
+     * A region of world space whose particles IParticleBackend::Kill removes (issue #445): a sphere, a circle in the XY
+     * plane (any z: the 2D case) or a box along the world axes. A negative or non-finite size holds nothing.
+     */
+    struct ParticleRegion
+    {
+        enum class Shape : std::uint8_t
+        {
+            Sphere,
+            Circle,
+            Box
+        };
+        Shape shape = Shape::Sphere;
+        Math::Vector3 center;
+        /// Sphere and Circle
+        float radius = 0.0f;
+        /// Box: half its size along each world axis
+        Math::Vector3 halfExtents;
+
+        [[nodiscard]] bool Contains(const float x, const float y, const float z) const
+        {
+            const float dx = x - center.x;
+            const float dy = y - center.y;
+            const float dz = z - center.z;
+            switch (shape)
+            {
+            case Shape::Sphere:
+                return radius >= 0.0f && dx * dx + dy * dy + dz * dz <= radius * radius;
+            case Shape::Circle:
+                return radius >= 0.0f && dx * dx + dy * dy <= radius * radius;
+            case Shape::Box:
+                return std::abs(dx) <= halfExtents.x && std::abs(dy) <= halfExtents.y && std::abs(dz) <= halfExtents.z;
+            }
+            return false;
+        }
+    };
+
+    /**
      * Simulates particles for ParticleSystem components. The seam between the component and whatever runs the
      * simulation: the engine's CPU backend (Particles::CpuParticleBackend, every machine, headless included) and,
      * later, a PhysX GPU backend that IPhysicsBackend::GetParticleBackend returns when the scene runs on the GPU.
@@ -141,6 +180,38 @@ namespace N2Engine::Physics
          * caller that reuses it allocates nothing once it has grown.
          */
         virtual void CopyPositions(ParticleSystemHandle handle, std::vector<Math::Vector4> &out) const = 0;
+
+        // Per-particle rotation, motion and kills (issue #445). Every engine backend (CPU, PhysX, WebGPU) implements them;
+        // the defaults are for a backend that doesn't: no rotation, no velocity, nothing killed.
+
+        /**
+         * Spawn, with each particle's start rotation (x, radians) and angular velocity (y, radians per second) from
+         * `spins`; a particle with no entry in `spins` does not turn. The rotation only turns the particle's quad.
+         */
+        virtual std::size_t SpawnWithSpin(const ParticleSystemHandle handle, const std::span<const Math::Vector3> positions,
+                                          const std::span<const Math::Vector3> velocities,
+                                          const std::span<const Math::Vector2> spins)
+        {
+            static_cast<void>(spins);
+            return Spawn(handle, positions, velocities);
+        }
+        /**
+         * Replaces `out` with one entry per living particle, in the order CopyPositions gives them: x, y, z the velocity
+         * in world units per second, w the rotation in radians (start rotation plus angular velocity times age). Empty
+         * when the backend can't tell (the caller then draws unrotated, camera-facing quads).
+         */
+        virtual void CopyMotion(const ParticleSystemHandle handle, std::vector<Math::Vector4> &out) const
+        {
+            static_cast<void>(handle);
+            out.clear();
+        }
+        /// Removes every living particle of the system inside `region` (where CopyPositions puts it); how many it removed
+        virtual std::size_t Kill(const ParticleSystemHandle handle, const ParticleRegion &region)
+        {
+            static_cast<void>(handle);
+            static_cast<void>(region);
+            return 0;
+        }
 
     protected:
         IParticleBackend() : _generation(NextParticleBackendGeneration()) {}

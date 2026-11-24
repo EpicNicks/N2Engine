@@ -79,6 +79,14 @@ namespace N2Engine::Particles
         void Step(float dt) override;
         [[nodiscard]] std::size_t GetAliveCount(Physics::ParticleSystemHandle handle) const override;
         void CopyPositions(Physics::ParticleSystemHandle handle, std::vector<Math::Vector4> &out) const override;
+        std::size_t SpawnWithSpin(Physics::ParticleSystemHandle handle, std::span<const Math::Vector3> positions,
+                                  std::span<const Math::Vector3> velocities, std::span<const Math::Vector2> spins) override;
+        /// The velocity is estimated: from the last two position copies that landed when both are of the particle, else
+        /// its ballistic velocity from its spawn (positions, not velocities, come back from the GPU)
+        void CopyMotion(Physics::ParticleSystemHandle handle, std::vector<Math::Vector4> &out) const override;
+        /// Kills the particles inside the region where CopyPositions puts them (the last copy that landed, or the ballistic
+        /// path): their slots are freed on the CPU and emptied on the GPU (lifetime 0)
+        std::size_t Kill(Physics::ParticleSystemHandle handle, const Physics::ParticleRegion &region) override;
 
         /// True while the renderer lives, its device runs and every GPU call so far succeeded
         [[nodiscard]] bool IsHealthy() const;
@@ -121,6 +129,8 @@ namespace N2Engine::Particles
             std::vector<Math::Vector3> spawnPosition;
             std::vector<Math::Vector3> spawnVelocity;
             std::vector<std::uint64_t> spawnStep; // `steps` when the particle was spawned
+            std::vector<float> spawnRotation;      // radians
+            std::vector<float> spin;               // radians per second
             std::vector<std::uint32_t> freeSlots;   // a min-heap of dead slots below highWater (may hold stale entries)
             std::uint32_t highWater = 0;
             std::size_t alive = 0;
@@ -131,6 +141,9 @@ namespace N2Engine::Particles
             std::uint64_t ticketStep = 0;
             std::vector<Math::Vector4> mirror; // the last copy that landed: x, y, z and the GPU's remaining lifetime
             std::uint64_t mirrorStep = 0;      // `steps` when it was taken (0: none yet)
+            std::vector<Math::Vector4> previousMirror; // the copy before it, for the velocities (CopyMotion)
+            std::uint64_t previousMirrorStep = 0;
+            float stepDt = 0.0f; // the last Step's dt
             std::vector<std::uint8_t> readBytes;
         };
 
@@ -145,6 +158,8 @@ namespace N2Engine::Particles
         /// Lands the system's read in flight if it has completed (const callers too: the mirror is a cache)
         void PollRead(System &system) const;
         void StepSystem(System &system, float dt);
+        /// Where CopyPositions draws the live particle in `slot`, `age` seconds old
+        [[nodiscard]] static Math::Vector3 PositionOf(const System &system, std::uint32_t slot, float age);
         [[nodiscard]] bool WriteParams(System &system, float h) const;
 
         Renderer::Common::IGpuCompute *_compute;

@@ -8,6 +8,7 @@
 #include <string_view>
 #include <vector>
 
+#include <math/Vector2.hpp>
 #include <math/Vector3.hpp>
 #include <math/Vector4.hpp>
 #include <renderer/common/IMaterial.hpp>
@@ -19,6 +20,7 @@
 #include "engine/IRenderable.hpp"
 #include "engine/common/Color.hpp"
 #include "engine/particles/ParticleBackendSelection.hpp"
+#include "engine/particles/ParticleBillboards.hpp"
 #include "engine/particles/ParticleEmitter.hpp"
 #include "engine/physics/IParticleBackend.hpp"
 #include "engine/rendering/GpuCache.hpp"
@@ -114,8 +116,22 @@ namespace N2Engine::Rendering
         /// Replaces `out` with the living particles, one Vector4 each: x, y, z the world position, w the age as a
         /// fraction of the lifetime (IParticleBackend::CopyPositions). Empty before the system started.
         void GetParticles(std::vector<Math::Vector4> &out) const;
+        /// Replaces `out` with one Vector4 per living particle, in GetParticles' order: x, y, z the velocity, w the rotation
+        /// in radians (IParticleBackend::CopyMotion). Empty before the system started.
+        void GetParticleMotion(std::vector<Math::Vector4> &out) const;
         /// "CPU", "PhysX" or "WebGPU": the backend simulating this system; empty before it started (not attached)
         [[nodiscard]] std::string_view GetActiveBackendName() const;
+
+        // Kills (issue #445): remove the living particles inside a region, where GetParticles puts them; each returns how
+        // many it removed (0 before the system started). Emission is unaffected.
+        /// Inside the sphere
+        std::size_t KillInSphere(const Math::Vector3 &center, float radius);
+        /// Inside the circle in the XY plane, whatever their z (the 2D case)
+        std::size_t KillInCircle(const Math::Vector2 &center, float radius);
+        /// Inside the box between two corners along the world axes (in any order)
+        std::size_t KillInBox(const Math::Vector3 &cornerA, const Math::Vector3 &cornerB);
+        /// The kill every Kill* method does
+        std::size_t Kill(const Physics::ParticleRegion &region);
 
         /// The simulation settings the current fields give (gravityScale applied to the world gravity)
         [[nodiscard]] Physics::ParticleParams BuildParams() const;
@@ -149,12 +165,24 @@ namespace N2Engine::Rendering
         float shapeRadius = 0.0f;
         /// Half angle of the cone, in degrees
         float coneAngle = 25.0f;
+        /// Start on the shape's outline (the cone's base rim, the sphere's surface, the circle's rim, the box's faces)
+        /// instead of anywhere inside it
+        bool emitFromEdge = false;
+        /// The Box shape's full size along the object's local axes
+        Math::Vector3 boxSize{1.0f, 1.0f, 1.0f};
 
         // Start values: each particle's lifetime (seconds) and start speed are picked from a range
         float lifetimeMin = 1.0f;
         float lifetimeMax = 2.0f;
         float speedMin = 2.0f;
         float speedMax = 4.0f;
+
+        // Each particle's start rotation (degrees) and angular velocity (degrees per second), picked from a range; they
+        // turn its quad (not a Stretched one)
+        float startRotationMin = 0.0f;
+        float startRotationMax = 0.0f;
+        float angularVelocityMin = 0.0f;
+        float angularVelocityMax = 0.0f;
 
         // Over a particle's life, from its start to its end
         float startSize = 0.2f;
@@ -176,6 +204,12 @@ namespace N2Engine::Rendering
 
         // Drawing
         ParticleBlend blendMode = ParticleBlend::Alpha;
+        /// Which way the quads face: Billboard (the camera), Stretched (along the velocity), HorizontalBillboard (flat,
+        /// facing up) or VerticalBillboard (upright, turned about Y to the camera)
+        Particles::ParticleRenderMode renderMode = Particles::ParticleRenderMode::Billboard;
+        /// Stretched: the quad's length is size * lengthScale + speed * speedScale (its width is the size)
+        float lengthScale = 2.0f;
+        float speedScale = 0.0f;
         /// Optional picture on every quad (its alpha times the particle's); none draws plain colours
         std::shared_ptr<Texture> texture;
 
@@ -210,9 +244,11 @@ namespace N2Engine::Rendering
         // Reused every step, so emitting allocates nothing once they have grown
         std::vector<Math::Vector3> _spawnPositions;
         std::vector<Math::Vector3> _spawnVelocities;
+        std::vector<Math::Vector2> _spawnSpins;
 
         // The picture
         std::vector<Math::Vector4> _particles;
+        std::vector<Math::Vector4> _motion; // read only when the render mode or the rotation needs it
         Renderer::Common::MeshData _meshData;
         Renderer::Common::IRenderer *_renderer = nullptr;
         std::weak_ptr<const void> _rendererLifetime; // expired once _renderer is destroyed

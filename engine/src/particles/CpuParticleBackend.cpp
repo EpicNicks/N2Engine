@@ -41,7 +41,11 @@ namespace N2Engine::Particles
             vz[index] = vz[last];
             age[index] = age[last];
             lifetime[index] = lifetime[last];
+            rotation[index] = rotation[last];
+            spin[index] = spin[last];
         }
+        rotation.pop_back();
+        spin.pop_back();
         px.pop_back();
         py.pop_back();
         pz.pop_back();
@@ -79,6 +83,14 @@ namespace N2Engine::Particles
                                           const std::span<const Math::Vector3> positions,
                                           const std::span<const Math::Vector3> velocities)
     {
+        return SpawnWithSpin(handle, positions, velocities, {});
+    }
+
+    std::size_t CpuParticleBackend::SpawnWithSpin(const Physics::ParticleSystemHandle handle,
+                                                  const std::span<const Math::Vector3> positions,
+                                                  const std::span<const Math::Vector3> velocities,
+                                                  const std::span<const Math::Vector2> spins)
+    {
         const auto it = _systems.find(handle);
         if (it == _systems.end())
         {
@@ -97,6 +109,8 @@ namespace N2Engine::Particles
             system.vz.push_back(velocities[i].z);
             system.age.push_back(0.0f);
             system.lifetime.push_back(system.random.Range(system.params.lifetimeMin, system.params.lifetimeMax));
+            system.rotation.push_back(i < spins.size() ? Finite(spins[i].x, 0.0f) : 0.0f);
+            system.spin.push_back(i < spins.size() ? Finite(spins[i].y, 0.0f) : 0.0f);
         }
         return count;
     }
@@ -115,6 +129,8 @@ namespace N2Engine::Particles
             system.vz.clear();
             system.age.clear();
             system.lifetime.clear();
+            system.rotation.clear();
+            system.spin.clear();
         }
     }
 
@@ -189,5 +205,48 @@ namespace N2Engine::Particles
             v.z = s.pz[i];
             v.w = std::clamp(s.age[i] / s.lifetime[i], 0.0f, 1.0f);
         }
+    }
+
+    void CpuParticleBackend::CopyMotion(const Physics::ParticleSystemHandle handle, std::vector<Math::Vector4> &out) const
+    {
+        out.clear();
+        const auto it = _systems.find(handle);
+        if (it == _systems.end())
+        {
+            return;
+        }
+        const System &s = it->second;
+        out.resize(s.Count());
+        for (std::size_t i = 0; i < s.Count(); ++i)
+        {
+            Math::Vector4 &v = out[i];
+            v.x = s.vx[i];
+            v.y = s.vy[i];
+            v.z = s.vz[i];
+            v.w = s.rotation[i] + s.spin[i] * s.age[i];
+        }
+    }
+
+    std::size_t CpuParticleBackend::Kill(const Physics::ParticleSystemHandle handle, const Physics::ParticleRegion &region)
+    {
+        const auto it = _systems.find(handle);
+        if (it == _systems.end())
+        {
+            return 0;
+        }
+        System &s = it->second;
+        std::size_t killed = 0;
+        std::size_t i = 0;
+        while (i < s.Count())
+        {
+            if (region.Contains(s.px[i], s.py[i], s.pz[i]))
+            {
+                s.Remove(i); // the last particle moved into slot i: look at it next
+                ++killed;
+                continue;
+            }
+            ++i;
+        }
+        return killed;
     }
 }
