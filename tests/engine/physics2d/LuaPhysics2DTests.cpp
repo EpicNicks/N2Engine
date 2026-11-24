@@ -195,6 +195,76 @@ namespace
         Run("kept_rb = nil");
     }
 
+    TEST_F(LuaPhysics2DTest, AScriptMakesAndDrivesASoftBody)
+    {
+        // Issue #445
+        Run(R"(
+            local scene = SceneManager.GetCurrentScene()
+            kept_blob = GameObject.Create('Blob')
+            kept_blob:CreatePositionable()
+            kept_blob:GetPositionable():SetPosition(Vector3(0, 5, 0))
+            scene:AddRootGameObject(kept_blob)
+            kept_soft = kept_blob:AddComponent('SoftBody2D')
+            assert(kept_soft:GetShape() == 'Circle')
+            kept_soft:SetBox(Vector2(2, 1), 10)
+            assert(kept_soft:GetShape() == 'Box' and kept_soft:GetNodeCount() == 10)
+            kept_soft:SetOutline({ Vector2(-1, -1), Vector2(1, -1), Vector2(0, 1) })
+            assert(kept_soft:GetShape() == 'Outline' and kept_soft:GetNodeCount() == 3)
+            kept_soft:SetCircle(1, 12)
+            assert(kept_soft:GetNodeCount() == 12 and #kept_soft:GetNodePositions() == 12)
+            kept_soft:SetStiffness(10, 0.5, 4, 0.5)
+            local a, b, c, d = kept_soft:GetStiffness()
+            assert(a == 10 and c == 4)
+            kept_soft:SetNodeRadius(0.125)
+            assert(kept_soft:GetNodeRadius() == 0.125)
+            kept_soft:SetDensity(2); assert(kept_soft:GetDensity() == 2)
+            kept_soft:SetFriction(0.25); assert(kept_soft:GetFriction() == 0.25)
+            kept_soft:SetBounciness(0.5); assert(kept_soft:GetBounciness() == 0.5)
+            kept_soft:SetGravityScale(1); assert(kept_soft:GetGravityScale() == 1)
+            kept_soft:SetLinearDamping(0.25); assert(kept_soft:GetLinearDamping() == 0.25)
+            kept_soft:SetColor(Color.new(0, 1, 0, 1)); assert(kept_soft:GetColor().g == 1)
+            kept_soft:SetSortingOrder(3); assert(kept_soft:GetSortingOrder() == 3)
+            kept_soft:SetBlendMode('Additive'); assert(kept_soft:GetBlendMode() == 'Additive')
+            kept_soft:SetTexture(nil)
+            kept_soft:SetNodePinned(4, true)
+            assert(kept_soft:IsNodePinned(4) and not kept_soft:IsNodePinned(5))
+            kept_soft:SetNodePinned(4, false)
+            assert(not kept_soft:HasBody())
+            for _, bad in ipairs({
+                function() kept_soft:SetCircle(0, 8) end,
+                function() kept_soft:SetCircle(1, 2) end,
+                function() kept_soft:SetCircle(1, 8.5) end,
+                function() kept_soft:SetBox(Vector2(-1, 1), 8) end,
+                function() kept_soft:SetOutline({ Vector2(0, 0), Vector2(1, 0) }) end,
+                function() kept_soft:SetOutline({ 1, 2, 3 }) end,
+                function() kept_soft:GetNodePosition(0) end,
+                function() kept_soft:GetNodePosition(13) end,
+                function() kept_soft:SetNodePinned(1, 'yes') end,
+                function() kept_soft:AddImpulse(3) end,
+                function() kept_soft:SetNodeRadius(-1) end,
+                function() kept_soft:SetBlendMode('Multiply') end,
+            }) do
+                assert(not pcall(bad))
+            end
+            assert(kept_soft:GetNodeCount() == 12, 'a refused change changes nothing')
+        )");
+        Step(30);
+        Run(R"(
+            assert(kept_soft:HasBody())
+            assert(kept_soft:GetCentre().y < 5, 'it falls')
+            assert(kept_soft:GetVelocity().y < 0)
+            assert(kept_soft:GetNodePosition(1).y < 5.1)
+            kept_soft:AddImpulse(Vector2(1, 0))
+        )");
+        Step(5);
+        Run(R"(
+            assert(kept_soft:GetVelocity().x > 0)
+            kept_soft:Rebuild()
+            assert(not kept_soft:HasBody())
+            kept_soft = nil; kept_blob = nil
+        )");
+    }
+
     TEST_F(LuaPhysics2DTest, EveryComponentMethodReachesTheComponent)
     {
         Run(R"(
