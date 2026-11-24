@@ -11,6 +11,7 @@
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/GameObject.hpp"
 #include "engine/Logger.hpp"
+#include "engine/physics2d/Joint2D.hpp"
 #include "engine/network/NetworkClient.hpp"
 #include "engine/network/NetworkServer.hpp"
 #include "engine/serialization/ComponentRegistry.hpp"
@@ -1212,6 +1213,7 @@ namespace N2Engine::Scripting
             _hasOnTriggerEnter2D = false;
             _hasOnTriggerStay2D = false;
             _hasOnTriggerExit2D = false;
+            _hasOnJointBreak2D = false;
             _hasOnApplicationQuit = false;
             _hasOnMouseEnter = false;
             _hasOnMouseOver = false;
@@ -1238,6 +1240,7 @@ namespace N2Engine::Scripting
         _hasOnTriggerEnter2D = HasMethod("OnTriggerEnter2D");
         _hasOnTriggerStay2D = HasMethod("OnTriggerStay2D");
         _hasOnTriggerExit2D = HasMethod("OnTriggerExit2D");
+        _hasOnJointBreak2D = HasMethod("OnJointBreak2D");
         _hasOnApplicationQuit = HasMethod("OnApplicationQuit");
         _hasOnMouseEnter = HasMethod("OnMouseEnter");
         _hasOnMouseOver = HasMethod("OnMouseOver");
@@ -1418,6 +1421,15 @@ namespace N2Engine::Scripting
         if (_hasOnTriggerExit2D && !_hasMissingScript)
         {
             CallLuaMethodWithArgument("OnTriggerExit2D", [&] { return Bindings::Trigger2DToLua(trigger, _scriptInstance.lua_state()); });
+        }
+    }
+
+    void LuaComponent::OnJointBreak2D(Physics2D::Joint2D &joint)
+    {
+        if (_hasOnJointBreak2D && !_hasMissingScript)
+        {
+            // The joint component as its checked handle
+            CallLuaMethodWithArgument("OnJointBreak2D", [&] { return Bindings::ComponentToLua(joint, _scriptInstance.lua_state()); });
         }
     }
 

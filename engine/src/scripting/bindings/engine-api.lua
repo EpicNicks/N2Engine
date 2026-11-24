@@ -886,7 +886,7 @@ function GameObject:Destroy() end
 
 ---Add a component by type name and return it.
 ---Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CharacterController", "Joint", "Rigidbody2D", "BoxCollider2D",
----"CircleCollider2D", "PolygonCollider2D", "CubeRenderer",
+---"CircleCollider2D", "PolygonCollider2D", "Joint2D", "CubeRenderer",
 ---"SphereRenderer", "QuadRenderer", "Sprite2D", "MeshRenderer", "TextRenderer", "ParticleSystem", "SoftBody", "Light", "AudioSource", "AudioListener",
 ---"LuaComponent", "RectTransform", "Canvas", "Image", "UIText", "Button". Unknown names raise an error.
 ---@param typeName string
@@ -2452,6 +2452,117 @@ PolygonCollider2D = {}
 function PolygonCollider2D:SetVertices(vertices) end
 ---@return Vector2[]
 function PolygonCollider2D:GetVertices() end
+
+---What a Joint2D allows (issue #445)
+---@enum JointType2D
+JointType2D = {
+    Fixed = 0,
+    Hinge = 1,
+    Slider = 2,
+    Distance = 3,
+    Wheel = 4,
+    Target = 5,
+}
+
+---Joins this object's 2D body (its Rigidbody2D's, or a collider's static body) to another object's, or to the world. Made in
+---the first fixed step in which both bodies exist, from their poses then (that pose is its zero). A value of the wrong type,
+---a non-finite number or settings the joint cannot use raises an error. Scripts on the object get OnJointBreak2D(joint) when
+---it breaks, and the component then disables itself.
+---@class Joint2D : Component
+Joint2D = {}
+---@param jointType JointType2D
+function Joint2D:SetJointType(jointType) end
+---@return JointType2D
+function Joint2D:GetJointType() end
+---The object whose 2D body this one is joined to; nil joins it to the world (Target ignores it)
+---@param body GameObject|nil
+function Joint2D:SetConnectedBody(body) end
+---@return GameObject|nil
+function Joint2D:GetConnectedBody() end
+---The joint's point on this body, in its local space
+---@param anchor Vector2
+function Joint2D:SetAnchor(anchor) end
+---@return Vector2
+function Joint2D:GetAnchor() end
+---The point on the connected body (its local space), or the world point without one
+---@param anchor Vector2
+function Joint2D:SetConnectedAnchor(anchor) end
+---@return Vector2
+function Joint2D:GetConnectedAnchor() end
+---Slider and Wheel: the direction in this body's local space (not zero)
+---@param axis Vector2
+function Joint2D:SetAxis(axis) end
+---@return Vector2
+function Joint2D:GetAxis() end
+---@param collide boolean
+function Joint2D:SetCollideConnected(collide) end
+---@return boolean
+function Joint2D:GetCollideConnected() end
+---Degrees within -178 to 178 for a hinge, metres otherwise; a hinge, slider or wheel range holds 0
+---@param enabled boolean
+---@param min number
+---@param max number
+function Joint2D:SetLimits(enabled, min, max) end
+---@return boolean
+function Joint2D:GetUseLimits() end
+---@return number
+function Joint2D:GetLimitMin() end
+---@return number
+function Joint2D:GetLimitMax() end
+---Frequency in hertz and damping ratio, neither negative. Target always uses its spring.
+---@param enabled boolean
+---@param frequency number
+---@param damping number
+function Joint2D:SetSpring(enabled, frequency, damping) end
+---@return boolean
+function Joint2D:GetUseSpring() end
+---@return number
+function Joint2D:GetSpringFrequency() end
+---@return number
+function Joint2D:GetSpringDamping() end
+---Degrees per second and newton-metres for a hinge or wheel; metres per second and newtons for a slider or distance joint
+---@param enabled boolean
+---@param speed number
+---@param maxForce number
+function Joint2D:SetMotor(enabled, speed, maxForce) end
+---@return boolean
+function Joint2D:GetUseMotor() end
+---@return number
+function Joint2D:GetMotorSpeed() end
+---@return number
+function Joint2D:GetMaxMotorForce() end
+---Target: the world point the anchor is pulled toward (the connected anchor), without making the joint again
+---@param target Vector2
+function Joint2D:SetTarget(target) end
+---@return Vector2
+function Joint2D:GetTarget() end
+---Target: the most force its spring applies (newtons)
+---@param force number
+function Joint2D:SetMaxForce(force) end
+---@return number
+function Joint2D:GetMaxForce() end
+---The reaction force past which the joint breaks; 0 or math.huge never breaks
+---@param force number
+function Joint2D:SetBreakForce(force) end
+---@return number
+function Joint2D:GetBreakForce() end
+---@param torque number
+function Joint2D:SetBreakTorque(torque) end
+---@return number
+function Joint2D:GetBreakTorque() end
+---The 2D world holds the joint now
+---@return boolean
+function Joint2D:IsCreated() end
+---Hinge: degrees from the zero pose
+---@return number
+function Joint2D:GetJointAngle() end
+---Slider: metres along the axis; Distance: the current length
+---@return number
+function Joint2D:GetJointTranslation() end
+---@return Vector2
+function Joint2D:GetReactionForce() end
+---@return number
+function Joint2D:GetReactionTorque() end
 ---@alias Sprite2DShape integer
 ---@class Sprite2DShapeValues
 ---@field Rect Sprite2DShape
