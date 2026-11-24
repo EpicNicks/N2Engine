@@ -669,3 +669,51 @@ TEST(PbdParticleBackendTest, ADriverWithATooSmallMirrorIsRefused)
     EXPECT_TRUE(backend.HasFailed());
     EXPECT_EQ(raw->destroyed, 1) << "the half-made system is released";
 }
+
+// ---------------------------------------------------------------- issue #445: motion, rotation and kills
+
+TEST(PbdParticleBackendTest, KillRemovesTheParticlesInARegionCompactsAndUploadsAndMotionFollows)
+{
+    Rig rig;
+    const ParticleSystemHandle handle = rig.backend->CreateSystem(MakeDesc(10, 100.0f));
+    std::vector<Math::Vector3> velocities;
+    std::vector<Math::Vector2> spins;
+    for (int i = 0; i < 5; ++i)
+    {
+        velocities.emplace_back(static_cast<float>(i), 0.0f, 0.0f);
+        spins.emplace_back(static_cast<float>(i), 1.0f);
+    }
+    ASSERT_EQ(rig.backend->SpawnWithSpin(handle, Row(5, 0.0f, 0.0f), velocities, spins), 5u); // x = 0 .. 4
+    rig.backend->OnSceneStepped(0.5f);
+
+    std::vector<Math::Vector4> motion;
+    rig.backend->CopyMotion(handle, motion);
+    ASSERT_EQ(motion.size(), 5u);
+    for (std::size_t i = 0; i < motion.size(); ++i)
+    {
+        EXPECT_FLOAT_EQ(motion[i].x, static_cast<float>(i)) << "the mirror's velocity";
+        EXPECT_NEAR(motion[i].w, static_cast<float>(i) + 0.5f, 1e-5f) << "start rotation plus spin times age";
+    }
+
+    const int uploads = rig.driver->systems.begin()->second.uploads;
+    Physics::ParticleRegion region;
+    region.shape = Physics::ParticleRegion::Shape::Circle;
+    region.center = Math::Vector3(0.0f, 0.0f, 0.0f);
+    region.radius = 1.5f; // x = 0 and 1
+    EXPECT_EQ(rig.backend->Kill(handle, region), 2u);
+    EXPECT_EQ(rig.backend->GetAliveCount(handle), 3u);
+    // Slots [0, 1, 2, 3, 4]: 0 takes 4, then 1 takes 3
+    EXPECT_EQ(Xs(*rig.backend, handle), (std::vector<float>{4.0f, 3.0f, 2.0f}));
+    const auto &system = rig.driver->systems.begin()->second;
+    EXPECT_EQ(system.uploads, uploads + 1) << "one upload for the whole kill";
+    EXPECT_EQ(system.active, 3u);
+    EXPECT_FLOAT_EQ(system.devicePositions[0].x, 4.0f);
+    rig.backend->CopyMotion(handle, motion);
+    ASSERT_EQ(motion.size(), 3u);
+    EXPECT_FLOAT_EQ(motion[0].x, 4.0f) << "the velocity moved with its particle";
+    EXPECT_NEAR(motion[0].w, 4.5f, 1e-5f);
+
+    region.radius = 0.1f; // nothing there now: no upload
+    EXPECT_EQ(rig.backend->Kill(handle, region), 0u);
+    EXPECT_EQ(rig.driver->systems.begin()->second.uploads, uploads + 1);
+}

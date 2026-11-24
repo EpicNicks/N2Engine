@@ -144,7 +144,7 @@ TEST_F(ParticleSystemTest, IsRegisteredAndDescribesItsFields)
     EXPECT_EQ(schema->defaults.at("backend"), "Auto");
 
     ASSERT_NE(find("shape"), nullptr);
-    EXPECT_EQ(find("shape")->enumOptions, (std::vector<std::string>{"Cone", "Sphere"}));
+    EXPECT_EQ(find("shape")->enumOptions, (std::vector<std::string>{"Cone", "Sphere", "Circle", "Edge", "Box"}));
     ASSERT_NE(find("blendMode"), nullptr);
     EXPECT_EQ(find("blendMode")->enumOptions, (std::vector<std::string>{"Alpha", "Additive"}));
     ASSERT_NE(find("texture"), nullptr);
@@ -797,4 +797,144 @@ TEST(ParticleHealthDetailTest, ComposeLeavesTheGpuProbesDetailAloneWithoutSystem
     const std::string noProbe = Particles::ParticleUsage::Compose("");
     EXPECT_EQ(noProbe.rfind("ParticleSystems:", 0), 0u) << noProbe;
     Particles::ParticleUsage::Remove(false);
+}
+
+// ---------------------------------------------------------------- issue #445
+
+TEST_F(ParticleSystemTest, ABurstRightAfterTheObjectMovedInTheSameFrameStartsAtTheNewPosition)
+{
+    ParticleSystem *system = Make("Mover");
+    system->playOnAwake = false;
+    system->speedMin = 0.0f;
+    system->speedMax = 0.0f;
+    system->OnAttach();
+    Step(system, 3); // some fixed steps have run at the old position
+    system->EmitBurst(2);
+
+    // The script moves the object and bursts in the same frame, before any fixed step
+    system->GetGameObject().GetPositionable()->SetPosition(Math::Vector3(7.0f, -2.0f, 1.0f));
+    system->EmitBurst(3);
+    std::vector<Math::Vector4> particles;
+    system->GetParticles(particles);
+    ASSERT_EQ(particles.size(), 5u);
+    int atNew = 0;
+    for (const Math::Vector4 &p : particles)
+    {
+        if (std::abs(p.x - 7.0f) < 1e-4f && std::abs(p.y + 2.0f) < 1e-4f && std::abs(p.z - 1.0f) < 1e-4f)
+        {
+            ++atNew;
+        }
+    }
+    EXPECT_EQ(atNew, 3) << "the three new particles start where the object is now, the first two where it was";
+}
+
+TEST_F(ParticleSystemTest, ABurstOfAChildFollowsItsMovedParentInTheSameFrame)
+{
+    auto parent = GameObject::Create("Parent");
+    _objects.push_back(parent);
+    ParticleSystem *system = Make("Child");
+    system->playOnAwake = false;
+    system->speedMin = 0.0f;
+    system->speedMax = 0.0f;
+    parent->CreatePositionable();
+    system->GetGameObject().SetParent(parent, false);
+    system->GetGameObject().GetPositionable()->SetLocalPosition(Math::Vector3(1.0f, 0.0f, 0.0f));
+    system->OnAttach();
+
+    parent->GetPositionable()->SetPosition(Math::Vector3(10.0f, 0.0f, 0.0f));
+    system->EmitBurst(1);
+    std::vector<Math::Vector4> particles;
+    system->GetParticles(particles);
+    ASSERT_EQ(particles.size(), 1u);
+    EXPECT_NEAR(particles[0].x, 11.0f, 1e-4f) << "the child's world position after the parent moved";
+}
+
+TEST_F(ParticleSystemTest, KillMethodsRemoveTheParticlesInsideTheRegion)
+{
+    ParticleSystem *system = Make("Killer");
+    system->playOnAwake = false;
+    system->shape = Particles::EmitterShape::Edge;
+    system->shapeRadius = 5.0f;
+    system->speedMin = 0.0f;
+    system->speedMax = 0.0f;
+    EXPECT_EQ(system->KillInCircle(Math::Vector2(0.0f, 0.0f), 100.0f), 0u) << "not started: nothing to kill";
+    system->OnAttach();
+    system->EmitBurst(200); // on the line from x = -5 to 5
+    ASSERT_EQ(system->GetAliveCount(), 200u);
+
+    const std::size_t left = system->KillInBox(Math::Vector3(0.0f, -1.0f, -1.0f), Math::Vector3(-6.0f, 1.0f, 1.0f));
+    EXPECT_GT(left, 50u);
+    EXPECT_LT(left, 150u);
+    std::vector<Math::Vector4> particles;
+    system->GetParticles(particles);
+    for (const Math::Vector4 &p : particles)
+    {
+        EXPECT_GT(p.x, 0.0f) << "the left half is gone";
+    }
+    EXPECT_EQ(system->KillInSphere(Math::Vector3(0.0f, 0.0f, 0.0f), -1.0f), 0u) << "a negative radius holds nothing";
+    EXPECT_EQ(system->KillInCircle(Math::Vector2(0.0f, 0.0f), 100.0f), 200u - left);
+    EXPECT_EQ(system->GetAliveCount(), 0u);
+
+    // Emission goes on after a kill
+    system->EmitBurst(4);
+    EXPECT_EQ(system->GetAliveCount(), 4u);
+}
+
+TEST_F(ParticleSystemTest, RotationSettingsReachTheBackendAndTheMotionComesBack)
+{
+    ParticleSystem *system = Make("Spinner");
+    system->playOnAwake = false;
+    system->speedMin = 2.0f;
+    system->speedMax = 2.0f;
+    system->coneAngle = 0.0f;
+    system->gravityScale = 0.0f;
+    system->startRotationMin = 90.0f;
+    system->startRotationMax = 90.0f;
+    system->angularVelocityMin = 180.0f;
+    system->angularVelocityMax = 180.0f;
+    system->OnAttach();
+    system->EmitBurst(3);
+    Step(system, 25); // 0.5 s
+    std::vector<Math::Vector4> motion;
+    system->GetParticleMotion(motion);
+    ASSERT_EQ(motion.size(), 3u);
+    const float pi = 3.14159265f;
+    for (const Math::Vector4 &m : motion)
+    {
+        EXPECT_NEAR(m.y, 2.0f, 1e-4f) << "the velocity, up the cone";
+        EXPECT_NEAR(m.w, 0.5f * pi + pi * 0.5f, 1e-3f) << "90 degrees plus 180 per second for half a second";
+    }
+}
+
+TEST_F(ParticleSystemTest, TheIssue445SettingsSurviveASceneLoad)
+{
+    auto go = GameObject::Create("Shapes");
+    auto *system = go->AddComponent<ParticleSystem>();
+    system->shape = Particles::EmitterShape::Box;
+    system->emitFromEdge = true;
+    system->boxSize = Math::Vector3(1.0f, 2.0f, 3.0f);
+    system->startRotationMin = -10.0f;
+    system->startRotationMax = 20.0f;
+    system->angularVelocityMin = 30.0f;
+    system->angularVelocityMax = 40.0f;
+    system->renderMode = Particles::ParticleRenderMode::Stretched;
+    system->lengthScale = 3.5f;
+    system->speedScale = 0.25f;
+
+    std::unique_ptr<Scene> scene;
+    const auto loaded = RoundTrip(go, scene);
+    ASSERT_NE(loaded, nullptr);
+    const auto *copy = loaded->GetComponent<ParticleSystem>();
+    ASSERT_NE(copy, nullptr);
+    EXPECT_EQ(copy->shape, Particles::EmitterShape::Box);
+    EXPECT_TRUE(copy->emitFromEdge);
+    EXPECT_FLOAT_EQ(copy->boxSize.y, 2.0f);
+    EXPECT_FLOAT_EQ(copy->boxSize.z, 3.0f);
+    EXPECT_FLOAT_EQ(copy->startRotationMin, -10.0f);
+    EXPECT_FLOAT_EQ(copy->startRotationMax, 20.0f);
+    EXPECT_FLOAT_EQ(copy->angularVelocityMin, 30.0f);
+    EXPECT_FLOAT_EQ(copy->angularVelocityMax, 40.0f);
+    EXPECT_EQ(copy->renderMode, Particles::ParticleRenderMode::Stretched);
+    EXPECT_FLOAT_EQ(copy->lengthScale, 3.5f);
+    EXPECT_FLOAT_EQ(copy->speedScale, 0.25f);
 }
