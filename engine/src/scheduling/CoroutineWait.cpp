@@ -20,6 +20,12 @@ bool WaitForSeconds::Wait()
     return _elapsedSeconds < _waitSeconds;
 }
 
+bool WaitForSecondsRealtime::Wait()
+{
+    _elapsedSeconds += Time::GetUnscaledDeltaTime();
+    return _elapsedSeconds < _waitSeconds;
+}
+
 bool WaitForever::Wait()
 {
     return true;

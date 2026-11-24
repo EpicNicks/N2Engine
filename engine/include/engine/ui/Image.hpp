@@ -7,6 +7,7 @@
 
 #include <math/Matrix.hpp>
 #include <math/Vector2.hpp>
+#include <math/Vector4.hpp>
 #include <renderer/common/ColorEffects.hpp>
 #include <renderer/common/IMaterial.hpp>
 #include <renderer/common/IMesh.hpp>
@@ -81,6 +82,32 @@ namespace N2Engine::UI
         /// The image's private Material when it has a shader (Material::GetParam reads the values), else null
         [[nodiscard]] const std::shared_ptr<Rendering::Material> &GetShaderMaterial() const { return _shaderSlot.GetMaterial(); }
 
+        /**
+         * 9-slicing (issue #445): the texture's border widths in texture pixels, x left, y bottom, z right, w top (all 0, the
+         * default, draws the texture stretched over the rect as before). With any border above 0 and a texture, the corners
+         * keep their size (border x sliceScale canvas units), the edges stretch along one axis and the centre both ways, so
+         * a frame or a rounded panel scales without stretching its corners. When the rect is smaller than two borders, the
+         * borders shrink in proportion. Saved as "sliceBorder", "sliceScale" and "fillCenter".
+         */
+        [[nodiscard]] const Math::Vector4 &GetSliceBorder() const { return _sliceBorder; }
+        void SetSliceBorder(const Math::Vector4 &border) { _sliceBorder = border; }
+        /// The same by side (Math::Vector4's constructor takes w first: this avoids getting it wrong)
+        void SetSliceBorder(const float left, const float bottom, const float right, const float top)
+        {
+            _sliceBorder.x = left;
+            _sliceBorder.y = bottom;
+            _sliceBorder.z = right;
+            _sliceBorder.w = top;
+        }
+        /// Canvas units per texture pixel of the borders (1 by default)
+        [[nodiscard]] float GetSliceScale() const { return _sliceScale; }
+        void SetSliceScale(float scale) { _sliceScale = scale; }
+        /// Whether a sliced image draws its centre (true by default; false leaves a frame)
+        [[nodiscard]] bool GetFillCenter() const { return _fillCenter; }
+        void SetFillCenter(bool fill) { _fillCenter = fill; }
+        /// Whether it is drawn 9-sliced: a border above 0
+        [[nodiscard]] bool IsSliced() const;
+
         /// The model matrix (row-major, as the renderers take it) that maps the unit square onto the rect
         [[nodiscard]] static Math::Matrix<float, 4, 4> ModelMatrixFor(const Rect &rect);
 
@@ -104,12 +131,19 @@ namespace N2Engine::UI
          * unit quad (no clip cuts it), else the visible quads, in canvas space. A clip that leaves nothing gives one quad
          * without area, which draws nothing.
          */
-        [[nodiscard]] std::vector<Quad> BuildQuads(const Rect &rect, const std::optional<Rect> &clip) const;
+        [[nodiscard]] std::vector<Quad> BuildQuads(const Rect &rect, const std::optional<Rect> &clip,
+                                                   const Math::Vector2 &textureSize = Math::Vector2{0.0f, 0.0f}) const;
+        /// The nine quads (fewer where one has no area, no centre without fillCenter) of a sliced image over `rect`, for a
+        /// texture `textureSize` pixels; empty without a texture size
+        [[nodiscard]] std::vector<Quad> SliceQuads(const Rect &rect, const Math::Vector2 &textureSize) const;
 
     private:
         Renderer::Common::ITexture *_texture = nullptr;
         std::shared_ptr<Rendering::Texture> _sprite; // serialized as "sprite"
         float _saturation = 1.0f;
+        Math::Vector4 _sliceBorder{0.0f, 0.0f, 0.0f, 0.0f};
+        float _sliceScale = 1.0f;
+        bool _fillCenter = true;
         Common::Color _flash{Common::Color::Transparent};
         Rendering::GpuCache::Handle _spriteTexture;  // _sprite's texture on _renderer, once drawn
         // The last sprite a renderer failed to make a texture for, so it isn't retried every frame

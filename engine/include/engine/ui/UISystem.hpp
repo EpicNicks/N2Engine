@@ -254,5 +254,16 @@ namespace N2Engine::UI
          */
         static std::shared_ptr<GameObject> CreateScrollView(const std::string &name = "ScrollView", bool vertical = true,
                                                             bool horizontal = false);
+        /**
+         * A new slider (issue #445): CreateElement sized 160 x 20 with a dark grey Image (the bar, what the pointer hits)
+         * and a Slider (0..1, left to right), and children "Fill" (a light Image the slider anchors up to the value) and
+         * "Handle" (a white Image 16 wide, anchored at the value, the full height of the bar).
+         */
+        static std::shared_ptr<GameObject> CreateSlider(const std::string &name = "Slider");
+
+        /// Whether `object` is `ancestor` or below it in the hierarchy (false for nullptr)
+        [[nodiscard]] static bool IsSelfOrBelow(const GameObject *object, const GameObject &ancestor);
+        /// The root canvas (Canvas::IsRootCanvas) on or above an object, or nullptr
+        [[nodiscard]] static const Canvas *RootCanvasOf(const GameObject &gameObject);
     };
 }

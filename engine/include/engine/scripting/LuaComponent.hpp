@@ -5,6 +5,7 @@
 #include "engine/serialization/ComponentSerializer.hpp"
 #include "engine/io/ResourcePath.hpp"
 #include "nlohmann/json.hpp"
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -114,6 +115,9 @@ namespace N2Engine::Scripting
         // Set when a call into the script ran out of instructions or memory (LuaLimits): its lifecycle calls are skipped
         // until the script is set again or reloaded, so a looping OnUpdate doesn't burn the whole budget every frame
         bool _faulted = false;
+        // The script's declared InstructionBudget (GetInstructionBudget); 0 for none
+        std::uint64_t _instructionBudget = 0;
+        void ReadInstructionBudget();
         // The script coroutines this component started (self.component:StartCoroutine), for StopAllCoroutines. Owned by
         // the GameObject's coroutine scheduler; an entry expires when its coroutine is freed.
         std::vector<std::weak_ptr<ScriptCoroutineState>> _coroutines;
@@ -237,6 +241,11 @@ namespace N2Engine::Scripting
         // Script coroutines (LuaScriptCoroutines.cpp): Lua coroutines the GameObject's scheduler resumes once per frame
         /// True while a call into the script ran out of instructions or memory and the script is switched off
         [[nodiscard]] bool IsFaulted() const { return _faulted; }
+        /// The instruction budget the script's class declares (`MyScript.InstructionBudget = n`, issue #445), cut to
+        /// MaxScriptInstructionBudget; 0 when it declares none (or an invalid one, which is logged). Read when the script
+        /// instance is made or replaced. Each outermost entry into this component (its lifecycle, collision, trigger and
+        /// pointer calls, and every resume of a coroutine it started) runs with the larger of this and the runtime's budget.
+        [[nodiscard]] std::uint64_t GetInstructionBudget() const { return _instructionBudget; }
         /// LuaComponent:StartCoroutine: runs the function at stack index firstIndex of L, with the count-1 values after it
         /// as its arguments, as a coroutine of this object (ScriptCoroutine.hpp). An empty handle when none could start.
         ScriptCoroutineHandle StartScriptCoroutine(lua_State *L, int firstIndex, int count);

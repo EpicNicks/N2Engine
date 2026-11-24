@@ -65,6 +65,14 @@ namespace N2Engine::Scripting::Bindings
             "SetRotation", Forward<PositionableRef, &Positionable::SetRotation>(),
             "GetScale", Forward<PositionableRef, &Positionable::GetScale>(),
             "SetScale", Forward<PositionableRef, &Positionable::SetScale>(),
+            // Relative to the parent's Positionable (the world values for a root object or one under a parent without
+            // one); issue #445
+            "GetLocalPosition", Forward<PositionableRef, &Positionable::GetLocalPosition>(),
+            "SetLocalPosition", Forward<PositionableRef, &Positionable::SetLocalPosition>(),
+            "GetLocalRotation", Forward<PositionableRef, &Positionable::GetLocalRotation>(),
+            "SetLocalRotation", Forward<PositionableRef, &Positionable::SetLocalRotation>(),
+            "GetLocalScale", Forward<PositionableRef, &Positionable::GetLocalScale>(),
+            "SetLocalScale", Forward<PositionableRef, &Positionable::SetLocalScale>(),
             "GetForward", Forward<PositionableRef, &Positionable::GetForward>(),
             "GetRight", Forward<PositionableRef, &Positionable::GetRight>(),
             "GetUp", Forward<PositionableRef, &Positionable::GetUp>()
