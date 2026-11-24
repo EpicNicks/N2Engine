@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <functional>
 #include <memory>
 #include <set>
 #include <string>
@@ -59,7 +60,8 @@ namespace
 
     /// A full-screen Image showing `sprite`, drawn by the UI pass alone (as Application::Render runs it after
     /// the scene), and read back
-    Frame RenderSprite(const std::shared_ptr<Rendering::Texture> &sprite, const int width, const int height)
+    Frame RenderSprite(const std::shared_ptr<Rendering::Texture> &sprite, const int width, const int height,
+                       const std::function<void(UI::Image &)> &configure = {})
     {
         SoftwareRenderer renderer;
         EXPECT_TRUE(renderer.Initialize(nullptr, static_cast<uint32_t>(width), static_cast<uint32_t>(height)));
@@ -76,6 +78,10 @@ namespace
             auto *image = element->AddComponent<UI::Image>();
             image->SetColor(Common::Color::White); // the sprite's own colours
             image->SetSprite(sprite);
+            if (configure)
+            {
+                configure(*image);
+            }
             canvas->AddChild(element, false);
 
             renderer.BeginFrame();
@@ -181,4 +187,52 @@ TEST(SoftwareImageGoldenTest, ALinearSpriteIsFilteredIntoAGradient)
     }
     EXPECT_EQ(flat.At(width / 4, row), kRed);
     EXPECT_EQ(flat.At(3 * width / 4, row), kBlue);
+}
+
+TEST(SoftwareImageGoldenTest, ANineSlicedSpriteKeepsItsCornersAndStretchesTheRest)
+{
+    // Issue #445: a 3 x 3 sprite with a 1-pixel border, drawn 60 x 60 with each border pixel 20 canvas units (sliceScale 20), so the
+    // corners are 20 x 20 and the edges and centre stretch over the middle 20 x 20. A nine-colour source: one colour a cell.
+    const std::vector<TextureTestSupport::Rgb> cells = {{255, 0, 0},   {0, 255, 0},     {0, 0, 255},
+                                                        {255, 255, 0}, {255, 255, 255}, {0, 255, 255},
+                                                        {255, 0, 255}, {128, 128, 128}, {64, 0, 0}};
+    Rendering::TextureSettings settings;
+    settings.filter = TextureFilter::Nearest;
+    const auto sprite = Rendering::Texture::CreateFromEncoded(MakeBmp(3, 3, cells), settings, "nine");
+    ASSERT_NE(sprite, nullptr);
+
+    const auto sliced = [](UI::Image &image)
+    {
+        image.SetSliceBorder(1.0f, 1.0f, 1.0f, 1.0f);
+        image.SetSliceScale(20.0f);
+    };
+    constexpr int size = 60;
+    const Frame frame = RenderSprite(sprite, size, size, sliced);
+    // Cell centres; frame y counts up from the bottom, the source's top row is the screen's top
+    EXPECT_EQ(frame.At(10, 50), kRed) << "top-left corner";
+    EXPECT_EQ(frame.At(30, 50), kGreen) << "top edge";
+    EXPECT_EQ(frame.At(50, 50), kBlue) << "top-right corner";
+    EXPECT_EQ(frame.At(10, 30), kYellow) << "left edge";
+    EXPECT_EQ(frame.At(30, 30), (Rgb{255, 255, 255})) << "centre";
+    EXPECT_EQ(frame.At(50, 30), (Rgb{0, 255, 255})) << "right edge";
+    EXPECT_EQ(frame.At(10, 10), (Rgb{255, 0, 255})) << "bottom-left corner";
+    EXPECT_EQ(frame.At(30, 10), (Rgb{128, 128, 128})) << "bottom edge";
+    EXPECT_EQ(frame.At(50, 10), (Rgb{64, 0, 0})) << "bottom-right corner";
+
+    // A larger rect stretches only the middle: the corners are still 20 x 20, so a pixel 25 in from the corner is the edge
+    const Frame wide = RenderSprite(sprite, 120, 60, sliced);
+    EXPECT_EQ(wide.At(10, 50), kRed);
+    EXPECT_EQ(wide.At(60, 50), kGreen) << "the top edge stretched across the middle";
+    EXPECT_EQ(wide.At(25, 50), kGreen) << "just past the corner";
+    EXPECT_EQ(wide.At(110, 50), kBlue);
+    EXPECT_EQ(wide.At(60, 30), (Rgb{255, 255, 255}));
+
+    // fillCenter false leaves the clear colour in the middle
+    const Frame frameOnly = RenderSprite(sprite, size, size, [&sliced](UI::Image &image)
+    {
+        sliced(image);
+        image.SetFillCenter(false);
+    });
+    EXPECT_EQ(frameOnly.At(30, 30), (Rgb{0, 0, 0})) << "no centre";
+    EXPECT_EQ(frameOnly.At(30, 50), kGreen) << "the edges remain";
 }

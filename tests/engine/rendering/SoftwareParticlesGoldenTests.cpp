@@ -370,3 +370,58 @@ void main() { n2_FragColor = n2_Color * u_Power; }
     renderer.Shutdown();
     Rendering::RenderSettings::SetUserShaderErrorStyle(before);
 }
+
+TEST(SoftwareParticlesGoldenTest, AStretchedParticleIsDrawnLongAlongItsVelocity)
+{
+    // Issue #445: a particle rising at 2 units per second, size 0.5, lengthScale 3: a quad 0.5 wide and 1.5 tall
+    SoftwareRenderer renderer;
+    ASSERT_TRUE(renderer.Initialize(nullptr, kSize, kSize));
+    FxScene fx = MakeFxScene("SoftwareParticles_Stretched");
+    fx.system->startSize = 0.5f;
+    fx.system->endSize = 0.5f;
+    fx.system->speedMin = 2.0f;
+    fx.system->speedMax = 2.0f;
+    fx.system->coneAngle = 0.0f;
+    fx.system->renderMode = Particles::ParticleRenderMode::Stretched;
+    fx.system->lengthScale = 3.0f;
+    fx.system->speedScale = 0.0f;
+    fx.system->EmitBurst(1);
+
+    const Frame stretched = Draw(*fx.scene, MakeCamera(), renderer);
+    const Coverage c = CoverageExcept(stretched, Black);
+    ASSERT_GT(c.count, 50);
+    const float width = static_cast<float>(c.maxX - c.minX + 1);
+    const float height = static_cast<float>(c.maxY - c.minY + 1);
+    EXPECT_NEAR(width, 0.5f * kPixelsPerUnit, 2.0f);
+    EXPECT_NEAR(height, 1.5f * kPixelsPerUnit, 2.0f);
+
+    // The same particle as a plain billboard is square
+    fx.system->renderMode = Particles::ParticleRenderMode::Billboard;
+    const Coverage square = CoverageExcept(Draw(*fx.scene, MakeCamera(), renderer), Black);
+    EXPECT_NEAR(static_cast<float>(square.maxY - square.minY + 1), 0.5f * kPixelsPerUnit, 2.0f);
+
+    fx.system->CleanupRenderResources(&renderer);
+    renderer.Shutdown();
+}
+
+TEST(SoftwareParticlesGoldenTest, AStartRotationTurnsTheQuad)
+{
+    // A square turned 45 degrees spans its diagonal across the frame: about 1.41 times its edge
+    SoftwareRenderer renderer;
+    ASSERT_TRUE(renderer.Initialize(nullptr, kSize, kSize));
+    FxScene fx = MakeFxScene("SoftwareParticles_Rotated");
+    fx.system->startSize = 1.0f;
+    fx.system->endSize = 1.0f;
+    fx.system->startRotationMin = 45.0f;
+    fx.system->startRotationMax = 45.0f;
+    fx.system->EmitBurst(1);
+
+    const Coverage c = CoverageExcept(Draw(*fx.scene, MakeCamera(), renderer), Black);
+    ASSERT_GT(c.count, 50);
+    EXPECT_NEAR(static_cast<float>(c.maxX - c.minX + 1), 1.414f * kPixelsPerUnit, 2.0f);
+    EXPECT_NEAR(static_cast<float>(c.count), kPixelsPerUnit * kPixelsPerUnit, 0.12f * kPixelsPerUnit * kPixelsPerUnit)
+        << "the same area as the unturned square";
+
+    fx.system->CleanupRenderResources(&renderer);
+    renderer.Shutdown();
+}

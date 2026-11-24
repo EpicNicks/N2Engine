@@ -19,6 +19,7 @@
 #include "engine/ui/RectMask.hpp"
 #include "engine/ui/RectTransform.hpp"
 #include "engine/ui/ScrollView.hpp"
+#include "engine/ui/Slider.hpp"
 #include "engine/ui/UISystem.hpp"
 #include "engine/ui/UIText.hpp"
 
@@ -121,6 +122,27 @@ namespace N2Engine::Scripting::Bindings
             }
             throw std::runtime_error("ScrollView:SetMovementType: unknown movement type \"" + name +
                                      "\" (expected \"Unrestricted\", \"Elastic\" or \"Clamped\")");
+        }
+
+        /// "LeftToRight", "RightToLeft", "BottomToTop" or "TopToBottom"; anything else is an error
+        UI::SliderDirection ParseSliderDirection(const std::string &name)
+        {
+            static constexpr const char *names[] = {"LeftToRight", "RightToLeft", "BottomToTop", "TopToBottom"};
+            for (int i = 0; i < 4; ++i)
+            {
+                if (name == names[i])
+                {
+                    return static_cast<UI::SliderDirection>(i);
+                }
+            }
+            throw std::runtime_error("Slider:SetDirection: unknown direction \"" + name +
+                                     "\" (expected \"LeftToRight\", \"RightToLeft\", \"BottomToTop\" or \"TopToBottom\")");
+        }
+
+        const char *SliderDirectionName(const UI::SliderDirection direction)
+        {
+            static constexpr const char *names[] = {"LeftToRight", "RightToLeft", "BottomToTop", "TopToBottom"};
+            return names[static_cast<int>(direction)];
         }
 
         /// A ChildAlignment by name ("UpperLeft" .. "LowerRight"); anything else is an error naming `where`
@@ -322,6 +344,19 @@ namespace N2Engine::Scripting::Bindings
             "SetColor", Forward<ImageRef, &UI::UIGraphic::SetColor>(),
             "GetRaycastTarget", Forward<ImageRef, &UI::UIGraphic::GetRaycastTarget>(),
             "SetRaycastTarget", Forward<ImageRef, &UI::UIGraphic::SetRaycastTarget>(),
+            // 9-slicing (issue #445): the texture's border widths in pixels; all 0 stretches the texture over the rect
+            "GetSliceBorder", [](const ImageRef &c)
+            {
+                const Math::Vector4 &border = c.Pin()->GetSliceBorder();
+                return std::make_tuple(border.x, border.y, border.z, border.w);
+            },
+            "SetSliceBorder", [](const ImageRef &c, const float left, const float bottom, const float right, const float top)
+            { c.Pin()->SetSliceBorder(left, bottom, right, top); },
+            "GetSliceScale", Forward<ImageRef, &UI::Image::GetSliceScale>(),
+            "SetSliceScale", Forward<ImageRef, &UI::Image::SetSliceScale>(),
+            "GetFillCenter", Forward<ImageRef, &UI::Image::GetFillCenter>(),
+            "SetFillCenter", Forward<ImageRef, &UI::Image::SetFillCenter>(),
+            "IsSliced", Forward<ImageRef, &UI::Image::IsSliced>(),
             "GetSaturation", Forward<ImageRef, &UI::Image::GetSaturation>(),
             "SetSaturation", Forward<ImageRef, &UI::Image::SetSaturation>(),
             "GetFlash", Forward<ImageRef, &UI::Image::GetFlash>(),
@@ -604,6 +639,59 @@ namespace N2Engine::Scripting::Bindings
             "GetOnValueChangedListenerCount", Forward<ScrollViewRef, &UI::ScrollView::GetOnValueChangedListenerCount>()
         );
 
+        // ===== Slider (issue #445) =====
+        using SliderRef = ComponentRef<UI::Slider>;
+        BindComponentType<UI::Slider>(
+            lua, "Slider",
+            "GetValue", Forward<SliderRef, &UI::Slider::GetValue>(),
+            // Clamped to the range (and rounded with wholeNumbers); the listeners run if it changed
+            "SetValue", Forward<SliderRef, &UI::Slider::SetValue>(),
+            "SetValueWithoutNotify", Forward<SliderRef, &UI::Slider::SetValueWithoutNotify>(),
+            "GetNormalizedValue", Forward<SliderRef, &UI::Slider::GetNormalizedValue>(),
+            "SetNormalizedValue", Forward<SliderRef, &UI::Slider::SetNormalizedValue>(),
+            "GetMinValue", Forward<SliderRef, &UI::Slider::GetMinValue>(),
+            "SetMinValue", Forward<SliderRef, &UI::Slider::SetMinValue>(),
+            "GetMaxValue", Forward<SliderRef, &UI::Slider::GetMaxValue>(),
+            "SetMaxValue", Forward<SliderRef, &UI::Slider::SetMaxValue>(),
+            "GetWholeNumbers", Forward<SliderRef, &UI::Slider::GetWholeNumbers>(),
+            "SetWholeNumbers", Forward<SliderRef, &UI::Slider::SetWholeNumbers>(),
+            "GetInteractable", Forward<SliderRef, &UI::Slider::IsInteractable>(),
+            "SetInteractable", Forward<SliderRef, &UI::Slider::SetInteractable>(),
+            "GetDirection", [](const SliderRef &c) { return std::string(SliderDirectionName(c.Pin()->GetDirection())); },
+            "SetDirection", [](const SliderRef &c, const std::string &name)
+            {
+                const UI::SliderDirection direction = ParseSliderDirection(name);
+                c.Pin()->SetDirection(direction);
+            },
+            "GetFillRect", [](const SliderRef &c, const sol::this_state state)
+            { return RectTransformToLua(c.Pin()->GetFillRect(), state.lua_state()); },
+            "SetFillRect", [](const SliderRef &c, const sol::object &fill)
+            {
+                UI::RectTransform *rectTransform = RectTransformFromLua(fill, "Slider:SetFillRect");
+                c.Pin()->SetFillRect(rectTransform);
+            },
+            "GetHandleRect", [](const SliderRef &c, const sol::this_state state)
+            { return RectTransformToLua(c.Pin()->GetHandleRect(), state.lua_state()); },
+            "SetHandleRect", [](const SliderRef &c, const sol::object &handle)
+            {
+                UI::RectTransform *rectTransform = RectTransformFromLua(handle, "Slider:SetHandleRect");
+                c.Pin()->SetHandleRect(rectTransform);
+            },
+            // For tests and scripts: the value a pointer at this canvas point would set
+            "SetValueFromPointer", [](const SliderRef &c, const float x, const float y)
+            { c.Pin()->SetValueFromPointer(Math::Vector2{x, y}); },
+            // fn(value) whenever the value changes; returns an id for RemoveOnValueChanged. An error in it is logged.
+            "AddOnValueChanged", [](const SliderRef &c, sol::protected_function callback) -> std::size_t
+            {
+                const auto slider = c.Pin();
+                auto call = MakeScriptCallback<float>(std::move(callback), "Slider.OnValueChanged");
+                return slider->AddOnValueChanged([call = std::move(call)](const float value) { call(value); });
+            },
+            "RemoveOnValueChanged", Forward<SliderRef, &UI::Slider::RemoveOnValueChanged>(),
+            "ClearOnValueChanged", Forward<SliderRef, &UI::Slider::ClearOnValueChanged>(),
+            "GetOnValueChangedListenerCount", Forward<SliderRef, &UI::Slider::GetOnValueChangedListenerCount>()
+        );
+
         // ===== Layout groups, LayoutElement, ContentSizeFitter (issue #445) =====
         using HorizontalRef = ComponentRef<UI::HorizontalLayoutGroup>;
         BindComponentType<UI::HorizontalLayoutGroup>(
@@ -765,6 +853,11 @@ namespace N2Engine::Scripting::Bindings
                 { return GameObjectRef::Owning(UI::UISystem::CreateScrollView(name, vertical)); },
                 [](const std::string &name, const bool vertical, const bool horizontal)
                 { return GameObjectRef::Owning(UI::UISystem::CreateScrollView(name, vertical, horizontal)); }
+            ),
+            // Issue #445: a 160 x 20 bar with a Slider, a "Fill" child and a "Handle" child
+            "CreateSlider", sol::overload(
+                []() { return GameObjectRef::Owning(UI::UISystem::CreateSlider()); },
+                [](const std::string &name) { return GameObjectRef::Owning(UI::UISystem::CreateSlider(name)); }
             ),
             // An element with an Image, a Button and a centred "Label" child showing the label
             "CreateButton", sol::overload(

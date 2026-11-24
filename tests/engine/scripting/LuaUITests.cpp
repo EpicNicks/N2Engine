@@ -318,6 +318,46 @@ TEST_F(LuaUITest, MakesAWorldSpaceCanvas)
     Run("lua_ui_world_go = nil; lua_ui_world = nil; lua_ui_overlay_go = nil; lua_ui_overlay = nil");
 }
 
+TEST_F(LuaUITest, SliderAndNineSlice)
+{
+    // Issue #445
+    const auto scene = Scene::Create("LuaUI_Slider");
+    Run(R"(
+        lua_ui_slider_canvas = UI.CreateCanvas("SliderCanvas")
+        lua_ui_slider_go = UI.CreateSlider("Volume")
+        lua_ui_slider_canvas:AddChild(lua_ui_slider_go)
+        lua_ui_slider = lua_ui_slider_go:GetComponent("Slider")
+        lua_ui_slider_log = {}
+        lua_ui_slider_id = lua_ui_slider:AddOnValueChanged(function(v) lua_ui_slider_log[#lua_ui_slider_log + 1] = v end)
+        lua_ui_slider:SetMaxValue(10)
+        lua_ui_slider:SetWholeNumbers(true)
+        lua_ui_slider:SetValue(3.6)
+    )");
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_slider:GetValue()"), 4.0f);
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_slider:GetNormalizedValue()"), 0.4f);
+    EXPECT_EQ(Eval<int>("#lua_ui_slider_log"), 1);
+    EXPECT_TRUE(Eval<bool>("lua_ui_slider:GetFillRect() ~= nil and lua_ui_slider:GetHandleRect() ~= nil"));
+    EXPECT_EQ(Eval<std::string>("lua_ui_slider:GetDirection()"), "LeftToRight");
+    Run("lua_ui_slider:SetDirection('TopToBottom')");
+    EXPECT_EQ(Eval<std::string>("lua_ui_slider:GetDirection()"), "TopToBottom");
+    EXPECT_FALSE(Lua().safe_script("lua_ui_slider:SetDirection('Sideways')", sol::script_pass_on_error).valid())
+        << "an unknown direction is an error";
+    EXPECT_EQ(Eval<std::string>("lua_ui_slider:GetDirection()"), "TopToBottom") << "and changes nothing";
+    Run("lua_ui_slider:RemoveOnValueChanged(lua_ui_slider_id)");
+    EXPECT_EQ(Eval<int>("lua_ui_slider:GetOnValueChangedListenerCount()"), 0);
+
+    Run(R"(
+        lua_ui_slice_go = UI.CreateElement("Panel")
+        lua_ui_slice = lua_ui_slice_go:AddComponent("Image")
+        lua_ui_slice:SetSliceBorder(8, 4, 8, 4)
+        lua_ui_slice:SetFillCenter(false)
+    )");
+    EXPECT_TRUE(Eval<bool>("lua_ui_slice:IsSliced()"));
+    EXPECT_FLOAT_EQ(Eval<float>("select(2, lua_ui_slice:GetSliceBorder())"), 4.0f);
+    EXPECT_FALSE(Eval<bool>("lua_ui_slice:GetFillCenter()"));
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_slice:GetSliceScale()"), 1.0f);
+}
+
 TEST_F(LuaUITest, ScrollViewAndRectMask)
 {
     // Issue #445

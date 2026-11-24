@@ -889,7 +889,7 @@ function GameObject:Destroy() end
 ---"CircleCollider2D", "PolygonCollider2D", "CubeRenderer",
 ---"SphereRenderer", "QuadRenderer", "Sprite2D", "MeshRenderer", "TextRenderer", "ParticleSystem", "LineRenderer", "TrailRenderer", "MeshRenderer2D",
 ---"SoftBody", "Light", "AudioSource", "AudioListener",
----"LuaComponent", "RectTransform", "Canvas", "Image", "UIText", "Button", "RectMask", "ScrollView", "HorizontalLayoutGroup", "VerticalLayoutGroup", "GridLayoutGroup",
+---"LuaComponent", "RectTransform", "Canvas", "Image", "UIText", "Button", "RectMask", "ScrollView", "Slider", "HorizontalLayoutGroup", "VerticalLayoutGroup", "GridLayoutGroup",
 ---"LayoutElement", "ContentSizeFitter". Unknown names raise an error.
 ---@param typeName string
 ---@return Component
@@ -1093,8 +1093,38 @@ function ParticleSystem:Stop() end
 function ParticleSystem:Clear() end
 
 ---Starts `count` particles now, playing or not. Particles beyond maxParticles are dropped (one warning in the log).
+---They start at the object's pose at the call: a burst right after the object moved, in the same frame, starts at the new position.
 ---@param count integer
 function ParticleSystem:EmitBurst(count) end
+
+---Removes the living particles inside a circle in the XY plane, at any depth (the 2D case). Emission is unaffected.
+---@param center Vector2|Vector3 a Vector3's z is ignored
+---@param radius number
+---@return integer killed how many it removed (0 before the system has started)
+function ParticleSystem:KillInCircle(center, radius) end
+
+---Removes the living particles inside a sphere
+---@param center Vector3
+---@param radius number
+---@return integer killed
+function ParticleSystem:KillInSphere(center, radius) end
+
+---Removes the living particles inside the box between two corners, along the world axes (corners in any order)
+---@param cornerA Vector3
+---@param cornerB Vector3
+---@return integer killed
+function ParticleSystem:KillInBox(cornerA, cornerB) end
+
+---@class ParticleInfo
+---@field position Vector3 world position
+---@field velocity Vector3 world units per second (estimated on the WebGPU backend)
+---@field age number the age as a fraction of the lifetime, 0 to 1
+---@field rotation number degrees
+
+---A copy of the living particles, at most `max` of them and at most 1024 a call
+---@param max integer|nil default 1024
+---@return ParticleInfo[]
+function ParticleSystem:GetParticles(max) end
 
 ---@return boolean
 function ParticleSystem:IsPlaying() end
@@ -1148,11 +1178,41 @@ function ParticleSystem:SetBurstCount(count) end
 ---@return integer
 function ParticleSystem:GetBurstCount() end
 
----@param shape "Cone"|"Sphere" a cone along the object's +Y axis, or a sphere (default Cone). An unknown name raises an error.
+---@param shape "Cone"|"Sphere"|"Circle"|"Edge"|"Box" a cone along the object's +Y axis, a sphere, a disc in the XY plane moving outwards in it (2D), a line along X of length 2 * radius moving along +Y within the cone angle in the XY plane (2D), or a box of BoxSize moving within the cone (default Cone). An unknown name raises an error.
 function ParticleSystem:SetShape(shape) end
 
----@return "Cone"|"Sphere"
+---@return "Cone"|"Sphere"|"Circle"|"Edge"|"Box"
 function ParticleSystem:GetShape() end
+
+---@param fromEdge boolean start on the shape's outline (the cone's rim, the sphere's surface, the circle's rim, the box's faces) instead of inside it (default false)
+function ParticleSystem:SetEmitFromEdge(fromEdge) end
+
+---@return boolean
+function ParticleSystem:GetEmitFromEdge() end
+
+---@param size Vector3 the Box shape's full size along the object's local axes (default 1, 1, 1)
+function ParticleSystem:SetBoxSize(size) end
+
+---@return Vector3
+function ParticleSystem:GetBoxSize() end
+
+---Each particle's start rotation is picked from this range; it turns the quad (not a Stretched one)
+---@param min number degrees (default 0)
+---@param max number degrees (default 0)
+function ParticleSystem:SetStartRotation(min, max) end
+
+---@return number min
+---@return number max
+function ParticleSystem:GetStartRotation() end
+
+---Each particle's angular velocity is picked from this range
+---@param min number degrees per second (default 0)
+---@param max number degrees per second (default 0)
+function ParticleSystem:SetAngularVelocity(min, max) end
+
+---@return number min
+---@return number max
+function ParticleSystem:GetAngularVelocity() end
 
 ---@param radius number the cone's base disc, or the sphere, in world units (default 0)
 function ParticleSystem:SetShapeRadius(radius) end
@@ -1233,6 +1293,21 @@ function ParticleSystem:SetBlendMode(mode) end
 
 ---@return "Alpha"|"Additive"
 function ParticleSystem:GetBlendMode() end
+
+---@param mode "Billboard"|"Stretched"|"HorizontalBillboard"|"VerticalBillboard" Billboard faces the camera (default); Stretched stretches along the velocity; HorizontalBillboard lies flat facing up; VerticalBillboard stands upright and turns about Y to the camera. An unknown name raises an error.
+function ParticleSystem:SetRenderMode(mode) end
+
+---@return "Billboard"|"Stretched"|"HorizontalBillboard"|"VerticalBillboard"
+function ParticleSystem:GetRenderMode() end
+
+---Stretched: the quad's length is size * lengthScale + speed * speedScale (its width is the size)
+---@param lengthScale number default 2
+---@param speedScale number default 0
+function ParticleSystem:SetStretch(lengthScale, speedScale) end
+
+---@return number lengthScale
+---@return number speedScale
+function ParticleSystem:GetStretch() end
 
 ---@param path string|nil an image file, e.g. "res://particles/spark.png"; nil draws plain colours. A path that doesn't load raises an error and keeps the current texture.
 function ParticleSystem:SetTexture(path) end
@@ -1724,6 +1799,32 @@ function Image:SetColor(color) end
 function Image:GetRaycastTarget() end
 ---@param raycastTarget boolean false lets the pointer through to what is underneath
 function Image:SetRaycastTarget(raycastTarget) end
+---9-slicing (issue #445): the texture's border widths in texture pixels. All 0 (the default) stretches the texture over the
+---rect. With a border and a sprite, the corners keep their size (border x sliceScale canvas units), the edges stretch along
+---one axis and the centre both ways; a rect smaller than two borders shrinks them in proportion.
+---@return number left
+---@return number bottom
+---@return number right
+---@return number top
+function Image:GetSliceBorder() end
+---@param left number
+---@param bottom number
+---@param right number
+---@param top number
+function Image:SetSliceBorder(left, bottom, right, top) end
+---Canvas units per texture pixel of the borders (default 1)
+---@return number
+function Image:GetSliceScale() end
+---@param scale number
+function Image:SetSliceScale(scale) end
+---Whether a sliced image draws its centre (default true; false leaves a frame)
+---@return boolean
+function Image:GetFillCenter() end
+---@param fill boolean
+function Image:SetFillCenter(fill) end
+---Whether it is drawn 9-sliced: a border above 0
+---@return boolean
+function Image:IsSliced() end
 ---@return number
 function Image:GetSaturation() end
 ---1 (the default) draws the colour as it is, 0 grey, in between mixes, above 1 strengthens it (stored clamped to 0..4). Saved
@@ -2022,6 +2123,68 @@ function ScrollView:ClearOnValueChanged() end
 ---@return integer
 function ScrollView:GetOnValueChangedListenerCount() end
 
+---@alias SliderDirection "LeftToRight"|"RightToLeft"|"BottomToTop"|"TopToBottom"
+
+---A value picked by dragging along a bar (issue #445, like Unity's Slider). The value runs from minValue to maxValue (whole
+---numbers only with wholeNumbers) along its object's rect, in `direction`. An optional fill rect is anchored over the part of
+---its parent up to the value, and an optional handle rect sits at the value across its parent. While the left button is held
+---after a press on the slider or below it, the value follows the pointer (screen-space overlay canvases only).
+---@class Slider : Component
+Slider = {}
+---@return number
+function Slider:GetValue() end
+---Clamped to the range (rounded with wholeNumbers); the listeners run if it changed
+---@param value number
+function Slider:SetValue(value) end
+---@param value number
+function Slider:SetValueWithoutNotify(value) end
+---0 at minValue, 1 at maxValue
+---@return number
+function Slider:GetNormalizedValue() end
+---@param normalized number
+function Slider:SetNormalizedValue(normalized) end
+---@return number
+function Slider:GetMinValue() end
+---@param value number clamps the value into the new range
+function Slider:SetMinValue(value) end
+---@return number
+function Slider:GetMaxValue() end
+---@param value number
+function Slider:SetMaxValue(value) end
+---@return boolean
+function Slider:GetWholeNumbers() end
+---@param enabled boolean
+function Slider:SetWholeNumbers(enabled) end
+---@return boolean
+function Slider:GetInteractable() end
+---@param interactable boolean
+function Slider:SetInteractable(interactable) end
+---@return SliderDirection
+function Slider:GetDirection() end
+---@param direction SliderDirection an unknown name is an error
+function Slider:SetDirection(direction) end
+---@return RectTransform|nil
+function Slider:GetFillRect() end
+---@param fill RectTransform|nil
+function Slider:SetFillRect(fill) end
+---@return RectTransform|nil
+function Slider:GetHandleRect() end
+---@param handle RectTransform|nil
+function Slider:SetHandleRect(handle) end
+---Sets the value for a pointer at this canvas point, as a drag does
+---@param x number
+---@param y number
+function Slider:SetValueFromPointer(x, y) end
+---Calls fn(value) whenever the value changes. An error in fn is logged.
+---@param fn fun(value: number)
+---@return integer id for RemoveOnValueChanged
+function Slider:AddOnValueChanged(fn) end
+---@param id integer
+function Slider:RemoveOnValueChanged(id) end
+function Slider:ClearOnValueChanged() end
+---@return integer
+function Slider:GetOnValueChangedListenerCount() end
+
 ---@alias ChildAlignment "UpperLeft"|"UpperCenter"|"UpperRight"|"MiddleLeft"|"MiddleCenter"|"MiddleRight"|"LowerLeft"|"LowerCenter"|"LowerRight"
 
 ---Lays its children out in a row (issue #445): padding, spacing, child alignment, controlled and expanded child sizes
@@ -2161,6 +2324,11 @@ function UI.CreateText(name, text) end
 ---@param label? string defaults to "Button"
 ---@return GameObject
 function UI.CreateButton(name, label) end
+
+---A 160 x 20 bar with a dark Image, a Slider, a "Fill" child and a "Handle" child (issue #445)
+---@param name? string defaults to "Slider"
+---@return GameObject
+function UI.CreateSlider(name) end
 
 ---A 300 x 200 element with a dark Image, a RectMask and a ScrollView, a "Content" child (put the items in it) and a
 ---scrollbar per enabled axis (issue #445)
@@ -4053,6 +4221,20 @@ Graphics = {}
 ---effects when it is false. Sprite2D is the exception: the software renderer blends sprites (Sprite2D:SetBlendMode). True on OpenGL, Vulkan and WebGPU, and without a renderer.
 ---@return boolean
 function Graphics.CanBlend() end
+
+---@class FrameStats
+---@field drawCalls integer Draw calls of the last finished frame, all renderables (the renderer's counters)
+---@field triangles integer
+---@field vertices integer
+---@field sprites integer Sprite2D components drawn in the latest frame
+---@field spriteDrawCalls integer Draw calls those sprites made: one per batch, one per sprite drawn alone
+---@field spriteBatches integer Batches of two or more sprites
+---@field batchedSprites integer Sprites drawn inside those batches
+
+---What the latest frame drew (issue #445): the renderer's draw calls, triangles and vertices, and how Sprite2D components were
+---batched (docs/sprite2d.html#batching). All zeros without a renderer.
+---@return FrameStats
+function Graphics.GetFrameStats() end
 
 -- ===== CAMERA =====
 

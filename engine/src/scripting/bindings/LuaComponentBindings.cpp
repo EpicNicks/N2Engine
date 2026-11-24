@@ -10,6 +10,7 @@
 #include <functional>
 #include <iterator>
 #include <map>
+#include <numbers>
 #include <optional>
 #include <ranges>
 #include <stdexcept>
@@ -65,12 +66,17 @@
 #include "engine/ui/RectMask.hpp"
 #include "engine/ui/RectTransform.hpp"
 #include "engine/ui/ScrollView.hpp"
+#include "engine/ui/Slider.hpp"
 #include "engine/ui/UIText.hpp"
 
 namespace N2Engine::Scripting::Bindings
 {
     namespace
     {
+        /// The most particles ParticleSystem:GetParticles copies into Lua in one call (issue #445): enough to test
+        /// particles against game objects, not a way to copy a whole large system into tables every frame
+        constexpr int kLuaParticleReadLimit = 1024;
+
         // Components reach Lua only as ComponentRef<T> handles, never as raw pointers a script could keep
         struct ComponentAccess
         {
@@ -163,6 +169,7 @@ namespace N2Engine::Scripting::Bindings
                 {"Button", MakeAccess<UI::Button>()},
                 {"RectMask", MakeAccess<UI::RectMask>()},
                 {"ScrollView", MakeAccess<UI::ScrollView>()},
+                {"Slider", MakeAccess<UI::Slider>()},
                 {"HorizontalLayoutGroup", MakeAccess<UI::HorizontalLayoutGroup>()},
                 {"VerticalLayoutGroup", MakeAccess<UI::VerticalLayoutGroup>()},
                 {"GridLayoutGroup", MakeAccess<UI::GridLayoutGroup>()},
@@ -968,7 +975,58 @@ namespace N2Engine::Scripting::Bindings
             { return PrivateMaterialInstance(state, c.Pin()->GetShaderMaterial()); },
             "Stop", [](const ParticleSystemRef &c) { c.Pin()->Stop(); },
             "Clear", [](const ParticleSystemRef &c) { c.Pin()->Clear(); },
+            // EmitBurst uses the object's pose at the call: a burst right after the object moved starts at the new position
             "EmitBurst", [](const ParticleSystemRef &c, const int count) { c.Pin()->EmitBurst(count); },
+            // Kills (issue #445): remove the living particles inside a region; each returns how many it removed
+            "KillInCircle", [](const ParticleSystemRef &c, const sol::object &center, const float radius)
+            {
+                // A Vector2, or a Vector3 whose z is ignored: the circle is in the XY plane, at any depth
+                Math::Vector2 point;
+                if (center.is<Math::Vector2>())
+                {
+                    point = center.as<Math::Vector2>();
+                }
+                else if (center.is<Math::Vector3>())
+                {
+                    const Math::Vector3 v = center.as<Math::Vector3>();
+                    point = Math::Vector2(v.x, v.y);
+                }
+                else
+                {
+                    throw std::runtime_error("ParticleSystem:KillInCircle: the centre must be a Vector2 or a Vector3");
+                }
+                return static_cast<int>(c.Pin()->KillInCircle(point, radius));
+            },
+            "KillInSphere", [](const ParticleSystemRef &c, const Math::Vector3 &center, const float radius)
+            { return static_cast<int>(c.Pin()->KillInSphere(center, radius)); },
+            "KillInBox", [](const ParticleSystemRef &c, const Math::Vector3 &cornerA, const Math::Vector3 &cornerB)
+            { return static_cast<int>(c.Pin()->KillInBox(cornerA, cornerB)); },
+            // A copy of at most `most` living particles (default and cap kLuaParticleReadLimit), each a table
+            // { position = Vector3, velocity = Vector3, age = fraction of its life, rotation = degrees }
+            "GetParticles", [](const ParticleSystemRef &c, const sol::optional<int> most, const sol::this_state state)
+            {
+                const auto ps = c.Pin();
+                const int limit = std::clamp(most.value_or(kLuaParticleReadLimit), 0, kLuaParticleReadLimit);
+                std::vector<Math::Vector4> positions;
+                std::vector<Math::Vector4> motion;
+                ps->GetParticles(positions);
+                ps->GetParticleMotion(motion);
+                const std::size_t count = std::min(positions.size(), static_cast<std::size_t>(limit));
+                const bool hasMotion = motion.size() == positions.size();
+                sol::state_view view(state);
+                sol::table list = view.create_table(static_cast<int>(count), 0);
+                for (std::size_t i = 0; i < count; ++i)
+                {
+                    const Math::Vector4 &p = positions[i];
+                    sol::table entry = view.create_table(0, 4);
+                    entry["position"] = Math::Vector3(p.x, p.y, p.z);
+                    entry["age"] = p.w;
+                    entry["velocity"] = hasMotion ? Math::Vector3(motion[i].x, motion[i].y, motion[i].z) : Math::Vector3();
+                    entry["rotation"] = hasMotion ? motion[i].w * (180.0f / std::numbers::pi_v<float>) : 0.0f;
+                    list[i + 1] = entry;
+                }
+                return list;
+            },
             "IsPlaying", [](const ParticleSystemRef &c) { return c.Pin()->IsPlaying(); },
             // Living particles
             "GetAliveCount", [](const ParticleSystemRef &c) { return static_cast<int>(c.Pin()->GetAliveCount()); },
@@ -1000,7 +1058,8 @@ namespace N2Engine::Scripting::Bindings
             "GetMaxParticles", [](const ParticleSystemRef &c) { return c.Pin()->maxParticles; },
             "SetSeed", [](const ParticleSystemRef &c, const int value) { c.Pin()->seed = value; },
             "GetSeed", [](const ParticleSystemRef &c) { return c.Pin()->seed; },
-            // Emission: particles per second, the burst every Play starts, and the shape ("Cone" or "Sphere")
+            // Emission: particles per second, the burst every Play starts, and the shape ("Cone", "Sphere", "Circle",
+            // "Edge" or "Box")
             "SetEmissionRate", [](const ParticleSystemRef &c, const float value) { c.Pin()->emissionRate = value; },
             "GetEmissionRate", [](const ParticleSystemRef &c) { return c.Pin()->emissionRate; },
             "SetBurstCount", [](const ParticleSystemRef &c, const int value) { c.Pin()->burstCount = value; },
@@ -1014,6 +1073,35 @@ namespace N2Engine::Scripting::Bindings
             "GetShapeRadius", [](const ParticleSystemRef &c) { return c.Pin()->shapeRadius; },
             "SetConeAngle", [](const ParticleSystemRef &c, const float value) { c.Pin()->coneAngle = value; },
             "GetConeAngle", [](const ParticleSystemRef &c) { return c.Pin()->coneAngle; },
+            // Start on the shape's outline instead of inside it
+            "SetEmitFromEdge", [](const ParticleSystemRef &c, const bool value) { c.Pin()->emitFromEdge = value; },
+            "GetEmitFromEdge", [](const ParticleSystemRef &c) { return c.Pin()->emitFromEdge; },
+            // The Box shape's full size along the object's local axes
+            "SetBoxSize", [](const ParticleSystemRef &c, const Math::Vector3 &size) { c.Pin()->boxSize = size; },
+            "GetBoxSize", [](const ParticleSystemRef &c) { return c.Pin()->boxSize; },
+            // Each particle's start rotation (degrees) and angular velocity (degrees per second), picked from a range
+            "SetStartRotation", [](const ParticleSystemRef &c, const float lo, const float hi)
+            {
+                const auto ps = c.Pin();
+                ps->startRotationMin = lo;
+                ps->startRotationMax = hi;
+            },
+            "GetStartRotation", [](const ParticleSystemRef &c)
+            {
+                const auto ps = c.Pin();
+                return std::make_tuple(ps->startRotationMin, ps->startRotationMax);
+            },
+            "SetAngularVelocity", [](const ParticleSystemRef &c, const float lo, const float hi)
+            {
+                const auto ps = c.Pin();
+                ps->angularVelocityMin = lo;
+                ps->angularVelocityMax = hi;
+            },
+            "GetAngularVelocity", [](const ParticleSystemRef &c)
+            {
+                const auto ps = c.Pin();
+                return std::make_tuple(ps->angularVelocityMin, ps->angularVelocityMax);
+            },
             // Start values: lifetime in seconds and speed in world units per second, each a min and a max
             "SetLifetime", [](const ParticleSystemRef &c, const float lo, const float hi)
             {
@@ -1077,6 +1165,24 @@ namespace N2Engine::Scripting::Bindings
                 c.Pin()->blendMode = ParseEnumName<Rendering::ParticleBlend>(name, "ParticleSystem:SetBlendMode");
             },
             "GetBlendMode", [](const ParticleSystemRef &c) { return EnumName(c.Pin()->blendMode); },
+            // "Billboard", "Stretched", "HorizontalBillboard" or "VerticalBillboard"
+            "SetRenderMode", [](const ParticleSystemRef &c, const std::string &name)
+            {
+                c.Pin()->renderMode = ParseEnumName<Particles::ParticleRenderMode>(name, "ParticleSystem:SetRenderMode");
+            },
+            "GetRenderMode", [](const ParticleSystemRef &c) { return EnumName(c.Pin()->renderMode); },
+            // Stretched: the quad's length is size * lengthScale + speed * speedScale
+            "SetStretch", [](const ParticleSystemRef &c, const float lengthScale, const float speedScale)
+            {
+                const auto ps = c.Pin();
+                ps->lengthScale = lengthScale;
+                ps->speedScale = speedScale;
+            },
+            "GetStretch", [](const ParticleSystemRef &c)
+            {
+                const auto ps = c.Pin();
+                return std::make_tuple(ps->lengthScale, ps->speedScale);
+            },
             // An image file, e.g. "res://particles/spark.png"; nil draws plain colours. A path that doesn't load
             // raises an error and keeps the current texture.
             "SetTexture", [](const ParticleSystemRef &c, sol::optional<std::string> path)

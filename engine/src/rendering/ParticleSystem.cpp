@@ -89,7 +89,15 @@ namespace N2Engine::Rendering
         RegisterMember(NAMEOF(shape), shape);
         RegisterMember(NAMEOF(shapeRadius), shapeRadius).Range(0.0, 1000.0)
             .Tooltip("Radius of the cone's base, or of the sphere");
-        RegisterMember(NAMEOF(coneAngle), coneAngle).Range(0.0, 180.0).Tooltip("Degrees, half angle of the cone");
+        RegisterMember(NAMEOF(coneAngle), coneAngle).Range(0.0, 180.0)
+            .Tooltip("Degrees, half angle of the cone (Cone and Box), or of the fan in the XY plane (Edge)");
+        RegisterMember(NAMEOF(emitFromEdge), emitFromEdge)
+            .Tooltip("Start on the shape's outline (cone rim, sphere surface, circle rim, box faces) instead of inside it");
+        RegisterMember(NAMEOF(boxSize), boxSize).Tooltip("The Box shape's full size along the object's local axes");
+        RegisterMember(NAMEOF(startRotationMin), startRotationMin).Tooltip("Degrees; turns the quad (not a Stretched one)");
+        RegisterMember(NAMEOF(startRotationMax), startRotationMax).Tooltip("Degrees; turns the quad (not a Stretched one)");
+        RegisterMember(NAMEOF(angularVelocityMin), angularVelocityMin).Tooltip("Degrees per second");
+        RegisterMember(NAMEOF(angularVelocityMax), angularVelocityMax).Tooltip("Degrees per second");
 
         RegisterMember(NAMEOF(lifetimeMin), lifetimeMin).Range(0.001, 3600.0).Tooltip("Seconds");
         RegisterMember(NAMEOF(lifetimeMax), lifetimeMax).Range(0.001, 3600.0).Tooltip("Seconds");
@@ -109,6 +117,12 @@ namespace N2Engine::Rendering
         RegisterMember(NAMEOF(bounce), bounce).Range(0.0, 1.0).Tooltip("Share of its speed a particle keeps off the ground");
 
         RegisterMember(NAMEOF(blendMode), blendMode);
+        RegisterMember(NAMEOF(renderMode), renderMode)
+            .Tooltip("Billboard faces the camera; Stretched stretches along the velocity; Horizontal lies flat facing up; Vertical stands upright");
+        RegisterMember(NAMEOF(lengthScale), lengthScale).Range(0.0, 1000.0)
+            .Tooltip("Stretched: the length is size * lengthScale + speed * speedScale");
+        RegisterMember(NAMEOF(speedScale), speedScale).Range(0.0, 1000.0)
+            .Tooltip("Stretched: the length is size * lengthScale + speed * speedScale");
         RegisterAssetRef(NAMEOF(texture), texture);
     }
 
@@ -156,6 +170,50 @@ namespace N2Engine::Rendering
         {
             sim->CopyPositions(_handle, out);
         }
+    }
+
+    void ParticleSystem::GetParticleMotion(std::vector<Math::Vector4> &out) const
+    {
+        out.clear();
+        if (const auto *sim = Backend(); sim && _handle != Physics::kInvalidParticleSystem)
+        {
+            sim->CopyMotion(_handle, out);
+        }
+    }
+
+    std::size_t ParticleSystem::Kill(const Physics::ParticleRegion &region)
+    {
+        auto *sim = Backend();
+        return sim && _handle != Physics::kInvalidParticleSystem ? sim->Kill(_handle, region) : 0;
+    }
+
+    std::size_t ParticleSystem::KillInSphere(const Math::Vector3 &center, const float radius)
+    {
+        Physics::ParticleRegion region;
+        region.shape = Physics::ParticleRegion::Shape::Sphere;
+        region.center = center;
+        region.radius = radius;
+        return Kill(region);
+    }
+
+    std::size_t ParticleSystem::KillInCircle(const Math::Vector2 &center, const float radius)
+    {
+        Physics::ParticleRegion region;
+        region.shape = Physics::ParticleRegion::Shape::Circle;
+        region.center = Math::Vector3(center.x, center.y, 0.0f);
+        region.radius = radius;
+        return Kill(region);
+    }
+
+    std::size_t ParticleSystem::KillInBox(const Math::Vector3 &cornerA, const Math::Vector3 &cornerB)
+    {
+        Physics::ParticleRegion region;
+        region.shape = Physics::ParticleRegion::Shape::Box;
+        region.center = Math::Vector3(0.5f * (cornerA.x + cornerB.x), 0.5f * (cornerA.y + cornerB.y),
+                                      0.5f * (cornerA.z + cornerB.z));
+        region.halfExtents = Math::Vector3(0.5f * std::abs(cornerB.x - cornerA.x), 0.5f * std::abs(cornerB.y - cornerA.y),
+                                           0.5f * std::abs(cornerB.z - cornerA.z));
+        return Kill(region);
     }
 
     std::string_view ParticleSystem::GetActiveBackendName() const
@@ -207,6 +265,12 @@ namespace N2Engine::Rendering
         settings.coneAngle = coneAngle;
         settings.speedMin = speedMin;
         settings.speedMax = std::max(speedMin, speedMax);
+        settings.emitFromEdge = emitFromEdge;
+        settings.boxSize = boxSize;
+        settings.startRotationMin = startRotationMin;
+        settings.startRotationMax = startRotationMax;
+        settings.angularVelocityMin = angularVelocityMin;
+        settings.angularVelocityMax = angularVelocityMax;
         return settings;
     }
 
@@ -467,8 +531,10 @@ namespace N2Engine::Rendering
             origin = positionable->GetPosition();
             rotation = positionable->GetRotation();
         }
-        _emitter.Generate(BuildShapeSettings(), origin, rotation, count, _spawnPositions, _spawnVelocities);
-        const std::size_t accepted = sim->Spawn(_handle, _spawnPositions, _spawnVelocities);
+        // The object's pose now: a burst right after the object moved (the same frame, before any fixed step) starts at
+        // the new position (docs/particles.html#burst-position)
+        _emitter.Generate(BuildShapeSettings(), origin, rotation, count, _spawnPositions, _spawnVelocities, &_spawnSpins);
+        const std::size_t accepted = sim->SpawnWithSpin(_handle, _spawnPositions, _spawnVelocities, _spawnSpins);
         if (accepted < count)
         {
             WarnFull();
@@ -673,7 +739,21 @@ namespace N2Engine::Rendering
         style.endSize = endSize;
         style.startColor = startColor;
         style.endColor = endColor;
-        Particles::BuildBillboards(_meshData, _particles, RenderCamera::Current(), style);
+        style.mode = renderMode;
+        style.lengthScale = lengthScale;
+        style.speedScale = speedScale;
+        // The velocities and rotations cost a second copy: only when the quads need them
+        const bool rotates = startRotationMin != 0.0f || startRotationMax != 0.0f || angularVelocityMin != 0.0f ||
+                             angularVelocityMax != 0.0f;
+        if (renderMode == Particles::ParticleRenderMode::Stretched || rotates)
+        {
+            sim->CopyMotion(_handle, _motion);
+        }
+        else
+        {
+            _motion.clear();
+        }
+        Particles::BuildBillboards(_meshData, _particles, RenderCamera::Current(), style, _motion);
 
         // In place, or replaced where the backend can't update meshes
         if (_mesh && !renderer->UpdateMesh(_mesh, _meshData))

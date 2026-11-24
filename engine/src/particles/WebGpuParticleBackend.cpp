@@ -296,6 +296,8 @@ namespace N2Engine::Particles
         system.spawnPosition.assign(system.capacity, Math::Vector3{});
         system.spawnVelocity.assign(system.capacity, Math::Vector3{});
         system.spawnStep.assign(system.capacity, 0);
+        system.spawnRotation.assign(system.capacity, 0.0f);
+        system.spin.assign(system.capacity, 0.0f);
 
         const std::uint32_t index = _nextIndex++;
         _systems.emplace(index, std::move(system));
@@ -348,6 +350,14 @@ namespace N2Engine::Particles
                                              const std::span<const Math::Vector3> positions,
                                              const std::span<const Math::Vector3> velocities)
     {
+        return SpawnWithSpin(handle, positions, velocities, {});
+    }
+
+    std::size_t WebGpuParticleBackend::SpawnWithSpin(const Physics::ParticleSystemHandle handle,
+                                                     const std::span<const Math::Vector3> positions,
+                                                     const std::span<const Math::Vector3> velocities,
+                                                     const std::span<const Math::Vector2> spins)
+    {
         System *found = Find(handle);
         if (!found || !Usable())
         {
@@ -385,6 +395,8 @@ namespace N2Engine::Particles
             system.spawnPosition[slot] = p;
             system.spawnVelocity[slot] = v;
             system.spawnStep[slot] = system.steps;
+            system.spawnRotation[slot] = i < spins.size() ? Finite(spins[i].x, 0.0f) : 0.0f;
+            system.spin[slot] = i < spins.size() ? Finite(spins[i].y, 0.0f) : 0.0f;
             ++system.alive;
             added.push_back({slot, {p.x, p.y, p.z, lifetime}, {v.x, v.y, v.z, 0.0f}});
         }
@@ -447,6 +459,8 @@ namespace N2Engine::Particles
         system->ticket = 0;
         system->mirror.clear();
         system->mirrorStep = 0;
+        system->previousMirror.clear();
+        system->previousMirrorStep = 0;
     }
 
     bool WebGpuParticleBackend::WriteParams(System &system, const float h) const
@@ -493,6 +507,9 @@ namespace N2Engine::Particles
         case GpuReadStatus::Pending:
             return;
         case GpuReadStatus::Done:
+            // The copy it replaces is kept for the velocities (CopyMotion); swapping keeps both allocations
+            std::swap(system.previousMirror, system.mirror);
+            system.previousMirrorStep = system.mirrorStep;
             // Field by field: Math::Vector4 keeps its components in the order w, x, y, z, not the GPU's x, y, z, w
             system.mirror.resize(system.readBytes.size() / kVec4Bytes);
             for (std::size_t i = 0; i < system.mirror.size(); ++i)
@@ -527,6 +544,7 @@ namespace N2Engine::Particles
             ++_skippedSteps;
             return;
         }
+        system.stepDt = dt;
         const float h = dt / static_cast<float>(kSubSteps);
         const std::uint32_t count = system.highWater; // every slot that may be alive at the start of the step
         if (count > 0)
@@ -632,7 +650,6 @@ namespace N2Engine::Particles
         System &system = _systems.at(Physics::ParticleHandleIndex(handle));
         PollRead(system);
         out.reserve(system.alive);
-        const Math::Vector3 &g = system.params.gravity;
         for (std::uint32_t slot = 0; slot < system.highWater; ++slot)
         {
             if (!(system.remaining[slot] > 0.0f))
@@ -641,30 +658,135 @@ namespace N2Engine::Particles
             }
             const float lifetime = system.lifetime[slot];
             const float age = std::max(0.0f, lifetime - system.remaining[slot]);
+            const Math::Vector3 position = PositionOf(system, slot, age);
             Math::Vector4 &v = out.emplace_back();
-            if (system.mirrorStep > system.spawnStep[slot] && slot < system.mirror.size())
+            v.x = position.x;
+            v.y = position.y;
+            v.z = position.z;
+            v.w = std::clamp(age / lifetime, 0.0f, 1.0f);
+        }
+    }
+
+    Math::Vector3 WebGpuParticleBackend::PositionOf(const System &system, const std::uint32_t slot, const float age)
+    {
+        if (system.mirrorStep > system.spawnStep[slot] && slot < system.mirror.size())
+        {
+            // The GPU's position as of the last copy that landed
+            const Math::Vector4 &m = system.mirror[slot];
+            return Math::Vector3(m.x, m.y, m.z);
+        }
+        // Spawned after that copy was taken: where it would be on its ballistic path
+        const Math::Vector3 &g = system.params.gravity;
+        const Math::Vector3 &p = system.spawnPosition[slot];
+        const Math::Vector3 &u = system.spawnVelocity[slot];
+        const float half = 0.5f * age * age;
+        Math::Vector3 v(p.x + u.x * age + g.x * half, p.y + u.y * age + g.y * half, p.z + u.z * age + g.z * half);
+        if (system.params.groundEnabled && v.y < system.params.groundHeight)
+        {
+            v.y = system.params.groundHeight;
+        }
+        return v;
+    }
+
+    void WebGpuParticleBackend::CopyMotion(const Physics::ParticleSystemHandle handle, std::vector<Math::Vector4> &out) const
+    {
+        out.clear();
+        if (!Find(handle))
+        {
+            return;
+        }
+        System &system = _systems.at(Physics::ParticleHandleIndex(handle));
+        PollRead(system);
+        out.reserve(system.alive);
+        const Math::Vector3 &g = system.params.gravity;
+        const std::uint64_t between =
+            system.mirrorStep > system.previousMirrorStep ? system.mirrorStep - system.previousMirrorStep : 0;
+        const float span = static_cast<float>(between) * system.stepDt;
+        for (std::uint32_t slot = 0; slot < system.highWater; ++slot)
+        {
+            if (!(system.remaining[slot] > 0.0f))
             {
-                // The GPU's position as of the last copy that landed
-                v.x = system.mirror[slot].x;
-                v.y = system.mirror[slot].y;
-                v.z = system.mirror[slot].z;
+                continue;
+            }
+            const float age = std::max(0.0f, system.lifetime[slot] - system.remaining[slot]);
+            Math::Vector4 &v = out.emplace_back();
+            if (span > 0.0f && system.previousMirrorStep > system.spawnStep[slot] && slot < system.mirror.size() &&
+                slot < system.previousMirror.size())
+            {
+                // Both copies are of this particle: the distance between them over the steps between them
+                const Math::Vector4 &now = system.mirror[slot];
+                const Math::Vector4 &before = system.previousMirror[slot];
+                v.x = (now.x - before.x) / span;
+                v.y = (now.y - before.y) / span;
+                v.z = (now.z - before.z) / span;
             }
             else
             {
-                // Spawned after that copy was taken: where it would be on its ballistic path
-                const Math::Vector3 &p = system.spawnPosition[slot];
+                // Its ballistic velocity since its spawn
                 const Math::Vector3 &u = system.spawnVelocity[slot];
-                const float half = 0.5f * age * age;
-                v.x = p.x + u.x * age + g.x * half;
-                v.y = p.y + u.y * age + g.y * half;
-                v.z = p.z + u.z * age + g.z * half;
-                if (system.params.groundEnabled && v.y < system.params.groundHeight)
-                {
-                    v.y = system.params.groundHeight;
-                }
+                v.x = u.x + g.x * age;
+                v.y = u.y + g.y * age;
+                v.z = u.z + g.z * age;
             }
-            v.w = std::clamp(age / lifetime, 0.0f, 1.0f);
+            v.w = system.spawnRotation[slot] + system.spin[slot] * age;
         }
+    }
+
+    std::size_t WebGpuParticleBackend::Kill(const Physics::ParticleSystemHandle handle, const Physics::ParticleRegion &region)
+    {
+        System *found = Find(handle);
+        if (!found)
+        {
+            return 0;
+        }
+        System &system = *found;
+        PollRead(system);
+        std::vector<std::uint32_t> killed;
+        for (std::uint32_t slot = 0; slot < system.highWater; ++slot)
+        {
+            if (!(system.remaining[slot] > 0.0f))
+            {
+                continue;
+            }
+            const float age = std::max(0.0f, system.lifetime[slot] - system.remaining[slot]);
+            const Math::Vector3 p = PositionOf(system, slot, age);
+            if (region.Contains(p.x, p.y, p.z))
+            {
+                FreeSlot(system, slot);
+                killed.push_back(slot);
+            }
+        }
+        if (killed.empty())
+        {
+            return 0;
+        }
+        // The GPU skips a slot whose lifetime (pos.w) is 0: one write per run of neighbouring killed slots
+        if (Usable())
+        {
+            std::vector<float> zeros;
+            std::size_t start = 0;
+            while (start < killed.size())
+            {
+                std::size_t end = start + 1;
+                while (end < killed.size() && killed[end] == killed[end - 1] + 1)
+                {
+                    ++end;
+                }
+                zeros.assign((end - start) * 4, 0.0f);
+                if (!_compute->WriteBuffer(system.positions, std::uint64_t{killed[start]} * kVec4Bytes, zeros.data(),
+                                           zeros.size() * sizeof(float)))
+                {
+                    MarkBroken();
+                    break;
+                }
+                start = end;
+            }
+        }
+        while (system.highWater > 0 && !(system.remaining[system.highWater - 1] > 0.0f))
+        {
+            --system.highWater;
+        }
+        return killed.size();
     }
 
     bool WebGpuParticleBackend::SyncForTest()
