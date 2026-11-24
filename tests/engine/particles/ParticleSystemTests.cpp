@@ -144,7 +144,7 @@ TEST_F(ParticleSystemTest, IsRegisteredAndDescribesItsFields)
     EXPECT_EQ(schema->defaults.at("backend"), "Auto");
 
     ASSERT_NE(find("shape"), nullptr);
-    EXPECT_EQ(find("shape")->enumOptions, (std::vector<std::string>{"Cone", "Sphere"}));
+    EXPECT_EQ(find("shape")->enumOptions, (std::vector<std::string>{"Cone", "Sphere", "Circle", "Edge", "Box"}));
     ASSERT_NE(find("blendMode"), nullptr);
     EXPECT_EQ(find("blendMode")->enumOptions, (std::vector<std::string>{"Alpha", "Additive"}));
     ASSERT_NE(find("texture"), nullptr);

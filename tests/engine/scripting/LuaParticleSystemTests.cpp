@@ -216,8 +216,8 @@ TEST_F(LuaParticleSystemTest, AnUnknownEnumNameIsAnErrorThatListsTheOptionsAndCh
     EXPECT_NE(error.find("Auto, PhysX, CPU, WebGPU"), std::string::npos) << error;
     EXPECT_EQ(Eval<std::string>("lua_ps:GetBackend()"), "Auto");
 
-    error = RunExpectingError(R"(lua_ps:SetShape("Box"))");
-    EXPECT_NE(error.find("Cone, Sphere"), std::string::npos) << error;
+    error = RunExpectingError(R"(lua_ps:SetShape("Torus"))");
+    EXPECT_NE(error.find("Cone, Sphere, Circle, Edge, Box"), std::string::npos) << error;
     EXPECT_EQ(Eval<std::string>("lua_ps:GetShape()"), "Cone");
 
     error = RunExpectingError(R"(lua_ps:SetBlendMode("Multiply"))");
