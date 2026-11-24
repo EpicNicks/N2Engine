@@ -312,6 +312,9 @@ namespace Renderer::Common
         [[nodiscard]] virtual bool SupportsStageDim() const { return false; }
         /// Whether blended draws (RenderState::blend) are blended. The software renderer draws them opaque.
         [[nodiscard]] virtual bool SupportsBlending() const { return true; }
+        /// Whether blended draws that also set RenderState::softwareBlend (Sprite2D's, issue #445) are blended: every backend that
+        /// blends, and the software renderer, which blends those draws only
+        [[nodiscard]] virtual bool SupportsOptInBlending() const { return SupportsBlending(); }
 
         /**
          * The screen tint (ScreenTint: a saturation inside or outside a circle on the screen; effects design, stage E2):

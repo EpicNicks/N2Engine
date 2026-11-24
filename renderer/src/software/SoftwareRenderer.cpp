@@ -763,14 +763,51 @@ namespace
         int       width, height;
     };
 
-    // The fixed-function part of a draw's RenderState (blend is not supported)
+    // The fixed-function part of a draw's RenderState. Blending only for a draw that opts in (RenderState::softwareBlend)
     struct RasterState
     {
         bool     depthTest;
         bool     depthWrite;   // already false when depthTest is off, as in OpenGL
         CullMode cull;
         bool     wireframe;
+        bool     blend = false;   // blend with `blendFunc` instead of writing the colour over what is there
+        BlendFunc blendFunc{};
     };
+
+    // One blend factor (BlendFactor) for a channel: `dstChannel` is the target's own value of that channel (DstColor)
+    inline float BlendFactorValue(const BlendFactor factor, const float srcA, const float dstChannel)
+    {
+        switch (factor)
+        {
+        case BlendFactor::Zero: return 0.f;
+        case BlendFactor::One: return 1.f;
+        case BlendFactor::SrcAlpha: return srcA;
+        case BlendFactor::OneMinusSrcAlpha: return 1.f - srcA;
+        case BlendFactor::DstColor: return dstChannel;
+        }
+        return 0.f;
+    }
+
+    // `src` blended over `dst` (both packed RGBA8) with `func`, equation ADD, as a GPU blends into an RGBA8 target: the factors in
+    // 0..1, the result clamped and rounded to 8 bits. Plain alpha blending of a fully opaque or fully transparent pixel is exact
+    inline uint32_t BlendPacked(const uint32_t src, const uint32_t dst, const BlendFunc& func)
+    {
+        const uint32_t srcA8 = src >> 24;
+        if (func.srcColor == BlendFactor::SrcAlpha && func.dstColor == BlendFactor::OneMinusSrcAlpha &&
+            func.srcAlpha == BlendFactor::SrcAlpha && func.dstAlpha == BlendFactor::OneMinusSrcAlpha)
+        {
+            if (srcA8 == 0u) return dst;
+        }
+        const float s[4] = { float(src & 0xFFu) / 255.f, float((src >> 8) & 0xFFu) / 255.f,
+                             float((src >> 16) & 0xFFu) / 255.f, float(srcA8) / 255.f };
+        const float d[4] = { float(dst & 0xFFu) / 255.f, float((dst >> 8) & 0xFFu) / 255.f,
+                             float((dst >> 16) & 0xFFu) / 255.f, float(dst >> 24) / 255.f };
+        float o[4];
+        for (int c = 0; c < 3; ++c)
+            o[c] = s[c] * BlendFactorValue(func.srcColor, s[3], d[c]) + d[c] * BlendFactorValue(func.dstColor, s[3], d[c]);
+        o[3] = s[3] * BlendFactorValue(func.srcAlpha, s[3], d[3]) + d[3] * BlendFactorValue(func.dstAlpha, s[3], d[3]);
+        return PackRGBA(o[0], o[1], o[2], o[3]);
+    }
 
     struct WireEdge
     {
@@ -802,7 +839,14 @@ namespace
     // writing its depth keeps anything drawn later behind it from covering it. See SWShaderType::Text.
     inline RasterState ToRasterState(const RenderState& s, const bool alphaTestedText, const bool wireframe)
     {
-        return RasterState{ s.depthTest, s.depthTest && (s.depthWrite || alphaTestedText), s.cull, wireframe };
+        RasterState rs{ s.depthTest, s.depthTest && (s.depthWrite || alphaTestedText), s.cull, wireframe };
+        // An opted-in blended draw (RenderState::softwareBlend; never text, which stays alpha-tested) blends as on the GPU
+        if (s.blend && s.softwareBlend && !alphaTestedText)
+        {
+            rs.blend = true;
+            rs.blendFunc = BlendFuncFor(s.additive, s.variant);
+        }
+        return rs;
     }
 
     // The text shader's alpha test: the SDF edge (0.5, 128 in the atlas bytes) and, as OpenGL discards a
@@ -1043,10 +1087,11 @@ namespace
                         if (covered)
                         {
                             if (rs.depthWrite && writesDepth) drow[px] = z;
-                            crow[px] = mat.effects
+                            const uint32_t shaded = mat.effects
                                 ? EffectsPacked(colOut, mat.dim, mat.tint, mat.tintCircle,
                                                 (float)px + 0.5f, (float)py + 0.5f)
                                 : colOut;
+                            crow[px] = rs.blend ? BlendPacked(shaded, crow[px], rs.blendFunc) : shaded;
                         }
                     }
                 }

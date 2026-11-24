@@ -683,6 +683,10 @@ namespace N2Engine::Scripting::Bindings
             "GetSaturation", Forward<Sprite2DRef, &Rendering::Sprite2D::GetSaturation>(),
             "SetFlash", Forward<Sprite2DRef, &Rendering::Sprite2D::SetFlash>(),
             "GetFlash", Forward<Sprite2DRef, &Rendering::Sprite2D::GetFlash>(),
+            // "Alpha", "Additive" or "Multiply" (issue #445), as ParticleSystem:SetBlendMode takes; another name is an error
+            "SetBlendMode", [](const Sprite2DRef &ref, const std::string &name)
+            { ref.Pin()->SetBlendMode(ParseEnumName<Rendering::SpriteBlend>(name, "Sprite2D:SetBlendMode")); },
+            "GetBlendMode", [](const Sprite2DRef &ref) { return EnumName(ref.Pin()->GetBlendMode()); },
             // A res:// path to an image, or nil for none
             "SetTexture", [](const Sprite2DRef &ref, const sol::optional<std::string> path)
             {
