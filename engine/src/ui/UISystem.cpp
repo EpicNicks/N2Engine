@@ -20,6 +20,7 @@
 #include "engine/ui/Button.hpp"
 #include "engine/ui/Canvas.hpp"
 #include "engine/ui/Image.hpp"
+#include "engine/ui/LayoutGroup.hpp"
 #include "engine/ui/RectMask.hpp"
 #include "engine/ui/RectTransform.hpp"
 #include "engine/ui/ScrollView.hpp"
@@ -95,11 +96,25 @@ namespace N2Engine::UI
             Rect rect = parentRect;
             if (rectTransform && !isCanvas)
             {
+                // Issue #445: a ContentSizeFitter sizes the object to its content first
+                if (const ContentSizeFitter *fitter = gameObject.GetComponent<ContentSizeFitter>(); fitter && fitter->IsActive())
+                {
+                    fitter->Fit(parentRect);
+                }
                 rect = rectTransform->ResolveIn(parentRect);
             }
             if (rectTransform)
             {
                 rectTransform->SetResolvedRect(rect);
+            }
+            // Issue #445: a layout group places the children before they resolve their rects in it
+            for (const LayoutGroup *group : gameObject.GetComponents<LayoutGroup>())
+            {
+                if (group && group->IsActive())
+                {
+                    group->Arrange(rect);
+                    break;
+                }
             }
 
             for (UIGraphic *graphic : gameObject.GetComponents<UIGraphic>())

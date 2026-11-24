@@ -58,6 +58,7 @@
 #include "engine/ui/Button.hpp"
 #include "engine/ui/Canvas.hpp"
 #include "engine/ui/Image.hpp"
+#include "engine/ui/LayoutGroup.hpp"
 #include "engine/ui/RectMask.hpp"
 #include "engine/ui/RectTransform.hpp"
 #include "engine/ui/ScrollView.hpp"
@@ -156,6 +157,11 @@ namespace N2Engine::Scripting::Bindings
                 {"Button", MakeAccess<UI::Button>()},
                 {"RectMask", MakeAccess<UI::RectMask>()},
                 {"ScrollView", MakeAccess<UI::ScrollView>()},
+                {"HorizontalLayoutGroup", MakeAccess<UI::HorizontalLayoutGroup>()},
+                {"VerticalLayoutGroup", MakeAccess<UI::VerticalLayoutGroup>()},
+                {"GridLayoutGroup", MakeAccess<UI::GridLayoutGroup>()},
+                {"LayoutElement", MakeAccess<UI::LayoutElement>()},
+                {"ContentSizeFitter", MakeAccess<UI::ContentSizeFitter>()},
             };
             return table;
         }

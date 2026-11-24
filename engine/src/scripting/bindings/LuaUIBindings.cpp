@@ -15,6 +15,7 @@
 #include "engine/ui/Canvas.hpp"
 #include "engine/ui/Image.hpp"
 #include "engine/ui/Rect.hpp"
+#include "engine/ui/LayoutGroup.hpp"
 #include "engine/ui/RectMask.hpp"
 #include "engine/ui/RectTransform.hpp"
 #include "engine/ui/ScrollView.hpp"
@@ -120,6 +121,114 @@ namespace N2Engine::Scripting::Bindings
             }
             throw std::runtime_error("ScrollView:SetMovementType: unknown movement type \"" + name +
                                      "\" (expected \"Unrestricted\", \"Elastic\" or \"Clamped\")");
+        }
+
+        /// A ChildAlignment by name ("UpperLeft" .. "LowerRight"); anything else is an error naming `where`
+        UI::ChildAlignment ParseChildAlignment(const std::string &name, const char *where)
+        {
+            static constexpr const char *names[] = {"UpperLeft", "UpperCenter", "UpperRight", "MiddleLeft", "MiddleCenter",
+                                                    "MiddleRight", "LowerLeft", "LowerCenter", "LowerRight"};
+            for (int i = 0; i < 9; ++i)
+            {
+                if (name == names[i])
+                {
+                    return static_cast<UI::ChildAlignment>(i);
+                }
+            }
+            throw std::runtime_error(std::string(where) + ": unknown alignment \"" + name + "\" (expected UpperLeft .. LowerRight)");
+        }
+
+        std::string ChildAlignmentName(const UI::ChildAlignment alignment)
+        {
+            static constexpr const char *names[] = {"UpperLeft", "UpperCenter", "UpperRight", "MiddleLeft", "MiddleCenter",
+                                                    "MiddleRight", "LowerLeft", "LowerCenter", "LowerRight"};
+            const auto index = static_cast<int>(alignment);
+            return index >= 0 && index < 9 ? names[index] : "UpperLeft";
+        }
+
+        UI::GridConstraint ParseGridConstraint(const std::string &name)
+        {
+            if (name == "Flexible")
+            {
+                return UI::GridConstraint::Flexible;
+            }
+            if (name == "FixedColumnCount")
+            {
+                return UI::GridConstraint::FixedColumnCount;
+            }
+            if (name == "FixedRowCount")
+            {
+                return UI::GridConstraint::FixedRowCount;
+            }
+            throw std::runtime_error("GridLayoutGroup:SetConstraint: unknown constraint \"" + name +
+                                     "\" (expected \"Flexible\", \"FixedColumnCount\" or \"FixedRowCount\")");
+        }
+
+        std::string GridConstraintName(const UI::GridConstraint constraint)
+        {
+            switch (constraint)
+            {
+            case UI::GridConstraint::FixedColumnCount:
+                return "FixedColumnCount";
+            case UI::GridConstraint::FixedRowCount:
+                return "FixedRowCount";
+            case UI::GridConstraint::Flexible:
+                break;
+            }
+            return "Flexible";
+        }
+
+        UI::FitMode ParseFitMode(const std::string &name, const char *where)
+        {
+            if (name == "Unconstrained")
+            {
+                return UI::FitMode::Unconstrained;
+            }
+            if (name == "PreferredSize")
+            {
+                return UI::FitMode::PreferredSize;
+            }
+            throw std::runtime_error(std::string(where) + ": unknown fit mode \"" + name +
+                                     "\" (expected \"Unconstrained\" or \"PreferredSize\")");
+        }
+
+        std::string FitModeName(const UI::FitMode mode)
+        {
+            return mode == UI::FitMode::PreferredSize ? "PreferredSize" : "Unconstrained";
+        }
+
+        /// The methods every layout group has: padding and child alignment
+        template <typename Ref>
+        auto PaddingGetter()
+        {
+            return [](const Ref &c)
+            {
+                const UI::LayoutPadding padding = c.Pin()->GetPadding();
+                return std::make_tuple(padding.left, padding.right, padding.top, padding.bottom);
+            };
+        }
+
+        template <typename Ref>
+        auto PaddingSetter()
+        {
+            return [](const Ref &c, const float left, const float right, const float top, const float bottom)
+            { c.Pin()->SetPadding(UI::LayoutPadding{left, right, top, bottom}); };
+        }
+
+        template <typename Ref>
+        auto AlignmentGetter()
+        {
+            return [](const Ref &c) { return ChildAlignmentName(c.Pin()->GetChildAlignment()); };
+        }
+
+        template <typename Ref>
+        auto AlignmentSetter(const char *where)
+        {
+            return [where](const Ref &c, const std::string &name)
+            {
+                const UI::ChildAlignment alignment = ParseChildAlignment(name, where);
+                c.Pin()->SetChildAlignment(alignment);
+            };
         }
 
         std::string MovementTypeName(const UI::ScrollMovementType type)
@@ -493,6 +602,132 @@ namespace N2Engine::Scripting::Bindings
             "RemoveOnValueChanged", Forward<ScrollViewRef, &UI::ScrollView::RemoveOnValueChanged>(),
             "ClearOnValueChanged", Forward<ScrollViewRef, &UI::ScrollView::ClearOnValueChanged>(),
             "GetOnValueChangedListenerCount", Forward<ScrollViewRef, &UI::ScrollView::GetOnValueChangedListenerCount>()
+        );
+
+        // ===== Layout groups, LayoutElement, ContentSizeFitter (issue #445) =====
+        using HorizontalRef = ComponentRef<UI::HorizontalLayoutGroup>;
+        BindComponentType<UI::HorizontalLayoutGroup>(
+            lua, "HorizontalLayoutGroup",
+            "GetPadding", PaddingGetter<HorizontalRef>(),
+            "SetPadding", PaddingSetter<HorizontalRef>(),
+            "GetChildAlignment", AlignmentGetter<HorizontalRef>(),
+            "SetChildAlignment", AlignmentSetter<HorizontalRef>("HorizontalLayoutGroup:SetChildAlignment"),
+            "GetSpacing", Forward<HorizontalRef, &UI::HorizontalOrVerticalLayoutGroup::GetSpacing>(),
+            "SetSpacing", Forward<HorizontalRef, &UI::HorizontalOrVerticalLayoutGroup::SetSpacing>(),
+            "GetControlChildSize", [](const HorizontalRef &c)
+            {
+                const auto group = c.Pin();
+                return std::make_tuple(group->GetControlChildWidth(), group->GetControlChildHeight());
+            },
+            "SetControlChildSize", [](const HorizontalRef &c, const bool width, const bool height)
+            {
+                const auto group = c.Pin();
+                group->SetControlChildWidth(width);
+                group->SetControlChildHeight(height);
+            },
+            "GetChildForceExpand", [](const HorizontalRef &c)
+            {
+                const auto group = c.Pin();
+                return std::make_tuple(group->GetChildForceExpandWidth(), group->GetChildForceExpandHeight());
+            },
+            "SetChildForceExpand", [](const HorizontalRef &c, const bool width, const bool height)
+            {
+                const auto group = c.Pin();
+                group->SetChildForceExpandWidth(width);
+                group->SetChildForceExpandHeight(height);
+            },
+            "GetPreferredSize", [](const HorizontalRef &c)
+            {
+                const auto group = c.Pin();
+                const Math::Vector2 size = group->GetPreferredSize(UI::Rect{});
+                return std::make_tuple(size.x, size.y);
+            }
+        );
+        using VerticalRef = ComponentRef<UI::VerticalLayoutGroup>;
+        BindComponentType<UI::VerticalLayoutGroup>(
+            lua, "VerticalLayoutGroup",
+            "GetPadding", PaddingGetter<VerticalRef>(),
+            "SetPadding", PaddingSetter<VerticalRef>(),
+            "GetChildAlignment", AlignmentGetter<VerticalRef>(),
+            "SetChildAlignment", AlignmentSetter<VerticalRef>("VerticalLayoutGroup:SetChildAlignment"),
+            "GetSpacing", Forward<VerticalRef, &UI::HorizontalOrVerticalLayoutGroup::GetSpacing>(),
+            "SetSpacing", Forward<VerticalRef, &UI::HorizontalOrVerticalLayoutGroup::SetSpacing>(),
+            "GetControlChildSize", [](const VerticalRef &c)
+            {
+                const auto group = c.Pin();
+                return std::make_tuple(group->GetControlChildWidth(), group->GetControlChildHeight());
+            },
+            "SetControlChildSize", [](const VerticalRef &c, const bool width, const bool height)
+            {
+                const auto group = c.Pin();
+                group->SetControlChildWidth(width);
+                group->SetControlChildHeight(height);
+            },
+            "GetChildForceExpand", [](const VerticalRef &c)
+            {
+                const auto group = c.Pin();
+                return std::make_tuple(group->GetChildForceExpandWidth(), group->GetChildForceExpandHeight());
+            },
+            "SetChildForceExpand", [](const VerticalRef &c, const bool width, const bool height)
+            {
+                const auto group = c.Pin();
+                group->SetChildForceExpandWidth(width);
+                group->SetChildForceExpandHeight(height);
+            },
+            "GetPreferredSize", [](const VerticalRef &c)
+            {
+                const auto group = c.Pin();
+                const Math::Vector2 size = group->GetPreferredSize(UI::Rect{});
+                return std::make_tuple(size.x, size.y);
+            }
+        );
+        using GridRef = ComponentRef<UI::GridLayoutGroup>;
+        BindComponentType<UI::GridLayoutGroup>(
+            lua, "GridLayoutGroup",
+            "GetPadding", PaddingGetter<GridRef>(),
+            "SetPadding", PaddingSetter<GridRef>(),
+            "GetChildAlignment", AlignmentGetter<GridRef>(),
+            "SetChildAlignment", AlignmentSetter<GridRef>("GridLayoutGroup:SetChildAlignment"),
+            "GetCellSize", Forward<GridRef, &UI::GridLayoutGroup::GetCellSize>(),
+            "SetCellSize", Forward<GridRef, &UI::GridLayoutGroup::SetCellSize>(),
+            "GetSpacing", Forward<GridRef, &UI::GridLayoutGroup::GetSpacing>(),
+            "SetSpacing", Forward<GridRef, &UI::GridLayoutGroup::SetSpacing>(),
+            // "Flexible", "FixedColumnCount" or "FixedRowCount"; an unknown name raises an error and changes nothing
+            "GetConstraint", [](const GridRef &c) { return GridConstraintName(c.Pin()->GetConstraint()); },
+            "SetConstraint", [](const GridRef &c, const std::string &name)
+            {
+                const UI::GridConstraint constraint = ParseGridConstraint(name);
+                c.Pin()->SetConstraint(constraint);
+            },
+            "GetConstraintCount", Forward<GridRef, &UI::GridLayoutGroup::GetConstraintCount>(),
+            "SetConstraintCount", Forward<GridRef, &UI::GridLayoutGroup::SetConstraintCount>()
+        );
+        using LayoutElementRef = ComponentRef<UI::LayoutElement>;
+        BindComponentType<UI::LayoutElement>(
+            lua, "LayoutElement",
+            "GetPreferredWidth", Forward<LayoutElementRef, &UI::LayoutElement::GetPreferredWidth>(),
+            "SetPreferredWidth", Forward<LayoutElementRef, &UI::LayoutElement::SetPreferredWidth>(),
+            "GetPreferredHeight", Forward<LayoutElementRef, &UI::LayoutElement::GetPreferredHeight>(),
+            "SetPreferredHeight", Forward<LayoutElementRef, &UI::LayoutElement::SetPreferredHeight>(),
+            "GetIgnoreLayout", Forward<LayoutElementRef, &UI::LayoutElement::GetIgnoreLayout>(),
+            "SetIgnoreLayout", Forward<LayoutElementRef, &UI::LayoutElement::SetIgnoreLayout>()
+        );
+        using FitterRef = ComponentRef<UI::ContentSizeFitter>;
+        BindComponentType<UI::ContentSizeFitter>(
+            lua, "ContentSizeFitter",
+            // "Unconstrained" or "PreferredSize"; an unknown name raises an error and changes nothing
+            "GetHorizontalFit", [](const FitterRef &c) { return FitModeName(c.Pin()->GetHorizontalFit()); },
+            "SetHorizontalFit", [](const FitterRef &c, const std::string &name)
+            {
+                const UI::FitMode mode = ParseFitMode(name, "ContentSizeFitter:SetHorizontalFit");
+                c.Pin()->SetHorizontalFit(mode);
+            },
+            "GetVerticalFit", [](const FitterRef &c) { return FitModeName(c.Pin()->GetVerticalFit()); },
+            "SetVerticalFit", [](const FitterRef &c, const std::string &name)
+            {
+                const UI::FitMode mode = ParseFitMode(name, "ContentSizeFitter:SetVerticalFit");
+                c.Pin()->SetVerticalFit(mode);
+            }
         );
 
         // ===== UI (global) =====

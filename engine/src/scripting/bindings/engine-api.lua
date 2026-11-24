@@ -888,7 +888,8 @@ function GameObject:Destroy() end
 ---Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CharacterController", "Joint", "Rigidbody2D", "BoxCollider2D",
 ---"CircleCollider2D", "PolygonCollider2D", "CubeRenderer",
 ---"SphereRenderer", "QuadRenderer", "Sprite2D", "MeshRenderer", "TextRenderer", "ParticleSystem", "SoftBody", "Light", "AudioSource", "AudioListener",
----"LuaComponent", "RectTransform", "Canvas", "Image", "UIText", "Button", "RectMask", "ScrollView". Unknown names raise an error.
+---"LuaComponent", "RectTransform", "Canvas", "Image", "UIText", "Button", "RectMask", "ScrollView", "HorizontalLayoutGroup", "VerticalLayoutGroup", "GridLayoutGroup",
+---"LayoutElement", "ContentSizeFitter". Unknown names raise an error.
 ---@param typeName string
 ---@return Component
 function GameObject:AddComponent(typeName) end
@@ -2019,6 +2020,116 @@ function ScrollView:RemoveOnValueChanged(id) end
 function ScrollView:ClearOnValueChanged() end
 ---@return integer
 function ScrollView:GetOnValueChangedListenerCount() end
+
+---@alias ChildAlignment "UpperLeft"|"UpperCenter"|"UpperRight"|"MiddleLeft"|"MiddleCenter"|"MiddleRight"|"LowerLeft"|"LowerCenter"|"LowerRight"
+
+---Lays its children out in a row (issue #445): padding, spacing, child alignment, controlled and expanded child sizes
+---@class HorizontalLayoutGroup : Component
+HorizontalLayoutGroup = {}
+---@return number left
+---@return number right
+---@return number top
+---@return number bottom
+function HorizontalLayoutGroup:GetPadding() end
+---@param left number
+---@param right number
+---@param top number
+---@param bottom number
+function HorizontalLayoutGroup:SetPadding(left, right, top, bottom) end
+---@return ChildAlignment
+function HorizontalLayoutGroup:GetChildAlignment() end
+---An unknown name raises an error and changes nothing
+---@param alignment ChildAlignment
+function HorizontalLayoutGroup:SetChildAlignment(alignment) end
+---@return number
+function HorizontalLayoutGroup:GetSpacing() end
+---@param spacing number
+function HorizontalLayoutGroup:SetSpacing(spacing) end
+---@return boolean width
+---@return boolean height
+function HorizontalLayoutGroup:GetControlChildSize() end
+---Whether the group sets its children's width and height (to their preferred sizes)
+---@param width boolean
+---@param height boolean
+function HorizontalLayoutGroup:SetControlChildSize(width, height) end
+---@return boolean width
+---@return boolean height
+function HorizontalLayoutGroup:GetChildForceExpand() end
+---With control: share the free width out, and fill the height
+---@param width boolean
+---@param height boolean
+function HorizontalLayoutGroup:SetChildForceExpand(width, height) end
+---The size the children need, padding included
+---@return number width
+---@return number height
+function HorizontalLayoutGroup:GetPreferredSize() end
+
+---Lays its children out in a column from the top (issue #445); the same methods as HorizontalLayoutGroup
+---@class VerticalLayoutGroup : HorizontalLayoutGroup
+VerticalLayoutGroup = {}
+
+---Lays its children out in rows of cells from the top-left (issue #445)
+---@class GridLayoutGroup : Component
+GridLayoutGroup = {}
+---@return number left
+---@return number right
+---@return number top
+---@return number bottom
+function GridLayoutGroup:GetPadding() end
+---@param left number
+---@param right number
+---@param top number
+---@param bottom number
+function GridLayoutGroup:SetPadding(left, right, top, bottom) end
+---@return ChildAlignment
+function GridLayoutGroup:GetChildAlignment() end
+---@param alignment ChildAlignment
+function GridLayoutGroup:SetChildAlignment(alignment) end
+---@return Vector2
+function GridLayoutGroup:GetCellSize() end
+---@param size Vector2
+function GridLayoutGroup:SetCellSize(size) end
+---@return Vector2
+function GridLayoutGroup:GetSpacing() end
+---@param spacing Vector2
+function GridLayoutGroup:SetSpacing(spacing) end
+---@return "Flexible"|"FixedColumnCount"|"FixedRowCount"
+function GridLayoutGroup:GetConstraint() end
+---An unknown name raises an error and changes nothing
+---@param constraint "Flexible"|"FixedColumnCount"|"FixedRowCount"
+function GridLayoutGroup:SetConstraint(constraint) end
+---@return integer
+function GridLayoutGroup:GetConstraintCount() end
+---@param count integer columns (FixedColumnCount) or rows (FixedRowCount)
+function GridLayoutGroup:SetConstraintCount(count) end
+
+---Overrides the size a layout group or a ContentSizeFitter uses for its object (issue #445); below 0 is not set
+---@class LayoutElement : Component
+LayoutElement = {}
+---@return number
+function LayoutElement:GetPreferredWidth() end
+---@param width number
+function LayoutElement:SetPreferredWidth(width) end
+---@return number
+function LayoutElement:GetPreferredHeight() end
+---@param height number
+function LayoutElement:SetPreferredHeight(height) end
+---@return boolean
+function LayoutElement:GetIgnoreLayout() end
+---@param ignore boolean true leaves the object out of its parent's layout group
+function LayoutElement:SetIgnoreLayout(ignore) end
+
+---Sizes its object to its content: its layout group's or its UIText's preferred size (issue #445)
+---@class ContentSizeFitter : Component
+ContentSizeFitter = {}
+---@return "Unconstrained"|"PreferredSize"
+function ContentSizeFitter:GetHorizontalFit() end
+---@param mode "Unconstrained"|"PreferredSize"
+function ContentSizeFitter:SetHorizontalFit(mode) end
+---@return "Unconstrained"|"PreferredSize"
+function ContentSizeFitter:GetVerticalFit() end
+---@param mode "Unconstrained"|"PreferredSize"
+function ContentSizeFitter:SetVerticalFit(mode) end
 
 ---@class UI
 UI = {}

@@ -74,6 +74,7 @@ set(N2ENGINE_UI_TESTS
     ui/ScrollViewTests.cpp
     ui/ImageColorEffectsTests.cpp
     ui/ImageCutOutTests.cpp
+    ui/LayoutGroupTests.cpp
     ui/UITests.cpp
     ui/UITextCharacterStyleTests.cpp
     ui/UITextOffsetTests.cpp
