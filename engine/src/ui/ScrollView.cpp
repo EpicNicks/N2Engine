@@ -24,40 +24,6 @@ namespace N2Engine::UI
 {
     namespace
     {
-        /// Whether `object` is `ancestor` or below it in the hierarchy
-        bool IsSelfOrBelow(const GameObject *object, const GameObject &ancestor)
-        {
-            while (object)
-            {
-                if (object == &ancestor)
-                {
-                    return true;
-                }
-                const GameObject::Ptr parent = object->GetParent();
-                object = parent.get(); // the scene owns it, so it outlives this walk
-            }
-            return false;
-        }
-
-        /// The root canvas above (or on) an object, or nullptr
-        const Canvas *RootCanvasOf(const GameObject &gameObject)
-        {
-            const Canvas *found = nullptr;
-            for (const GameObject *object = &gameObject; object;)
-            {
-                for (const Canvas *canvas : object->GetComponents<Canvas>())
-                {
-                    if (canvas && canvas->IsRootCanvas())
-                    {
-                        found = canvas;
-                    }
-                }
-                const GameObject::Ptr parent = object->GetParent();
-                object = parent.get();
-            }
-            return found;
-        }
-
         float Clamp01(const float value) { return std::clamp(value, 0.0f, 1.0f); }
 
         /// The normalized position on one axis: where the view's start is across the hidden part of the content
@@ -575,7 +541,7 @@ namespace N2Engine::UI
 
         // The wheel, over the view or anything below it
         const Math::Vector2 wheel = mouse->GetScrollDelta();
-        if ((wheel.x != 0.0f || wheel.y != 0.0f) && IsSelfOrBelow(dispatcher.GetHovered(), self))
+        if ((wheel.x != 0.0f || wheel.y != 0.0f) && UISystem::IsSelfOrBelow(dispatcher.GetHovered(), self))
         {
             Scroll(wheel);
         }
@@ -590,7 +556,7 @@ namespace N2Engine::UI
         }
 
         // The pointer in canvas space: overlay canvases only
-        const Canvas *canvas = RootCanvasOf(self);
+        const Canvas *canvas = UISystem::RootCanvasOf(self);
         if (!canvas || canvas->IsWorldSpace())
         {
             return;
@@ -609,7 +575,7 @@ namespace N2Engine::UI
             {
                 _draggedHandle = _horizontalScrollbar;
             }
-            else if (IsSelfOrBelow(captured, self))
+            else if (UISystem::IsSelfOrBelow(captured, self))
             {
                 _pressTracked = true;
                 _pressPointer = pointer;
