@@ -18,8 +18,22 @@ namespace N2Engine::Rendering
         struct TaggedStats
         {
             const Renderer::Common::IRenderer *renderer = nullptr;
+            /// Which renderer, not just which address: a renderer made where an earlier one stood has the same address and, being new,
+            /// the same frame count, and must not be mistaken for it (its token is another one, and the weak pointer keeps the old
+            /// token's control block, so its address is never reused while the stats are held)
+            std::weak_ptr<const void> life;
             std::uint64_t tag = 0;
             SpriteBatchStats stats{};
+
+            [[nodiscard]] bool Is(const Renderer::Common::IRenderer *other) const
+            {
+                if (renderer != other || other == nullptr)
+                {
+                    return false;
+                }
+                const std::weak_ptr<const void> now = other->GetLifetimeToken();
+                return !life.owner_before(now) && !now.owner_before(life);
+            }
         };
         TaggedStats s_current;
         TaggedStats s_previous;
@@ -96,11 +110,11 @@ namespace N2Engine::Rendering
         {
             return {};
         }
-        if (s_current.renderer == renderer)
+        if (s_current.Is(renderer))
         {
             return s_current.stats;
         }
-        if (s_previous.renderer == renderer)
+        if (s_previous.Is(renderer))
         {
             return s_previous.stats;
         }
@@ -110,11 +124,11 @@ namespace N2Engine::Rendering
     void SpriteBatcher::BeginPass(Renderer::Common::IRenderer &renderer, const Renderer::Common::RenderState &state)
     {
         const std::uint64_t tag = FrameTag(renderer);
-        const bool newFrame = s_current.renderer != &renderer || s_current.tag != tag;
+        const bool newFrame = !s_current.Is(&renderer) || s_current.tag != tag;
         if (newFrame)
         {
             s_previous = s_current;
-            s_current = TaggedStats{&renderer, tag, {}};
+            s_current = TaggedStats{&renderer, renderer.GetLifetimeToken(), tag, {}};
         }
         // A batch's mesh may be read only when the frame ends (the software renderer rasterizes then), so within one frame every batch
         // takes a slot of its own, across passes too (two cameras); a new frame, or another renderer, starts from the first slot

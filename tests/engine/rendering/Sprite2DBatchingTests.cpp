@@ -198,7 +198,7 @@ TEST(Sprite2DBatchingTest, AThousandAlikeSpritesAreOneDrawCallInsteadOfAThousand
     EXPECT_EQ(batched.stats.drawCalls, 1u);
     EXPECT_EQ(batched.stats.batches, 1u);
     EXPECT_EQ(batched.stats.batchedSprites, 1000u);
-    EXPECT_EQ(batched.counters.triangles, 2000u) << "two triangles a rect, all in the one draw";
+    EXPECT_EQ(batched.counters.triangles, 4000u) << "a rect is a fan of four triangles around its middle (ShapeMesh2D), all in the one draw";
 
     const Result alone = Draw(build, false);
     EXPECT_EQ(alone.counters.drawCalls, 1000u);
@@ -328,7 +328,9 @@ TEST(Sprite2DBatchingTest, FiveThousandSpritesDrawAndTheTimeIsPrinted)
                     batching ? "on" : "off", static_cast<unsigned>(result.counters.drawCalls), ms);
         if (batching)
         {
-            EXPECT_LE(result.counters.drawCalls, 2u) << "two sorting orders, so at most two runs";
+            // 5000 circles of kCircleSegments2D + 1 vertices are 165000 vertices, and a batch holds at most MaxBatchVertices (65536): three
+            // draws, however the two sorting orders interleave
+            EXPECT_EQ(result.counters.drawCalls, 3u) << "165000 vertices in batches of at most 65536";
         }
     }
 }
