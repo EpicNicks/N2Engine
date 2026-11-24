@@ -1,9 +1,12 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 
 #include <math/Matrix.hpp>
+#include <math/Vector2.hpp>
 #include <renderer/common/ColorEffects.hpp>
 #include <renderer/common/IMaterial.hpp>
 #include <renderer/common/IMesh.hpp>
@@ -81,6 +84,28 @@ namespace N2Engine::UI
         /// The model matrix (row-major, as the renderers take it) that maps the unit square onto the rect
         [[nodiscard]] static Math::Matrix<float, 4, 4> ModelMatrixFor(const Rect &rect);
 
+        /// One quad of an image's geometry: where it goes (canvas space) and the part of the texture on it (uv.x, uv.y the
+        /// bottom-left texture coordinate, v = 0 at the bottom of the rect; width and height the extent)
+        struct Quad
+        {
+            Rect position;
+            Rect uv{0.0f, 0.0f, 1.0f, 1.0f};
+            friend constexpr bool operator==(const Quad &, const Quad &) = default;
+        };
+
+        /**
+         * `quad` cut to `clip` (issue #445, RectMask): the part of it inside the clip, with its texture coordinates cut in
+         * the same proportion, so the texture stays where it was on screen. nullopt when no area of it is inside.
+         */
+        [[nodiscard]] static std::optional<Quad> ClipQuad(const Quad &quad, const Rect &clip);
+
+        /**
+         * The quads this image draws over `rect` with `clip` (GetRenderClip during a UI draw): empty when it draws its plain
+         * unit quad (no clip cuts it), else the visible quads, in canvas space. A clip that leaves nothing gives one quad
+         * without area, which draws nothing.
+         */
+        [[nodiscard]] std::vector<Quad> BuildQuads(const Rect &rect, const std::optional<Rect> &clip) const;
+
     private:
         Renderer::Common::ITexture *_texture = nullptr;
         std::shared_ptr<Rendering::Texture> _sprite; // serialized as "sprite"
@@ -97,10 +122,16 @@ namespace N2Engine::UI
         std::weak_ptr<const void> _rendererLifetime; // expired once _renderer is destroyed
         Renderer::Common::IMesh *_mesh = nullptr;
         Renderer::Common::IMaterial *_material = nullptr;
+        // The mesh of a clipped image (BuildQuads), relative to its rect's corner, and the quads it was built from
+        Renderer::Common::IMesh *_quadMesh = nullptr;
+        std::vector<Quad> _quadMeshQuads;
         Rendering::UserShaderSlot _shaderSlot; // the user shader and its Material, when one is set
 
         /// Creates the quad and material on first use; false if the renderer couldn't
         bool EnsureResources(Renderer::Common::IRenderer *renderer);
+        /// The mesh of `quads` (relative to `origin`), updated in place when they change; nullptr if the renderer can't
+        Renderer::Common::IMesh *EnsureQuadMesh(Renderer::Common::IRenderer *renderer, const std::vector<Quad> &quads,
+                                                const Math::Vector2 &origin);
         /// The sprite's texture on `renderer` (nullptr for no sprite, or one the renderer can't upload)
         Renderer::Common::ITexture *EnsureSpriteTexture(Renderer::Common::IRenderer *renderer);
         void ReleaseResources();

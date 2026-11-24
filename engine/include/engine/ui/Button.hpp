@@ -132,6 +132,9 @@ namespace N2Engine::UI
          * with any listeners left, but nothing after it touches the button.
          */
         bool Click();
+        /// Forgets the press the pointer made on this button, so releasing it is no click (issue #445: what a ScrollView
+        /// calls when the press turns into a drag). The hover is kept.
+        void CancelPress();
 
         // ===== Lifecycle and pointer callbacks =====
         void OnAttach() override;
