@@ -99,6 +99,7 @@
 <li><a href="#mask">Masks (RectMask)</a></li>
 <li><a href="#scroll">Scroll views (ScrollView)</a></li>
 <li><a href="#layout-groups">Layout groups and ContentSizeFitter</a></li>
+<li><a href="#slider">Sliders (Slider)</a></li>
 <li><a href="#lua">Lua API</a></li>
 <li><a href="#serialization">Serialization</a></li>
 <li><a href="#not-yet">Not yet</a></li>
@@ -120,6 +121,7 @@
 <tr><td><code>UI::RectMask</code> <span class="badge">issue #445</span></td><td>Clips its object's descendants to its rect, for drawing and for the pointer (<a href="#mask">Masks</a>).</td></tr>
 <tr><td><code>UI::ScrollView</code> <span class="badge">issue #445</span></td><td>Scrolls a content child inside its rect with the wheel, a drag and scrollbars (<a href="#scroll">Scroll views</a>).</td></tr>
 <tr><td><code>UI::HorizontalLayoutGroup</code>, <code>VerticalLayoutGroup</code>, <code>GridLayoutGroup</code>, <code>LayoutElement</code>, <code>ContentSizeFitter</code> <span class="badge">issue #445</span></td><td>Place children in a row, a column or a grid, override an element's size, and size an element to its content (<a href="#layout-groups">Layout groups</a>).</td></tr>
+<tr><td><code>UI::Slider</code> <span class="badge">issue #445</span></td><td>A value picked by dragging along a bar, with an optional fill and handle (<a href="#slider">Sliders</a>).</td></tr>
 <tr><td><code>UI::UISystem</code></td><td>Static functions: layout, the UI pass, the hit test, and the helpers below.</td></tr>
 </tbody>
 </table>
@@ -244,6 +246,16 @@ rect     = (pivotPos - pivot * size, size)
 <h3 id="image-effects">Colour effects <span class="badge">PR #327</span></h3>
 <p><code>SetSaturation(float)</code> and <code>SetFlash(Color)</code> work as on <a href="sprite2d.html#effects"><code>Sprite2D</code></a>: saturation 1 (the default) draws the colour as it is and 0 as its grey, and the flash colour is mixed over the image by its own alpha, after the saturation, without changing the image's alpha. They are applied after the colour, tint and sprite, on every renderer. The setters store the values clamped (saturation 0..4, a value that is not finite as 1; each flash component 0..1), so the getters return what is drawn and a scene always saves numbers. For a greyed-out locked button, set <code>saturation</code> to 0.</p>
 <p class="src">Source: <code>engine/src/ui/Image.cpp</code> — <code>Image::RenderUI</code>; the maths in <code>renderer/include/renderer/common/ColorEffects.hpp</code></p>
+
+<h3 id="image-slice">9-slicing <span class="badge">issue #445</span></h3>
+<p>A sprite with a border stretches its middle and keeps its corners, so a frame or a rounded panel scales to any size. <code>sliceBorder</code> is the border width in <em>texture pixels</em>, left, bottom, right and top (<code>SetSliceBorder(left, bottom, right, top)</code>, saved as <code>sliceBorder</code>). All zero, the default, stretches the whole texture over the rect as before. With a border and a sprite, the image draws nine quads:</p>
+<ul>
+<li>The four <strong>corners</strong> keep their size: the border times <code>sliceScale</code> (canvas units per texture pixel, default 1), showing the matching corner of the texture.</li>
+<li>The four <strong>edges</strong> stretch along their own axis, and the <strong>centre</strong> both ways. <code>fillCenter</code> false leaves the centre out, a frame.</li>
+<li>Where the rect is smaller than two borders on an axis, both borders shrink in proportion, so the corners never overlap. A quad with no area is not drawn.</li>
+<li>A <a href="#mask">RectMask</a> cuts each quad, texture coordinates included, as it does a plain one.</li>
+</ul>
+<p>An image with a border but no sprite draws as it did. <code>IsSliced()</code> tells whether a border is set. Lua: <code>image:SetSliceBorder(l, b, r, t)</code>, <code>GetSliceBorder()</code>, <code>SetSliceScale</code>, <code>SetFillCenter</code>, <code>IsSliced</code>.</p>
 
 <h2 id="text">Text (UIText) <span class="badge">PR #53</span></h2>
 <p><code>UIText</code> draws a block of UTF-8 text inside its object's rect, with the same SDF fonts, layout and shader as the world-space <a href="text.html#text-renderer"><code>TextRenderer</code></a>. Layout and mesh building come from the text work (<a href="https://github.com/EpicNicks/N2Engine/issues/1">#1</a>); the canvas, rect and UI pass from this page (<a href="https://github.com/EpicNicks/N2Engine/issues/42">#42</a>).</p>
@@ -617,6 +629,24 @@ for i = 1, 20 do
 end</code></pre>
 <p class="src">Source: <code>engine/include/engine/ui/LayoutGroup.hpp</code>; <code>engine/src/ui/LayoutGroup.cpp</code> &mdash; <code>HorizontalOrVerticalLayoutGroup::ComputeRects</code>, <code>GridLayoutGroup::ComputeRects</code>, <code>LayoutGroup::Place</code>, <code>ContentSizeFitter::Fit</code>, <code>LayoutUtility::GetPreferredSize</code>; <code>engine/src/ui/UISystem.cpp</code> &mdash; <code>LayOut</code>; tests: <code>LayoutGroupTest.*</code>, <code>LayoutMathTest.*</code>, <code>ContentSizeFitterTest.*</code> (<code>tests/engine/ui/LayoutGroupTests.cpp</code>), <code>LuaUITest.LayoutGroupsAndContentSizeFitter</code></p>
 
+<h2 id="slider">Sliders (Slider) <span class="badge">issue #445</span></h2>
+<p>A <code>Slider</code> (Unity's <code>Slider</code>) is a value picked by dragging along its object's rect. <code>UI.CreateSlider(name)</code> (<code>UISystem::CreateSlider</code>) makes a 160 x 20 dark bar with a <code>Slider</code>, a <code>Fill</code> child and a <code>Handle</code> child.</p>
+<ul>
+<li><strong>The value.</strong> <code>minValue</code> (0) to <code>maxValue</code> (1), and <code>value</code>. <code>SetValue</code> clamps it into the range, and rounds it with <code>wholeNumbers</code>. A NaN is the minimum. A range change that moves the value clamps it. <code>GetNormalizedValue</code> is 0 at the minimum and 1 at the maximum (0 for an empty range).</li>
+<li><strong>Direction.</strong> <code>LeftToRight</code> (the default), <code>RightToLeft</code>, <code>BottomToTop</code> or <code>TopToBottom</code>: where the minimum is.</li>
+<li><strong>Fill and handle.</strong> <code>fillRect</code>, a <code>RectTransform</code> anchored over the part of its parent's rect up to the value, and <code>handleRect</code>, anchored at the value across its parent's rect, keeping its own size along the bar. Their parents are the areas they move in. Either may be empty. They follow every change, and a value loaded with a scene shows on the first update.</li>
+<li><strong>The pointer.</strong> After a left press on the slider or anything below it (its handle, its fill), the value follows the pointer across the slider's rect until the button is released, even when the pointer leaves it. Screen-space overlay canvases only. <code>interactable</code> false, or a disabled component, ignores the pointer; scripts can still call <code>SetValue</code>. <code>SetValueFromPointer(x, y)</code> does the same for a canvas point.</li>
+<li><strong>OnValueChanged.</strong> <code>AddOnValueChanged(fn)</code> calls <code>fn(value)</code> whenever the value changes (<code>SetValue</code>, the pointer, a clamping range change), and returns an id for <code>RemoveOnValueChanged</code>. <code>SetValueWithoutNotify</code> changes it silently. A listener that throws is logged. Listeners are not saved.</li>
+</ul>
+<pre class="lang-lua"><code>local bar = UI.CreateSlider("Volume")
+canvas:AddChild(bar)
+local slider = bar:GetComponent("Slider")
+slider:SetMaxValue(10)
+slider:SetWholeNumbers(true)
+slider:AddOnValueChanged(function(v) Audio.SetMasterVolume(v / 10) end)
+slider:SetValue(7)</code></pre>
+<p class="src">Source: <code>engine/include/engine/ui/Slider.hpp</code>; <code>engine/src/ui/Slider.cpp</code> &mdash; <code>Slider::Set</code>, <code>UpdateVisuals</code>, <code>SetValueFromPointer</code>, <code>OnUpdate</code>.</p>
+
 <h2 id="lua">Lua API <span class="badge">PR #50</span></h2>
 <p>Scripts add and get the components by name (<code>go:AddComponent("Image")</code>; the names are <code>"RectTransform"</code>, <code>"Canvas"</code>, <code>"Image"</code>, <code>"UIText"</code>, <code>"Button"</code> <span class="badge">PR #54</span>, <code>"RectMask"</code>, <code>"ScrollView"</code>, <code>"HorizontalLayoutGroup"</code>, <code>"VerticalLayoutGroup"</code>, <code>"GridLayoutGroup"</code>, <code>"LayoutElement"</code> and <code>"ContentSizeFitter"</code> <span class="badge">issue #445</span>) and get checked handles, as for every component (see <a href="scripting-lua.html#lifetime-handles">handles</a>).</p>
 <div class="table-wrap">
@@ -717,7 +747,7 @@ open:GetComponent("Button"):AddOnClick(function() print("opening") end)
 <li>For <strong>UI text</strong>: clipping to its own rect (a <a href="#mask">RectMask</a> clips it <span class="badge">issue #445</span>), best-fit sizing, rich text, and a reference-resolution scale for font sizes.</li>
 <li>For <strong>world-space canvases</strong>: Unity's Screen Space - Camera mode, a per-canvas event camera (the main camera is used), clipping a transparent object that crosses the canvas's plane, and blending on the software renderer (<a href="#world-sw-text">text writes depth there</a>).</li>
 <li>Rotation and scale on <code>RectTransform</code>, flexible layout sizes and Unity's <code>MinSize</code> fit, a reference-resolution scaler, soft (feathered) mask edges and masks of any shape (<span class="badge">issue #445</span> rectangular masks and scroll views are done), and events for buttons other than the left.</li>
-<li>For <strong>Image</strong>: sprite sub-rects and atlases, 9-slicing, and preserving the aspect ratio (a sprite is stretched over the whole rect).</li>
+<li>For <strong>Image</strong>: sprite sub-rects and atlases, tiled (repeating) slices, and preserving the aspect ratio (a sprite is stretched over the whole rect).</li>
 </ul>
 
 <div class="page-footer">

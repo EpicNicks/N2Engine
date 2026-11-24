@@ -1,5 +1,7 @@
 #include "engine/ui/Image.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <utility>
 
@@ -15,6 +17,9 @@ namespace N2Engine::UI
         RegisterAssetRef("sprite", _sprite);
         RegisterMember("saturation", _saturation).Range(0.0, Renderer::Common::ColorEffects::MaxSaturation);
         RegisterMember("flash", _flash);
+        RegisterMember("sliceBorder", _sliceBorder).Tooltip("9-slice borders in texture pixels: x left, y bottom, z right, w top");
+        RegisterMember("sliceScale", _sliceScale).Tooltip("Canvas units per border pixel");
+        RegisterMember("fillCenter", _fillCenter);
         // A user shader and its values, only when one is set (stage 9g): an image without one saves what it always did
         RegisterOptionalState("shaderState", [this] { return _shaderSlot.Save(); }, [this](const nlohmann::json &json) { _shaderSlot.Load(json); });
     }
@@ -96,15 +101,93 @@ namespace N2Engine::UI
         return result;
     }
 
-    std::vector<Image::Quad> Image::BuildQuads(const Rect &rect, const std::optional<Rect> &clip) const
+    bool Image::IsSliced() const
+    {
+        return _sliceBorder.x > 0.0f || _sliceBorder.y > 0.0f || _sliceBorder.z > 0.0f || _sliceBorder.w > 0.0f;
+    }
+
+    std::vector<Image::Quad> Image::SliceQuads(const Rect &rect, const Math::Vector2 &textureSize) const
     {
         std::vector<Quad> quads;
-        if (!clip || clip->ContainsRect(rect))
+        if (!(textureSize.x > 0.0f) || !(textureSize.y > 0.0f))
         {
-            return quads; // the plain unit quad
+            return quads;
         }
-        const std::optional<Quad> clipped = ClipQuad(Quad{rect}, *clip);
-        quads.push_back(clipped ? *clipped : Quad{Rect{rect.x, rect.y, 0.0f, 0.0f}});
+        auto border = [](const float value) { return std::isfinite(value) && value > 0.0f ? value : 0.0f; };
+        const float scale = std::isfinite(_sliceScale) && _sliceScale > 0.0f ? _sliceScale : 1.0f;
+        // Texture pixels, at most the whole texture on each axis
+        const float leftPx = border(_sliceBorder.x), bottomPx = border(_sliceBorder.y);
+        const float rightPx = border(_sliceBorder.z), topPx = border(_sliceBorder.w);
+        // Canvas units, shrunk in proportion where two borders don't fit the rect
+        float left = leftPx * scale, right = rightPx * scale, bottom = bottomPx * scale, top = topPx * scale;
+        if (left + right > rect.width && left + right > 0.0f)
+        {
+            const float fit = rect.width / (left + right);
+            left *= fit;
+            right *= fit;
+        }
+        if (bottom + top > rect.height && bottom + top > 0.0f)
+        {
+            const float fit = rect.height / (bottom + top);
+            bottom *= fit;
+            top *= fit;
+        }
+        const float xs[4] = {rect.x, rect.x + left, rect.XMax() - right, rect.XMax()};
+        const float ys[4] = {rect.y, rect.y + bottom, rect.YMax() - top, rect.YMax()};
+        const float us[4] = {0.0f, std::min(leftPx / textureSize.x, 1.0f), std::max(1.0f - rightPx / textureSize.x, 0.0f), 1.0f};
+        const float vs[4] = {0.0f, std::min(bottomPx / textureSize.y, 1.0f), std::max(1.0f - topPx / textureSize.y, 0.0f), 1.0f};
+        for (int row = 0; row < 3; ++row)
+        {
+            for (int column = 0; column < 3; ++column)
+            {
+                if (row == 1 && column == 1 && !_fillCenter)
+                {
+                    continue;
+                }
+                const Rect position{xs[column], ys[row], xs[column + 1] - xs[column], ys[row + 1] - ys[row]};
+                if (!position.HasArea())
+                {
+                    continue;
+                }
+                quads.push_back(Quad{position, Rect{us[column], vs[row], us[column + 1] - us[column], vs[row + 1] - vs[row]}});
+            }
+        }
+        return quads;
+    }
+
+    std::vector<Image::Quad> Image::BuildQuads(const Rect &rect, const std::optional<Rect> &clip,
+                                               const Math::Vector2 &textureSize) const
+    {
+        std::vector<Quad> quads;
+        const bool sliced = IsSliced() && textureSize.x > 0.0f && textureSize.y > 0.0f;
+        if (!sliced)
+        {
+            if (!clip || clip->ContainsRect(rect))
+            {
+                return quads; // the plain unit quad
+            }
+            quads.push_back(Quad{rect});
+        }
+        else
+        {
+            quads = SliceQuads(rect, textureSize);
+        }
+        if (clip && !clip->ContainsRect(rect))
+        {
+            std::vector<Quad> clipped;
+            for (const Quad &quad : quads)
+            {
+                if (const std::optional<Quad> cut = ClipQuad(quad, *clip))
+                {
+                    clipped.push_back(*cut);
+                }
+            }
+            quads = std::move(clipped);
+        }
+        if (quads.empty())
+        {
+            quads.push_back(Quad{Rect{rect.x, rect.y, 0.0f, 0.0f}}); // nothing left: drawn as nothing
+        }
         return quads;
     }
 
@@ -246,7 +329,17 @@ namespace N2Engine::UI
         // The geometry: the unit quad over the rect, or (issue #445) the quads a RectMask's clip leaves
         Renderer::Common::IMesh *mesh = _mesh;
         Matrix4 local = ModelMatrixFor(rect);
-        if (const std::vector<Quad> quads = BuildQuads(rect, _renderClip); !quads.empty())
+        // The texture's size, for 9-slicing: the raw texture wins over the sprite, as below
+        Math::Vector2 textureSize{0.0f, 0.0f};
+        if (_texture)
+        {
+            textureSize = Math::Vector2{static_cast<float>(_texture->GetWidth()), static_cast<float>(_texture->GetHeight())};
+        }
+        else if (_sprite)
+        {
+            textureSize = Math::Vector2{static_cast<float>(_sprite->GetWidth()), static_cast<float>(_sprite->GetHeight())};
+        }
+        if (const std::vector<Quad> quads = BuildQuads(rect, _renderClip, textureSize); !quads.empty())
         {
             if (quads.size() == 1 && !quads.front().position.HasArea())
             {

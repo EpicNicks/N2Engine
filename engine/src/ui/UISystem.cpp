@@ -25,6 +25,7 @@
 #include "engine/ui/RectMask.hpp"
 #include "engine/ui/RectTransform.hpp"
 #include "engine/ui/ScrollView.hpp"
+#include "engine/ui/Slider.hpp"
 #include "engine/ui/UIGraphic.hpp"
 #include "engine/ui/UIText.hpp"
 
@@ -583,6 +584,83 @@ namespace N2Engine::UI
             text->SetColor(Common::Color{0.196f, 0.196f, 0.196f, 1.0f}); // Unity's label grey (50, 50, 50)
         }
         gameObject->AddChild(labelObject, false);
+        return gameObject;
+    }
+
+    bool UISystem::IsSelfOrBelow(const GameObject *object, const GameObject &ancestor)
+    {
+        while (object)
+        {
+            if (object == &ancestor)
+            {
+                return true;
+            }
+            const GameObject::Ptr parent = object->GetParent();
+            object = parent.get(); // the scene owns it, so it outlives this walk
+        }
+        return false;
+    }
+
+    const Canvas *UISystem::RootCanvasOf(const GameObject &gameObject)
+    {
+        const Canvas *found = nullptr;
+        for (const GameObject *object = &gameObject; object;)
+        {
+            for (const Canvas *canvas : object->GetComponents<Canvas>())
+            {
+                if (canvas && canvas->IsRootCanvas())
+                {
+                    found = canvas;
+                }
+            }
+            const GameObject::Ptr parent = object->GetParent();
+            object = parent.get();
+        }
+        return found;
+    }
+
+    std::shared_ptr<GameObject> UISystem::CreateSlider(const std::string &name)
+    {
+        auto gameObject = CreateElement(name);
+        if (auto *rectTransform = gameObject->GetComponent<RectTransform>())
+        {
+            rectTransform->SetSizeDelta(Math::Vector2{160.0f, 20.0f});
+        }
+        if (auto *bar = gameObject->AddComponent<Image>())
+        {
+            bar->SetColor(Common::Color{0.25f, 0.25f, 0.25f, 1.0f});
+        }
+        auto *slider = gameObject->AddComponent<Slider>();
+
+        auto fill = CreateElement("Fill");
+        RectTransform *fillTransform = fill->GetComponent<RectTransform>();
+        if (fillTransform)
+        {
+            fillTransform->StretchToParent();
+        }
+        if (auto *image = fill->AddComponent<Image>())
+        {
+            image->SetColor(Common::Color{0.45f, 0.75f, 1.0f, 1.0f});
+        }
+        gameObject->AddChild(fill, false);
+
+        auto handle = CreateElement("Handle");
+        RectTransform *handleTransform = handle->GetComponent<RectTransform>();
+        if (handleTransform)
+        {
+            handleTransform->SetAnchorMin(Math::Vector2{0.0f, 0.0f});
+            handleTransform->SetAnchorMax(Math::Vector2{0.0f, 1.0f});
+            handleTransform->SetAnchoredPosition(Math::Vector2{0.0f, 0.0f});
+            handleTransform->SetSizeDelta(Math::Vector2{16.0f, 0.0f});
+        }
+        handle->AddComponent<Image>();
+        gameObject->AddChild(handle, false);
+
+        if (slider)
+        {
+            slider->SetFillRect(fillTransform);
+            slider->SetHandleRect(handleTransform);
+        }
         return gameObject;
     }
 

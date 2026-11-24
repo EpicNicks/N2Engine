@@ -65,6 +65,7 @@
 #include "engine/ui/RectMask.hpp"
 #include "engine/ui/RectTransform.hpp"
 #include "engine/ui/ScrollView.hpp"
+#include "engine/ui/Slider.hpp"
 #include "engine/ui/UIText.hpp"
 
 namespace N2Engine::Scripting::Bindings
@@ -165,6 +166,7 @@ namespace N2Engine::Scripting::Bindings
                 {"Button", MakeAccess<UI::Button>()},
                 {"RectMask", MakeAccess<UI::RectMask>()},
                 {"ScrollView", MakeAccess<UI::ScrollView>()},
+                {"Slider", MakeAccess<UI::Slider>()},
                 {"HorizontalLayoutGroup", MakeAccess<UI::HorizontalLayoutGroup>()},
                 {"VerticalLayoutGroup", MakeAccess<UI::VerticalLayoutGroup>()},
                 {"GridLayoutGroup", MakeAccess<UI::GridLayoutGroup>()},
