@@ -30,6 +30,23 @@ namespace N2Engine::UI
             return HasArea() && point.x >= XMin() && point.x <= XMax() && point.y >= YMin() && point.y <= YMax();
         }
 
+        /// Whether `other` lies wholly inside this rect, edges included
+        [[nodiscard]] constexpr bool ContainsRect(const Rect &other) const
+        {
+            return other.XMin() >= XMin() && other.XMax() <= XMax() && other.YMin() >= YMin() && other.YMax() <= YMax();
+        }
+
+        /// The overlap of two rects (issue #445: what RectMask clipping uses). Without an overlap the size is 0 on the
+        /// axis that misses, never negative, so the result has no area.
+        [[nodiscard]] static constexpr Rect Intersect(const Rect &a, const Rect &b)
+        {
+            const float xMin = a.XMin() > b.XMin() ? a.XMin() : b.XMin();
+            const float yMin = a.YMin() > b.YMin() ? a.YMin() : b.YMin();
+            const float xMax = a.XMax() < b.XMax() ? a.XMax() : b.XMax();
+            const float yMax = a.YMax() < b.YMax() ? a.YMax() : b.YMax();
+            return Rect{xMin, yMin, xMax > xMin ? xMax - xMin : 0.0f, yMax > yMin ? yMax - yMin : 0.0f};
+        }
+
         friend constexpr bool operator==(const Rect &, const Rect &) = default;
     };
 }

@@ -317,3 +317,103 @@ TEST_F(LuaUITest, MakesAWorldSpaceCanvas)
 
     Run("lua_ui_world_go = nil; lua_ui_world = nil; lua_ui_overlay_go = nil; lua_ui_overlay = nil");
 }
+
+TEST_F(LuaUITest, ScrollViewAndRectMask)
+{
+    // Issue #445
+    const auto scene = Scene::Create("LuaUI_Scroll");
+    Run(R"(
+        lua_ui_scroll_canvas = UI.CreateCanvas("ScrollCanvas")
+        lua_ui_scroll_go = UI.CreateScrollView("List")
+        lua_ui_scroll_canvas:AddChild(lua_ui_scroll_go)
+        lua_ui_scroll = lua_ui_scroll_go:GetComponent("ScrollView")
+        lua_ui_scroll_log = {}
+        lua_ui_scroll:AddOnValueChanged(function(x, y) lua_ui_scroll_log[#lua_ui_scroll_log + 1] = y end)
+    )");
+    const sol::object canvasObject = Lua()["lua_ui_scroll_canvas"];
+    ASSERT_TRUE(canvasObject.valid());
+    scene->AddRootGameObject(canvasObject.as<GameObjectRef>().Pin());
+    static_cast<void>(UI::UISystem::CollectGraphics(*scene, Vector2i{800, 600}));
+
+    EXPECT_TRUE(Eval<bool>("lua_ui_scroll_go:GetComponent('RectMask') ~= nil"));
+    EXPECT_TRUE(Eval<bool>("lua_ui_scroll:GetVertical()"));
+    EXPECT_EQ(Eval<std::string>("lua_ui_scroll:GetMovementType()"), "Elastic");
+    EXPECT_FLOAT_EQ(Eval<float>("select(2, lua_ui_scroll:GetNormalizedPosition())"), 1.0f);
+    EXPECT_TRUE(Eval<bool>("lua_ui_scroll:GetContent() ~= nil"));
+    EXPECT_TRUE(Eval<bool>("lua_ui_scroll:GetVerticalScrollbar() ~= nil"));
+    EXPECT_TRUE(Eval<bool>("lua_ui_scroll:GetHorizontalScrollbar() == nil"));
+
+    Run(R"(
+        lua_ui_scroll:SetVerticalNormalizedPosition(0.5)
+        lua_ui_scroll:SetMovementType("Clamped")
+        lua_ui_scroll:Scroll(0, 100)
+    )");
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_scroll:GetVerticalNormalizedPosition()"), 1.0f) << "clamped at the top";
+    EXPECT_EQ(Eval<int>("#lua_ui_scroll_log"), 2);
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_scroll_log[1]"), 0.5f);
+    EXPECT_EQ(Eval<int>("lua_ui_scroll:GetOnValueChangedListenerCount()"), 1);
+    EXPECT_FALSE(Lua().safe_script(R"(lua_ui_scroll:SetMovementType("Bouncy"))", sol::script_pass_on_error).valid());
+    EXPECT_EQ(Eval<std::string>("lua_ui_scroll:GetMovementType()"), "Clamped");
+
+    Run("lua_ui_scroll_canvas = nil; lua_ui_scroll_go = nil; lua_ui_scroll = nil; lua_ui_scroll_log = nil");
+}
+
+TEST_F(LuaUITest, LayoutGroupsAndContentSizeFitter)
+{
+    // Issue #445
+    const auto scene = Scene::Create("LuaUI_Layout");
+    Run(R"(
+        lua_ui_layout_canvas = UI.CreateCanvas("LayoutCanvas")
+        lua_ui_layout_list = UI.CreateElement("List")
+        lua_ui_layout_canvas:AddChild(lua_ui_layout_list)
+        local rt = lua_ui_layout_list:GetComponent("RectTransform")
+        rt:SetAnchorMin(Vector2(0, 1))
+        rt:SetAnchorMax(Vector2(0, 1))
+        rt:SetPivot(Vector2(0, 1))
+        rt:SetAnchoredPosition(Vector2(0, 0))
+        lua_ui_layout_group = lua_ui_layout_list:AddComponent("VerticalLayoutGroup")
+        lua_ui_layout_group:SetPadding(4, 4, 6, 6)
+        lua_ui_layout_group:SetSpacing(2)
+        lua_ui_layout_group:SetChildAlignment("UpperCenter")
+        lua_ui_layout_fitter = lua_ui_layout_list:AddComponent("ContentSizeFitter")
+        lua_ui_layout_fitter:SetHorizontalFit("PreferredSize")
+        for i = 1, 3 do
+            local item = UI.CreateElement("Item" .. i)
+            item:GetComponent("RectTransform"):SetSizeDelta(Vector2(50, 20))
+            lua_ui_layout_list:AddChild(item)
+        end
+        lua_ui_layout_grid_go = UI.CreateElement("Grid")
+        lua_ui_layout_grid = lua_ui_layout_grid_go:AddComponent("GridLayoutGroup")
+        lua_ui_layout_grid:SetConstraint("FixedColumnCount")
+        lua_ui_layout_grid:SetConstraintCount(4)
+        lua_ui_layout_grid:SetCellSize(Vector2(32, 32))
+        lua_ui_layout_element_go = UI.CreateElement("E")
+        lua_ui_layout_element = lua_ui_layout_element_go:AddComponent("LayoutElement")
+        lua_ui_layout_element:SetPreferredHeight(12)
+    )");
+    const sol::object canvasObject = Lua()["lua_ui_layout_canvas"];
+    ASSERT_TRUE(canvasObject.valid());
+    scene->AddRootGameObject(canvasObject.as<GameObjectRef>().Pin());
+    static_cast<void>(UI::UISystem::CollectGraphics(*scene, Vector2i{800, 600}));
+
+    // 3 x 20 + 2 x 2 + 12 high, 50 + 8 wide
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_layout_list:GetComponent('RectTransform'):GetRect().height"), 76.0f);
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_layout_list:GetComponent('RectTransform'):GetRect().width"), 58.0f);
+    EXPECT_FLOAT_EQ(Eval<float>("select(2, lua_ui_layout_group:GetPreferredSize())"), 76.0f);
+    EXPECT_FLOAT_EQ(Eval<float>("select(3, lua_ui_layout_group:GetPadding())"), 6.0f);
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_layout_group:GetSpacing()"), 2.0f);
+    EXPECT_EQ(Eval<std::string>("lua_ui_layout_group:GetChildAlignment()"), "UpperCenter");
+    EXPECT_EQ(Eval<std::string>("lua_ui_layout_fitter:GetHorizontalFit()"), "PreferredSize");
+    EXPECT_EQ(Eval<std::string>("lua_ui_layout_fitter:GetVerticalFit()"), "PreferredSize");
+    EXPECT_EQ(Eval<std::string>("lua_ui_layout_grid:GetConstraint()"), "FixedColumnCount");
+    EXPECT_EQ(Eval<int>("lua_ui_layout_grid:GetConstraintCount()"), 4);
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_layout_grid:GetCellSize().x"), 32.0f);
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_layout_element:GetPreferredHeight()"), 12.0f);
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_layout_element:GetPreferredWidth()"), -1.0f);
+    EXPECT_FALSE(Lua().safe_script(R"(lua_ui_layout_group:SetChildAlignment("Somewhere"))", sol::script_pass_on_error).valid());
+    EXPECT_FALSE(Lua().safe_script(R"(lua_ui_layout_fitter:SetVerticalFit("MinSize"))", sol::script_pass_on_error).valid());
+    EXPECT_FALSE(Lua().safe_script(R"(lua_ui_layout_grid:SetConstraint("Diagonal"))", sol::script_pass_on_error).valid());
+
+    Run("lua_ui_layout_canvas = nil; lua_ui_layout_list = nil; lua_ui_layout_group = nil; lua_ui_layout_fitter = nil; "
+        "lua_ui_layout_grid = nil; lua_ui_layout_element = nil; lua_ui_layout_grid_go = nil; lua_ui_layout_element_go = nil");
+}
