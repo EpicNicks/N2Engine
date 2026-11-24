@@ -227,6 +227,14 @@ namespace Renderer::Common
         /// ignores it
         BlendVariant variant = BlendVariant::Alpha;
         /**
+         * Opts a blended draw in to the software renderer's blending (issue #445): with this set too, the software renderer blends the
+         * draw by `additive` and `variant` as the GPU backends do (BlendFuncFor), instead of drawing it opaque. Sprite2D sets it. The GPU
+         * backends ignore it (they blend every blended draw), and so does a draw that does not blend. Other components' blended draws
+         * stay opaque on the software renderer until each is moved over and its software goldens are redone
+         * (IRenderer::SupportsOptInBlending).
+         */
+        bool softwareBlend = false;
+        /**
          * How much the draw is dimmed, 0 (not at all, the default) to 1: the colour it would write is mixed towards a
          * darkened grey of its own luminance, rgb = mix(rgb, luma(rgb) * DimGrey, dim), alpha unchanged (StageDimmed).
          * The editor's prefab stage draws the scene around a prefab with it (In Scene mode), so the scene stays readable

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -28,15 +29,33 @@ namespace N2Engine::Rendering
                       {Shape2D::Polygon, "Polygon"}
                       })
 
+    /// How a Sprite2D mixes with what is behind it (issue #445), on the built-in shader and on every renderer, the software one included
+    enum class SpriteBlend : std::uint8_t
+    {
+        /// Mixed by alpha (SRC_ALPHA, ONE_MINUS_SRC_ALPHA): the default
+        Alpha,
+        /// Added to what is behind (SRC_ALPHA, ONE): glows, halos, sparks, neon. Brightens only; black adds nothing
+        Additive,
+        /// What is behind times the sprite's colour (DST_COLOR, ZERO): shadows, tinting. Alpha is not used, so white leaves the
+        /// picture as it is and a texture's transparent texels must be white
+        Multiply
+    };
+
+    N2_SERIALIZE_ENUM(SpriteBlend, {
+                      {SpriteBlend::Alpha, "Alpha"},
+                      {SpriteBlend::Additive, "Additive"},
+                      {SpriteBlend::Multiply, "Multiply"}
+                      })
+
     /**
      * A flat shape in the object's x, y plane (docs/sprite2d.html): a rectangle, triangle, circle, regular polygon or convex
      * polygon, filled or outlined, in a colour, optionally textured. It always draws in the Transparent queue with its
      * `sortingOrder` as the sort key, so lower orders draw first; equal orders draw back to front by depth, then in hierarchy order.
      * Both faces draw, so a flip or a negative scale never hides it. Depth tested against 3D geometry, not written.
      *
-     * On the software renderer, which cannot blend, a textured sprite's pixels with alpha under 0.5 are not drawn, so a texture's
-     * transparent parts are cut out rather than drawn opaque. Solid shapes look the same everywhere. `saturation` and `flash` (the
-     * colour effects) look the same on every renderer.
+     * Blended by its `blendMode` (SpriteBlend: alpha, additive or multiply) on every renderer: the software renderer, which draws other
+     * blended things opaque, blends sprites (RenderState::softwareBlend, issue #445). `saturation` and `flash` (the colour effects) look
+     * the same on every renderer, and reach a user shader that declares u_Saturation and u_Flash.
      */
     class Sprite2D final : public IRenderable
     {
@@ -81,13 +100,19 @@ namespace N2Engine::Rendering
         /// each component clamped to 0..1 (a non-finite one is 0)
         void SetFlash(const Common::Color &flash) { _flash = Renderer::Common::ColorEffects::ClampFlash(flash); }
         [[nodiscard]] const Common::Color &GetFlash() const { return _flash; }
+        /// How the sprite mixes with what is behind it (SpriteBlend). With a user shader whose header has a `state.blend` hint, the
+        /// hint wins (a premultiplied shader needs its own blending); otherwise the shader draws with this mode too
+        void SetBlendMode(SpriteBlend mode) { _blendMode = mode; }
+        [[nodiscard]] SpriteBlend GetBlendMode() const { return _blendMode; }
         /// An image asset; null for a plain colour
         void SetTexture(std::shared_ptr<Texture> texture);
         [[nodiscard]] const std::shared_ptr<Texture> &GetTexture() const { return _texture; }
         /// A user shader (`.n2shader`, a Shader asset) to draw with instead of the built-in unlit one; null goes back (and forgets the
         /// parameter values). The sprite keeps a Material of its own for it, so one sprite's values never reach another's. Its texture
-        /// reaches the shader as the reserved baseColorTexture, its colour as baseColor, and the cut-out on a renderer that cannot blend
-        /// stays; the saturation and flash are the built-in shader's and are not applied. Saved in a scene or prefab file as `shaderState`
+        /// reaches the shader as the reserved baseColorTexture, its colour as baseColor, its saturation and flash as the reserved u_Saturation
+        /// and u_Flash when the shader declares them (Material::SaturationParam; the shader decides how to apply them), and the engine's
+        /// clock as u_Time and u_ScaledTime. Where the shader cannot be drawn (the software renderer) the built-in fallback applies the
+        /// saturation and flash itself. Saved in a scene or prefab file as `shaderState`
         /// (only when set; per object; not a field a schema or the network knows). See UserShaderSlot::Save
         void SetShader(std::shared_ptr<Shader> shader) { _shaderSlot.SetShader(std::move(shader)); }
         [[nodiscard]] const std::shared_ptr<Shader> &GetShader() const { return _shaderSlot.GetShader(); }
@@ -130,7 +155,7 @@ namespace N2Engine::Rendering
         static constexpr bool IsSingleton = false;
 
     private:
-        /// The material for this draw: blended, both faces, with the texture; cut out on a renderer that cannot blend
+        /// The material for this draw: blended by the blend mode, both faces, with the texture and the colour effects
         const std::shared_ptr<Material> &EnsureMaterial(const Renderer::Common::IRenderer &renderer);
 
         Shape2D _shape = Shape2D::Rect;
@@ -141,6 +166,7 @@ namespace N2Engine::Rendering
         Common::Color _color{Common::Color::White};
         float _saturation = 1.0f;
         Common::Color _flash{Common::Color::Transparent};
+        SpriteBlend _blendMode = SpriteBlend::Alpha;
         std::shared_ptr<Texture> _texture;
         Math::Vector2 _regionOffset{0.0f, 0.0f};
         Math::Vector2 _regionSize{1.0f, 1.0f};
