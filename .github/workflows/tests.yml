@@ -1866,7 +1866,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        profile: [dev, size, speed]
+        # The speed leg and the size leg's budget check take a long time and are not critical, so a pull request or a push runs
+        # only dev and size (the size package feeds the browser gate); a manual run (Actions > Tests > Run workflow) runs all three
+        profile: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["dev","size","speed"]' || '["dev","size"]') }}
     # Since the per-project module builds (#315) a full run took about 63 minutes: every step passed and the job was cancelled at 60.
     # Master runs on 2026-11-13 took 67 to 87 minutes before ccache (PR #360)
     timeout-minutes: 90
@@ -2163,7 +2165,8 @@ jobs:
           cmake --build build-web-size --target web-package -- -k 0
           node scripts/web-package-smoke.mjs build-web-size/web-package 30 320x180 --precompressed
           bash scripts/web-size-report.sh build-web-size/web-package
-          node scripts/web-budget-check.mjs build-web-size/web-package size
+          # The size budgets are checked on a manual run only (see the matrix above)
+          if [ "${{ github.event_name }}" = workflow_dispatch ]; then node scripts/web-budget-check.mjs build-web-size/web-package size; fi
 
       # Jolt Physics (N2ENGINE_USE_JOLT) IS linked into the player since the Jolt backend (PR #205): the player's budgets were raised
       # for it. Two small programs of its own (cmake/jolt/probe) still give the library's weight in this profile (the .wasm of
