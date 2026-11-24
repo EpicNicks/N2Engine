@@ -307,6 +307,7 @@ SIMDLevel InitializeSIMD(SIMDTierRequest); // Auto, or a named tier (lowered if 
 <tr><td><code>Camera.cpp</code> (<code>tan</code> of the field of view)</td><td>kept: the projection matrix and the picking rays, drawing and input only</td></tr>
 <tr><td><code>rendering/Mesh.cpp</code> (<code>sin</code>, <code>cos</code>)</td><td>kept: the vertices of the built-in sphere</td></tr>
 <tr><td><code>particles/ParticleEmitter.cpp</code> (<code>sin</code>, <code>cos</code>, <code>cbrt</code>)</td><td>kept: cosmetic particles, outside the simulation state</td></tr>
+<tr><td><code>particles/ParticleBillboards.cpp</code> (<code>sin</code>, <code>cos</code>) <span class="badge">issue #445</span></td><td>kept: turning particle quads by their rotation, drawing only</td></tr>
 <tr><td><code>softbody/Tetrahedraliser.cpp</code> (<code>cbrt</code>)</td><td>changed: the cube root that scales the voxel grid is now <code>Math::Exp(Math::Log(ratio) / 3.0)</code>; the soft body mesh is built at run time on every peer and the scale picks its resolution, so it is simulation state</td></tr>
 <tr><td><code>renderer/</code> (spot cone cosines, sRGB <code>pow</code>, specular <code>pow</code>, <code>exp2</code>)</td><td>kept: lighting, drawing only</td></tr>
 </tbody>

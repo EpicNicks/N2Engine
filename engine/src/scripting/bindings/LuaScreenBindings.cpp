@@ -15,6 +15,7 @@
 #include "engine/common/Color.hpp"
 #include "engine/rendering/PostProcessStack.hpp"
 #include "engine/rendering/RenderTexture.hpp"
+#include "engine/rendering/SpriteBatcher.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/scripting/bindings/LuaBindings.hpp"
 
@@ -307,6 +308,24 @@ namespace N2Engine::Scripting::Bindings
             "CanBlend", []() {
                 const Renderer::Common::IRenderer *renderer = Application::GetInstance().GetWindow().GetRenderer();
                 return renderer == nullptr || renderer->SupportsBlending();
+            },
+            // What the latest frame drew (issue #445): the renderer's counters and the sprite batching's. Zeros without a renderer
+            "GetFrameStats", [](const sol::this_state state)
+            {
+                sol::state_view lua(state);
+                const Renderer::Common::IRenderer *renderer = Application::GetInstance().GetWindow().GetRenderer();
+                const Renderer::Common::RenderCounters counters =
+                    renderer != nullptr ? renderer->GetLastFrameCounters() : Renderer::Common::RenderCounters{};
+                const Rendering::SpriteBatchStats sprites = Rendering::SpriteBatcher::GetFrameStats(renderer);
+                sol::table stats = lua.create_table();
+                stats["drawCalls"] = counters.drawCalls;
+                stats["triangles"] = counters.triangles;
+                stats["vertices"] = counters.vertices;
+                stats["sprites"] = sprites.sprites;
+                stats["spriteDrawCalls"] = sprites.drawCalls;
+                stats["spriteBatches"] = sprites.batches;
+                stats["batchedSprites"] = sprites.batchedSprites;
+                return stats;
             }
         );
     }

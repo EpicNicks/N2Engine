@@ -155,6 +155,9 @@ namespace N2Engine::Rendering
         static constexpr bool IsSingleton = false;
 
     private:
+        // Reads the material a sprite would draw with, to decide whether it can join a batch (issue #445)
+        friend class SpriteBatcher;
+
         /// The material for this draw: blended by the blend mode, both faces, with the texture and the colour effects
         const std::shared_ptr<Material> &EnsureMaterial(const Renderer::Common::IRenderer &renderer);
 
