@@ -6,6 +6,8 @@
 #include <format>
 #include <utility>
 
+#include <math/DeterministicMath.hpp>
+
 #include "engine/Application.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/Logger.hpp"
@@ -370,7 +372,9 @@ namespace N2Engine::UI
                     }
                     else if (_inertia)
                     {
-                        velocity[axis] *= std::pow(std::clamp(_decelerationRate, 0.0f, 1.0f), deltaTime);
+                        // rate^deltaTime, with the engine's deterministic maths (the same on every machine)
+                        const float rate = std::clamp(_decelerationRate, 0.0f, 1.0f);
+                        velocity[axis] *= rate > 0.0f ? Math::Exp(deltaTime * Math::Log(rate)) : 0.0f;
                         if (std::abs(velocity[axis]) < StopSpeed)
                         {
                             velocity[axis] = 0.0f;
