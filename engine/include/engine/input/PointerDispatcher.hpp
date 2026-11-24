@@ -40,7 +40,9 @@ namespace N2Engine::Input
      * a dispatcher of your own has none until one is set), then, if the UI hit nothing, the world hit
      * provider, which by default casts the main camera's ScreenPointToRay against physics
      * (Raycast::Single with the pick mask, Layers::DefaultRaycastMask unless changed, so Ignore Raycast can't
-     * be clicked; the target is the hit collider's GameObject). Without a physics backend nothing is hit.
+     * be clicked; the target is the hit collider's GameObject), and the same ray against the 2D colliders
+     * (Physics2D::PickRay: each in the plane of its object's z); the nearer of the two wins, 3D on a tie. Without
+     * a 3D backend or a 2D world, that side hits nothing.
      * The object that got OnMouseDown captures the pointer: it gets OnMouseDrag every frame the button stays
      * held and OnMouseUp on release wherever the pointer is, plus OnMouseUpAsButton first if released over it.
      *
@@ -85,7 +87,8 @@ namespace N2Engine::Input
         void Reset();
 
         /// The physics pick: casts camera.ScreenPointToRay(screenPosition, viewport) from the near plane to
-        /// the far plane against the layers in mask and returns the hit collider's GameObject, or nullptr.
+        /// the far plane against the layers in mask, through the 3D colliders (Raycast::Single) and the 2D ones
+        /// (Physics2D::PickRay), and returns the nearer hit collider's GameObject (3D on a tie), or nullptr.
         /// A point outside the viewport (0 <= x < width, 0 <= y < height) picks nothing.
         [[nodiscard]] static GameObject* PickWorld(const Camera &camera, const Math::Vector2 &screenPosition,
                                                    const Vector2i &viewport, uint32_t mask);
