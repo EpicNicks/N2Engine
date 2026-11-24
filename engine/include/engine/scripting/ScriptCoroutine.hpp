@@ -22,4 +22,12 @@ namespace N2Engine::Scripting
         /// Stops it: no further part of its body runs, except the rest of the current step when called from inside its own body (it ends at the next yield). Does nothing once it is over.
         void Stop() const;
     };
+
+    /// What WaitForSecondsRealtime(seconds) makes in Lua (issue #445): a script coroutine that yields it waits that many
+    /// seconds of unscaled time (Scheduling::WaitForSecondsRealtime), so hit-stop (timeScale near 0) does not stretch it.
+    /// The constructor checks the value (finite, >= 0), so a yielded one is always a valid wait.
+    struct ScriptRealtimeWait
+    {
+        float seconds = 0.0f;
+    };
 }

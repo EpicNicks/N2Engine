@@ -33,6 +33,7 @@
 #include "engine/ui/RectMask.hpp"
 #include "engine/ui/RectTransform.hpp"
 #include "engine/ui/ScrollView.hpp"
+#include "engine/ui/Slider.hpp"
 #include "engine/ui/UIText.hpp"
 
 namespace N2Engine
@@ -86,6 +87,7 @@ namespace N2Engine
         Add<UI::Button>(registry, "Button");
         Add<UI::RectMask>(registry, "RectMask");
         Add<UI::ScrollView>(registry, "ScrollView");
+        Add<UI::Slider>(registry, "Slider");
         Add<UI::HorizontalLayoutGroup>(registry, "HorizontalLayoutGroup");
         Add<UI::VerticalLayoutGroup>(registry, "VerticalLayoutGroup");
         Add<UI::GridLayoutGroup>(registry, "GridLayoutGroup");

@@ -8,6 +8,7 @@
 #include <string>
 
 #include <math/UUID.hpp>
+#include <math/Quaternion.hpp>
 #include <math/Vector3.hpp>
 
 #include "engine/Application.hpp"
@@ -349,6 +350,55 @@ TEST_F(LuaTest, GameObjectPositionFromLua)
     Lua()["go_positioned"] = sol::lua_nil;
 }
 
+// Issue #445 item 10: local-space getters and setters, relative to the parent's Positionable
+TEST_F(LuaTest, LocalTransformAccessorsAreRelativeToTheParent)
+{
+    Run(R"(
+        lt_parent = GameObject.Create('LocalParent')
+        lt_parent:CreatePositionable()
+        lt_parent:GetPositionable():SetPosition(Vector3(10, 0, 0))
+        lt_parent:GetPositionable():SetScale(Vector3(2, 2, 2))
+        lt_child = GameObject.Create('LocalChild')
+        lt_child:CreatePositionable()
+        lt_parent:AddChild(lt_child)
+        local p = lt_child:GetPositionable()
+        p:SetLocalPosition(Vector3(1, 2, 3))
+        p:SetLocalRotation(Quaternion.FromAxisAngle(Vector3(0, 0, 1), 0.5))
+        p:SetLocalScale(Vector3(3, 3, 3))
+    )");
+
+    const auto child = Lua()["lt_child"].get<GameObjectRef>().Lock();
+    ASSERT_NE(child, nullptr);
+    const Positionable &positionable = *child->GetPositionable();
+    // The world values follow from the parent's: (10, 0, 0) + 2 * (1, 2, 3), and 2 * 3
+    EXPECT_FLOAT_EQ(positionable.GetPosition().x, 12.0f);
+    EXPECT_FLOAT_EQ(positionable.GetPosition().y, 4.0f);
+    EXPECT_FLOAT_EQ(positionable.GetPosition().z, 6.0f);
+    EXPECT_FLOAT_EQ(positionable.GetScale().x, 6.0f);
+    const Math::Quaternion expected = Math::Quaternion::FromAxisAngle(Math::Vector3(0, 0, 1), 0.5f);
+    EXPECT_FLOAT_EQ(positionable.GetLocalRotation().GetZ(), expected.GetZ());
+    EXPECT_FLOAT_EQ(positionable.GetLocalRotation().GetW(), expected.GetW());
+
+    // The getters read the local values back, not the world ones
+    EXPECT_FLOAT_EQ(Eval<float>("lt_child:GetPositionable():GetLocalPosition().x"), 1.0f);
+    EXPECT_FLOAT_EQ(Eval<float>("lt_child:GetPositionable():GetLocalPosition().z"), 3.0f);
+    EXPECT_FLOAT_EQ(Eval<float>("lt_child:GetPositionable():GetLocalScale().y"), 3.0f);
+    EXPECT_FLOAT_EQ(Eval<float>("lt_child:GetPositionable():GetLocalRotation().z"), expected.GetZ());
+    EXPECT_FLOAT_EQ(Eval<float>("lt_child:GetPositionable():GetPosition().x"), 12.0f);
+
+    // A world setter changes the local value it implies
+    Run("lt_child:GetPositionable():SetPosition(Vector3(14, 0, 0))");
+    EXPECT_FLOAT_EQ(Eval<float>("lt_child:GetPositionable():GetLocalPosition().x"), 2.0f);
+    EXPECT_FLOAT_EQ(Eval<float>("lt_child:GetPositionable():GetLocalPosition().y"), 0.0f);
+
+    // A root object's local values are its world ones
+    EXPECT_FLOAT_EQ(Eval<float>("lt_parent:GetPositionable():GetLocalPosition().x"), 10.0f);
+    EXPECT_FLOAT_EQ(Eval<float>("lt_parent:GetPositionable():GetLocalScale().z"), 2.0f);
+
+    Lua()["lt_parent"] = sol::lua_nil;
+    Lua()["lt_child"] = sol::lua_nil;
+}
+
 TEST_F(LuaTest, GameObjectHierarchyFromLua)
 {
     Run(R"(
@@ -521,6 +571,29 @@ TEST_F(LuaScriptTest, SerializableFieldDefaultsAndOverrides)
     EXPECT_FLOAT_EQ(component->GetField<float>("speed"), 7.5f);
     component->OnAttach();
     EXPECT_EQ(go->GetName(), "speed=7.5");
+}
+
+// Issue #445 item 14, intended: a field the script changes on self is not written back to scriptData, so a save (Serialize)
+// keeps the value the scene or the inspector gave it
+TEST_F(LuaScriptTest, AFieldTheScriptChangesAtRuntimeIsNotSaved)
+{
+    const auto go = GameObject::Create("RuntimeFieldChange");
+    auto *component = AttachScript(go, "res://scripts/Fields.lua");
+    ASSERT_FALSE(component->HasMissingScript());
+
+    sol::table self = component->GetScriptInstance();
+    self["speed"] = 9.0; // what `self.speed = 9` does in the script
+    EXPECT_DOUBLE_EQ(self["speed"].get<double>(), 9.0);
+
+    const nlohmann::json saved = component->Serialize();
+    ASSERT_TRUE(saved.contains("scriptData"));
+    EXPECT_DOUBLE_EQ(saved["scriptData"]["speed"].get<double>(), 2.5);
+    EXPECT_FLOAT_EQ(component->GetField<float>("speed"), 2.5f);
+
+    // SetField is the way to change the stored value (and it updates self too)
+    component->SetField<float>("speed", 4.0f);
+    EXPECT_DOUBLE_EQ(component->Serialize()["scriptData"]["speed"].get<double>(), 4.0);
+    EXPECT_DOUBLE_EQ(self["speed"].get<double>(), 4.0);
 }
 
 TEST_F(LuaScriptTest, MissingScriptIsReportedAndSafe)

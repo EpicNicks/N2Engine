@@ -2,6 +2,7 @@
 // scheduler resumes (one C++ generator per Lua coroutine). What the function yields says how long to wait:
 //   coroutine.yield()      the next frame (nil, or nothing)
 //   coroutine.yield(2.5)   2.5 seconds of game time (a number >= 0; 0 is the next frame)
+//   coroutine.yield(WaitForSecondsRealtime(2.5))   2.5 seconds of unscaled time (timeScale does not stretch it)
 // Any other yielded value is an error that ends the coroutine. The first resume is on the first scheduler update after
 // StartCoroutine (nothing of the body runs in StartCoroutine itself), as for C++ coroutines.
 //
@@ -75,6 +76,7 @@ namespace N2Engine::Scripting
         {
             bool done = true;
             float seconds = 0.0f; // the wait when not done; 0 is the next frame
+            bool realtime = false; // the seconds are unscaled time (WaitForSecondsRealtime)
         };
 
         // One resume. Never throws, and never leaves the state half-run: the thread's status decides.
@@ -85,7 +87,8 @@ namespace N2Engine::Scripting
                 return {};
             }
             LuaComponent *owner = state.owner;
-            const LuaBudgetScope budget;
+            // The component's declared InstructionBudget, as its lifecycle calls get it
+            const LuaBudgetScope budget(owner->GetInstructionBudget());
             ScriptLifetimeScope scope(state.lifetime);
 
             lua_State *thread = state.thread;
@@ -147,11 +150,18 @@ namespace N2Engine::Scripting
                         owner->ReportCoroutineError("coroutine.yield: the wait must be a finite number of seconds >= 0");
                     }
                 }
+                else if (sol::stack::check<ScriptRealtimeWait>(thread, -results))
+                {
+                    // Checked when it was made (finite, >= 0)
+                    step.seconds = sol::stack::get<ScriptRealtimeWait>(thread, -results).seconds;
+                    step.realtime = true;
+                }
                 else
                 {
                     step.done = true;
                     owner->ReportCoroutineError(std::format(
-                        "coroutine.yield: expected nothing or a number of seconds, got a {}", luaL_typename(thread, -results)));
+                        "coroutine.yield: expected nothing, a number of seconds or a WaitForSecondsRealtime, got a {}",
+                        luaL_typename(thread, -results)));
                 }
             }
             lua_settop(thread, 0);
@@ -174,7 +184,11 @@ namespace N2Engine::Scripting
                 {
                     co_return;
                 }
-                if (step.seconds > 0.0f)
+                if (step.seconds > 0.0f && step.realtime)
+                {
+                    co_yield Scheduling::WaitForSecondsRealtime{step.seconds};
+                }
+                else if (step.seconds > 0.0f)
                 {
                     co_yield Scheduling::WaitForSeconds{step.seconds};
                 }

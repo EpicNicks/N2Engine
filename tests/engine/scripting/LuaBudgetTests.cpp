@@ -135,6 +135,36 @@ protected:
         WriteAsset("budget/SpinA.lua", SpinSource(200000) + "\n");
         WriteAsset("budget/SpinB.lua", SpinSource(200000) + "\n");
 
+        // Issue #445: a script that declares a larger InstructionBudget, and the same spin without it (about a million
+        // instructions per OnUpdate: five times the test budget)
+        const std::string spinUpdate =
+            "function Spinner:OnUpdate() local x = 0 for i = 1, 200000 do x = x + 1 x = x + 1 x = x + 1 x = x + 1 end "
+            "budget_spins = budget_spins + 1 end ";
+        WriteAsset("budget/Raised.lua", "local Spinner = {} Spinner.__index = Spinner Spinner.InstructionBudget = 2000000 " +
+                                            spinUpdate + "return Spinner\n");
+        WriteAsset("budget/Unraised.lua", "local Spinner = {} Spinner.__index = Spinner " + spinUpdate + "return Spinner\n");
+        // A raised budget still stops a loop that never ends
+        WriteAsset("budget/RaisedLooper.lua", R"(
+            local RaisedLooper = { InstructionBudget = 1000000 }
+            RaisedLooper.__index = RaisedLooper
+            function RaisedLooper:OnUpdate()
+                while true do end
+            end
+            return RaisedLooper
+        )");
+        WriteAsset("budget/OverCap.lua", "local T = { InstructionBudget = 1e12 } T.__index = T return T\n");
+        WriteAsset("budget/BadBudget.lua", "local T = { InstructionBudget = 'lots' } T.__index = T return T\n");
+        WriteAsset("budget/Lowered.lua", R"(
+            local Lowered = { InstructionBudget = 1000 }
+            Lowered.__index = Lowered
+            function Lowered:OnUpdate()
+                local x = 0
+                for i = 1, 10000 do x = x + 1 end
+                budget_lowered = budget_lowered + 1
+            end
+            return Lowered
+        )");
+
         IO::ResourceUUID::Initialize(Math::UUID::Random());
         IO::ResourceLoader::Instance().Initialize(s_projectRoot);
     }
@@ -649,4 +679,63 @@ TEST_F(LuaBudgetTest, QuitFromLuaStillQuitsAGame)
     Application::SetScriptQuitAllowed(false);
     Application::Quit();
     EXPECT_TRUE(Application::GetInstance().IsQuitRequested());
+}
+
+// Issue #445 item 13: a script's class can declare InstructionBudget to give each entry into its component more than the
+// runtime's budget; the entries of other scripts, and entries outside the component, keep the runtime's
+TEST_F(LuaBudgetTest, ADeclaredInstructionBudgetRaisesTheBudgetOfThatComponentOnly)
+{
+    Lua()["budget_spins"] = 0;
+    const auto raisedGo = GameObject::Create("Raised");
+    const auto unraisedGo = GameObject::Create("Unraised");
+    auto *raised = Attach(raisedGo, "res://budget/Raised.lua");
+    auto *unraised = Attach(unraisedGo, "res://budget/Unraised.lua");
+    ASSERT_FALSE(raised->HasMissingScript());
+    ASSERT_FALSE(unraised->HasMissingScript());
+    EXPECT_EQ(raised->GetInstructionBudget(), 2'000'000u);
+    EXPECT_EQ(unraised->GetInstructionBudget(), 0u);
+
+    raised->OnUpdate();
+    raised->OnUpdate();
+    EXPECT_FALSE(raised->IsFaulted()) << DumpLogs();
+    EXPECT_EQ(Lua()["budget_spins"].get<int>(), 2) << "each entry gets the raised budget afresh";
+
+    // The raise belongs to the component's entries: a chunk run afterwards has the runtime's budget again
+    EXPECT_NE(ErrorOf(Run(SpinSource(200000))).find("instruction budget of 200000"), std::string::npos);
+
+    unraised->OnUpdate();
+    EXPECT_TRUE(unraised->IsFaulted());
+    EXPECT_EQ(Lua()["budget_spins"].get<int>(), 2);
+}
+
+TEST_F(LuaBudgetTest, ARaisedBudgetStillStopsALoopThatNeverEnds)
+{
+    const auto go = GameObject::Create("RaisedLooper");
+    auto *component = Attach(go, "res://budget/RaisedLooper.lua");
+    ASSERT_FALSE(component->HasMissingScript());
+    EXPECT_EQ(component->GetInstructionBudget(), 1'000'000u);
+    component->OnUpdate();
+    EXPECT_TRUE(component->IsFaulted());
+    EXPECT_EQ(CountLogs("instruction budget of 1000000", Logger::LogLevel::Error), 1) << DumpLogs();
+}
+
+TEST_F(LuaBudgetTest, AnInstructionBudgetOverTheMaximumIsCutAndAnInvalidOneIgnored)
+{
+    const auto overGo = GameObject::Create("OverCap");
+    const auto badGo = GameObject::Create("BadBudget");
+    EXPECT_EQ(Attach(overGo, "res://budget/OverCap.lua")->GetInstructionBudget(), MaxScriptInstructionBudget);
+    EXPECT_GE(CountLogs("is more than the most a script may declare", Logger::LogLevel::Warn), 1) << DumpLogs();
+    EXPECT_EQ(Attach(badGo, "res://budget/BadBudget.lua")->GetInstructionBudget(), 0u);
+    EXPECT_GE(CountLogs("InstructionBudget must be a positive number", Logger::LogLevel::Warn), 1) << DumpLogs();
+}
+
+TEST_F(LuaBudgetTest, ADeclaredBudgetBelowTheRuntimesDoesNotLowerIt)
+{
+    Lua()["budget_lowered"] = 0;
+    const auto go = GameObject::Create("Lowered");
+    auto *component = Attach(go, "res://budget/Lowered.lua");
+    ASSERT_FALSE(component->HasMissingScript());
+    component->OnUpdate(); // about 30,000 instructions: over the declared 1,000, under the runtime's 200,000
+    EXPECT_FALSE(component->IsFaulted()) << DumpLogs();
+    EXPECT_EQ(Lua()["budget_lowered"].get<int>(), 1);
 }
