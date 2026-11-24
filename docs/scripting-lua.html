@@ -753,15 +753,6 @@ return Fields
 <p>The editor reads these declarations: <code>GetLuaFields</code> lists them with their kinds (the declared <code>type</code>, else the default's type), and <code>SetComponentFields</code> sets them through <code>scriptData</code> <span class="badge">PR #93</span>. See <a href="serialization.html#reflection-lua">Reflection: LuaComponent</a> and <a href="editor.html#components">Components and the inspector</a>.</p>
 <p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::ExtractSerializableFields</code>, <code>LuaComponent::InjectFieldsIntoScript</code>, <code>LuaComponent::SetScriptData</code>, <code>LuaComponent::GetField</code>, <code>LuaComponent::SetField</code>; tests: <code>LuaScriptTest.SerializableFieldDefaultsAndOverrides</code>, <code>LuaRobustnessTest.ShorthandFieldDefaultsAreRead</code>, <code>LuaRobustnessTest.PartialVectorFieldDefaultsMissingAxesToZero</code></p>
 
-<h3 id="fields-runtime">Changes made while the game runs are not saved <span class="badge">issue #445</span></h3>
-<p>The scene file holds <code>scriptData</code>, the store described above, and nothing else: <code>LuaComponent::Serialize</code> writes <code>scriptData</code> as it is and never reads the instance table back. So:</p>
-<ul>
-<li><code>self.count = self.count + 1</code> in a callback changes the running instance only. Serializing the scene (the editor saving it, a rollback or prefab capture reading it) still writes the value <code>scriptData</code> holds, the one the scene was loaded with or the editor set. This is on purpose: <code>SerializableFields</code> are the <em>authored</em> values of a scene, the inspector's, not a save game.</li>
-<li>Game progress belongs in <a href="#save-data"><code>SaveData</code> and <code>Json</code></a>: write what must survive in a save, read it in <code>OnAttach</code>, and let the field be the default for a new game.</li>
-<li>A value set through <code>SetField</code> (C++) or the editor's <code>SetComponentFields</code> does go into <code>scriptData</code>, and is injected into the instance the next time the script is set.</li>
-</ul>
-<p>Tests: <code>LuaScriptTest.AFieldChangedWhileRunningIsNotWrittenToTheScene</code>.</p>
-
 <div class="callout note">
 <p class="callout-title">Note</p>
 <ul>

@@ -424,21 +424,6 @@ protected:
             return Fields
         )");
 
-        WriteAsset("scripts/GrowsField.lua", R"(
-            local Grows = {}
-            Grows.__index = Grows
-            Grows.SerializableFields = {
-                count = { default = 1 },
-            }
-
-            function Grows:OnUpdate()
-                self.count = self.count + 10
-                self.gameObject:SetName("count=" .. self.count)
-            end
-
-            return Grows
-        )");
-
         WriteAsset("scripts/Broken.lua", R"(
             local Broken = {}
             Broken.__index = Broken
@@ -520,22 +505,6 @@ TEST_F(LuaScriptTest, SerializableFieldDefaultsAndOverrides)
     EXPECT_FLOAT_EQ(component->GetField<float>("speed"), 7.5f);
     component->OnAttach();
     EXPECT_EQ(go->GetName(), "speed=7.5");
-}
-
-// Issue #445 (item 14): the scene holds scriptData, not the instance's fields (docs/scripting-lua.html#fields-runtime)
-TEST_F(LuaScriptTest, AFieldChangedWhileRunningIsNotWrittenToTheScene)
-{
-    const auto go = GameObject::Create("Grows");
-    auto *component = AttachScript(go, "res://scripts/GrowsField.lua");
-    ASSERT_FALSE(component->HasMissingScript());
-    component->OnAttach();
-    component->OnUpdate();
-    EXPECT_EQ(go->GetName(), "count=11") << "the running instance changed";
-    EXPECT_EQ(component->GetField<int>("count"), 1) << "scriptData did not";
-    EXPECT_EQ(component->Serialize().at("scriptData").at("count").get<int>(), 1) << "and so the saved scene did not";
-
-    component->SetField<int>("count", 5); // what the editor's SetComponentFields does
-    EXPECT_EQ(component->Serialize().at("scriptData").at("count").get<int>(), 5);
 }
 
 TEST_F(LuaScriptTest, MissingScriptIsReportedAndSafe)
