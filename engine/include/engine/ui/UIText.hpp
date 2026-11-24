@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -25,7 +26,7 @@ namespace N2Engine::UI
      *
      * - fontSize is in canvas pixels per em (a line is about 1.36 em high in the default font).
      * - With wrap on (the default) lines wrap at the rect's width; with it off they run past the rect.
-     *   Nothing is clipped: text that doesn't fit in the rect's height overflows it.
+     *   Text that doesn't fit in the rect's height overflows it; only a RectMask above it clips it (issue #445).
      * - The alignments place the block inside the rect. Left, Center and Right align the lines to the
      *   rect's left edge, centre and right edge. Top puts the first line's ascent on the top edge, Middle
      *   centres the block vertically, Bottom puts the last line's descent on the bottom edge, and Baseline
@@ -165,6 +166,15 @@ namespace N2Engine::UI
         [[nodiscard]] static Text::TextLayout ApplyCharacterScales(const Text::TextLayout &layout, const std::string &text,
                                                                    const std::vector<float> &scales);
 
+        /**
+         * `layout`'s glyph quads cut to `clip` (issue #445, RectMask; in the layout's own space, relative to the anchor, as
+         * the quads are): a quad wholly outside is dropped, one across the edge keeps the part inside with its atlas
+         * coordinates cut in the same proportion, so the glyph stays where it was. `quadColors`, when given with one colour
+         * per quad, is filtered the same way. The lines and bounds are kept as they were. Used by the draw, public for tests
+         */
+        [[nodiscard]] static Text::TextLayout ClipLayout(const Text::TextLayout &layout, const Text::Rect &clip,
+                                                         std::vector<Common::Color> *quadColors = nullptr);
+
         /// The layout options the current settings give in a rect of this width (it is the wrap width
         /// with wrap on)
         [[nodiscard]] Text::LayoutOptions GetLayoutOptions(float rectWidth) const;
@@ -214,6 +224,12 @@ namespace N2Engine::UI
         std::vector<Common::Color> _quadColors;
         std::uint64_t _drawnLayoutVersion = ~std::uint64_t{0}; // the layout version the last mesh came from
         std::uint64_t _meshVersion = 0;                        // what DrawResources sees: up on any change
+        // The RectMask clip of the last draw (relative to the anchor; nullopt: none that cuts the text), and the clipped
+        // layout and quad colours made for it at _clippedVersion
+        std::optional<Text::Rect> _drawnClip;
+        Text::TextLayout _clippedLayout;
+        std::vector<Common::Color> _clippedColors;
+        std::uint64_t _clippedVersion = ~std::uint64_t{0};
 
         // Layout cache and GPU resources, the code TextRenderer uses
         mutable Rendering::TextDrawing::LayoutCache _layoutCache;

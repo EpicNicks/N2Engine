@@ -889,7 +889,8 @@ function GameObject:Destroy() end
 ---"CircleCollider2D", "PolygonCollider2D", "CubeRenderer",
 ---"SphereRenderer", "QuadRenderer", "Sprite2D", "MeshRenderer", "TextRenderer", "ParticleSystem", "LineRenderer", "TrailRenderer", "MeshRenderer2D",
 ---"SoftBody", "Light", "AudioSource", "AudioListener",
----"LuaComponent", "RectTransform", "Canvas", "Image", "UIText", "Button". Unknown names raise an error.
+---"LuaComponent", "RectTransform", "Canvas", "Image", "UIText", "Button", "RectMask", "ScrollView", "HorizontalLayoutGroup", "VerticalLayoutGroup", "GridLayoutGroup",
+---"LayoutElement", "ContentSizeFitter". Unknown names raise an error.
 ---@param typeName string
 ---@return Component
 function GameObject:AddComponent(typeName) end
@@ -1933,6 +1934,204 @@ function Button:GetOnClickListenerCount() end
 ---@return boolean whether it did
 function Button:Click() end
 
+---Clips everything below its object to its object's rect, for drawing and for the pointer (issue #445). Nested masks
+---clip to the overlap. No settings of its own: enable or disable it with SetActive.
+---@class RectMask : Component
+RectMask = {}
+
+---A scrollable view (issue #445): moves its content (a child RectTransform) with the mouse wheel, a drag (touch on the
+---web player) and optional scrollbar handles. The normalized position is x 0 left .. 1 right, y 0 bottom .. 1 top.
+---@class ScrollView : Component
+ScrollView = {}
+---@return number x
+---@return number y
+function ScrollView:GetNormalizedPosition() end
+---Moves the content there (clamped to 0..1 unless "Unrestricted") and stops any movement
+---@param x number
+---@param y number
+function ScrollView:SetNormalizedPosition(x, y) end
+---@return number
+function ScrollView:GetHorizontalNormalizedPosition() end
+---@param x number
+function ScrollView:SetHorizontalNormalizedPosition(x) end
+---@return number
+function ScrollView:GetVerticalNormalizedPosition() end
+---@param y number
+function ScrollView:SetVerticalNormalizedPosition(y) end
+---@return boolean
+function ScrollView:GetHorizontal() end
+---@param enabled boolean
+function ScrollView:SetHorizontal(enabled) end
+---@return boolean
+function ScrollView:GetVertical() end
+---@param enabled boolean
+function ScrollView:SetVertical(enabled) end
+---@return "Unrestricted"|"Elastic"|"Clamped"
+function ScrollView:GetMovementType() end
+---An unknown name raises an error and changes nothing
+---@param type "Unrestricted"|"Elastic"|"Clamped"
+function ScrollView:SetMovementType(type) end
+---@return number seconds an elastic view takes to spring back
+function ScrollView:GetElasticity() end
+---@param seconds number
+function ScrollView:SetElasticity(seconds) end
+---@return boolean
+function ScrollView:GetInertia() end
+---@param inertia boolean
+function ScrollView:SetInertia(inertia) end
+---@return number the share of the speed left after a second of coasting
+function ScrollView:GetDecelerationRate() end
+---@param rate number
+function ScrollView:SetDecelerationRate(rate) end
+---@return number canvas units per wheel notch
+function ScrollView:GetScrollSensitivity() end
+---@param sensitivity number
+function ScrollView:SetScrollSensitivity(sensitivity) end
+---@return number canvas units the pointer moves before a drag starts
+function ScrollView:GetDragThreshold() end
+---@param threshold number
+function ScrollView:SetDragThreshold(threshold) end
+---@return Vector2 canvas units per second
+function ScrollView:GetVelocity() end
+---@param velocity Vector2
+function ScrollView:SetVelocity(velocity) end
+function ScrollView:StopMovement() end
+---A wheel step, as the mouse wheel over the view does
+---@param x number notches
+---@param y number notches, +y up (shows content further up)
+function ScrollView:Scroll(x, y) end
+---@return RectTransform|nil
+function ScrollView:GetContent() end
+---@param content RectTransform|nil nil uses the first child with a RectTransform
+function ScrollView:SetContent(content) end
+---@return RectTransform|nil
+function ScrollView:GetVerticalScrollbar() end
+---@param handle RectTransform|nil a handle placed inside its parent's rect (the track)
+function ScrollView:SetVerticalScrollbar(handle) end
+---@return RectTransform|nil
+function ScrollView:GetHorizontalScrollbar() end
+---@param handle RectTransform|nil
+function ScrollView:SetHorizontalScrollbar(handle) end
+---Calls fn(x, y) with the normalized position whenever the content moves. An error in fn is logged.
+---@param fn fun(x: number, y: number)
+---@return integer id for RemoveOnValueChanged
+function ScrollView:AddOnValueChanged(fn) end
+---@param id integer
+function ScrollView:RemoveOnValueChanged(id) end
+function ScrollView:ClearOnValueChanged() end
+---@return integer
+function ScrollView:GetOnValueChangedListenerCount() end
+
+---@alias ChildAlignment "UpperLeft"|"UpperCenter"|"UpperRight"|"MiddleLeft"|"MiddleCenter"|"MiddleRight"|"LowerLeft"|"LowerCenter"|"LowerRight"
+
+---Lays its children out in a row (issue #445): padding, spacing, child alignment, controlled and expanded child sizes
+---@class HorizontalLayoutGroup : Component
+HorizontalLayoutGroup = {}
+---@return number left
+---@return number right
+---@return number top
+---@return number bottom
+function HorizontalLayoutGroup:GetPadding() end
+---@param left number
+---@param right number
+---@param top number
+---@param bottom number
+function HorizontalLayoutGroup:SetPadding(left, right, top, bottom) end
+---@return ChildAlignment
+function HorizontalLayoutGroup:GetChildAlignment() end
+---An unknown name raises an error and changes nothing
+---@param alignment ChildAlignment
+function HorizontalLayoutGroup:SetChildAlignment(alignment) end
+---@return number
+function HorizontalLayoutGroup:GetSpacing() end
+---@param spacing number
+function HorizontalLayoutGroup:SetSpacing(spacing) end
+---@return boolean width
+---@return boolean height
+function HorizontalLayoutGroup:GetControlChildSize() end
+---Whether the group sets its children's width and height (to their preferred sizes)
+---@param width boolean
+---@param height boolean
+function HorizontalLayoutGroup:SetControlChildSize(width, height) end
+---@return boolean width
+---@return boolean height
+function HorizontalLayoutGroup:GetChildForceExpand() end
+---With control: share the free width out, and fill the height
+---@param width boolean
+---@param height boolean
+function HorizontalLayoutGroup:SetChildForceExpand(width, height) end
+---The size the children need, padding included
+---@return number width
+---@return number height
+function HorizontalLayoutGroup:GetPreferredSize() end
+
+---Lays its children out in a column from the top (issue #445); the same methods as HorizontalLayoutGroup
+---@class VerticalLayoutGroup : HorizontalLayoutGroup
+VerticalLayoutGroup = {}
+
+---Lays its children out in rows of cells from the top-left (issue #445)
+---@class GridLayoutGroup : Component
+GridLayoutGroup = {}
+---@return number left
+---@return number right
+---@return number top
+---@return number bottom
+function GridLayoutGroup:GetPadding() end
+---@param left number
+---@param right number
+---@param top number
+---@param bottom number
+function GridLayoutGroup:SetPadding(left, right, top, bottom) end
+---@return ChildAlignment
+function GridLayoutGroup:GetChildAlignment() end
+---@param alignment ChildAlignment
+function GridLayoutGroup:SetChildAlignment(alignment) end
+---@return Vector2
+function GridLayoutGroup:GetCellSize() end
+---@param size Vector2
+function GridLayoutGroup:SetCellSize(size) end
+---@return Vector2
+function GridLayoutGroup:GetSpacing() end
+---@param spacing Vector2
+function GridLayoutGroup:SetSpacing(spacing) end
+---@return "Flexible"|"FixedColumnCount"|"FixedRowCount"
+function GridLayoutGroup:GetConstraint() end
+---An unknown name raises an error and changes nothing
+---@param constraint "Flexible"|"FixedColumnCount"|"FixedRowCount"
+function GridLayoutGroup:SetConstraint(constraint) end
+---@return integer
+function GridLayoutGroup:GetConstraintCount() end
+---@param count integer columns (FixedColumnCount) or rows (FixedRowCount)
+function GridLayoutGroup:SetConstraintCount(count) end
+
+---Overrides the size a layout group or a ContentSizeFitter uses for its object (issue #445); below 0 is not set
+---@class LayoutElement : Component
+LayoutElement = {}
+---@return number
+function LayoutElement:GetPreferredWidth() end
+---@param width number
+function LayoutElement:SetPreferredWidth(width) end
+---@return number
+function LayoutElement:GetPreferredHeight() end
+---@param height number
+function LayoutElement:SetPreferredHeight(height) end
+---@return boolean
+function LayoutElement:GetIgnoreLayout() end
+---@param ignore boolean true leaves the object out of its parent's layout group
+function LayoutElement:SetIgnoreLayout(ignore) end
+
+---Sizes its object to its content: its layout group's or its UIText's preferred size (issue #445)
+---@class ContentSizeFitter : Component
+ContentSizeFitter = {}
+---@return "Unconstrained"|"PreferredSize"
+function ContentSizeFitter:GetHorizontalFit() end
+---@param mode "Unconstrained"|"PreferredSize"
+function ContentSizeFitter:SetHorizontalFit(mode) end
+---@return "Unconstrained"|"PreferredSize"
+function ContentSizeFitter:GetVerticalFit() end
+---@param mode "Unconstrained"|"PreferredSize"
+function ContentSizeFitter:SetVerticalFit(mode) end
+
 ---@class UI
 UI = {}
 
@@ -1962,6 +2161,14 @@ function UI.CreateText(name, text) end
 ---@param label? string defaults to "Button"
 ---@return GameObject
 function UI.CreateButton(name, label) end
+
+---A 300 x 200 element with a dark Image, a RectMask and a ScrollView, a "Content" child (put the items in it) and a
+---scrollbar per enabled axis (issue #445)
+---@param name? string defaults to "ScrollView"
+---@param vertical? boolean defaults to true
+---@param horizontal? boolean defaults to false
+---@return GameObject
+function UI.CreateScrollView(name, vertical, horizontal) end
 
 ---@class Scene
 ---@field sceneName string The name of this scene
@@ -2516,6 +2723,14 @@ function Sprite2D:GetSaturation() end
 function Sprite2D:SetFlash(flash) end
 ---@return Color
 function Sprite2D:GetFlash() end
+---How the sprite mixes with what is behind it, on every renderer (the software one included): "Alpha" (the default),
+---"Additive" (adds its colour: glows, halos, neon) or "Multiply" (what is behind times its colour; alpha unused, so transparent
+---texels must be white). No user shader needed. With a user shader that declares a state.blend hint, the hint wins. Saved with
+---the scene. Another name is an error.
+---@param mode "Alpha"|"Additive"|"Multiply"
+function Sprite2D:SetBlendMode(mode) end
+---@return "Alpha"|"Additive"|"Multiply"
+function Sprite2D:GetBlendMode() end
 ---A res:// path to an image, or nil for a plain colour
 ---@param path string|nil
 function Sprite2D:SetTexture(path) end
@@ -3834,8 +4049,8 @@ function Screen.GetTint() end
 Graphics = {}
 
 ---False on the software renderer (the web player's fallback when the browser has no WebGPU), which cannot blend: a
----half-transparent pixel is drawn opaque or not at all, so a soft glow sprite becomes a hard disc. Skip such sprites
----when it is false. True on OpenGL, Vulkan and WebGPU, and without a renderer.
+---half-transparent pixel is drawn opaque or not at all, so a soft particle or UI image becomes a hard shape. Skip such
+---effects when it is false. Sprite2D is the exception: the software renderer blends sprites (Sprite2D:SetBlendMode). True on OpenGL, Vulkan and WebGPU, and without a renderer.
 ---@return boolean
 function Graphics.CanBlend() end
 

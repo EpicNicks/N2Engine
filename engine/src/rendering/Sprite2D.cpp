@@ -23,6 +23,7 @@ namespace N2Engine::Rendering
         RegisterMember(NAMEOF(_color), _color);
         RegisterMember(NAMEOF(_saturation), _saturation).Range(0.0, Renderer::Common::ColorEffects::MaxSaturation);
         RegisterMember(NAMEOF(_flash), _flash);
+        RegisterMember(NAMEOF(_blendMode), _blendMode);
         RegisterAssetRef(NAMEOF(_texture), _texture);
         RegisterMember(NAMEOF(_regionOffset), _regionOffset);
         RegisterMember(NAMEOF(_regionSize), _regionSize);
@@ -114,12 +115,56 @@ namespace N2Engine::Rendering
         return mesh->GetBounds().Transformed(*world);
     }
 
+    namespace
+    {
+        BlendMode MaterialBlendFor(const SpriteBlend blend)
+        {
+            switch (blend)
+            {
+            case SpriteBlend::Additive: return BlendMode::Additive;
+            case SpriteBlend::Multiply: return BlendMode::Multiply;
+            case SpriteBlend::Alpha: break;
+            }
+            return BlendMode::Alpha;
+        }
+
+        /// Gives `material` the sprite's colour effects, each only when it changed (a change bumps the material's version)
+        void SyncColorEffects(Material &material, const float saturation, const Common::Color &flash)
+        {
+            // A scene file can hold any value, which the material clamps, so compare with what it would store
+            if (material.GetSaturation() != Renderer::Common::ColorEffects::ClampSaturation(saturation))
+            {
+                material.SetSaturation(saturation);
+            }
+            // Component by component: Color's == allows an epsilon, which would skip a small step of a rainbow
+            const Common::Color clamped = Renderer::Common::ColorEffects::ClampFlash(flash);
+            const Common::Color &current = material.GetFlash();
+            if (current.r != clamped.r || current.g != clamped.g || current.b != clamped.b || current.a != clamped.a)
+            {
+                material.SetFlash(clamped);
+            }
+        }
+    }
+
     const std::shared_ptr<Material> &Sprite2D::EnsureMaterial(const Renderer::Common::IRenderer &renderer)
     {
+        // Sprites blend on every renderer that blends opted-in draws (the software one too, issue #445), so the cut-out that stands in
+        // for blending is only for a renderer that blends nothing (Renderer::Common::BlendCutOutBelow, shared with the UI Image)
+        const bool blends = renderer.SupportsBlending() || renderer.SupportsOptInBlending();
+        const float discard = Renderer::Common::BlendCutOutBelow(_texture != nullptr, blends, _color.a);
         if (_shaderSlot.HasShader())
         {
             // A user shader: the slot's own Material, with the sprite's texture and the cut-out. The built-in path below is not touched
-            _shaderSlot.Sync(_texture, Renderer::Common::BlendCutOutBelow(_texture != nullptr, renderer.SupportsBlending(), _color.a));
+            _shaderSlot.Sync(_texture, discard);
+            Material &material = *_shaderSlot.GetMaterial();
+            // The colour effects reach a shader that declares u_Saturation and u_Flash, and the built-in fallback where it cannot draw
+            SyncColorEffects(material, _saturation, _flash);
+            // The shader's own blend hint wins (a premultiplied shader needs premultiplied blending); without one, the sprite's mode
+            const std::shared_ptr<Shader> &shader = _shaderSlot.GetShader();
+            if (!shader->GetStateHints().blend && material.GetBlendMode() != MaterialBlendFor(_blendMode))
+            {
+                material.SetBlendMode(MaterialBlendFor(_blendMode));
+            }
             return _shaderSlot.GetMaterial();
         }
         if (!_material)
@@ -132,27 +177,18 @@ namespace N2Engine::Rendering
         {
             _material->SetBaseColorTexture(_texture);
         }
+        if (_material->GetBlendMode() != MaterialBlendFor(_blendMode))
+        {
+            _material->SetBlendMode(MaterialBlendFor(_blendMode));
+        }
         // The test is on the final alpha, the texture's times the colour's: half the colour's alpha cuts out what is under half
         // opaque in the texture, so fading a sprite does not make it vanish, and a fully faded one draws nothing
-        // (Renderer::Common::BlendCutOutBelow, shared with the UI Image)
-        const float discard = Renderer::Common::BlendCutOutBelow(_texture != nullptr, renderer.SupportsBlending(), _color.a);
         if (_material->GetBlendDiscardBelow() != discard)
         {
             _material->SetBlendDiscardBelow(discard);
         }
-        // The colour effects reach the GPU as uniforms, so a change costs nothing; set only when changed, as above (a scene
-        // file can hold any value, which the material clamps, so compare with what it would store)
-        if (_material->GetSaturation() != Renderer::Common::ColorEffects::ClampSaturation(_saturation))
-        {
-            _material->SetSaturation(_saturation);
-        }
-        // Component by component: Color's == allows an epsilon, which would skip a small step of a rainbow
-        const Common::Color flash = Renderer::Common::ColorEffects::ClampFlash(_flash);
-        const Common::Color &current = _material->GetFlash();
-        if (current.r != flash.r || current.g != flash.g || current.b != flash.b || current.a != flash.a)
-        {
-            _material->SetFlash(flash);
-        }
+        // The colour effects reach the GPU as uniforms, so a change costs nothing; set only when changed
+        SyncColorEffects(*_material, _saturation, _flash);
         return _material;
     }
 
@@ -176,8 +212,11 @@ namespace N2Engine::Rendering
         }
         const std::shared_ptr<Material> &material = EnsureMaterial(*renderer);
         _resources.Bind(renderer);
+        // Blended on the software renderer too (issue #445): the draw opts in, and MeshDrawing gives it the material's blend mode
+        Renderer::Common::RenderState spriteState = state;
+        spriteState.softwareBlend = true;
         _resources.Draw(mesh, std::span<const std::shared_ptr<Material>>(&material, 1), Material::GetDefaultUnlit(), *world,
-                        _color, queue, state);
+                        _color, queue, spriteState);
     }
 
     void Sprite2D::InitializeRenderResources(Renderer::Common::IRenderer *renderer)

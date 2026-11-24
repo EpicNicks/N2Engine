@@ -61,7 +61,10 @@
 #include "engine/ui/Button.hpp"
 #include "engine/ui/Canvas.hpp"
 #include "engine/ui/Image.hpp"
+#include "engine/ui/LayoutGroup.hpp"
+#include "engine/ui/RectMask.hpp"
 #include "engine/ui/RectTransform.hpp"
+#include "engine/ui/ScrollView.hpp"
 #include "engine/ui/UIText.hpp"
 
 namespace N2Engine::Scripting::Bindings
@@ -158,6 +161,13 @@ namespace N2Engine::Scripting::Bindings
                 {"Image", MakeAccess<UI::Image>()},
                 {"UIText", MakeAccess<UI::UIText>()},
                 {"Button", MakeAccess<UI::Button>()},
+                {"RectMask", MakeAccess<UI::RectMask>()},
+                {"ScrollView", MakeAccess<UI::ScrollView>()},
+                {"HorizontalLayoutGroup", MakeAccess<UI::HorizontalLayoutGroup>()},
+                {"VerticalLayoutGroup", MakeAccess<UI::VerticalLayoutGroup>()},
+                {"GridLayoutGroup", MakeAccess<UI::GridLayoutGroup>()},
+                {"LayoutElement", MakeAccess<UI::LayoutElement>()},
+                {"ContentSizeFitter", MakeAccess<UI::ContentSizeFitter>()},
             };
             return table;
         }
@@ -676,6 +686,10 @@ namespace N2Engine::Scripting::Bindings
             "GetSaturation", Forward<Sprite2DRef, &Rendering::Sprite2D::GetSaturation>(),
             "SetFlash", Forward<Sprite2DRef, &Rendering::Sprite2D::SetFlash>(),
             "GetFlash", Forward<Sprite2DRef, &Rendering::Sprite2D::GetFlash>(),
+            // "Alpha", "Additive" or "Multiply" (issue #445), as ParticleSystem:SetBlendMode takes; another name is an error
+            "SetBlendMode", [](const Sprite2DRef &ref, const std::string &name)
+            { ref.Pin()->SetBlendMode(ParseEnumName<Rendering::SpriteBlend>(name, "Sprite2D:SetBlendMode")); },
+            "GetBlendMode", [](const Sprite2DRef &ref) { return EnumName(ref.Pin()->GetBlendMode()); },
             // A res:// path to an image, or nil for none
             "SetTexture", [](const Sprite2DRef &ref, const sol::optional<std::string> path)
             {
