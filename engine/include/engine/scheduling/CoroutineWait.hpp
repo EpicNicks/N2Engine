@@ -139,6 +139,20 @@ namespace N2Engine
             bool Wait();
         };
 
+        /// Like WaitForSeconds, in unscaled time (Time::GetUnscaledDeltaTime): it keeps counting while timeScale is 0 or
+        /// small, as Unity's WaitForSecondsRealtime does. Frame time, as every coroutine wait is (coroutines run once per
+        /// frame, never inside a fixed tick), in every simulation mode.
+        class WaitForSecondsRealtime
+        {
+        private:
+            float _waitSeconds{};
+            float _elapsedSeconds{};
+
+        public:
+            explicit WaitForSecondsRealtime(float seconds) : _waitSeconds{seconds} {}
+            bool Wait();
+        };
+
         class WaitForever
         {
         public:

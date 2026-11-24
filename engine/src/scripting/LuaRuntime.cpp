@@ -196,7 +196,7 @@ namespace N2Engine::Scripting
         void PrepareThreadHook(lua_State *thread)
         {
             const LuaGuardState *guard = LuaGuardState::Of(thread);
-            if (guard->limit == 0)
+            if (guard->entryLimit == 0)
             {
                 if (lua_gethookmask(thread) != 0)
                 {
@@ -218,7 +218,7 @@ namespace N2Engine::Scripting
         {
             LuaGuardState *guard = LuaGuardState::Of(thread);
             const int uncounted = TakeUncountedInstructions(thread);
-            if (guard->limit == 0)
+            if (guard->entryLimit == 0)
             {
                 return false;
             }
@@ -244,7 +244,7 @@ namespace N2Engine::Scripting
             {
                 const LuaGuardState *guard = LuaGuardState::Of(L);
                 lua_sethook(L, &LuaGuardState::CountHook, LUA_MASKCOUNT, 1);
-                return luaL_error(L, "%s of %I", BudgetErrorText.data(), static_cast<lua_Integer>(guard->limit));
+                return luaL_error(L, "%s of %I", BudgetErrorText.data(), static_cast<lua_Integer>(guard->entryLimit));
             }
 
             // coroutine.resume and coroutine.close; upvalue 1 is the library's own function. Both run Lua code in the
@@ -473,7 +473,7 @@ namespace N2Engine::Scripting
         if (_guard->exhausted)
         {
             // The text the count hook raises
-            return std::format("{} of {}", BudgetErrorText, _guard->limit);
+            return std::format("{} of {}", BudgetErrorText, _guard->entryLimit);
         }
         if (memoryError)
         {
@@ -509,11 +509,11 @@ namespace N2Engine::Scripting
         return _limitLogged.insert(key).second;
     }
 
-    void LuaRuntime::BeginEntry()
+    void LuaRuntime::BeginEntry(const std::uint64_t raisedTo)
     {
         if (_guard->depth++ == 0)
         {
-            _guard->Arm();
+            _guard->Arm(raisedTo);
         }
     }
 
@@ -533,10 +533,10 @@ namespace N2Engine::Scripting
         }
     }
 
-    LuaBudgetScope::LuaBudgetScope()
+    LuaBudgetScope::LuaBudgetScope(const std::uint64_t raisedTo)
         : _outerDepth(LuaRuntime::Instance()._guard->depth)
     {
-        LuaRuntime::Instance().BeginEntry();
+        LuaRuntime::Instance().BeginEntry(raisedTo);
     }
 
     LuaBudgetScope::~LuaBudgetScope()

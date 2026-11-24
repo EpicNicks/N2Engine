@@ -45,6 +45,9 @@ namespace N2Engine::Scripting::Detail
 
         // Instructions
         std::uint64_t limit = LuaLimits{}.instructionsPerEntry;
+        // The budget the running entry was armed with: `limit`, or more for a component whose script declares a larger
+        // InstructionBudget (Arm's argument; 0 is unlimited, as for `limit`)
+        std::uint64_t entryLimit = LuaLimits{}.instructionsPerEntry;
         std::int64_t remaining = 0;
         std::uint64_t step = HookGranularity; // instructions the installed hook counts per call
         // Wall clock (the declaration evaluator only; the runtime leaves it off): the instruction budget does not bound
@@ -69,19 +72,22 @@ namespace N2Engine::Scripting::Detail
         std::uint64_t growthRequests = 0;
 #endif
 
-        void Arm()
+        /// Refills the budget for a new entry: `limit` instructions, or `raisedTo` when that is more (a component's
+        /// InstructionBudget; an unlimited `limit` stays unlimited)
+        void Arm(const std::uint64_t raisedTo = 0)
         {
             exhausted = false;
             timedOut = false;
             loopRefused = false;
-            if (limit == 0)
+            entryLimit = limit == 0 ? 0 : std::max(limit, raisedTo);
+            if (entryLimit == 0)
             {
                 remaining = 0;
                 lua_sethook(state, nullptr, 0, 0);
                 return;
             }
-            step = std::min(limit, hasDeadline ? DeadlineGranularity : HookGranularity);
-            remaining = static_cast<std::int64_t>(std::min<std::uint64_t>(limit, INT64_MAX));
+            step = std::min(entryLimit, hasDeadline ? DeadlineGranularity : HookGranularity);
+            remaining = static_cast<std::int64_t>(std::min<std::uint64_t>(entryLimit, INT64_MAX));
             lua_sethook(state, &LuaGuardState::CountHook, LUA_MASKCOUNT, static_cast<int>(step));
         }
 
@@ -141,7 +147,7 @@ namespace N2Engine::Scripting::Detail
                 guard->step = 1;
                 lua_sethook(L, &LuaGuardState::CountHook, LUA_MASKCOUNT, 1);
             }
-            luaL_error(L, "%s of %I", BudgetErrorText.data(), static_cast<lua_Integer>(guard->limit));
+            luaL_error(L, "%s of %I", BudgetErrorText.data(), static_cast<lua_Integer>(guard->entryLimit));
         }
     };
 

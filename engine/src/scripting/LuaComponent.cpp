@@ -191,8 +191,9 @@ namespace N2Engine::Scripting
         if (!LuaRuntime::RunsScripts())
             return; // DeclarationsOnly: there is no instance and nothing may run (no caller gets here; this is the guard)
 
-        // One budget for the whole call, whatever it triggers (see LuaBudgetScope)
-        const LuaBudgetScope budget;
+        // One budget for the whole call, whatever it triggers (see LuaBudgetScope); the script's declared
+        // InstructionBudget when it is larger and this is the outermost entry
+        const LuaBudgetScope budget(_instructionBudget);
 
         // Callbacks the script registers during this call (e.g. Subscribe in OnAttach) are tied to this
         // component (and to this script instance: see RetireScriptInstance)
@@ -1220,6 +1221,7 @@ namespace N2Engine::Scripting
             _hasOnMouseDrag = false;
             _hasOnMouseUp = false;
             _hasOnMouseUpAsButton = false;
+            _instructionBudget = 0;
             return;
         }
 
@@ -1246,6 +1248,46 @@ namespace N2Engine::Scripting
         _hasOnMouseDrag = HasMethod("OnMouseDrag");
         _hasOnMouseUp = HasMethod("OnMouseUp");
         _hasOnMouseUpAsButton = HasMethod("OnMouseUpAsButton");
+        ReadInstructionBudget();
+    }
+
+    void LuaComponent::ReadInstructionBudget()
+    {
+        _instructionBudget = 0;
+        if (!_scriptInstance.valid() || !LuaRuntime::RunsScripts())
+        {
+            return;
+        }
+        // Read as plain data inside the protected call (a class's __index can run there); judged outside it
+        int type = LUA_TNIL;
+        double declared = 0.0;
+        GuardedAccess([&]
+        {
+            const sol::object value = _scriptInstance["InstructionBudget"];
+            type = static_cast<int>(value.get_type());
+            if (type == LUA_TNUMBER)
+            {
+                declared = value.as<double>();
+            }
+        }, 2);
+        if (type == LUA_TNIL || type == LUA_TNONE)
+        {
+            return;
+        }
+        if (type != LUA_TNUMBER || !std::isfinite(declared) || declared < 1.0)
+        {
+            Logger::Warn(std::format("{}: InstructionBudget must be a positive number of instructions; it is ignored and "
+                                     "the default budget applies", _scriptPath.ToString()));
+            return;
+        }
+        if (declared > static_cast<double>(MaxScriptInstructionBudget))
+        {
+            Logger::Warn(std::format("{}: InstructionBudget {} is more than the most a script may declare; {} is used",
+                                     _scriptPath.ToString(), declared, MaxScriptInstructionBudget));
+            _instructionBudget = MaxScriptInstructionBudget;
+            return;
+        }
+        _instructionBudget = static_cast<std::uint64_t>(declared);
     }
 
     void LuaComponent::OnAttach()

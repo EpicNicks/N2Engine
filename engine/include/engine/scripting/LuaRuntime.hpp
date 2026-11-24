@@ -24,6 +24,11 @@ namespace N2Engine::Scripting
         std::size_t maxBytes = std::size_t{256} * 1024 * 1024;
     };
 
+    /// The most instructions a script's InstructionBudget declaration can give one entry of its component (issue #445):
+    /// ten times the default budget, so a script that needs a long catch-up loop gets room and a runaway one still stops
+    /// (after a few seconds at most). A larger declaration is cut to this, with a warning.
+    inline constexpr std::uint64_t MaxScriptInstructionBudget = 500'000'000;
+
     /// What this process lets the engine do with project Lua. Run is every game, the play host and every test: scripts run
     /// as the docs describe. DeclarationsOnly is the editor host that edits (N2EditorHost without --play): project Lua
     /// never runs in the engine's state there. A LuaComponent reads its script's field declarations from the
@@ -189,7 +194,7 @@ namespace N2Engine::Scripting
 
     private:
         friend class LuaBudgetScope;
-        void BeginEntry();
+        void BeginEntry(std::uint64_t raisedTo);
         void EndEntry(int outerDepth);
         // Not public: destroying the state while components still hold sol::table/sol::function
         // references into it left them dangling. Nothing calls it; the runtime lives for the process.
@@ -207,7 +212,11 @@ namespace N2Engine::Scripting
         int _outerDepth;
 
     public:
-        LuaBudgetScope();
+        LuaBudgetScope() : LuaBudgetScope(0) {}
+        /// As the default, but when this scope is the outermost one its entry gets `raisedTo` instructions if that is more
+        /// than the runtime's budget (a LuaComponent's declared InstructionBudget). A nested scope ignores it: it shares the
+        /// running budget, whatever it asks for.
+        explicit LuaBudgetScope(std::uint64_t raisedTo);
         ~LuaBudgetScope();
         LuaBudgetScope(const LuaBudgetScope&) = delete;
         LuaBudgetScope& operator=(const LuaBudgetScope&) = delete;
