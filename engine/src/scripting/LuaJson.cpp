@@ -15,15 +15,28 @@ namespace N2Engine::Scripting
         // becomes null at the point it recurs, instead of recursing until the stack overflows
         thread_local std::unordered_set<const void *> t_tablesInProgress;
 
-        nlohmann::json NumberToJson(const double number)
+        // A Lua integer stays a JSON integer and a Lua float stays a JSON float (written with a fraction or an
+        // exponent, "3.0", so Json.Decode gives a float back). Turning whole floats into integers made a large
+        // float currency value come back as a Lua integer, whose arithmetic then wraps on overflow (issue #445).
+        // Floats are written with the shortest text that reads back to the same double; NaN and infinities have
+        // no JSON form and become null.
+        nlohmann::json NumberToJson(const sol::object &value)
         {
-            // Lua scripts write whole numbers for counts and ids; keep them integral in JSON
-            constexpr double MaxExactInteger = 9007199254740992.0; // 2^53
-            if (std::trunc(number) == number && std::abs(number) < MaxExactInteger)
+            lua_State *L = value.lua_state();
+            value.push(L);
+            const bool isInteger = lua_isinteger(L, -1) != 0;
+            const lua_Integer integer = isInteger ? lua_tointeger(L, -1) : 0;
+            const lua_Number number = isInteger ? 0.0 : lua_tonumber(L, -1);
+            lua_pop(L, 1);
+            if (isInteger)
             {
-                return static_cast<std::int64_t>(number);
+                return static_cast<std::int64_t>(integer);
             }
-            return number;
+            if (!std::isfinite(number))
+            {
+                return nullptr;
+            }
+            return static_cast<double>(number);
         }
 
         nlohmann::json TableToJson(const sol::table &table)
@@ -80,7 +93,7 @@ namespace N2Engine::Scripting
         case sol::type::boolean:
             return value.as<bool>();
         case sol::type::number:
-            return NumberToJson(value.as<double>());
+            return NumberToJson(value);
         case sol::type::string:
             return value.as<std::string>();
         case sol::type::table:
@@ -115,7 +128,7 @@ namespace N2Engine::Scripting
     namespace
     {
         sol::object JsonToLuaAt(const nlohmann::json &value, sol::state_view lua, const int depth, const int maxDepth,
-                                const std::string_view what)
+                                const std::string_view what, const JsonNumbers numbers)
         {
             if (depth > maxDepth)
             {
@@ -126,10 +139,18 @@ namespace N2Engine::Scripting
             case nlohmann::json::value_t::boolean:
                 return sol::make_object(lua, value.get<bool>());
             case nlohmann::json::value_t::number_integer:
+                if (numbers == JsonNumbers::Float)
+                {
+                    return sol::make_object(lua, static_cast<double>(value.get<std::int64_t>()));
+                }
                 return sol::make_object(lua, value.get<std::int64_t>());
             case nlohmann::json::value_t::number_unsigned:
             {
                 const auto u = value.get<std::uint64_t>();
+                if (numbers == JsonNumbers::Float)
+                {
+                    return sol::make_object(lua, static_cast<double>(u));
+                }
                 if (u <= static_cast<std::uint64_t>(INT64_MAX))
                 {
                     return sol::make_object(lua, static_cast<std::int64_t>(u));
@@ -146,7 +167,7 @@ namespace N2Engine::Scripting
                 int index = 1;
                 for (const auto &element : value)
                 {
-                    table[index++] = JsonToLuaAt(element, lua, depth + 1, maxDepth, what);
+                    table[index++] = JsonToLuaAt(element, lua, depth + 1, maxDepth, what, numbers);
                 }
                 return table;
             }
@@ -155,7 +176,7 @@ namespace N2Engine::Scripting
                 sol::table table = lua.create_table(0, static_cast<int>(value.size()));
                 for (const auto &[key, element] : value.items())
                 {
-                    table[key] = JsonToLuaAt(element, lua, depth + 1, maxDepth, what);
+                    table[key] = JsonToLuaAt(element, lua, depth + 1, maxDepth, what, numbers);
                 }
                 return table;
             }
@@ -165,8 +186,9 @@ namespace N2Engine::Scripting
         }
     }
 
-    sol::object JsonToLua(const nlohmann::json &value, sol::state_view lua, const int maxDepth, const std::string_view what)
+    sol::object JsonToLua(const nlohmann::json &value, sol::state_view lua, const int maxDepth, const std::string_view what,
+                          const JsonNumbers numbers)
     {
-        return JsonToLuaAt(value, lua, 0, maxDepth, what);
+        return JsonToLuaAt(value, lua, 0, maxDepth, what, numbers);
     }
 }

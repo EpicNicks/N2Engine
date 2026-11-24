@@ -12,6 +12,8 @@
 #include "engine/input/Mouse.hpp"
 #include "engine/physics/ICollider.hpp"
 #include "engine/physics/Raycast.hpp"
+#include "engine/physics2d/Collider2D.hpp"
+#include "engine/physics2d/Physics2DQueries.hpp"
 
 namespace N2Engine::Input
 {
@@ -231,8 +233,18 @@ namespace N2Engine::Input
             return nullptr;
         }
 
+        // 3D colliders, then 2D colliders (each in the plane of its object's z) along the same ray: the nearer wins, and
+        // 3D on a tie. Neither needs the other's backend.
         Physics::RaycastHit hit;
-        if (!Physics::Raycast::Single(ray.origin, ray.direction, hit, nearToFar, mask))
+        const bool hit3D = Physics::Raycast::Single(ray.origin, ray.direction, hit, nearToFar, mask);
+        Physics2D::RaycastHit2D hit2D;
+        const bool found2D = Physics2D::PickRay(ray.origin, ray.direction, hit2D, nearToFar, mask);
+        if (found2D && (!hit3D || hit2D.distance < hit.distance))
+        {
+            // The collider's own object, as for 3D
+            return hit2D.collider ? &hit2D.collider->GetGameObject() : hit2D.gameObject;
+        }
+        if (!hit3D)
         {
             return nullptr;
         }
