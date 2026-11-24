@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -124,6 +125,54 @@ TEST_F(LuaSaveDataTest, JsonRoundTrip)
         local back = Json.Decode(SaveData.Read('save.json'))
         return back.run.coins + #back.unlocked
     )"), 12);
+}
+
+TEST_F(LuaSaveDataTest, JsonKeepsTheNumberSubtype)
+{
+    // A whole float stays a float: it used to be written as an integer and come back as a Lua integer, whose
+    // arithmetic wraps (issue #445)
+    EXPECT_EQ(Eval<std::string>("return Json.Encode({ i = 3, f = 6 / 2 })"), R"({"f":3.0,"i":3})");
+    EXPECT_EQ(Eval<std::string>("return math.type(Json.Decode(Json.Encode(1e15)))"), "float");
+    EXPECT_TRUE(Eval<bool>(R"(
+        local coins = Json.Decode(Json.Encode({ coins = 2^62 })).coins
+        return math.type(coins) == 'float' and coins * 4 > 0
+    )")) << "a large float currency value survives a save and its arithmetic does not wrap";
+
+    // Doubles round-trip exactly
+    EXPECT_TRUE(Eval<bool>(R"(
+        for _, x in ipairs({ 0.1, 1 / 3, 123456789.123456789, 1.7976931348623157e308, 5e-324, -2.5e-12, 2^53 + 0.0 }) do
+            local back = Json.Decode(Json.Encode(x))
+            if back ~= x or math.type(back) ~= 'float' then return false end
+        end
+        return true
+    )"));
+    EXPECT_EQ(Eval<std::string>("return math.type(Json.Decode(Json.Encode(math.maxinteger)))"), "integer");
+    EXPECT_TRUE(Eval<bool>("return Json.Decode(Json.Encode(math.maxinteger)) == math.maxinteger"));
+    EXPECT_EQ(Eval<std::string>("return Json.Encode({ 0/0, 1/0 })"), "[null,null]") << "no JSON form";
+}
+
+TEST_F(LuaSaveDataTest, JsonDecodeCanMakeEveryNumberAFloat)
+{
+    EXPECT_EQ(Eval<std::string>("return math.type(Json.Decode('3', { numbers = 'float' }))"), "float");
+    EXPECT_TRUE(Eval<bool>(R"(
+        local t = Json.Decode('{"coins":9007199254740993,"list":[1,2]}', { numbers = 'float' })
+        return math.type(t.coins) == 'float' and math.type(t.list[2]) == 'float' and t.list[2] == 2
+    )"));
+    EXPECT_EQ(Eval<std::string>("return math.type(Json.Decode('3', { numbers = 'auto' }))"), "integer");
+    EXPECT_EQ(Eval<std::string>("return math.type(Json.Decode('3', {}))"), "integer");
+    EXPECT_NE(ErrorOf("Json.Decode('3', { numbers = 'int' })").find("options.numbers"), std::string::npos);
+}
+
+TEST_F(LuaSaveDataTest, GetModifiedTimeIsTheLastWriteAsUnixTime)
+{
+    EXPECT_TRUE(Eval<bool>("return SaveData.GetModifiedTime('never-written.json') == nil"));
+    EXPECT_TRUE(Eval<bool>("return (SaveData.Write('stamped.json', '{}'))"));
+    const double now = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+    const double written = Eval<double>("return SaveData.GetModifiedTime('stamped.json')");
+    // File systems store times coarsely (FAT: 2 seconds); allow a few seconds either way
+    EXPECT_NEAR(written, now, 5.0);
+    EXPECT_NE(ErrorOf("SaveData.GetModifiedTime('../x')").find("not a save name"), std::string::npos);
+    Eval<bool>("return SaveData.Delete('stamped.json')");
 }
 
 TEST_F(LuaSaveDataTest, BadJsonIsNilAndAMessage)
