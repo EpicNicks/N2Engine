@@ -26,6 +26,11 @@ namespace N2Engine
         class Physics2DWorld;
     }
 
+    namespace Rendering
+    {
+        class SpriteBatcher;
+    }
+
     class Camera;
     class Component;
     class GameObject;
@@ -53,6 +58,10 @@ namespace N2Engine
         // Created by the first 2D component that attaches, so a scene without any has none. Components hold weak references:
         // an object can outlive its scene's world.
         std::shared_ptr<Physics2D::Physics2DWorld> _physics2DWorld;
+
+        // Draws runs of alike Sprite2D components of the Transparent queue as one draw call (issue #445); made by the first Render,
+        // and keeps its GPU meshes between frames
+        std::unique_ptr<Rendering::SpriteBatcher> _spriteBatcher;
 
         std::queue<std::shared_ptr<GameObject>> _markedForDestructionQueue;
         // diagnostics

@@ -3641,6 +3641,20 @@ Graphics = {}
 ---@return boolean
 function Graphics.CanBlend() end
 
+---@class FrameStats
+---@field drawCalls integer Draw calls of the last finished frame, all renderables (the renderer's counters)
+---@field triangles integer
+---@field vertices integer
+---@field sprites integer Sprite2D components drawn in the latest frame
+---@field spriteDrawCalls integer Draw calls those sprites made: one per batch, one per sprite drawn alone
+---@field spriteBatches integer Batches of two or more sprites
+---@field batchedSprites integer Sprites drawn inside those batches
+
+---What the latest frame drew (issue #445): the renderer's draw calls, triangles and vertices, and how Sprite2D components were
+---batched (docs/sprite2d.html#batching). All zeros without a renderer.
+---@return FrameStats
+function Graphics.GetFrameStats() end
+
 -- ===== CAMERA =====
 
 ---@enum OrthographicResizeMode

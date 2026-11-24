@@ -202,7 +202,21 @@ local ring = AddTextureOutline(player, body, 2, Color(1, 0.9, 0.2, 1))</code></p
 <p>Tests: <code>Sprite2DShaderTest</code> and <code>UserShaderSlotTest</code> (<code>tests/engine/rendering/UserShaderComponentsTests.cpp</code>), <code>Sprite2DShaderEffectsTest</code> (<code>Sprite2DBlendTests.cpp</code>). Source: <code>engine/src/rendering/Sprite2D.cpp</code> (<code>EnsureMaterial</code>), <code>UserShaderSlot.cpp</code>.</p>
 
 <h2 id="performance">Performance</h2>
-<p>Each sprite is one draw call. Sprites with the same shape, size, outline, region and pivot share one mesh, kept while any sprite uses it. <code>tests/engine/rendering/Sprite2DTests.cpp</code> draws 2,000 circles on the software renderer and prints the time as a <code>[SPRITE2D-PERF]</code> line. Batching many sprites into one draw is not done yet.</p>
+<p>Sprites with the same shape, size, outline, region and pivot share one mesh, kept while any sprite uses it. Runs of alike sprites are drawn as one draw call (<a href="#batching">batching</a>). <code>tests/engine/rendering/Sprite2DTests.cpp</code> draws 2,000 circles on the software renderer and prints the time as a <code>[SPRITE2D-PERF]</code> line; <code>Sprite2DBatchingTests.cpp</code> prints the same for 5,000 circles with batching off and on, with the draw calls.</p>
+
+<h2 id="batching">Batching <span class="badge">issue #445</span></h2>
+<p>Scene::Render hands the sorted Transparent queue to a <code>SpriteBatcher</code> (one per scene). A run of <strong>consecutive</strong> sprites in that order that look alike is drawn as <strong>one draw call</strong>: a mesh built on the CPU each frame from the sprites' shape meshes, with each sprite's world matrix (flips included) applied to its vertices and its colour in the vertex colours, drawn with an identity model matrix and a white tint. The unlit shaders multiply the base colour, the texture and the vertex colour on every backend, so the colour reaches the same product. It goes through the ordinary mesh path (<code>Mesh::SetData</code>, <code>GpuCache</code>, <code>IRenderer::UpdateMesh</code>), which is a dynamic vertex buffer on OpenGL, Vulkan, WebGPU and the software renderer alike, so no backend has code of its own for it. Instancing was not chosen: it would need a new vertex layout and pipeline on each of four backends, and the shape meshes are a few vertices each, where building the vertices costs little.</p>
+<ul>
+<li><strong>Draw order and transparency are kept exactly.</strong> A batch is only ever a run of sprites that were next to each other in the sorted order (sorting order, then back to front, then hierarchy), and every backend blends the triangles of one draw in the order given. Different sprites may be in one run whatever their sorting orders, as long as nothing else sorts between them.</li>
+<li><strong>What breaks a batch:</strong> another renderable between them in the order (a mesh, text, particles, a UI canvas); a different texture (or texture against none); a different <code>blendMode</code>, <code>saturation</code> or <code>flash</code>; a user shader (such a sprite draws alone); a run over 65,536 vertices (about 16,000 rects or 2,000 circles). Colour, shape, size, position, rotation, scale, flip, region and sorting order do not.</li>
+<li>So to batch, give sprites that draw together the same texture (a sprite sheet with <code>region</code> per sprite), the same blend mode and no per-sprite effects, and keep other renderables out of their sorting orders. Additive halos batch with each other, not with the alpha sprites around them: put halos in a sorting order of their own.</li>
+<li>A run of one sprite is drawn by the sprite itself, exactly as before. <code>SpriteBatcher::SetEnabled(false)</code> draws every sprite alone (for comparing; on by default).</li>
+<li>Each batch of a frame has a mesh of its own (a backend may read a mesh only when the frame ends), kept by the scene from frame to frame.</li>
+</ul>
+<p><strong>Counts.</strong> <code>Graphics.GetFrameStats()</code> in Lua returns <code>drawCalls</code>, <code>triangles</code> and <code>vertices</code> (the renderer's counters for the last finished frame, every renderable) and <code>sprites</code>, <code>spriteDrawCalls</code>, <code>spriteBatches</code> and <code>batchedSprites</code> (the sprites of the latest frame; C++ <code>SpriteBatcher::GetFrameStats(renderer)</code>). The editor's Profiler shows the renderer's counters as before.</p>
+<pre class="lang-lua"><code>local stats = Graphics.GetFrameStats()
+Debug.Log(stats.sprites .. ' sprites in ' .. stats.spriteDrawCalls .. ' draws')</code></pre>
+<p>Tests: <code>Sprite2DBatchingTest</code> (<code>tests/engine/rendering/Sprite2DBatchingTests.cpp</code>): 1,000 sprites of two colours are one draw call instead of 1,000, with the same pixels; a mixed scene (shapes, colours, translucent and additive runs, textures, flips, rotations, interleaved sorting orders) batched equals it unbatched on the software renderer, a few rotated-edge pixels allowed; each batch breaker; a user-shader sprite drawn alone; the stats from Lua. Source: <code>engine/src/rendering/SpriteBatcher.cpp</code>, <code>Scene::Render</code>.</p>
 
 <h2 id="lua">From Lua</h2>
 <pre class="lang-lua"><code>local bullet = GameObject.Create('Bullet')
@@ -232,10 +246,10 @@ halo:SetBlendMode('Additive')</code></pre>
 <p><span class="badge">PR #369</span> <code>GetTextureSize()</code> is the texture's size in pixels as a <code>Vector2</code>, or <code>nil</code> without a texture. <code>SetOutlineTextureOf(source, widthPixels, color)</code> sets the sprite's texture to <a href="#texture-outline">the outline</a> of <code>source</code>, a <code>res://</code> path or another <code>Sprite2D</code> (its texture). A source that does not load, a <code>Sprite2D</code> with no texture, any other source, or a width that is not a whole number from 0 to 256 raises an error naming <code>Sprite2D:SetOutlineTextureOf</code> and keeps the sprite's texture.</p>
 
 <h2 id="not-yet">Not yet</h2>
-<p>Glow and outline glow (recipes in <code>orchestrator/proposals/effects-design.md</code>: a gradient texture behind the sprite, child outlines), a soft (blurred) texture outline, sprite animation (a script can change the region), batching, nine-slice, named sorting layers, and editor gizmos.</p>
+<p>Glow and outline glow (recipes in <code>orchestrator/proposals/effects-design.md</code>: a gradient texture behind the sprite, child outlines), a soft (blurred) texture outline, sprite animation (a script can change the region), batching sprites that have a user shader, nine-slice, named sorting layers, and editor gizmos.</p>
 
 <div class="page-footer">
-<span>Describes master through PR #369 and issue #445 (blend modes).</span>
+<span>Describes master through PR #369 and issue #445 (blend modes, batching).</span>
 <a href="index.html">Back to overview</a>
 </div>
 
