@@ -21,7 +21,10 @@
 #include "engine/ui/Button.hpp"
 #include "engine/ui/Canvas.hpp"
 #include "engine/ui/Image.hpp"
+#include "engine/ui/LayoutGroup.hpp"
+#include "engine/ui/RectMask.hpp"
 #include "engine/ui/RectTransform.hpp"
+#include "engine/ui/ScrollView.hpp"
 #include "engine/ui/UIGraphic.hpp"
 #include "engine/ui/UIText.hpp"
 
@@ -73,7 +76,15 @@ namespace N2Engine::UI
         }
 
 #ifdef N2ENGINE_UI_ENABLED
-        void LayOut(GameObject &gameObject, const Rect &parentRect, const bool isCanvas, std::vector<UIDrawItem> &out)
+        /// Whether the object has an enabled RectMask (it clips its descendants)
+        bool HasActiveMask(const GameObject &gameObject)
+        {
+            const RectMask *mask = gameObject.GetComponent<RectMask>();
+            return mask && mask->IsActive();
+        }
+
+        void LayOut(GameObject &gameObject, const Rect &parentRect, const bool isCanvas, const std::optional<Rect> &clip,
+                    std::vector<UIDrawItem> &out)
         {
             if (!gameObject.IsActiveInHierarchy())
             {
@@ -86,26 +97,46 @@ namespace N2Engine::UI
             Rect rect = parentRect;
             if (rectTransform && !isCanvas)
             {
+                // Issue #445: a ContentSizeFitter sizes the object to its content first
+                if (const ContentSizeFitter *fitter = gameObject.GetComponent<ContentSizeFitter>(); fitter && fitter->IsActive())
+                {
+                    fitter->Fit(parentRect);
+                }
                 rect = rectTransform->ResolveIn(parentRect);
             }
             if (rectTransform)
             {
                 rectTransform->SetResolvedRect(rect);
             }
+            // Issue #445: a layout group places the children before they resolve their rects in it
+            for (const LayoutGroup *group : gameObject.GetComponents<LayoutGroup>())
+            {
+                if (group && group->IsActive())
+                {
+                    group->Arrange(rect);
+                    break;
+                }
+            }
 
             for (UIGraphic *graphic : gameObject.GetComponents<UIGraphic>())
             {
                 if (graphic && graphic->IsActive())
                 {
-                    out.push_back(UIDrawItem{graphic, rect});
+                    out.push_back(UIDrawItem{graphic, rect, clip});
                 }
             }
 
+            // A RectMask clips the descendants (not its own object's graphics) to its rect, within any clip above it
+            std::optional<Rect> childClip = clip;
+            if (HasActiveMask(gameObject))
+            {
+                childClip = clip ? Rect::Intersect(*clip, rect) : rect;
+            }
             for (const auto &child : gameObject.GetChildren())
             {
                 if (child)
                 {
-                    LayOut(*child, rect, false, out);
+                    LayOut(*child, rect, false, childClip, out);
                 }
             }
         }
@@ -121,6 +152,20 @@ namespace N2Engine::UI
                 FindCanvases(root, canvases);
             }
             return canvases;
+        }
+
+        /// Draws one item that can show (UIDrawItem::IsVisible), with its clip set on the graphic for the draw only
+        void DrawItem(const UIDrawItem &item, Renderer::Common::IRenderer *renderer,
+                      const Renderer::Common::RenderState &state, const Math::Matrix<float, 4, 4> &canvasToWorld)
+        {
+            if (!item.IsVisible())
+            {
+                return;
+            }
+            // Each graphic decides whether the clip cuts it (text can overflow its rect): one inside it draws as without
+            item.graphic->SetRenderClip(item.clip);
+            item.graphic->RenderUI(renderer, item.rect, state, canvasToWorld);
+            item.graphic->SetRenderClip(std::nullopt);
         }
 
 #ifdef N2ENGINE_UI_ENABLED
@@ -193,7 +238,7 @@ namespace N2Engine::UI
         const Rect canvasRect{0.0f, 0.0f, static_cast<float>(viewport[0]), static_cast<float>(viewport[1])};
         for (const RootCanvas &canvas : canvases)
         {
-            LayOut(*canvas.gameObject, canvasRect, true, items);
+            LayOut(*canvas.gameObject, canvasRect, true, std::nullopt, items);
         }
         return items;
 #endif
@@ -218,10 +263,7 @@ namespace N2Engine::UI
         constexpr Renderer::Common::RenderState state = OverlayState();
         for (const UIDrawItem &item : items)
         {
-            if (item.rect.HasArea())
-            {
-                item.graphic->RenderUI(renderer, item.rect, state);
-            }
+            DrawItem(item, renderer, state, Math::Matrix<float, 4, 4>::identity());
         }
     }
 
@@ -231,7 +273,7 @@ namespace N2Engine::UI
         // Topmost first: the reverse of draw order
         for (const UIDrawItem &item : items | std::views::reverse)
         {
-            if (item.graphic->GetRaycastTarget() && item.rect.Contains(canvasPoint))
+            if (item.graphic->GetRaycastTarget() && item.Hits(canvasPoint))
             {
                 return &item.graphic->GetGameObject();
             }
@@ -285,7 +327,7 @@ namespace N2Engine::UI
         {
             return items;
         }
-        LayOut(gameObject, WorldCanvasRect(canvas), true, items);
+        LayOut(gameObject, WorldCanvasRect(canvas), true, std::nullopt, items);
         return items;
 #endif
     }
@@ -305,10 +347,7 @@ namespace N2Engine::UI
         const Math::Matrix<float, 4, 4> canvasToWorld = canvas.GetCanvasToWorldMatrix();
         for (const UIDrawItem &item : items)
         {
-            if (item.rect.HasArea())
-            {
-                item.graphic->RenderUI(renderer, item.rect, state, canvasToWorld);
-            }
+            DrawItem(item, renderer, state, canvasToWorld);
         }
     }
 
@@ -389,7 +428,7 @@ namespace N2Engine::UI
             const std::vector<UIDrawItem> items = CollectWorldCanvasGraphics(*root.canvas);
             for (const UIDrawItem &item : items | std::views::reverse)
             {
-                if (item.graphic->GetRaycastTarget() && item.rect.Contains(planeHit->canvasPoint))
+                if (item.graphic->GetRaycastTarget() && item.Hits(planeHit->canvasPoint))
                 {
                     best = WorldUIHit{&item.graphic->GetGameObject(), root.canvas, planeHit->distance,
                                       planeHit->canvasPoint};
@@ -544,6 +583,83 @@ namespace N2Engine::UI
             text->SetColor(Common::Color{0.196f, 0.196f, 0.196f, 1.0f}); // Unity's label grey (50, 50, 50)
         }
         gameObject->AddChild(labelObject, false);
+        return gameObject;
+    }
+
+    std::shared_ptr<GameObject> UISystem::CreateScrollView(const std::string &name, const bool vertical,
+                                                           const bool horizontal)
+    {
+        auto gameObject = CreateElement(name);
+        if (auto *rectTransform = gameObject->GetComponent<RectTransform>())
+        {
+            rectTransform->SetSizeDelta(Math::Vector2{300.0f, 200.0f});
+        }
+        if (auto *background = gameObject->AddComponent<Image>())
+        {
+            background->SetColor(Common::Color{0.1f, 0.1f, 0.1f, 0.8f});
+        }
+        gameObject->AddComponent<RectMask>();
+        auto *scrollView = gameObject->AddComponent<ScrollView>();
+
+        // The content, at the view's top-left
+        auto content = CreateElement("Content");
+        if (auto *rectTransform = content->GetComponent<RectTransform>())
+        {
+            rectTransform->SetAnchorMin(Math::Vector2{0.0f, vertical ? 1.0f : 0.0f});
+            rectTransform->SetAnchorMax(Math::Vector2{horizontal ? 0.0f : 1.0f, 1.0f});
+            rectTransform->SetPivot(Math::Vector2{0.0f, 1.0f});
+            rectTransform->SetAnchoredPosition(Math::Vector2{0.0f, 0.0f});
+            rectTransform->SetSizeDelta(Math::Vector2{horizontal ? 600.0f : 0.0f, vertical ? 400.0f : 0.0f});
+            if (scrollView)
+            {
+                scrollView->SetContent(rectTransform);
+            }
+        }
+        gameObject->AddChild(content, false);
+
+        // A grey track along one edge with a lighter handle the ScrollView places
+        auto addScrollbar = [&gameObject](const std::string &trackName, const bool isVertical) -> RectTransform *
+        {
+            auto track = CreateElement(trackName);
+            if (auto *rectTransform = track->GetComponent<RectTransform>())
+            {
+                rectTransform->SetAnchorMin(Math::Vector2{isVertical ? 1.0f : 0.0f, 0.0f});
+                rectTransform->SetAnchorMax(Math::Vector2{1.0f, isVertical ? 1.0f : 0.0f});
+                rectTransform->SetPivot(Math::Vector2{isVertical ? 1.0f : 0.5f, isVertical ? 0.5f : 0.0f});
+                rectTransform->SetAnchoredPosition(Math::Vector2{0.0f, 0.0f});
+                rectTransform->SetSizeDelta(Math::Vector2{isVertical ? 10.0f : 0.0f, isVertical ? 0.0f : 10.0f});
+            }
+            if (auto *image = track->AddComponent<Image>())
+            {
+                image->SetColor(Common::Color{0.25f, 0.25f, 0.25f, 1.0f});
+            }
+            auto handle = CreateElement("Handle");
+            RectTransform *handleTransform = handle->GetComponent<RectTransform>();
+            if (handleTransform)
+            {
+                handleTransform->StretchToParent();
+            }
+            if (auto *image = handle->AddComponent<Image>())
+            {
+                image->SetColor(Common::Color{0.7f, 0.7f, 0.7f, 1.0f});
+            }
+            track->AddChild(handle, false);
+            gameObject->AddChild(track, false);
+            return handleTransform;
+        };
+        if (vertical && scrollView)
+        {
+            scrollView->SetVerticalScrollbar(addScrollbar("Scrollbar Vertical", true));
+        }
+        if (horizontal && scrollView)
+        {
+            scrollView->SetHorizontalScrollbar(addScrollbar("Scrollbar Horizontal", false));
+        }
+        if (scrollView)
+        {
+            scrollView->SetVertical(vertical);
+            scrollView->SetHorizontal(horizontal);
+        }
         return gameObject;
     }
 }

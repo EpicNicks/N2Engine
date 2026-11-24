@@ -30,7 +30,10 @@
 #include "engine/ui/Button.hpp"
 #include "engine/ui/Canvas.hpp"
 #include "engine/ui/Image.hpp"
+#include "engine/ui/LayoutGroup.hpp"
+#include "engine/ui/RectMask.hpp"
 #include "engine/ui/RectTransform.hpp"
+#include "engine/ui/ScrollView.hpp"
 #include "engine/ui/UIText.hpp"
 
 namespace N2Engine
@@ -83,6 +86,13 @@ namespace N2Engine
         Add<UI::Image>(registry, "Image");
         Add<UI::UIText>(registry, "UIText");
         Add<UI::Button>(registry, "Button");
+        Add<UI::RectMask>(registry, "RectMask");
+        Add<UI::ScrollView>(registry, "ScrollView");
+        Add<UI::HorizontalLayoutGroup>(registry, "HorizontalLayoutGroup");
+        Add<UI::VerticalLayoutGroup>(registry, "VerticalLayoutGroup");
+        Add<UI::GridLayoutGroup>(registry, "GridLayoutGroup");
+        Add<UI::LayoutElement>(registry, "LayoutElement");
+        Add<UI::ContentSizeFitter>(registry, "ContentSizeFitter");
         Add<Network::NetworkObject>(registry, "NetworkObject");
         Add<Network::LagCompensatedHitbox>(registry, "LagCompensatedHitbox");
         Add<Network::NetworkTransform>(registry, "NetworkTransform");
