@@ -175,6 +175,7 @@
 <li>Triggers are hit by default.</li>
 <li>One difference: every distance is clamped to <code>kMaxSweepDistance</code>, rays included.</li>
 </ul>
+<p><span class="badge">issue #445</span> <strong>Picking.</strong> <code>PickRay(origin, direction, hit, ...)</code> takes a 3D ray, such as a camera's <code>ScreenPointToRay</code>, and returns the nearest collider containing the point where the ray crosses that collider's plane, <code>z =</code> its object's world z. It is what makes <code>OnMouse*</code> callbacks reach 2D colliders: see <a href="input.html#picking-2d">Picking 2D colliders</a>.</p>
 
 <h2 id="lua">From Lua <span class="badge">PR #314</span></h2>
 <p>The components have the same method names as in C++, through <code>AddComponent("Rigidbody2D")</code> and the rest, with the same <a href="scripting-lua.html#collisions">checked handles</a> as 3D: using one after its object is gone is a Lua error.</p>

@@ -85,6 +85,8 @@ namespace N2Engine::Physics2D
         constexpr float kMaxDistance = Physics::QueryRules::kMaxSweepDistance;
         /// How far along a ray a start must still be inside a shape to count as started inside: above Box2D's 0.005 linear slop
         constexpr float kInsideProbe = 0.01f;
+        /// PickRay: a ray whose unit direction has less z than this is taken as parallel to the 2D plane, which it cannot cross
+        constexpr float kPickMinSlope = 1.0e-6f;
 
         using ShapeKey = ContactTracker2D::ShapeKey;
 
@@ -899,6 +901,85 @@ namespace N2Engine::Physics2D
                 b2Vec2 corners[4];
                 MakeBoxCorners(halfExtents, angleRadians, corners);
                 return Overlap(center, b2MakeProxy(corners, 4, 0.0f), hits, layerMask, triggers);
+            }
+
+            bool PickRay(const Math::Vector3 &origin, const Math::Vector3 &direction, RaycastHit2D &hit, const float maxDistance,
+                         const std::uint32_t layerMask, const QueryTriggers triggers) override
+            {
+                hit = RaycastHit2D{};
+                const bool finite = std::isfinite(origin.x) && std::isfinite(origin.y) && std::isfinite(origin.z) &&
+                                    std::isfinite(direction.x) && std::isfinite(direction.y) && std::isfinite(direction.z);
+                const float lengthSquared = direction.x * direction.x + direction.y * direction.y + direction.z * direction.z;
+                if (!finite || !(maxDistance > 0.0f) || layerMask == 0 || !(lengthSquared > 0.0f) || !std::isfinite(lengthSquared))
+                {
+                    return false;
+                }
+                const float length = std::sqrt(lengthSquared);
+                const float dx = direction.x / length;
+                const float dy = direction.y / length;
+                const float dz = direction.z / length;
+                if (std::abs(dz) < kPickMinSlope)
+                {
+                    return false; // edge-on to every shape's plane
+                }
+                float reach = std::min(maxDistance, kMaxDistance);
+                const float planar = std::sqrt(dx * dx + dy * dy);
+                if (planar * reach > kMaxDistance)
+                {
+                    reach = kMaxDistance / planar;
+                }
+
+                // The candidates: every shape that contains a point of the ray's shadow on the plane, which is every shape the
+                // ray can cross in its own plane. Those that contain the shadow's start (Box2D's ray misses a shape it starts
+                // inside, and an orthographic camera's shadow is that single point), and those the shadow crosses.
+                QueryContext context{this, triggers, reach, {}, {}};
+                const b2QueryFilter filter = MakeQueryFilter(layerMask);
+                const b2Vec2 point{0.0f, 0.0f};
+                const b2ShapeProxy proxy = b2MakeProxy(&point, 1, 0.0f);
+                b2World_OverlapShape(_world, ToPos(origin.x, origin.y), &proxy, filter, &CollectOverlap, &context);
+                const b2Vec2 shadow{dx * reach, dy * reach};
+                if (shadow.x != 0.0f || shadow.y != 0.0f)
+                {
+                    b2World_CastRay(_world, ToPos(origin.x, origin.y), shadow, filter, &CollectCast, &context);
+                }
+                std::vector<ShapeKey> candidates = std::move(context.overlaps);
+                for (const RawHit &raw : context.hits)
+                {
+                    candidates.push_back(raw.shape);
+                }
+                std::ranges::sort(candidates);
+                candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+
+                // Each candidate exactly: where the ray crosses its own plane, and whether the shape contains that point
+                std::vector<RawHit> raw;
+                for (const ShapeKey key : candidates)
+                {
+                    const ShapeRecord &shape = _shapes.at(key);
+                    const BodyRecord *body = Find(shape.body);
+                    GameObject *object = shape.collider ? &shape.collider->GetGameObject() : body ? body->owner : nullptr;
+                    const Positionable *positionable = object ? object->GetPositionable() : nullptr;
+                    if (!positionable)
+                    {
+                        continue;
+                    }
+                    const float distance = (positionable->GetPosition().z - origin.z) / dz;
+                    if (!(distance >= 0.0f) || distance > reach)
+                    {
+                        continue; // behind the ray's start, or beyond its end
+                    }
+                    const Math::Vector2 at(origin.x + dx * distance, origin.y + dy * distance);
+                    if (b2Shape_TestPoint(shape.id, ToPos(at.x, at.y)))
+                    {
+                        raw.push_back({key, at, Math::Vector2(), distance});
+                    }
+                }
+                std::vector<RaycastHit2D> hits;
+                if (FinishHits(raw, hits) == 0)
+                {
+                    return false;
+                }
+                hit = hits.front();
+                return true;
             }
 
             [[nodiscard]] std::uint64_t HashState() const override { return b2World_GetStateHash(_world); }

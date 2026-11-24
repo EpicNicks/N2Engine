@@ -112,6 +112,10 @@ TEST_F(LuaSceneTest, LuaToJsonScalars)
     EXPECT_TRUE(whole.is_number_integer());
     EXPECT_EQ(whole.get<int>(), 3);
 
+    const json wholeFloat = LuaToJson(LuaValue("3.0"));
+    EXPECT_TRUE(wholeFloat.is_number_float()) << "a Lua float stays a float (issue #445)";
+    EXPECT_EQ(wholeFloat.dump(), "3.0");
+
     const json fractional = LuaToJson(LuaValue("0.25"));
     EXPECT_TRUE(fractional.is_number_float());
     EXPECT_DOUBLE_EQ(fractional.get<double>(), 0.25);
