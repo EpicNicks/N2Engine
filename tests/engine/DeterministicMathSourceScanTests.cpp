@@ -29,6 +29,8 @@ namespace
     const Allowed kAllowed[] = {
         {"src/Camera.cpp", "std::tan of the field of view: the projection matrix, drawing and picking rays only"},
         {"src/rendering/Mesh.cpp", "std::sin and std::cos generating the vertices of the built-in sphere: rendering geometry"},
+        {"src/audio/AudioSynth.cpp",
+         "std::sin of the oscillator phase: it renders audio samples for the speakers, and the simulation never reads them"},
         {"src/particles/ParticleEmitter.cpp",
          "std::sin, std::cos and std::cbrt placing cosmetic particles: they are not part of the simulation state, which "
          "gameplay never reads, and an emitter has its own seeded generator for one machine"},
