@@ -2968,8 +2968,9 @@ function AudioSource:SetVolume(volume) end
 ---@return number
 function AudioSource:GetVolume() end
 
----Set the pitch
----@param pitch number Pitch multiplier
+---Set the pitch: a playback-rate multiplier (2 is an octave up, 0.5 an octave down), clamped to 1/8..8. The pitch
+---applied is this times the mixer group's pitch, clamped to 1/8..8 again.
+---@param pitch number Pitch multiplier, 0.125..8
 function AudioSource:SetPitch(pitch) end
 
 ---Get the pitch
@@ -3012,9 +3013,24 @@ function AudioSource:SetMaxDistance(distance) end
 ---@param factor number
 function AudioSource:SetRolloffFactor(factor) end
 
----Set the clip by path, loaded through the resource cache; a clip that does not load is a Lua error
----@param path string e.g. "res://audio/music.ogg"
-function AudioSource:SetClip(path) end
+---Set the clip: a path, loaded through the resource cache (a clip that does not load is a Lua error), or an AudioClip
+---from Audio.CreateTone / Audio.CreateClip
+---@param clip string|AudioClip e.g. "res://audio/music.ogg"
+function AudioSource:SetClip(clip) end
+
+---Play, started on the exact output sample of a DSP time (Audio.GetDspTime) instead of now. A time already reached plays
+---at once. Sources scheduled for the same time start on the same sample and stay aligned (music stems). On the web the
+---start is frame-accurate only (Audio.IsSampleAccurate() is false). Play, Stop or Pause before then cancels it.
+---@param dspTime number seconds on the DSP clock
+function AudioSource:PlayScheduled(dspTime) end
+
+---Playback position in seconds into the clip (within the current loop for a looping clip; 0 without a source)
+---@return number
+function AudioSource:GetTime() end
+
+---Move a playing or paused source to this position, clamped to the clip's length
+---@param seconds number
+function AudioSource:SetTime(seconds) end
 
 ---@return boolean
 function AudioSource:HasClip() end
@@ -3055,12 +3071,41 @@ function Audio.SetListenerPosition(x, y, z) end
 function Audio.SetListenerOrientation(fx, fy, fz, ux, uy, uz) end
 
 ---Fire-and-forget playback. Returns a handle id, 0 when the sound was dropped. A clip that does not load is a Lua error.
----@param path string e.g. "res://audio/shoot.ogg"
+---@param clip string|AudioClip a path (e.g. "res://audio/shoot.ogg") or an AudioClip from CreateTone / CreateClip
 ---@param volume number|nil default 1
----@param pitch number|nil default 1
+---@param pitch number|nil default 1 (0.125..8)
 ---@param group string|nil mixer group, default "SFX"
 ---@return integer
-function Audio.PlayOneShot(path, volume, pitch, group) end
+function Audio.PlayOneShot(clip, volume, pitch, group) end
+
+---PlayOneShot, started on the exact output sample of dspTime (the clock of Audio.GetDspTime). A time already reached plays
+---at once. Note the order: group before pitch.
+---@param clip string|AudioClip
+---@param dspTime number seconds on the DSP clock
+---@param volume number|nil default 1
+---@param group string|nil mixer group, default "SFX"
+---@param pitch number|nil default 1
+---@return integer handle id, 0 when the sound was dropped
+function Audio.PlayOneShotAt(clip, dspTime, volume, group, pitch) end
+
+---Playback position of a one-shot in seconds into its clip (0 for an unknown id)
+---@param id integer
+---@return number
+function Audio.GetOneShotTime(id) end
+
+---The DSP clock: samples the mixer has produced divided by the output rate, in seconds. Monotonic; moves in the mixer's
+---update steps; 0 without an audio output. Schedule on this clock, not on Time.time.
+---@return number
+function Audio.GetDspTime() end
+
+---The output's sample rate in Hz (0 without an audio output)
+---@return integer
+function Audio.GetSampleRate() end
+
+---Whether scheduled sounds start on their exact sample (native builds); false on the web, where they start in the first
+---frame at or after their time
+---@return boolean
+function Audio.IsSampleAccurate() end
 
 ---@param id integer a PlayOneShot handle
 function Audio.StopOneShot(id) end
@@ -3089,6 +3134,86 @@ function Audio.IsGroupMuted(group) end
 ---@param group string
 ---@return boolean
 function Audio.HasGroup(group) end
+
+---@class AudioGroupSettings
+---@field volume number|nil 0..1, default 1
+---@field maxVolume number|nil cap on each sound's own volume, 0..1, default 1
+---@field pitch number|nil 0.125..8, default 1
+---@field muted boolean|nil default false
+---@field maxConcurrent integer|nil most sounds playing in the group at once; nil or below 1 is no limit
+
+---Create a mixer group. Groups are flat (no parent). Returns false, and changes nothing, when the group exists.
+---@param name string
+---@param settings AudioGroupSettings|nil
+---@return boolean
+function Audio.CreateGroup(name, settings) end
+
+---@param group string
+---@param max integer|nil nil or 0 removes the limit
+function Audio.SetGroupMaxConcurrent(group, max) end
+
+---@param group string
+---@return integer|nil nil for no limit or an unknown group
+function Audio.GetGroupMaxConcurrent(group) end
+
+---@param group string
+---@param pitch number 0.125..8
+function Audio.SetGroupPitch(group, pitch) end
+
+---@param group string
+---@return number 1 for an unknown group
+function Audio.GetGroupPitch(group) end
+
+---@param group string
+---@param maxVolume number 0..1, caps each sound's own volume
+function Audio.SetGroupMaxVolume(group, maxVolume) end
+
+---@alias AudioWaveform "sine"|"square"|"saw"|"triangle"|"noise"
+
+---@class ToneOptions
+---@field waveform AudioWaveform|nil default "sine"
+---@field frequency number|nil Hz, more than 0 and at most sampleRate / 2; default 440
+---@field duration number|nil seconds, more than 0 and at most 30; default 0.25
+---@field volume number|nil peak, 0..1; default 0.5
+---@field attack number|nil seconds; default 0.005
+---@field decay number|nil seconds; default 0.05
+---@field sustain number|nil level 0..1; default 0.7
+---@field release number|nil seconds, the end of the note; default 0.05
+---@field sampleRate integer|nil 8000..192000; default 48000
+---@field seed integer|nil the noise seed; default 1
+
+---A clip of one synthesised note, exactly round(duration * sampleRate) frames, with a linear ADSR envelope.
+---Invalid options are a Lua error; nil when there is no audio output to hold the clip.
+---@param options ToneOptions|nil
+---@return AudioClip|nil
+function Audio.CreateTone(options) end
+
+---A clip from PCM samples (-1..1, clamped; stereo interleaved left, right), at most 30 seconds. Invalid input is a Lua
+---error; nil when there is no audio output to hold the clip.
+---@param samples number[]
+---@param sampleRate integer|nil 8000..192000, default 48000
+---@param channels integer|nil 1 or 2, default 1
+---@return AudioClip|nil
+function Audio.CreateClip(samples, sampleRate, channels) end
+
+---A clip made in Lua (Audio.CreateTone, Audio.CreateClip); pass it to PlayOneShot, PlayOneShotAt or AudioSource:SetClip
+---@class AudioClip
+AudioClip = {}
+
+---@return number seconds
+function AudioClip:GetDuration() end
+
+---@return integer
+function AudioClip:GetFrameCount() end
+
+---@return integer
+function AudioClip:GetSampleRate() end
+
+---@return integer
+function AudioClip:GetChannels() end
+
+---@return boolean
+function AudioClip:IsLoaded() end
 
 -- ===== SAVE DATA AND JSON =====
 

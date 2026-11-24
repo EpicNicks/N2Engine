@@ -519,10 +519,14 @@ TEST_F(AudioSystemTest, GroupSettersClampValues)
     audio.SetGroupMaxVolume("SFX", 2.0f);
     EXPECT_FLOAT_EQ(audio.GetMixerGroup("SFX")->settings.maxSourceVolume, 1.0f);
 
+    // Pitch is 1/8..8 (issue #445 widened it from 0.5..2)
     audio.SetGroupPitch("SFX", 10.0f);
-    EXPECT_FLOAT_EQ(audio.GetMixerGroup("SFX")->settings.pitch, 2.0f);
+    EXPECT_FLOAT_EQ(audio.GetMixerGroup("SFX")->settings.pitch, AudioSystem::MaxPitch);
     audio.SetGroupPitch("SFX", 0.1f);
-    EXPECT_FLOAT_EQ(audio.GetMixerGroup("SFX")->settings.pitch, 0.5f);
+    EXPECT_FLOAT_EQ(audio.GetMixerGroup("SFX")->settings.pitch, AudioSystem::MinPitch);
+    audio.SetGroupPitch("SFX", 4.0f);
+    EXPECT_FLOAT_EQ(audio.GetMixerGroup("SFX")->settings.pitch, 4.0f);
+    audio.SetGroupPitch("SFX", 1.0f);
 }
 
 TEST_F(AudioSystemTest, GroupSettersIgnoreUnknownGroups)
@@ -816,9 +820,13 @@ TEST_F(AudioSourceTest, SettersClampValues)
     EXPECT_FLOAT_EQ(_source->GetVolume(), 0.0f);
 
     _source->SetPitch(5.0f);
-    EXPECT_FLOAT_EQ(_source->GetPitch(), 2.0f);
+    EXPECT_FLOAT_EQ(_source->GetPitch(), 5.0f);
+    _source->SetPitch(20.0f);
+    EXPECT_FLOAT_EQ(_source->GetPitch(), AudioSystem::MaxPitch);
     _source->SetPitch(0.0f);
-    EXPECT_FLOAT_EQ(_source->GetPitch(), 0.5f);
+    EXPECT_FLOAT_EQ(_source->GetPitch(), AudioSystem::MinPitch);
+    _source->SetPitch(0.25f);
+    EXPECT_FLOAT_EQ(_source->GetPitch(), 0.25f);
 }
 
 TEST_F(AudioSourceTest, PlayWithoutClipDoesNothing)
