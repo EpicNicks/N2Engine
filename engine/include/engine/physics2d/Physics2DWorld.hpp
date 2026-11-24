@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <math/Vector2.hpp>
+#include <math/Vector3.hpp>
 
 #include "engine/physics/PhysicsHandle.hpp"
 #include "engine/physics/PhysicsMaterial.hpp"
@@ -131,6 +132,12 @@ namespace N2Engine::Physics2D
                                   std::uint32_t layerMask, QueryTriggers triggers) = 0;
         virtual int OverlapBox(const Math::Vector2 &center, const Math::Vector2 &halfExtents, float angleRadians,
                                std::vector<OverlapHit2D> &hits, std::uint32_t layerMask, QueryTriggers triggers) = 0;
+        /// A 3D ray against the 2D shapes, for picking (PointerDispatcher::PickWorld). Each shape lies in the plane z = its
+        /// collider's object's world z; the hit is the shape containing the point where the ray crosses that plane, nearest
+        /// along the ray (ties as in QueryRules). `distance` is along the 3D ray, `point` is that crossing's x and y, and
+        /// `normal` is zero. A ray parallel to the plane (no z direction) hits nothing, nor does degenerate input.
+        virtual bool PickRay(const Math::Vector3 &origin, const Math::Vector3 &direction, RaycastHit2D &hit, float maxDistance,
+                             std::uint32_t layerMask, QueryTriggers triggers) = 0;
 
         /// Hash of the whole simulation (every body, parked ones included, the contacts and the id pools), for tests
         [[nodiscard]] virtual std::uint64_t HashState() const = 0;
