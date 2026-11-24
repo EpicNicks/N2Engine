@@ -302,6 +302,16 @@ namespace N2Engine::UI
         return true;
     }
 
+    void Button::CancelPress()
+    {
+        if (!_pointerDown)
+        {
+            return;
+        }
+        _pointerDown = false;
+        Transition(false);
+    }
+
     // ===== Lifecycle =====
 
     void Button::OnAttach()

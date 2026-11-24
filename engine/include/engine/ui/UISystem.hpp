@@ -35,6 +35,20 @@ namespace N2Engine::UI
     {
         UIGraphic *graphic = nullptr;
         Rect rect{};
+        /// Issue #445: the overlap of the rects of the active RectMask objects above the graphic's object (nested masks
+        /// intersect); nothing without a mask. The graphic draws, and is hit, only inside it.
+        std::optional<Rect> clip{};
+
+        /// Whether a canvas point hits this item: inside its rect and inside its clip, if any
+        [[nodiscard]] bool Hits(const Math::Vector2 &point) const
+        {
+            return rect.Contains(point) && (!clip || clip->Contains(point));
+        }
+        /// Whether any of it can show: a rect with area, and with the clip, an overlap with area
+        [[nodiscard]] bool IsVisible() const
+        {
+            return rect.HasArea() && (!clip || Rect::Intersect(rect, *clip).HasArea());
+        }
     };
 
     /// Where a ray crosses a world-space canvas's plane
@@ -73,7 +87,8 @@ namespace N2Engine::UI
      *    children in order, skipping inactive objects and their subtrees. An object's rect is its RectTransform
      *    resolved in its parent's rect (RectTransform::ResolveIn), or its parent's rect if it has none. The
      *    result is stored in the RectTransform (GetRect).
-     * 3. Each object's active UIGraphic components are listed in component order.
+     * 3. Each object's active UIGraphic components are listed in component order, with the clip of the RectMask objects
+     *    above it (issue #445: an active RectMask clips its object's descendants to its rect, nested ones to the overlap).
      * So later items draw on top: a later canvas, a later sibling, a child over its parent.
      *
      * World-space canvases (Canvas::GetRenderMode() == WorldSpace) are left out of the overlay layout, the UI
@@ -105,7 +120,8 @@ namespace N2Engine::UI
         static void Render(const Scene &scene, Renderer::Common::IRenderer *renderer, const Vector2i &viewport);
 
         /// The topmost raycast-target graphic's object whose rect contains the point (canvas space: y up), or
-        /// nullptr. Topmost is last in draw order; graphics with raycastTarget off are skipped.
+        /// nullptr. Topmost is last in draw order; graphics with raycastTarget off are skipped, and so is a graphic
+        /// whose RectMask clip (UIDrawItem::clip, issue #445) leaves the point out.
         [[nodiscard]] static GameObject* HitTest(const Scene &scene, const Math::Vector2 &canvasPoint,
                                                  const Vector2i &viewport);
         /// HitTest for a point in window coordinates (top-left origin, y down; Mouse::GetPosition). A point
@@ -228,5 +244,15 @@ namespace N2Engine::UI
         /// 20 px, dark grey) showing `label`. Parent it under a canvas or another element.
         static std::shared_ptr<GameObject> CreateButton(const std::string &name = "Button",
                                                         const std::string &label = "Button");
+        /**
+         * A new scroll view (issue #445): CreateElement sized 300 x 200 with a dark translucent Image (what the pointer
+         * hits between items), a RectMask and a ScrollView, and children:
+         * - "Content", the ScrollView's content: pinned to the top-left (pivot (0, 1)); 400 high when vertical, else
+         *   stretched to the view's height; 600 wide when horizontal, else stretched to its width. Put the items in it.
+         * - with `vertical`, "Scrollbar Vertical" (a 10-unit grey track on the right edge) with a "Handle" Image, the
+         *   ScrollView's verticalScrollbar; with `horizontal`, "Scrollbar Horizontal" along the bottom likewise.
+         */
+        static std::shared_ptr<GameObject> CreateScrollView(const std::string &name = "ScrollView", bool vertical = true,
+                                                            bool horizontal = false);
     };
 }
