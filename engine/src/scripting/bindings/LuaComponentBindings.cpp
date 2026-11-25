@@ -44,6 +44,7 @@
 #include "engine/physics2d/Collider2D.hpp"
 #include "engine/physics2d/Joint2D.hpp"
 #include "engine/physics2d/Rigidbody2D.hpp"
+#include "engine/physics2d/SoftBody2D.hpp"
 #include "engine/rendering/Sprite2D.hpp"
 #include "engine/io/Resources.hpp"
 #include "engine/rendering/Light.hpp"
@@ -65,6 +66,7 @@
 #include "engine/text/Font.hpp"
 #include "engine/ui/Button.hpp"
 #include "engine/ui/Canvas.hpp"
+#include "engine/ui/CanvasScaler.hpp"
 #include "engine/ui/Image.hpp"
 #include "engine/ui/LayoutGroup.hpp"
 #include "engine/ui/RectMask.hpp"
@@ -152,6 +154,7 @@ namespace N2Engine::Scripting::Bindings
                 {"CircleCollider2D", MakeAccess<Physics2D::CircleCollider2D>()},
                 {"PolygonCollider2D", MakeAccess<Physics2D::PolygonCollider2D>()},
                 {"Joint2D", MakeAccess<Physics2D::Joint2D>()},
+                {"SoftBody2D", MakeAccess<Physics2D::SoftBody2D>()},
                 {"CubeRenderer", MakeAccess<Example::CubeRenderer>()},
                 {"SphereRenderer", MakeAccess<Example::SphereRenderer>()},
                 {"QuadRenderer", MakeAccess<Example::QuadRenderer>()},
@@ -170,6 +173,7 @@ namespace N2Engine::Scripting::Bindings
                 {"LuaComponent", MakeAccess<LuaComponent>()},
                 {"RectTransform", MakeAccess<UI::RectTransform>()},
                 {"Canvas", MakeAccess<UI::Canvas>()},
+                {"CanvasScaler", MakeAccess<UI::CanvasScaler>()},
                 {"Image", MakeAccess<UI::Image>()},
                 {"UIText", MakeAccess<UI::UIText>()},
                 {"Button", MakeAccess<UI::Button>()},

@@ -20,6 +20,7 @@
 #include "engine/physics2d/Collider2D.hpp"
 #include "engine/physics2d/Joint2D.hpp"
 #include "engine/physics2d/Rigidbody2D.hpp"
+#include "engine/physics2d/SoftBody2D.hpp"
 #include "engine/physics/SoftBody.hpp"
 #include "engine/physics/SphereCollider.hpp"
 #include "engine/rendering/Light.hpp"
@@ -33,6 +34,7 @@
 #include "engine/scripting/LuaComponent.hpp"
 #include "engine/ui/Button.hpp"
 #include "engine/ui/Canvas.hpp"
+#include "engine/ui/CanvasScaler.hpp"
 #include "engine/ui/Image.hpp"
 #include "engine/ui/LayoutGroup.hpp"
 #include "engine/ui/RectMask.hpp"
@@ -74,6 +76,7 @@ namespace N2Engine
         Add<Physics2D::CircleCollider2D>(registry, "CircleCollider2D");
         Add<Physics2D::PolygonCollider2D>(registry, "PolygonCollider2D");
         Add<Physics2D::Joint2D>(registry, "Joint2D");
+        Add<Physics2D::SoftBody2D>(registry, "SoftBody2D");
         Add<Rendering::Light>(registry, "Light");
         Add<Audio::AudioSource>(registry, "AudioSource");
         Add<Audio::AudioListener>(registry, "AudioListener");
@@ -91,6 +94,7 @@ namespace N2Engine
         Add<Physics::SoftBody>(registry, "SoftBody");
         Add<Scripting::LuaComponent>(registry, "LuaComponent");
         Add<UI::Canvas>(registry, "Canvas");
+        Add<UI::CanvasScaler>(registry, "CanvasScaler");
         Add<UI::RectTransform>(registry, "RectTransform");
         Add<UI::Image>(registry, "Image");
         Add<UI::UIText>(registry, "UIText");

@@ -10,8 +10,8 @@
 namespace N2Engine::Rendering
 {
     /**
-     * The scene's full-screen effects (issue #445; docs/post-processing.html): bloom, colour inversion, chromatic aberration
-     * and a vignette, run by the Application over the scene pass of every frame, before the screen-space UI (so the HUD is not
+     * The scene's full-screen effects (issue #445; docs/post-processing.html): a blur, bloom, colour inversion, chromatic
+     * aberration and a vignette, run by the Application over the scene pass of every frame, before the screen-space UI (so the HUD is not
      * bloomed, as in Unity). Put one on any object of the scene: the first active one the scene finds is used, and a scene with
      * none (or with every effect off) draws exactly as before, with no extra pass. The fields are Renderer::Common::
      * PostProcessSettings', edited in the inspector and saved with the scene; out-of-range values are clamped when the frame
@@ -40,5 +40,8 @@ namespace N2Engine::Rendering
         float invert = 0.0f;
         float chromaticAberration = 0.0f;
         float vignette = 0.0f;
+        bool blur = false;
+        float blurStrength = 1.0f;
+        int blurIterations = 3;
     };
 }

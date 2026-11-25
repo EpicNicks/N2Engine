@@ -14,6 +14,7 @@
 #include "engine/rendering/Texture.hpp"
 #include "engine/ui/Button.hpp"
 #include "engine/ui/Canvas.hpp"
+#include "engine/ui/CanvasScaler.hpp"
 #include "engine/ui/Image.hpp"
 #include "engine/ui/Rect.hpp"
 #include "engine/ui/LayoutGroup.hpp"
@@ -57,6 +58,40 @@ namespace N2Engine::Scripting::Bindings
             }
             throw std::runtime_error(std::string(where) + ": unknown render mode \"" + name +
                                      "\" (expected \"ScreenSpaceOverlay\" or \"WorldSpace\")");
+        }
+
+        /// "ConstantPixelSize" or "ScaleWithScreenSize"; anything else is an error
+        UI::CanvasScaleMode ParseScaleMode(const std::string &name)
+        {
+            if (name == "ConstantPixelSize")
+            {
+                return UI::CanvasScaleMode::ConstantPixelSize;
+            }
+            if (name == "ScaleWithScreenSize")
+            {
+                return UI::CanvasScaleMode::ScaleWithScreenSize;
+            }
+            throw std::runtime_error("CanvasScaler:SetUIScaleMode: unknown scale mode \"" + name +
+                                     "\" (expected \"ConstantPixelSize\" or \"ScaleWithScreenSize\")");
+        }
+
+        /// "MatchWidthOrHeight", "Expand" or "Shrink"; anything else is an error
+        UI::ScreenMatchMode ParseMatchMode(const std::string &name)
+        {
+            if (name == "MatchWidthOrHeight")
+            {
+                return UI::ScreenMatchMode::MatchWidthOrHeight;
+            }
+            if (name == "Expand")
+            {
+                return UI::ScreenMatchMode::Expand;
+            }
+            if (name == "Shrink")
+            {
+                return UI::ScreenMatchMode::Shrink;
+            }
+            throw std::runtime_error("CanvasScaler:SetScreenMatchMode: unknown match mode \"" + name +
+                                     "\" (expected \"MatchWidthOrHeight\", \"Expand\" or \"Shrink\")");
         }
 
         std::string RenderModeName(const UI::CanvasRenderMode mode)
@@ -348,6 +383,47 @@ namespace N2Engine::Scripting::Bindings
             // A world canvas's size in canvas units (its RectTransform's sizeDelta)
             "GetSize", Forward<CanvasRef, &UI::Canvas::GetSize>(),
             "SetSize", Forward<CanvasRef, &UI::Canvas::SetSize>()
+        );
+
+        // ===== CanvasScaler =====
+        using ScalerRef = ComponentRef<UI::CanvasScaler>;
+        BindComponentType<UI::CanvasScaler>(
+            lua, "CanvasScaler",
+            "GetUIScaleMode", [](const ScalerRef &c) -> std::string
+            {
+                return c.Pin()->GetUIScaleMode() == UI::CanvasScaleMode::ConstantPixelSize ? "ConstantPixelSize"
+                                                                                           : "ScaleWithScreenSize";
+            },
+            "SetUIScaleMode", [](const ScalerRef &c, const std::string &mode)
+            {
+                const UI::CanvasScaleMode parsed = ParseScaleMode(mode);
+                c.Pin()->SetUIScaleMode(parsed);
+            },
+            "GetScaleFactor", Forward<ScalerRef, &UI::CanvasScaler::GetScaleFactor>(),
+            "SetScaleFactor", Forward<ScalerRef, &UI::CanvasScaler::SetScaleFactor>(),
+            "GetReferenceResolution", Forward<ScalerRef, &UI::CanvasScaler::GetReferenceResolution>(),
+            "SetReferenceResolution", Forward<ScalerRef, &UI::CanvasScaler::SetReferenceResolution>(),
+            "GetScreenMatchMode", [](const ScalerRef &c) -> std::string
+            {
+                switch (c.Pin()->GetScreenMatchMode())
+                {
+                case UI::ScreenMatchMode::Expand:
+                    return "Expand";
+                case UI::ScreenMatchMode::Shrink:
+                    return "Shrink";
+                case UI::ScreenMatchMode::MatchWidthOrHeight:
+                    break;
+                }
+                return "MatchWidthOrHeight";
+            },
+            "SetScreenMatchMode", [](const ScalerRef &c, const std::string &mode)
+            {
+                const UI::ScreenMatchMode parsed = ParseMatchMode(mode);
+                c.Pin()->SetScreenMatchMode(parsed);
+            },
+            "GetMatchWidthOrHeight", Forward<ScalerRef, &UI::CanvasScaler::GetMatchWidthOrHeight>(),
+            "SetMatchWidthOrHeight", Forward<ScalerRef, &UI::CanvasScaler::SetMatchWidthOrHeight>(),
+            "GetAppliedScale", Forward<ScalerRef, &UI::CanvasScaler::GetAppliedScale>()
         );
 
         // ===== Image =====

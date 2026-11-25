@@ -911,6 +911,11 @@ namespace N2Engine::Rendering
                 {
                     MeshDrawing::ApplyBlendMode(drawState, *_shaderSlot.GetMaterial());
                 }
+                // Where the shader cannot be drawn, a blending one blends on the software renderer too (issue #445)
+                if (_shaderSlot.GetMaterial()->IsBlended())
+                {
+                    drawState.softwareBlend = true;
+                }
             }
         }
         renderer->DrawMesh(_mesh, kIdentity, drawMaterial, drawState);

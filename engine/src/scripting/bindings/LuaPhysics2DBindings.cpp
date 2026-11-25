@@ -21,6 +21,8 @@
 #include "engine/physics2d/Physics2DQueries.hpp"
 #include "engine/physics2d/Physics2DWorld.hpp"
 #include "engine/physics2d/Rigidbody2D.hpp"
+#include "engine/physics2d/SoftBody2D.hpp"
+#include "engine/rendering/Texture.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
@@ -549,6 +551,181 @@ namespace N2Engine::Scripting::Bindings
             },
             N2_COLLIDER2D_MEMBERS(PolygonRef, Physics2D::PolygonCollider2D)
         );
+
+        // ===== SoftBody2D (docs/physics2d.html#soft-bodies) =====
+        using SoftRef = ComponentRef<Physics2D::SoftBody2D>;
+        // A node index from Lua (1-based) as the component's (0-based); one outside the outline is an error
+        static const auto nodeIndex = [](Physics2D::SoftBody2D &body, const sol::object &argument, const char *method)
+        {
+            const std::size_t count = body.GetNodeCount();
+            const double index = argument.get_type() == sol::type::number ? argument.as<double>() : 0.0;
+            if (!(index >= 1.0) || index > static_cast<double>(count) || index != std::floor(index))
+            {
+                throw std::runtime_error(std::string(method) + ": the node must be a whole number from 1 to " +
+                                         std::to_string(count));
+            }
+            return static_cast<std::size_t>(index) - 1;
+        };
+        static const auto nodeCountArgument = [](const sol::object &argument, const char *method)
+        {
+            const float count = RequireFinite(argument, method, "nodes");
+            if (count != std::floor(count) || count < 3.0f || count > 64.0f)
+            {
+                throw std::runtime_error(std::string(method) + ": nodes must be a whole number from 3 to 64");
+            }
+            return static_cast<int>(count);
+        };
+        static const auto requirePositive = [](const sol::object &argument, const char *method, const char *name)
+        {
+            const float value = RequireFinite(argument, method, name);
+            if (!(value > 0.0f))
+            {
+                throw std::runtime_error(std::string(method) + ": " + name + " must be above 0");
+            }
+            return value;
+        };
+        BindComponentType<Physics2D::SoftBody2D>(lua, "SoftBody2D",
+            "SetCircle", [](const SoftRef &c, const sol::object radius, const sol::object nodes)
+            {
+                const float r = requirePositive(radius, "SoftBody2D:SetCircle", "radius");
+                const int count = nodeCountArgument(nodes, "SoftBody2D:SetCircle");
+                c.Pin()->SetCircle(r, count);
+            },
+            "SetBox", [](const SoftRef &c, const sol::object size, const sol::object nodes)
+            {
+                const Math::Vector2 value = RequireVector2(size, "SoftBody2D:SetBox", "size");
+                if (!(value.x > 0.0f) || !(value.y > 0.0f))
+                {
+                    throw std::runtime_error("SoftBody2D:SetBox: the size must be above 0");
+                }
+                const int count = nodeCountArgument(nodes, "SoftBody2D:SetBox");
+                c.Pin()->SetBox(value, count);
+            },
+            // An array of 3 to 64 Vector2 around the object's origin
+            "SetOutline", [](const SoftRef &c, const sol::object points)
+            {
+                if (points.get_type() != sol::type::table)
+                {
+                    throw std::runtime_error("SoftBody2D:SetOutline: expected an array of Vector2");
+                }
+                const sol::table table = points.as<sol::table>();
+                std::vector<Math::Vector2> outline;
+                const std::size_t count = table.size();
+                if (count < 3 || count > 64)
+                {
+                    throw std::runtime_error("SoftBody2D:SetOutline: an outline has 3 to 64 points");
+                }
+                for (std::size_t i = 1; i <= count; ++i)
+                {
+                    outline.push_back(RequireVector2(table.get<sol::object>(i), "SoftBody2D:SetOutline", "each point"));
+                }
+                if (!c.Pin()->SetOutline(outline))
+                {
+                    throw std::runtime_error("SoftBody2D:SetOutline: the points enclose no area");
+                }
+            },
+            "GetShape", [](const SoftRef &c) -> std::string
+            {
+                switch (c.Pin()->GetShape())
+                {
+                case Physics2D::SoftBodyShape2D::Box:
+                    return "Box";
+                case Physics2D::SoftBodyShape2D::Outline:
+                    return "Outline";
+                case Physics2D::SoftBodyShape2D::Circle:
+                    break;
+                }
+                return "Circle";
+            },
+            "GetNodeCount", [](const SoftRef &c) { return static_cast<int>(c.Pin()->GetNodeCount()); },
+            "GetNodePosition", [](const SoftRef &c, const sol::object node)
+            {
+                const auto body = c.Pin();
+                const std::size_t index = nodeIndex(*body, node, "SoftBody2D:GetNodePosition");
+                return body->GetNodePositions().at(index);
+            },
+            "GetNodePositions", [](const SoftRef &c, sol::this_state state)
+            {
+                const std::vector<Math::Vector2> nodes = c.Pin()->GetNodePositions();
+                sol::table result = sol::state_view(state).create_table(static_cast<int>(nodes.size()), 0);
+                for (std::size_t i = 0; i < nodes.size(); ++i)
+                {
+                    result[i + 1] = nodes[i];
+                }
+                return result;
+            },
+            "GetCentre", Forward<SoftRef, &Physics2D::SoftBody2D::GetCentre>(),
+            "GetVelocity", Forward<SoftRef, &Physics2D::SoftBody2D::GetVelocity>(),
+            "SetNodePinned", [](const SoftRef &c, const sol::object node, const sol::object pinned)
+            {
+                const auto body = c.Pin();
+                const std::size_t index = nodeIndex(*body, node, "SoftBody2D:SetNodePinned");
+                const bool on = RequireBool(pinned, "SoftBody2D:SetNodePinned", "pinned");
+                body->SetNodePinned(index, on);
+            },
+            "IsNodePinned", [](const SoftRef &c, const sol::object node)
+            {
+                const auto body = c.Pin();
+                return body->IsNodePinned(nodeIndex(*body, node, "SoftBody2D:IsNodePinned"));
+            },
+            "AddImpulse", [](const SoftRef &c, const sol::object impulse)
+            {
+                const Math::Vector2 value = RequireVector2(impulse, "SoftBody2D:AddImpulse", "impulse");
+                c.Pin()->AddImpulse(value);
+            },
+            "Rebuild", Forward<SoftRef, &Physics2D::SoftBody2D::Rebuild>(),
+            "HasBody", Forward<SoftRef, &Physics2D::SoftBody2D::HasBody>(),
+            "SetStiffness", [](const SoftRef &c, const sol::object edgeFrequency, const sol::object edgeDamping,
+                               const sol::object shapeFrequency, const sol::object shapeDamping)
+            {
+                const float a = RequireNonNegative(edgeFrequency, "SoftBody2D:SetStiffness", "edgeFrequency");
+                const float b = RequireNonNegative(edgeDamping, "SoftBody2D:SetStiffness", "edgeDamping");
+                const float d = RequireNonNegative(shapeFrequency, "SoftBody2D:SetStiffness", "shapeFrequency");
+                const float e = RequireNonNegative(shapeDamping, "SoftBody2D:SetStiffness", "shapeDamping");
+                c.Pin()->SetStiffness(a, b, d, e);
+            },
+            "GetStiffness", [](const SoftRef &c)
+            {
+                const auto body = c.Pin();
+                return std::make_tuple(body->GetEdgeFrequency(), body->GetEdgeDamping(), body->GetShapeFrequency(),
+                                       body->GetShapeDamping());
+            },
+            "SetNodeRadius", [](const SoftRef &c, const sol::object radius)
+            { c.Pin()->SetNodeRadius(requirePositive(radius, "SoftBody2D:SetNodeRadius", "radius")); },
+            "GetNodeRadius", Forward<SoftRef, &Physics2D::SoftBody2D::GetNodeRadius>(),
+            "SetDensity", [](const SoftRef &c, const sol::object value)
+            { c.Pin()->SetDensity(RequireNonNegative(value, "SoftBody2D:SetDensity", "density")); },
+            "GetDensity", Forward<SoftRef, &Physics2D::SoftBody2D::GetDensity>(),
+            "SetFriction", [](const SoftRef &c, const sol::object value)
+            { c.Pin()->SetFriction(RequireNonNegative(value, "SoftBody2D:SetFriction", "friction")); },
+            "GetFriction", Forward<SoftRef, &Physics2D::SoftBody2D::GetFriction>(),
+            "SetBounciness", [](const SoftRef &c, const sol::object value)
+            { c.Pin()->SetBounciness(RequireNonNegative(value, "SoftBody2D:SetBounciness", "bounciness")); },
+            "GetBounciness", Forward<SoftRef, &Physics2D::SoftBody2D::GetBounciness>(),
+            "SetGravityScale", [](const SoftRef &c, const sol::object value)
+            { c.Pin()->SetGravityScale(RequireFinite(value, "SoftBody2D:SetGravityScale", "scale")); },
+            "GetGravityScale", Forward<SoftRef, &Physics2D::SoftBody2D::GetGravityScale>(),
+            "SetLinearDamping", [](const SoftRef &c, const sol::object value)
+            { c.Pin()->SetLinearDamping(RequireNonNegative(value, "SoftBody2D:SetLinearDamping", "damping")); },
+            "GetLinearDamping", Forward<SoftRef, &Physics2D::SoftBody2D::GetLinearDamping>(),
+            "SetColor", Forward<SoftRef, &Physics2D::SoftBody2D::SetColor>(),
+            "GetColor", Forward<SoftRef, &Physics2D::SoftBody2D::GetColor>(),
+            // An image file; nil for the colour alone. One that doesn't load is an error
+            "SetTexture", [](const SoftRef &c, const sol::optional<std::string> path)
+            { c.Pin()->SetTexture(path ? LoadTextureOrThrow(*path, "SoftBody2D:SetTexture") : nullptr); },
+            "SetSortingOrder", [](const SoftRef &c, const int order) { c.Pin()->SetSortingOrder(order); },
+            "GetSortingOrder", [](const SoftRef &c) { return c.Pin()->GetSortingOrder(); },
+            "SetBlendMode", [](const SoftRef &c, const std::string &name)
+            {
+                if (name != "Alpha" && name != "Additive")
+                {
+                    throw std::runtime_error("SoftBody2D:SetBlendMode: unknown mode \"" + name +
+                                             "\" (expected \"Alpha\" or \"Additive\")");
+                }
+                c.Pin()->SetBlendMode(name == "Additive" ? Rendering::Blend2D::Additive : Rendering::Blend2D::Alpha);
+            },
+            "GetBlendMode", [](const SoftRef &c) -> std::string
+            { return c.Pin()->GetBlendMode() == Rendering::Blend2D::Additive ? "Additive" : "Alpha"; });
 
         // ===== Joint2D (docs/physics2d.html#joints) =====
         // A value of the wrong type, a non-finite number or settings the joint cannot use is a Lua error

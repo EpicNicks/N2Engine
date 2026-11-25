@@ -1861,6 +1861,36 @@ function Canvas:GetSize() end
 ---@param size Vector2
 function Canvas:SetSize(size) end
 
+---Scales a screen-space overlay canvas with the window (on the object with the root Canvas). With a scale s the
+---canvas is the viewport divided by s, laid out in canvas units and drawn and hit s times as large: GetRect is in canvas
+---units, the mouse and RectTransform:LocalToCanvas stay in window coordinates.
+---@class CanvasScaler : Component
+CanvasScaler = {}
+
+---@return "ConstantPixelSize"|"ScaleWithScreenSize"
+function CanvasScaler:GetUIScaleMode() end
+---@param mode "ConstantPixelSize"|"ScaleWithScreenSize" an unknown name raises an error
+function CanvasScaler:SetUIScaleMode(mode) end
+---@return number
+function CanvasScaler:GetScaleFactor() end
+---@param factor number pixels per canvas unit, used with ConstantPixelSize
+function CanvasScaler:SetScaleFactor(factor) end
+---@return Vector2
+function CanvasScaler:GetReferenceResolution() end
+---@param resolution Vector2 the size the UI is laid out for, used with ScaleWithScreenSize (800 x 600 by default)
+function CanvasScaler:SetReferenceResolution(resolution) end
+---@return "MatchWidthOrHeight"|"Expand"|"Shrink"
+function CanvasScaler:GetScreenMatchMode() end
+---@param mode "MatchWidthOrHeight"|"Expand"|"Shrink" an unknown name raises an error
+function CanvasScaler:SetScreenMatchMode(mode) end
+---@return number
+function CanvasScaler:GetMatchWidthOrHeight() end
+---@param match number 0 follows the width, 1 the height
+function CanvasScaler:SetMatchWidthOrHeight(match) end
+---The scale the last layout used (1 before any)
+---@return number
+function CanvasScaler:GetAppliedScale() end
+
 ---A coloured rectangle over its object's rect, optionally showing a sprite (an image file). A raycast target
 ---(the default) takes the pointer: its object gets the OnMouse* callbacks and Input.IsPointerOverUI() is true.
 ---@class Image : Component
@@ -2927,6 +2957,97 @@ JointType2D = {
     Wheel = 4,
     Target = 5,
 }
+
+---A deformable 2D body (Box2D): a ring of nodes joined by springs to each other and to a centre, drawn filled. The body is
+---made in the first FixedUpdate from the object's position, rotation and scale; the object then follows the centre,
+---moving it moves the whole body, and changing the shape or a physics setting rebuilds it at rest. The nodes collide by
+---the object's layer; queries and collision messages do not see them
+---@class SoftBody2D : Component
+SoftBody2D = {}
+
+---@param radius number
+---@param nodes integer 3 to 64
+function SoftBody2D:SetCircle(radius, nodes) end
+---@param size Vector2
+---@param nodes integer 3 to 64 (at least 4 are used)
+function SoftBody2D:SetBox(size, nodes) end
+---@param points Vector2[] 3 to 64 points around the object's origin, either winding
+function SoftBody2D:SetOutline(points) end
+---@return "Circle"|"Box"|"Outline"
+function SoftBody2D:GetShape() end
+---@return integer
+function SoftBody2D:GetNodeCount() end
+---@param node integer 1 to GetNodeCount()
+---@return Vector2 its world position
+function SoftBody2D:GetNodePosition(node) end
+---@return Vector2[] world positions, in outline order
+function SoftBody2D:GetNodePositions() end
+---@return Vector2
+function SoftBody2D:GetCentre() end
+---@return Vector2 the centre's velocity
+function SoftBody2D:GetVelocity() end
+---Holds a node where it is, or lets it go
+---@param node integer 1 to GetNodeCount()
+---@param pinned boolean
+function SoftBody2D:SetNodePinned(node, pinned) end
+---@param node integer
+---@return boolean
+function SoftBody2D:IsNodePinned(node) end
+---An impulse on the whole body; nothing before there is a body
+---@param impulse Vector2
+function SoftBody2D:AddImpulse(impulse) end
+---Rebuilds the body at rest where the object is, in the next FixedUpdate
+function SoftBody2D:Rebuild() end
+---@return boolean
+function SoftBody2D:HasBody() end
+---@param edgeFrequency number hertz, the outline's springs (default 8)
+---@param edgeDamping number damping ratio (default 0.5)
+---@param shapeFrequency number hertz, the springs to the centre (default 3)
+---@param shapeDamping number damping ratio (default 0.5)
+function SoftBody2D:SetStiffness(edgeFrequency, edgeDamping, shapeFrequency, shapeDamping) end
+---@return number edgeFrequency
+---@return number edgeDamping
+---@return number shapeFrequency
+---@return number shapeDamping
+function SoftBody2D:GetStiffness() end
+---@param radius number each node's collision circle, in metres (default 0.1)
+function SoftBody2D:SetNodeRadius(radius) end
+---@return number
+function SoftBody2D:GetNodeRadius() end
+---@param density number
+function SoftBody2D:SetDensity(density) end
+---@return number
+function SoftBody2D:GetDensity() end
+---@param friction number
+function SoftBody2D:SetFriction(friction) end
+---@return number
+function SoftBody2D:GetFriction() end
+---@param bounciness number
+function SoftBody2D:SetBounciness(bounciness) end
+---@return number
+function SoftBody2D:GetBounciness() end
+---@param scale number
+function SoftBody2D:SetGravityScale(scale) end
+---@return number
+function SoftBody2D:GetGravityScale() end
+---@param damping number
+function SoftBody2D:SetLinearDamping(damping) end
+---@return number
+function SoftBody2D:GetLinearDamping() end
+---@param color Color
+function SoftBody2D:SetColor(color) end
+---@return Color
+function SoftBody2D:GetColor() end
+---@param path string|nil an image mapped over the rest shape; nil for the colour alone
+function SoftBody2D:SetTexture(path) end
+---@param order integer lower draws first
+function SoftBody2D:SetSortingOrder(order) end
+---@return integer
+function SoftBody2D:GetSortingOrder() end
+---@param mode "Alpha"|"Additive"
+function SoftBody2D:SetBlendMode(mode) end
+---@return "Alpha"|"Additive"
+function SoftBody2D:GetBlendMode() end
 
 ---Joins this object's 2D body (its Rigidbody2D's, or a collider's static body) to another object's, or to the world. Made in
 ---the first fixed step in which both bodies exist, from their poses then (that pose is its zero). A value of the wrong type,
@@ -4566,6 +4687,9 @@ function Graphics.CanPostProcess() end
 ---@field invert number|nil 0 (none) to 1 (a full negative)
 ---@field chromaticAberration number|nil red and blue fringes, 0 to 0.25 (0.02 is strong)
 ---@field vignette number|nil darkened corners, 0 to 1
+---@field blur boolean|nil blur the whole scene, before the other effects
+---@field blurStrength number|nil 0 (sharp) to 1 (blurred, the default)
+---@field blurIterations integer|nil blur passes, 1 to 8 (default 3): the blur widens with each
 
 ---The scene's full-screen effects, run after the scene and before the screen-space UI (the HUD is not bloomed). The first
 ---active PostProcessStack of the scene is used; add it with go:AddComponent("PostProcessStack"). Saved with the scene and

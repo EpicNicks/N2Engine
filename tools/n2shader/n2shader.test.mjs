@@ -92,6 +92,18 @@ test('parse: CRLF and LF files give the same stage text and line numbers', () =>
   assert.ok(!b.source.includes('\r'));
 });
 
+test('parse: the fallback block is checked and kept out of the cooked header (issue #445)', () => {
+  const params = [param('u_Tint', 'color'), param('u_Fade', 'float'), param('u_Offset', 'vec2')];
+  const { header: h } = parseN2Shader(shader(header({ params, fallback: { tint: 'u_Tint', opacity: 'u_Fade', hidden: false } })));
+  assert.equal(h.fallback, undefined);
+  rejects(shader(header({ params, fallback: [] })), /"fallback" must be an object/);
+  rejects(shader(header({ params, fallback: { glow: 1 } })), /unknown fallback key/);
+  rejects(shader(header({ params, fallback: { tint: 'u_Fade' } })), /fallback\.tint/);
+  rejects(shader(header({ params, fallback: { opacity: 'u_Offset' } })), /fallback\.opacity/);
+  rejects(shader(header({ params, fallback: { tint: 'u_None' } })), /fallback\.tint/);
+  rejects(shader(header({ params, fallback: { hidden: 'yes' } })), /fallback\.hidden/);
+});
+
 test('parse: header defaults per type', () => {
   const { header: h } = parseN2Shader(shader(header({ params: [
     param('a', 'float'), param('b', 'int'), param('c', 'bool'), param('d', 'vec2'), param('e', 'vec3'), param('f', 'vec4'), param('g', 'color'), param('h', 'texture'),

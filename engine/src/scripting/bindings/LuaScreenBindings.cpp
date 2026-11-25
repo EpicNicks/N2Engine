@@ -223,10 +223,32 @@ namespace N2Engine::Scripting::Bindings
                 {
                     settings.vignette = PostNumber(pair.second, key);
                 }
+                else if (key == "blur")
+                {
+                    if (pair.second.get_type() != sol::type::boolean)
+                    {
+                        FailPost("blur must be a boolean");
+                    }
+                    settings.blur = pair.second.as<bool>();
+                }
+                else if (key == "blurStrength")
+                {
+                    settings.blurStrength = PostNumber(pair.second, key);
+                }
+                else if (key == "blurIterations")
+                {
+                    const float iterations = PostNumber(pair.second, key);
+                    if (iterations != std::floor(iterations))
+                    {
+                        FailPost("blurIterations must be a whole number");
+                    }
+                    settings.blurIterations = static_cast<int>(std::clamp(iterations, -1000.0f, 1000.0f));
+                }
                 else
                 {
                     FailPost(std::format("unknown field '{}' (the fields are bloom, bloomThreshold, bloomIntensity, "
-                                         "bloomIterations, bloomTint, invert, chromaticAberration, vignette)",
+                                         "bloomIterations, bloomTint, invert, chromaticAberration, vignette, blur, blurStrength, "
+                                         "blurIterations)",
                                          key));
                 }
             }
@@ -244,6 +266,9 @@ namespace N2Engine::Scripting::Bindings
             table["invert"] = stack.invert;
             table["chromaticAberration"] = stack.chromaticAberration;
             table["vignette"] = stack.vignette;
+            table["blur"] = stack.blur;
+            table["blurStrength"] = stack.blurStrength;
+            table["blurIterations"] = stack.blurIterations;
             return table;
         }
 
