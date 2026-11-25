@@ -433,11 +433,21 @@ TEST(RectTransformRotationTest, NestedTurnedMasksThatMissShowNothing)
     const auto inner = AddPanel(outer, "Inner", Rect{300.0f, 300.0f, 100.0f, 100.0f}, false);
     inner->AddComponent<RectMask>();
     const auto leaf = AddPanel(inner, "Leaf", Rect{0.0f, 0.0f, 100.0f, 100.0f});
+    // A third mask under the two that miss must not bring anything back
+    const auto deeper = AddPanel(inner, "Deeper", Rect{0.0f, 0.0f, 100.0f, 100.0f}, false);
+    deeper->AddComponent<RectMask>();
+    const auto buried = AddPanel(deeper, "Buried", Rect{0.0f, 0.0f, 100.0f, 100.0f});
     const std::vector<UIDrawItem> items = UISystem::CollectGraphics(*scene, Viewport);
-    const UIDrawItem *item = ItemOf(items, *leaf);
-    ASSERT_NE(item, nullptr);
-    EXPECT_FALSE(item->IsVisible());
-    EXPECT_FALSE(item->Hits(Vector2{50.0f, 50.0f}));
+    for (const GameObject::Ptr &element : {leaf, buried})
+    {
+        const UIDrawItem *item = ItemOf(items, *element);
+        ASSERT_NE(item, nullptr) << element->GetName();
+        EXPECT_FALSE(item->IsVisible()) << element->GetName();
+        // The middle of where it would be drawn without the masks
+        EXPECT_FALSE(item->Hits(item->transform.Apply(Vector2{item->rect.x + item->rect.width * 0.5f,
+                                                              item->rect.y + item->rect.height * 0.5f})))
+            << element->GetName();
+    }
 }
 
 // ============================================================================

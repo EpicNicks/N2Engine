@@ -31,10 +31,10 @@ namespace
 {
     constexpr float Tolerance = 1e-3f;
 
-    GameObject::Ptr ScaledCanvas(const Scene::Ptr &scene, const Vector2 &reference)
+    GameObject::Ptr ScaledCanvas(Scene &scene, const Vector2 &reference)
     {
         const auto canvas = UISystem::CreateCanvas("Canvas");
-        scene->AddRootGameObject(canvas);
+        scene.AddRootGameObject(canvas);
         canvas->AddComponent<CanvasScaler>()->SetReferenceResolution(reference);
         return canvas;
     }
@@ -108,7 +108,7 @@ TEST(CanvasScalerTest, BadValuesScaleNothing)
 TEST(CanvasScalerTest, TheLayoutIsInCanvasUnitsAndEverythingIsDrawnScaled)
 {
     const auto scene = Scene::Create("Scaler_Layout");
-    const auto canvas = ScaledCanvas(scene, Vector2{400.0f, 300.0f});
+    const auto canvas = ScaledCanvas(*scene, Vector2{400.0f, 300.0f});
     const auto panel = AddPanel(canvas, Rect{10.0f, 20.0f, 100.0f, 50.0f});
 
     const std::vector<UIDrawItem> items = UISystem::CollectGraphics(*scene, Vector2i{800, 600});
@@ -129,7 +129,7 @@ TEST(CanvasScalerTest, TheLayoutIsInCanvasUnitsAndEverythingIsDrawnScaled)
 TEST(CanvasScalerTest, AnchorsFollowTheCanvasSize)
 {
     const auto scene = Scene::Create("Scaler_Anchors");
-    const auto canvas = ScaledCanvas(scene, Vector2{800.0f, 600.0f}); // match the width
+    const auto canvas = ScaledCanvas(*scene, Vector2{800.0f, 600.0f}); // match the width
     const auto stretched = AddPanel(canvas, Rect{});
     stretched->GetComponent<RectTransform>()->StretchToParent();
     static_cast<void>(UISystem::CollectGraphics(*scene, Vector2i{1600, 900}));
@@ -141,7 +141,7 @@ TEST(CanvasScalerTest, AnchorsFollowTheCanvasSize)
 TEST(CanvasScalerTest, ADisabledScalerAndAWorldCanvasAreUnscaled)
 {
     const auto scene = Scene::Create("Scaler_Off");
-    const auto canvas = ScaledCanvas(scene, Vector2{400.0f, 300.0f});
+    const auto canvas = ScaledCanvas(*scene, Vector2{400.0f, 300.0f});
     const auto panel = AddPanel(canvas, Rect{0.0f, 0.0f, 10.0f, 10.0f});
     canvas->GetComponent<CanvasScaler>()->SetActive(false);
     std::vector<UIDrawItem> items = UISystem::CollectGraphics(*scene, Vector2i{800, 600});
@@ -162,7 +162,7 @@ TEST(CanvasScalerTest, ADisabledScalerAndAWorldCanvasAreUnscaled)
 TEST(CanvasScalerTest, MasksAndControlsWorkInAScaledCanvas)
 {
     const auto scene = Scene::Create("Scaler_Controls");
-    const auto canvas = ScaledCanvas(scene, Vector2{400.0f, 300.0f});
+    const auto canvas = ScaledCanvas(*scene, Vector2{400.0f, 300.0f});
     const auto mask = AddPanel(canvas, Rect{0.0f, 0.0f, 50.0f, 50.0f}, false);
     mask->AddComponent<RectMask>();
     const auto child = AddPanel(mask, Rect{0.0f, 0.0f, 100.0f, 100.0f});
@@ -185,7 +185,7 @@ TEST(CanvasScalerTest, TheSoftwareRendererDrawsScaled)
 {
     constexpr int size = 40;
     const auto scene = Scene::Create("Scaler_Software");
-    const auto canvas = ScaledCanvas(scene, Vector2{20.0f, 20.0f});
+    const auto canvas = ScaledCanvas(*scene, Vector2{20.0f, 20.0f});
     const auto mask = AddPanel(canvas, Rect{0.0f, 0.0f, 10.0f, 10.0f}, false);
     mask->AddComponent<RectMask>();
     AddPanel(mask, Rect{0.0f, 0.0f, 20.0f, 20.0f}); // cut to the lower left quarter of the screen
