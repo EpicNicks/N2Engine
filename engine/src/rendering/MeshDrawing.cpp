@@ -41,6 +41,12 @@ namespace N2Engine::Rendering::MeshDrawing
         {
             return;
         }
+        // A user shader's material blends where its shader cannot be drawn too (issue #445): the software renderer, which
+        // blends only the draws that ask, draws the fallback with the shader's blend mode. Nothing changes on a GPU
+        if (material.GetShader())
+        {
+            state.softwareBlend = true;
+        }
         using Renderer::Common::BlendVariant;
         const BlendMode mode = material.GetBlendMode();
         state.additive = mode == BlendMode::Additive;

@@ -40,7 +40,7 @@ namespace
             ASSERT_NE(font, nullptr);
             options.fontSize = 20.0f;
             // The default font (Latin subset) may or may not have U+2026
-            mark = font->GetSdfFont().GetAtlas().FindCodepoint(U'…') ? Ellipsis : std::string("...");
+            mark = font->GetSdfFont().GetAtlas().FindCodepoint(U'\u2026') ? Ellipsis : std::string("...");
         }
 
         [[nodiscard]] float WidthOf(const std::string &text) const
