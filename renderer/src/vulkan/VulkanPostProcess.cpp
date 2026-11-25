@@ -637,6 +637,15 @@ void VulkanRenderer::ApplyPostProcess(const PostProcessSettings& input)
         ResumeFramePassLocked(commandBuffer);
         drawPass(post.framePipeline, mixSet, PostProcessParams::For(PostPassMode::Mix, settings));
     }
+    if (settings.WarpActive())
+    {
+        SuspendFramePassLocked(commandBuffer);
+        copyFrame();
+        ResumeFramePassLocked(commandBuffer);
+        PostProcessParams params = PostProcessParams::For(PostPassMode::Warp, settings);
+        params.b[1] = 1.0f; // the image's first row is the top of the frame
+        drawPass(post.framePipeline, sceneSet, params);
+    }
     if (settings.CompositeActive())
     {
         SuspendFramePassLocked(commandBuffer);

@@ -214,6 +214,43 @@ hinge-&gt;SetBreakForce(500.0f);
 </code></pre>
 <p class="src">Source: <code>engine/include/engine/physics2d/Joint2D.hpp</code>, <code>engine/src/physics2d/Joint2D.cpp</code> (<code>Joint2D::Refresh</code>, <code>OnJointBroken</code>, <code>DescribeProblem</code>); <code>engine/src/physics2d/Physics2DWorld.cpp</code> (<code>CreateJoint</code>, <code>ConfigureJoint</code>, <code>ClaimJoint</code>, <code>EndUnclaimedJoints</code>, <code>BreakJoints</code>, <code>SaveState</code>, <code>RestoreImpl</code>); <code>engine/src/scripting/bindings/LuaPhysics2DBindings.cpp</code>; tests: <code>Joint2DTest.*</code> (<code>tests/engine/physics2d/Joint2DTests.cpp</code>), <code>LuaPhysics2DTest.AJoint2DFromAScriptHoldsBreaksAndCallsOnJointBreak2D</code>.</p>
 
+<h2 id="soft-bodies">Soft bodies (the <code>SoftBody2D</code> component) <span class="badge">issue #445</span></h2>
+<p>A <code>SoftBody2D</code> is a deformable shape drawn filled: jelly, a blob, a cushion. (The 3D <a href="soft-bodies.html">soft bodies</a> are a separate system.) Its outline is a ring of small circle bodies (the <em>nodes</em>), joined by distance springs to their neighbours and next-but-one neighbours (the edge springs) and to a centre body at the object's position (the shape springs). It is made of ordinary Box2D bodies and joints, so it collides with every other 2D collider by its object's layer, with the same fixed step.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Field</th><th>Default</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>shape</code></td><td><code>Circle</code></td><td><code>Circle</code> (<code>radius</code> 1), <code>Box</code> (<code>size</code> 2 &times; 2, the corners among its nodes, at least 4) or <code>Outline</code> (<code>outline</code>: 3 to 64 points around the object's origin, either winding; concave shapes work)</td></tr>
+<tr><td><code>nodeCount</code></td><td>16</td><td>Nodes of a circle or box, 3 to 64: more is smoother and costs more (a node is a body with three springs)</td></tr>
+<tr><td><code>nodeRadius</code></td><td>0.1</td><td>Each node's collision circle, in metres. Space the nodes less than twice this apart, or small things slip between them</td></tr>
+<tr><td><code>density</code>, <code>friction</code>, <code>bounciness</code></td><td>1, 0.4, 0</td><td>Of the nodes (the centre has the same density and collides with nothing)</td></tr>
+<tr><td><code>edgeFrequency</code>, <code>edgeDamping</code></td><td>8 Hz, 0.5</td><td>How stiff the outline is, and how fast its wobble dies</td></tr>
+<tr><td><code>shapeFrequency</code>, <code>shapeDamping</code></td><td>3 Hz, 0.5</td><td>How strongly it keeps its shape</td></tr>
+<tr><td><code>gravityScale</code>, <code>linearDamping</code></td><td>1, 0</td><td>As on a <code>Rigidbody2D</code></td></tr>
+<tr><td><code>pinned</code></td><td>none</td><td>Node indices (from 0; Lua counts from 1) held where they are: a hanging flag, a trampoline's ends</td></tr>
+<tr><td><code>color</code>, <code>texture</code>, <code>blendMode</code>, <code>sortingOrder</code></td><td>white, none, Alpha, 0</td><td>Drawn like a <a href="meshes.html#mesh-renderer-2d"><code>MeshRenderer2D</code></a>; the texture covers the rest outline's box and deforms with the body</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li><strong>Life.</strong> The body is made in the first <code>FixedUpdate</code>, from the object's world position, rotation and scale. After each step the object's <em>position</em> follows the centre (its rotation is not touched), so cameras and children follow it. Moving the object from code moves the whole body, keeping its deformation and speeds; rotating or scaling it does nothing until a rebuild. Changing the shape or a physics field rebuilds the body at rest where the object is (<code>Rebuild()</code> does it on request, which also applies a changed layer). Disabling the component or the object takes the body out of the simulation where it is and puts it back there. <code>SetNodePinned</code> and <code>AddImpulse</code> (shared by mass over the whole body) act on the live body.</li>
+<li><strong>What does not see it.</strong> The nodes raise no collision or trigger messages, 2D queries and <code>OnMouse*</code> picking do not find them, and joints cannot connect to them. The nodes of one body never collide with each other; two soft bodies collide. Keep no <code>Rigidbody2D</code> or <code>Collider2D</code> on the same object.</li>
+<li><strong>Drawing.</strong> The outline is pushed out from the centre by <code>nodeRadius</code>, so the picture covers what collides. A circle or box is drawn as a fan around its centre; an <code>Outline</code> shape is triangulated as a polygon, and fanned while it is folded over itself. The software renderer draws it as it draws a <code>MeshRenderer2D</code>. In the editor's edit mode, and in a build without Box2D, the rest shape is drawn.</li>
+<li><strong>Rollback and the network.</strong> Soft bodies are part of the 2D world's saved state and state hash (2D state version 3), so a rollback restores and replays them bit for bit. A body made after the restored tick is made again, and one destroyed since stays destroyed. On a late join a networked object's soft body is matched by net id, node and order like its other 2D bodies. Their node positions are not replicated values: only the lockstep and rollback presets keep peers' soft bodies together, and in the server-authoritative presets each peer simulates its own.</li>
+<li><strong>Limits.</strong> The shape springs hold the form but not the area: pressed hard enough, an outline can fold through itself. Fast small objects can pass between nodes.</li>
+</ul>
+<pre class="lang-lua"><code>local go = GameObject.Create("Jelly")
+go:CreatePositionable()
+go:GetPositionable():SetPosition(Vector3(0, 4, 0))
+SceneManager.GetCurrentScene():AddRootGameObject(go)
+local jelly = go:AddComponent("SoftBody2D")
+jelly:SetCircle(1.0, 20)
+jelly:SetStiffness(10, 0.4, 4, 0.4)
+jelly:SetColor(Color.new(0.3, 0.9, 1.0, 0.9))
+-- later, a kick
+jelly:AddImpulse(Vector2(3, 6))</code></pre>
+<p class="src">Source: <code>engine/include/engine/physics2d/SoftBody2D.hpp</code>, <code>engine/src/physics2d/SoftBody2D.cpp</code>; <code>engine/src/physics2d/Physics2DWorld.cpp</code> &mdash; <code>CreateSoftBody</code>, <code>MoveSoftBody</code>, <code>SaveState</code>; tests: <code>SoftBody2DTest.*</code> (<code>tests/engine/physics2d/SoftBody2DTests.cpp</code>), <code>LuaPhysics2DTest.AScriptMakesAndDrivesASoftBody</code></p>
+
 <h2 id="lua">From Lua <span class="badge">PR #314</span></h2>
 <p>The components have the same method names as in C++, through <code>AddComponent("Rigidbody2D")</code> and the rest, with the same <a href="scripting-lua.html#collisions">checked handles</a> as 3D: using one after its object is gone is a Lua error.</p>
 <pre class="lang-lua"><code>local Crate = {}

@@ -81,7 +81,7 @@
 <div class="content">
 
 <h1>Post-processing and render textures</h1>
-<p class="lead">A <code>PostProcessStack</code> component gives a scene full-screen effects: a blur, bloom, colour inversion, chromatic aberration and a vignette. A <code>RenderTexture</code> is a texture a frame can be drawn into, for a snapshot of the scene shown on a sprite or UI image. Both are from <a href="https://github.com/EpicNicks/N2Engine/issues/445">issue #445</a> and work on every renderer (OpenGL, Vulkan, WebGPU and software).</p>
+<p class="lead">A <code>PostProcessStack</code> component gives a scene full-screen effects: a blur, a screen warp, bloom, colour inversion, chromatic aberration and a vignette. A <code>RenderTexture</code> is a texture a frame can be drawn into, for a snapshot of the scene shown on a sprite or UI image. Both are from <a href="https://github.com/EpicNicks/N2Engine/issues/445">issue #445</a> and work on every renderer (OpenGL, Vulkan, WebGPU and software).</p>
 
 <h2 id="stack">PostProcessStack</h2>
 <p>Add it to any object of the scene (<code>go:AddComponent("PostProcessStack")</code>, or in the inspector). The first active one the scene finds is used. A scene with none, or with every effect off, draws exactly as before and runs no extra pass. The fields are saved with the scene.</p>
@@ -100,6 +100,11 @@
 <tr><td><code>blur</code></td><td>false</td><td>Blur the whole scene (a pause menu, a focus pull)</td></tr>
 <tr><td><code>blurStrength</code></td><td>1</td><td>0 (the sharp image) to 1 (the blurred one): a mix of the two, so a fade in is a number going up</td></tr>
 <tr><td><code>blurIterations</code></td><td>3</td><td>Blur passes, 1 to 8. The blur widens with each, and each costs two half-resolution passes</td></tr>
+<tr><td><code>distortion</code></td><td>0</td><td>Lens distortion, -1 to 1: above 0 the middle bulges out (barrel), below 0 it pinches in. The corners stay put</td></tr>
+<tr><td><code>waveAmplitude</code></td><td>0</td><td>How far a wave moves a point, 0 to 0.1 of the screen; 0 is no wave</td></tr>
+<tr><td><code>waveFrequency</code></td><td>4</td><td>Waves from one edge to the other, 0 to 64</td></tr>
+<tr><td><code>wavePhase</code></td><td>0</td><td>Where the wave is in its cycle, in cycles (only the fraction counts)</td></tr>
+<tr><td><code>waveSpeed</code></td><td>0</td><td>Cycles a second the wave travels by itself, on unscaled time, so it keeps moving while the game is paused</td></tr>
 </tbody>
 </table>
 </div>
@@ -108,6 +113,7 @@
 <h2 id="order">Order and what it covers</h2>
 <ol>
 <li>Blur <span class="badge">issue #445</span>: the frame is drawn at half resolution, blurred <code>blurIterations</code> times (the bloom's Gaussian, across and then down, spread one texel further each pass) and drawn back over the frame, mixed with the sharp image by <code>blurStrength</code>. Everything after it, the bloom's bright parts included, sees the blurred frame. Since it works at half resolution, even one pass softens the picture by a couple of pixels; the radius in pixels does not follow the window's size.</li>
+<li>Warp <span class="badge">issue #445</span>: each pixel is read from a displaced point. The distortion moves the point along the line from the screen centre by <code>1 + distortion / 2 &times; (r&sup2; &minus; 1)</code>, where r&sup2; is 1 in the corners; then the wave adds <code>waveAmplitude &times; sin(2&pi;(waveFrequency &times; v + phase))</code> across and the same with u up and down (u rightwards, v upwards, 0 to 1). A point outside the picture reads its edge, so a strong pinch or wave streaks the borders. The warp is not applied to the pointer: a UI drawn over a warped scene stays where it is, and picking in the scene uses unwarped positions.</li>
 <li>Chromatic aberration: the red channel is read from a point moved away from the screen centre, blue from one moved towards it.</li>
 <li>Bloom: the parts brighter than <code>bloomThreshold</code> are taken at half resolution, blurred <code>bloomIterations</code> times (a 9-tap Gaussian across and then down, spread one texel further each pass) and added back times <code>bloomIntensity</code> and <code>bloomTint</code>.</li>
 <li>Invert, then vignette.</li>
@@ -144,7 +150,7 @@ sprite:SetRenderTexture(snap)</code></pre>
 <p><code>Set</code> changes the fields given and leaves the others. A field of the wrong type or an unknown name is an error and changes nothing.</p>
 
 <h2 id="not-yet">Not yet</h2>
-<p>Post-processing runs once over the whole scene frame, not per camera, and there is no user-written post shader, depth of field or tone mapping. A render texture holds an 8-bit picture, not HDR.</p>
+<p>A shockwave or other warp around one point is not offered. Post-processing runs once over the whole scene frame, not per camera, and there is no user-written post shader, depth of field or tone mapping. A render texture holds an 8-bit picture, not HDR.</p>
 
 <div class="page-footer">
 <span>Describes the post-processing and render-texture work of issue #445.</span>

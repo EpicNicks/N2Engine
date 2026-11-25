@@ -329,13 +329,17 @@ namespace Renderer::WebGpu
         // Back into the frame's pass, and the pass that writes the frame
         const auto toFrame = [&](const WGPUTextureView second, const PostPassMode mode)
         {
+            PostProcessParams params = PostProcessParams::For(mode, settings);
+            if (mode == PostPassMode::Warp)
+            {
+                params.b[1] = 1.0f; // a texture's first row is the top of the frame
+            }
             if (!BeginPass(true))
             {
                 LogOnce("could not begin a render pass; the rest of the frame is skipped");
                 return false;
             }
-            PostPassLocked(state.colorView.Get(), true, post.sceneView.Get(), second,
-                           PostProcessParams::For(mode, settings));
+            PostPassLocked(state.colorView.Get(), true, post.sceneView.Get(), second, params);
             return true;
         };
 
@@ -344,6 +348,14 @@ namespace Renderer::WebGpu
             copyFrame();
             halfPasses(PostProcessParams::For(PostPassMode::Copy, settings), settings.blurIterations);
             if (!toFrame(post.bloomAView.Get(), PostPassMode::Mix))
+            {
+                return;
+            }
+        }
+        if (settings.WarpActive())
+        {
+            copyFrame();
+            if (!toFrame(post.sceneView.Get(), PostPassMode::Warp))
             {
                 return;
             }
