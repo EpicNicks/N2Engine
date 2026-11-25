@@ -675,14 +675,39 @@ namespace N2Engine::Rendering
         // fallback), so it is the unlit uniforms, and magenta where the host wants the failure to show
         const bool fallback = _shader != nullptr;
         const ShadingModel shading = fallback ? ShadingModel::Unlit : _shading;
-        if (fallback && RenderSettings::GetUserShaderErrorStyle() == UserShaderErrorStyle::Magenta)
+        const bool magenta = fallback && RenderSettings::GetUserShaderErrorStyle() == UserShaderErrorStyle::Magenta;
+        bool hidden = false;
+        if (magenta)
         {
             target.SetColor("uAlbedo", 1.0f, 0.0f, 1.0f, 1.0f);
         }
         else
         {
-            target.SetColor("uAlbedo", _baseColor.r * tint.r, _baseColor.g * tint.g, _baseColor.b * tint.b,
-                            _baseColor.a * tint.a);
+            Common::Color color{_baseColor.r * tint.r, _baseColor.g * tint.g, _baseColor.b * tint.b,
+                                _baseColor.a * tint.a};
+            if (fallback)
+            {
+                // Issue #445: what the shader's header says stands in for it (ShaderFallback)
+                const ShaderFallback &standIn = _shader->GetFallback();
+                if (const std::optional<MaterialParamValue> own = standIn.tint.empty() ? std::nullopt
+                                                                                       : GetParam(standIn.tint))
+                {
+                    color = Common::Color{color.r * own->value[0], color.g * own->value[1], color.b * own->value[2],
+                                          color.a * own->value[3]};
+                }
+                if (const std::optional<MaterialParamValue> own = standIn.opacity.empty() ? std::nullopt
+                                                                                          : GetParam(standIn.opacity))
+                {
+                    const float opacity = own->value[0];
+                    color.a *= std::isfinite(opacity) ? std::clamp(opacity, 0.0f, 1.0f) : 1.0f;
+                }
+                hidden = standIn.hidden;
+            }
+            if (hidden)
+            {
+                color.a = 0.0f;
+            }
+            target.SetColor("uAlbedo", color.r, color.g, color.b, color.a);
         }
         target.SetInt("uHasTexture", target.GetTexture() != nullptr ? 1 : 0);
         float cutoff = 0.0f;
@@ -693,6 +718,10 @@ namespace N2Engine::Rendering
         else if (_alphaMode == AlphaMode::Blend)
         {
             cutoff = _blendDiscardBelow;
+        }
+        if (hidden)
+        {
+            cutoff = 1.0f; // every pixel's alpha is 0: all of them are cut, opaque or blended
         }
         target.SetFloat("uAlphaCutoff", cutoff);
         if (shading == ShadingModel::Unlit)

@@ -8,6 +8,7 @@
 #include <renderer/common/BlendCutOut.hpp>
 #include <renderer/common/RenderTypes.hpp>
 
+#include "engine/rendering/Material.hpp"
 #include "engine/rendering/MeshDrawing.hpp"
 #include "engine/ui/QuadClip.hpp"
 
@@ -386,7 +387,25 @@ namespace N2Engine::UI
         {
             _spriteTexture.Release(true); // the slot's Material holds the sprite's GPU texture itself
             const Common::Color shaderColor = GetDrawColor();
-            _shaderSlot.Sync(_sprite, Renderer::Common::BlendCutOutBelow(_sprite != nullptr, renderer->SupportsBlending(), shaderColor.a));
+            // A renderer that cannot blend still blends the draws that ask, which a blending shader's fallback does
+            // (issue #445): such a one needs no cut-out
+            Rendering::Material &material = *_shaderSlot.GetMaterial();
+            const bool blends = renderer->SupportsBlending() ||
+                                (material.IsBlended() && renderer->SupportsOptInBlending());
+            _shaderSlot.Sync(_sprite, Renderer::Common::BlendCutOutBelow(_sprite != nullptr, blends, shaderColor.a));
+            // The colour effects reach a shader that declares u_Saturation and u_Flash, and the fallback where it cannot
+            // draw, as a Sprite2D's do; set only when changed
+            const float saturation = Renderer::Common::ColorEffects::ClampSaturation(_saturation);
+            if (material.GetSaturation() != saturation)
+            {
+                material.SetSaturation(saturation);
+            }
+            const Common::Color flash = Renderer::Common::ColorEffects::ClampFlash(_flash);
+            const Common::Color &current = material.GetFlash();
+            if (current.r != flash.r || current.g != flash.g || current.b != flash.b || current.a != flash.a)
+            {
+                material.SetFlash(flash);
+            }
             if (Renderer::Common::IMaterial *gpu = _shaderSlot.Prepare(*renderer, shaderColor))
             {
                 Renderer::Common::RenderState shaderState = state;
