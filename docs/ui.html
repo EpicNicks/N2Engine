@@ -90,6 +90,7 @@
 <li><a href="#space">Canvas space</a></li>
 <li><a href="#layout">RectTransform layout</a></li>
 <li><a href="#rotation">Rotation and scale</a></li>
+<li><a href="#scaler">Reference resolution (CanvasScaler)</a></li>
 <li><a href="#order">Canvases and draw order</a></li>
 <li><a href="#pass">The UI pass</a></li>
 <li><a href="#image">Image</a></li>
@@ -114,6 +115,7 @@
 <thead><tr><th>Component</th><th>Role</th></tr></thead>
 <tbody>
 <tr><td><code>UI::Canvas</code></td><td>The root of a UI tree. Has a <code>sortOrder</code> and a render mode: <code>ScreenSpaceOverlay</code> (the default) or, <span class="badge">PR #67</span>, <code>WorldSpace</code> (<a href="#world">World-space canvases</a>). One per object.</td></tr>
+<tr><td><code>UI::CanvasScaler</code> <span class="badge">issue #445</span></td><td>Scales a screen-space overlay canvas with the window from a reference resolution (<a href="#scaler">CanvasScaler</a>). One per object.</td></tr>
 <tr><td><code>UI::RectTransform</code></td><td>Anchors, pivot, anchored position and size delta; the element's rect is resolved from its parent's rect. Rotation and scale about the pivot <span class="badge">issue #445</span> (<a href="#rotation">Rotation and scale</a>). One per object (<code>AddComponent</code> returns the existing one).</td></tr>
 <tr><td><code>UI::UIGraphic</code></td><td>Base of everything the UI pass draws: a colour, a <code>raycastTarget</code> flag, a tint (<span class="badge">PR #54</span>, below), and <code>RenderUI(renderer, rect, state, canvasToWorld)</code> (<span class="badge">PR #67</span> the last argument is identity on an overlay canvas, which the three-argument overload passes; a subclass overrides the four-argument one and adds <code>using UIGraphic::RenderUI;</code> so the three-argument call still compiles on it). It is not an <code>IRenderable</code>, so the scene pass never draws it itself; a world-space canvas, which is one, draws its graphics.</td></tr>
 <tr><td><code>UI::Image</code></td><td>A <code>UIGraphic</code> that fills its rect with its colour, optionally multiplied by a sprite (a texture asset) or a raw texture.</td></tr>
@@ -206,12 +208,35 @@ rect     = (pivotPos - pivot * size, size)
 <p>Scenes saved before these fields keep the defaults. From Lua: <code>SetRotation</code>, <code>GetRotation</code>, <code>SetScale</code>, <code>GetScale</code>, <code>LocalToCanvas</code>, <code>CanvasToLocal</code> (nil when flattened) and <code>GetCanvasCorners</code>.</p>
 <p class="src">Source: <code>engine/include/engine/ui/Transform2D.hpp</code>, <code>engine/src/ui/Transform2D.cpp</code>; <code>engine/src/ui/RectTransform.cpp</code> &mdash; <code>LocalTransform</code>; <code>engine/src/ui/UISystem.cpp</code> &mdash; <code>LayOut</code>, <code>DrawItem</code>; tests: <code>Transform2DTest.*</code>, <code>RectTransformRotationTest.*</code> (<code>tests/engine/ui/RectTransformRotationTests.cpp</code>), <code>LuaUITest.RotatesAndScalesAnElement</code></p>
 
+<h2 id="scaler">Reference resolution (CanvasScaler) <span class="badge">issue #445</span></h2>
+<p>Without a scaler a canvas unit is a window pixel, so a UI laid out at 800 &times; 600 is small on a 4K screen. A <code>CanvasScaler</code> (Unity's) on the object with the root <code>Canvas</code> of a screen-space overlay picks the size of a canvas unit instead. With a scale <em>s</em>, the canvas's rect is the viewport divided by <em>s</em>, everything under it is laid out in those canvas units, and it is all drawn and hit <em>s</em> times as large.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Field</th><th>Meaning</th><th>Default</th></tr></thead>
+<tbody>
+<tr><td><code>uiScaleMode</code></td><td><code>ScaleWithScreenSize</code>, or <code>ConstantPixelSize</code> (<em>s</em> = <code>scaleFactor</code>)</td><td><code>ScaleWithScreenSize</code></td></tr>
+<tr><td><code>referenceResolution</code></td><td>The size the UI is laid out for</td><td>(800, 600)</td></tr>
+<tr><td><code>screenMatchMode</code></td><td>With <em>w</em> = viewport width / reference width and <em>h</em> likewise: <code>MatchWidthOrHeight</code> gives 2^lerp(log2 <em>w</em>, log2 <em>h</em>, <code>matchWidthOrHeight</code>) (Unity's); <code>Expand</code> gives min(<em>w</em>, <em>h</em>), so the canvas is never smaller than the reference; <code>Shrink</code> gives max(<em>w</em>, <em>h</em>), so it is never larger</td><td><code>MatchWidthOrHeight</code></td></tr>
+<tr><td><code>matchWidthOrHeight</code></td><td>0 follows the width, 1 the height (clamped to 0..1)</td><td>0</td></tr>
+<tr><td><code>scaleFactor</code></td><td>Pixels per canvas unit with <code>ConstantPixelSize</code></td><td>1</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li><strong>Which space is which.</strong> <code>GetRect()</code> of every element is in canvas units. The pointer, <code>UISystem::HitTest</code> and <code>UIDrawItem::clip</code> stay in window coordinates, and each element's <a href="#rotation">transform</a> (<code>GetLocalToCanvas</code>, <code>LocalToCanvas</code>, <code>CanvasToLocal</code>) carries the scale between them. A <code>Slider</code>, a <code>ScrollView</code> and a <code>RectMask</code> work as before. A <code>ScrollView</code>'s drag threshold stays in window pixels.</li>
+<li><strong>Text</strong> is drawn from its distance field, so it stays sharp at any scale; its font size and effects are in canvas units.</li>
+<li>A reference resolution, scale factor or result that is not a positive finite number gives a scale of 1. A disabled scaler scales nothing. It is ignored on a world-space canvas, whose object's scale already is the size of a unit, and on any object without the root canvas.</li>
+<li>Not done: Unity's <code>ConstantPhysicalSize</code> mode (no screen DPI is read).</li>
+</ul>
+<p>From Lua, add it with <code>canvas:AddComponent("CanvasScaler")</code>: <code>SetReferenceResolution</code>, <code>SetUIScaleMode</code>, <code>SetScreenMatchMode</code>, <code>SetMatchWidthOrHeight</code>, <code>SetScaleFactor</code>, the getters and <code>GetAppliedScale()</code> (the last layout's).</p>
+<p class="src">Source: <code>engine/include/engine/ui/CanvasScaler.hpp</code>; <code>engine/src/ui/CanvasScaler.cpp</code> &mdash; <code>ComputeScale</code>; <code>engine/src/ui/UISystem.cpp</code> &mdash; <code>CollectGraphics</code>; tests: <code>CanvasScalerTest.*</code> (<code>tests/engine/ui/CanvasScalerTests.cpp</code>), <code>LuaUITest.ScalesACanvasForTheWindow</code></p>
+
 <h2 id="order">Canvases and draw order <span class="badge">PR #50</span></h2>
 <p><code>UISystem::CollectGraphics(scene, viewport)</code> lays out the scene's screen-space overlay UI and returns its graphics in draw order. The UI pass and the overlay hit test both use it. World-space canvases <span class="badge">PR #67</span> are left out of it: each one is laid out on its own (<code>CollectWorldCanvasGraphics</code>) and draws in the scene's Transparent queue (<a href="#world">below</a>).</p>
 <ol class="steps">
 <li><strong>Find the canvases.</strong> A canvas is an enabled <code>Canvas</code> component on an object that is active in the hierarchy and has no <code>Canvas</code> above it. Objects are visited depth first, with roots in scene order. Inactive objects are skipped with their subtrees, and so is the tree of a disabled root <code>Canvas</code>. A <code>Canvas</code> below another one is ignored, enabled or not: its object is an ordinary element of the outer canvas.</li>
 <li><strong>Drop the world-space ones</strong> <span class="badge">PR #67</span> and <strong>sort the rest</strong> by <code>sortOrder</code>, lowest first. The sort is stable, so canvases with equal sort orders keep hierarchy order. A higher <code>sortOrder</code> draws on top.</li>
-<li><strong>Lay out each canvas.</strong> The canvas's rect is the whole viewport, <code>(0, 0, width, height)</code>, whatever a <code>RectTransform</code> on its object says (the canvas's <code>RectTransform</code>, if any, is given that rect). The tree is walked depth first, parents before children and children in order, skipping inactive objects and their subtrees.</li>
+<li><strong>Lay out each canvas.</strong> The canvas's rect is the whole viewport, <code>(0, 0, width, height)</code> (divided by the scale of a <a href="#scaler">CanvasScaler</a>, when it has one <span class="badge">issue #445</span>), whatever a <code>RectTransform</code> on its object says (the canvas's <code>RectTransform</code>, if any, is given that rect). The tree is walked depth first, parents before children and children in order, skipping inactive objects and their subtrees.</li>
 <li><strong>List the graphics.</strong> Each object's enabled <code>UIGraphic</code> components are listed in component order, with the object's rect.</li>
 </ol>
 <p>So later items draw over earlier ones: a later canvas over an earlier one, a later sibling over an earlier sibling, and a child over its parent. A <code>Canvas</code> nested under another canvas has no effect of its own: its object is laid out and drawn as an ordinary element of the outer canvas, and its <code>sortOrder</code> is ignored. A UI object that isn't under any canvas is never drawn or hit.</p>
@@ -673,7 +698,7 @@ slider:SetValue(7)</code></pre>
 <p class="src">Source: <code>engine/include/engine/ui/Slider.hpp</code>; <code>engine/src/ui/Slider.cpp</code> &mdash; <code>Slider::Set</code>, <code>UpdateVisuals</code>, <code>SetValueFromPointer</code>, <code>OnUpdate</code>.</p>
 
 <h2 id="lua">Lua API <span class="badge">PR #50</span></h2>
-<p>Scripts add and get the components by name (<code>go:AddComponent("Image")</code>; the names are <code>"RectTransform"</code>, <code>"Canvas"</code>, <code>"Image"</code>, <code>"UIText"</code>, <code>"Button"</code> <span class="badge">PR #54</span>, <code>"RectMask"</code>, <code>"ScrollView"</code>, <code>"HorizontalLayoutGroup"</code>, <code>"VerticalLayoutGroup"</code>, <code>"GridLayoutGroup"</code>, <code>"LayoutElement"</code> and <code>"ContentSizeFitter"</code> <span class="badge">issue #445</span>) and get checked handles, as for every component (see <a href="scripting-lua.html#lifetime-handles">handles</a>).</p>
+<p>Scripts add and get the components by name (<code>go:AddComponent("Image")</code>; the names are <code>"RectTransform"</code>, <code>"Canvas"</code>, <code>"CanvasScaler"</code>, <code>"Image"</code>, <code>"UIText"</code>, <code>"Button"</code> <span class="badge">PR #54</span>, <code>"RectMask"</code>, <code>"ScrollView"</code>, <code>"HorizontalLayoutGroup"</code>, <code>"VerticalLayoutGroup"</code>, <code>"GridLayoutGroup"</code>, <code>"LayoutElement"</code> and <code>"ContentSizeFitter"</code> <span class="badge">issue #445</span>) and get checked handles, as for every component (see <a href="scripting-lua.html#lifetime-handles">handles</a>).</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Lua</th><th>Does</th></tr></thead>
@@ -769,9 +794,9 @@ open:GetComponent("Button"):AddOnClick(function() print("opening") end)
 <h2 id="not-yet">Not yet</h2>
 <ul>
 <li>For <strong>Button</strong>: sprite-swap and animation transitions, keyboard and gamepad navigation and selection (Unity's <code>Selected</code> state), persistent (saved) listeners, and pointer events bubbling to a parent.</li>
-<li>For <strong>UI text</strong>: clipping to its own rect (a <a href="#mask">RectMask</a> clips it <span class="badge">issue #445</span>), best-fit sizing, rich text, and a reference-resolution scale for font sizes.</li>
+<li>For <strong>UI text</strong>: clipping to its own rect (a <a href="#mask">RectMask</a> clips it <span class="badge">issue #445</span>), best-fit sizing and rich text.</li>
 <li>For <strong>world-space canvases</strong>: Unity's Screen Space - Camera mode, a per-canvas event camera (the main camera is used), clipping a transparent object that crosses the canvas's plane, and blending on the software renderer (<a href="#world-sw-text">text writes depth there</a>).</li>
-<li>Flexible layout sizes and Unity's <code>MinSize</code> fit, a reference-resolution scaler, soft (feathered) mask edges and masks of any shape (<span class="badge">issue #445</span> rectangular masks and scroll views are done), and events for buttons other than the left.</li>
+<li>Flexible layout sizes and Unity's <code>MinSize</code> fit, soft (feathered) mask edges and masks of any shape (<span class="badge">issue #445</span> rectangular masks and scroll views are done), and events for buttons other than the left.</li>
 <li>For <strong>Image</strong>: sprite sub-rects and atlases, tiled (repeating) slices, and preserving the aspect ratio (a sprite is stretched over the whole rect).</li>
 </ul>
 

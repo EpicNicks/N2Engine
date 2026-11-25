@@ -46,7 +46,8 @@ namespace N2Engine::UI
      * one is the canvas.
      *
      * Screen-space overlay (the default): the canvas covers the whole viewport. Its rect is (0, 0, width,
-     * height) in window coordinates' units, whatever the RectTransform on its object says. Overlay canvases
+     * height) in window coordinates' units, whatever the RectTransform on its object says; with a CanvasScaler on its
+     * object (issue #445), the viewport divided by the scaler's scale, in canvas units. Overlay canvases
      * draw in the UI pass after the scene, in ascending sortOrder (ties in hierarchy order), so a higher
      * sortOrder is on top and is hit first.
      *

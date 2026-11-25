@@ -493,3 +493,36 @@ TEST_F(LuaUITest, RotatesAndScalesAnElement)
 
     Run("lua_ui_rot_canvas = nil; lua_ui_rot = nil");
 }
+
+TEST_F(LuaUITest, ScalesACanvasForTheWindow)
+{
+    // Issue #445
+    const auto scene = Scene::Create("LuaUI_Scaler");
+    Run(R"(
+        lua_ui_scaled = UI.CreateCanvas("Scaled")
+        local scaler = lua_ui_scaled:AddComponent("CanvasScaler")
+        scaler:SetReferenceResolution(Vector2(400, 300))
+        scaler:SetScreenMatchMode("Expand")
+        lua_ui_scaled_panel = UI.CreateElement("Panel")
+        lua_ui_scaled:AddChild(lua_ui_scaled_panel)
+    )");
+    const auto canvas = Lua()["lua_ui_scaled"].get<GameObjectRef>().Pin();
+    scene->AddRootGameObject(canvas);
+    static_cast<void>(UI::UISystem::CollectGraphics(*scene, Vector2i{800, 900}));
+
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_scaled:GetComponent('CanvasScaler'):GetAppliedScale()"), 2.0f);
+    EXPECT_EQ(Eval<std::string>("lua_ui_scaled:GetComponent('CanvasScaler'):GetScreenMatchMode()"), "Expand");
+    EXPECT_EQ(Eval<std::string>("lua_ui_scaled:GetComponent('CanvasScaler'):GetUIScaleMode()"), "ScaleWithScreenSize");
+    // The panel is in the middle of a 400 x 450 canvas
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_scaled_panel:GetComponent('RectTransform'):GetRect().y"), 175.0f);
+    Run(R"(
+        local ok = pcall(function() lua_ui_scaled:GetComponent("CanvasScaler"):SetUIScaleMode("Huge") end)
+        assert(not ok)
+        lua_ui_scaled:GetComponent("CanvasScaler"):SetUIScaleMode("ConstantPixelSize")
+        lua_ui_scaled:GetComponent("CanvasScaler"):SetScaleFactor(3)
+    )");
+    static_cast<void>(UI::UISystem::CollectGraphics(*scene, Vector2i{800, 900}));
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_scaled:GetComponent('CanvasScaler'):GetAppliedScale()"), 3.0f);
+
+    Run("lua_ui_scaled = nil; lua_ui_scaled_panel = nil");
+}
