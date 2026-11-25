@@ -296,22 +296,25 @@ namespace Renderer::WebGpu
         }
         PostResources& post = state.post;
 
-        EndPass();
-        WGPUTexelCopyTextureInfo from = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
-        from.texture = state.color.Get();
-        WGPUTexelCopyTextureInfo to = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
-        to.texture = post.scene.Get();
-        const WGPUExtent3D extent = {_targetWidth, _targetHeight, 1};
-        wgpuCommandEncoderCopyTextureToTexture(state.encoder.Get(), &from, &to, &extent);
-
-        const bool bloom = settings.BloomActive();
-        if (bloom)
+        const std::uint32_t bloomWidth = Common::BloomExtent(_targetWidth);
+        const std::uint32_t bloomHeight = Common::BloomExtent(_targetHeight);
+        // Ends the frame's pass and copies the frame into the scene texture
+        const auto copyFrame = [&]
         {
-            const std::uint32_t bloomWidth = Common::BloomExtent(_targetWidth);
-            const std::uint32_t bloomHeight = Common::BloomExtent(_targetHeight);
-            PostPassLocked(post.bloomAView.Get(), false, post.sceneView.Get(), post.sceneView.Get(),
-                           PostProcessParams::For(PostPassMode::Bright, settings));
-            for (int pass = 0; pass < settings.bloomIterations; ++pass)
+            EndPass();
+            WGPUTexelCopyTextureInfo from = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
+            from.texture = state.color.Get();
+            WGPUTexelCopyTextureInfo to = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
+            to.texture = post.scene.Get();
+            const WGPUExtent3D extent = {_targetWidth, _targetHeight, 1};
+            wgpuCommandEncoderCopyTextureToTexture(state.encoder.Get(), &from, &to, &extent);
+        };
+        // A half-size image from the copy (the first pass given), then `iterations` pairs of blur passes; the result is in
+        // bloomA
+        const auto halfPasses = [&](const PostProcessParams& first, const int iterations)
+        {
+            PostPassLocked(post.bloomAView.Get(), false, post.sceneView.Get(), post.sceneView.Get(), first);
+            for (int pass = 0; pass < iterations; ++pass)
             {
                 const float spread = static_cast<float>(pass + 1);
                 PostProcessParams params = PostProcessParams::For(PostPassMode::Blur, settings);
@@ -322,16 +325,39 @@ namespace Renderer::WebGpu
                 params.b[1] = spread / static_cast<float>(bloomHeight);
                 PostPassLocked(post.bloomAView.Get(), false, post.bloomBView.Get(), post.bloomBView.Get(), params);
             }
-        }
-
-        if (!BeginPass(true))
+        };
+        // Back into the frame's pass, and the pass that writes the frame
+        const auto toFrame = [&](const WGPUTextureView second, const PostPassMode mode)
         {
-            LogOnce("could not begin a render pass; the rest of the frame is skipped");
-            return;
+            if (!BeginPass(true))
+            {
+                LogOnce("could not begin a render pass; the rest of the frame is skipped");
+                return false;
+            }
+            PostPassLocked(state.colorView.Get(), true, post.sceneView.Get(), second,
+                           PostProcessParams::For(mode, settings));
+            return true;
+        };
+
+        if (settings.BlurActive())
+        {
+            copyFrame();
+            halfPasses(PostProcessParams::For(PostPassMode::Copy, settings), settings.blurIterations);
+            if (!toFrame(post.bloomAView.Get(), PostPassMode::Mix))
+            {
+                return;
+            }
         }
-        PostPassLocked(state.colorView.Get(), true, post.sceneView.Get(),
-                       bloom ? post.bloomAView.Get() : post.sceneView.Get(),
-                       PostProcessParams::For(PostPassMode::Composite, settings));
+        if (settings.CompositeActive())
+        {
+            copyFrame();
+            const bool bloom = settings.BloomActive();
+            if (bloom)
+            {
+                halfPasses(PostProcessParams::For(PostPassMode::Bright, settings), settings.bloomIterations);
+            }
+            static_cast<void>(toFrame(bloom ? post.bloomAView.Get() : post.sceneView.Get(), PostPassMode::Composite));
+        }
     }
 
     Common::ITexture* WebGpuRenderer::CreateRenderTexture(const std::uint32_t width, const std::uint32_t height)
