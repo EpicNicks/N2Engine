@@ -790,7 +790,7 @@ namespace N2Engine::UI
         // With <color> text the colour is in the vertices, the whole of it, so a change of the text's colour or tint
         // builds the mesh again; the material then carries only its alpha, which the effects don't follow
         const Common::Color drawColor = GetDrawColor();
-        const bool baseChanged = coloured && !SameColor(_styledBase, drawColor);
+        const bool baseChanged = coloured && (!SameColor(_styledBase, drawColor) || !SameColor(_styledTint, GetTint()));
         const bool layoutChanged =
             _layoutCache.GetVersion() != _drawnLayoutVersion || _shownVersion != _drawnShownVersion;
         if (layoutChanged || _charactersChanged || baseChanged)
@@ -798,6 +798,7 @@ namespace N2Engine::UI
             _drawnLayoutVersion = _layoutCache.GetVersion();
             _drawnShownVersion = _shownVersion;
             _styledBase = drawColor;
+            _styledTint = GetTint();
             ++_meshVersion;
             const bool recolor = coloured || (!_characterColors.empty() && (layoutChanged || _colorsChanged));
             // The characters the quads are: of the shown text, and through its map of GetPlainText()

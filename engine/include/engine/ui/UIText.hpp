@@ -340,7 +340,10 @@ namespace N2Engine::UI
         // text include
         Renderer::Common::MeshData _styledMesh;
         bool _styled = false;
+        // The colour and tint the coloured mesh was built with: black text drawn the same under any tint, so the tint
+        // is kept too
         Common::Color _styledBase{Common::Color::White};
+        Common::Color _styledTint{Common::Color::White};
 
         /// What is drawn in `rect`, or nullptr when that is _text as it is
         [[nodiscard]] const Shown *ShownIn(const Rect &rect) const;
