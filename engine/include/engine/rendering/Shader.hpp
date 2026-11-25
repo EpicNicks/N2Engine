@@ -67,6 +67,15 @@ namespace N2Engine::Rendering
         std::optional<std::string> queue;
     };
 
+    /// The header's "fallback" (issue #445): how to draw the built-in effect that stands in where the shader cannot be drawn
+    /// (the software renderer, a missing or failed cook). Empty when absent
+    struct ShaderFallback
+    {
+        std::string tint;    ///< a color or vec4 parameter whose value multiplies the fallback's colour ("" none)
+        std::string opacity; ///< a float parameter whose value, clamped to 0..1, multiplies its alpha ("" none)
+        bool hidden = false; ///< nothing is drawn instead
+    };
+
     /**
      * A user shader (`"Shader"`, a `.n2shader` file; orchestrator/proposals/user-shaders.md). The asset holds what the file's header
      * declares (name, parameters, whether it reads the scene lighting, state hints) and, when asked for a backend, the COOKED payload
@@ -105,6 +114,7 @@ namespace N2Engine::Rendering
         /// that tell such shaders apart
         [[nodiscard]] bool NeedsCook() const { return _hasVertexStage || _hasAtlasTexture; }
         [[nodiscard]] const ShaderStateHints &GetStateHints() const { return _state; }
+        [[nodiscard]] const ShaderFallback &GetFallback() const { return _fallback; }
         /// The file it was loaded from (empty for one made with FromSource)
         [[nodiscard]] const std::string &GetSourcePath() const { return _sourcePath; }
         /// Goes up by one on every Load; 1 for a new shader
@@ -155,6 +165,7 @@ namespace N2Engine::Rendering
         bool _hasVertexStage = false;
         bool _hasAtlasTexture = false;
         ShaderStateHints _state;
+        ShaderFallback _fallback;
         std::string _sourcePath;
         std::uint64_t _version = 1;
         std::filesystem::path _cookedDirectory;

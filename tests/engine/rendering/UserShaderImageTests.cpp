@@ -167,3 +167,42 @@ TEST(ImageShaderTest, ClearingTheShaderGoesBackToTheStandardDraw)
     EXPECT_TRUE(IsGreen(cleared.At(32, 32)));
 }
 
+// Issue #445: an image whose shader blends, drawn by the fallback, blends on the software renderer too, and its colour
+// effects reach the fallback
+TEST(ImageShaderTest, ABlendingShadersFallbackBlendsWithTheImagesColourEffects)
+{
+    const ErrorStyleGuard style(UserShaderErrorStyle::Unlit);
+    auto blending = Shader::FromSource(R"({ "n2shader": 1, "name": "Glass", "params": [], "state": { "blend": "alpha" } }
+#stage fragment
+void main() { n2_FragColor = n2_Color; }
+)", "glass");
+    ASSERT_NE(blending, nullptr);
+    blending->SetCookedDirectory(std::filesystem::temp_directory_path() / "n2-no-cooked-data-here");
+
+    const Frame half = DrawImage([&](UI::Image &image)
+    {
+        image.SetColor(Common::Color{0.0f, 1.0f, 0.0f, 0.5f});
+        image.SetShader(blending);
+    });
+    EXPECT_NEAR(half.At(32, 32).g, 128, 2) << "half green over the black clear, not opaque";
+
+    const Frame grey = DrawImage([&](UI::Image &image)
+    {
+        image.SetColor(Common::Color::Green);
+        image.SetSaturation(0.0f);
+        image.SetShader(blending);
+    });
+    const Rgb pixel = grey.At(32, 32);
+    EXPECT_NEAR(pixel.r, pixel.g, 2);
+    EXPECT_NEAR(pixel.b, pixel.g, 2);
+    EXPECT_GT(pixel.g, 60);
+
+    const Frame flashed = DrawImage([&](UI::Image &image)
+    {
+        image.SetColor(Common::Color::Green);
+        image.SetFlash(Common::Color{1.0f, 0.0f, 0.0f, 1.0f});
+        image.SetShader(blending);
+    });
+    EXPECT_GT(flashed.At(32, 32).r, 200);
+    EXPECT_LT(flashed.At(32, 32).g, 60);
+}
