@@ -57,6 +57,29 @@ namespace N2Engine::Physics
         return NextBackendGeneration<Detail::ParticleGenerationTag>();
     }
 
+    /// Where a moving particle met something (IParticleCollider)
+    struct ParticleHit
+    {
+        /// The point of contact
+        Math::Vector3 point;
+        /// The surface's unit normal there, towards the side the particle came from
+        Math::Vector3 normal;
+    };
+
+    /**
+     * What a particle can collide with (issue #445): a backend that supports it (the CPU backend) asks it about each
+     * particle's movement, one particle at a time, during Step.
+     */
+    class IParticleCollider
+    {
+    public:
+        virtual ~IParticleCollider() = default;
+        /// Whether a particle moving from `from` along the unit vector `direction` for `distance` world units meets
+        /// something, and where (the first thing). Something the particle starts inside is not met.
+        [[nodiscard]] virtual bool Cast(const Math::Vector3 &from, const Math::Vector3 &direction, float distance,
+                                        ParticleHit &hit) = 0;
+    };
+
     /// The simulation settings a backend can change at any time (SetParams). Emission (when and where particles
     /// start, with what velocity) is the caller's: the backend only simulates what Spawn gives it.
     struct ParticleParams
@@ -74,6 +97,16 @@ namespace N2Engine::Physics
         bool groundEnabled = false;
         float groundHeight = 0.0f;
         float bounce = 0.3f;
+        /// Issue #445: what each particle collides with, nothing when null. Not owned: it must live until the next
+        /// SetParams or the system is destroyed. A backend without per-particle collision ignores these.
+        IParticleCollider *collider = nullptr;
+        /// A particle's radius for collisions, in world units (0 a point)
+        float collisionRadius = 0.0f;
+        /// The share of the speed along the surface a particle loses when it hits, 0 to 1 (the speed into the surface
+        /// is turned back by `bounce`)
+        float collisionDampen = 0.0f;
+        /// The share of its whole lifetime a particle loses at each hit, 0 to 1; 1 removes it at the first
+        float collisionLifetimeLoss = 0.0f;
     };
 
     struct ParticleSystemDesc

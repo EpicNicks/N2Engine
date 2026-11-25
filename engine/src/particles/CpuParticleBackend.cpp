@@ -25,7 +25,46 @@ namespace N2Engine::Particles
         params.drag = std::max(Finite(params.drag, 0.0f), 0.0f);
         params.groundHeight = Finite(params.groundHeight, 0.0f);
         params.bounce = std::clamp(Finite(params.bounce, 0.0f), 0.0f, 1.0f);
+        params.collisionRadius = std::max(Finite(params.collisionRadius, 0.0f), 0.0f);
+        params.collisionDampen = std::clamp(Finite(params.collisionDampen, 0.0f), 0.0f, 1.0f);
+        params.collisionLifetimeLoss = std::clamp(Finite(params.collisionLifetimeLoss, 0.0f), 0.0f, 1.0f);
         return params;
+    }
+
+    bool CpuParticleBackend::System::Collide(const std::size_t i, const float dt)
+    {
+        /// A particle is put this far off the surface (past its radius), so the next step's cast starts outside it
+        constexpr float kSkin = 1e-3f;
+        const Physics::ParticleParams &p = params;
+        const float dx = vx[i] * dt;
+        const float dy = vy[i] * dt;
+        const float dz = vz[i] * dt;
+        const float length = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (!(length > 0.0f) || !std::isfinite(length))
+        {
+            return false;
+        }
+        Physics::ParticleHit hit;
+        const Math::Vector3 direction{dx / length, dy / length, dz / length};
+        if (!p.collider->Cast(Math::Vector3{px[i], py[i], pz[i]}, direction, length + p.collisionRadius + kSkin, hit))
+        {
+            return false;
+        }
+        const float off = p.collisionRadius + kSkin;
+        px[i] = hit.point.x + hit.normal.x * off;
+        py[i] = hit.point.y + hit.normal.y * off;
+        pz[i] = hit.point.z + hit.normal.z * off;
+        const float into = vx[i] * hit.normal.x + vy[i] * hit.normal.y + vz[i] * hit.normal.z;
+        if (into < 0.0f)
+        {
+            // Along the surface, less the dampening; into it, turned back by the bounce
+            const float keep = 1.0f - p.collisionDampen;
+            vx[i] = (vx[i] - hit.normal.x * into) * keep - hit.normal.x * into * p.bounce;
+            vy[i] = (vy[i] - hit.normal.y * into) * keep - hit.normal.y * into * p.bounce;
+            vz[i] = (vz[i] - hit.normal.z * into) * keep - hit.normal.z * into * p.bounce;
+        }
+        age[i] += p.collisionLifetimeLoss * lifetime[i];
+        return true;
     }
 
     void CpuParticleBackend::System::Remove(const std::size_t index)
@@ -163,9 +202,20 @@ namespace N2Engine::Particles
                 s.vx[i] = (s.vx[i] + gx) * damping;
                 s.vy[i] = (s.vy[i] + gy) * damping;
                 s.vz[i] = (s.vz[i] + gz) * damping;
-                s.px[i] += s.vx[i] * dt;
-                s.py[i] += s.vy[i] * dt;
-                s.pz[i] += s.vz[i] * dt;
+                if (p.collider != nullptr && s.Collide(i, dt))
+                {
+                    if (s.age[i] >= s.lifetime[i])
+                    {
+                        s.Remove(i); // the hit used up its life
+                        continue;
+                    }
+                }
+                else
+                {
+                    s.px[i] += s.vx[i] * dt;
+                    s.py[i] += s.vy[i] * dt;
+                    s.pz[i] += s.vz[i] * dt;
+                }
 
                 if (p.groundEnabled && s.py[i] < p.groundHeight)
                 {
