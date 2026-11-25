@@ -144,6 +144,7 @@ namespace N2Engine::Rendering::TextDrawing
             std::string text;
             const Text::Font *font = nullptr;
             Text::LayoutOptions options;
+            std::vector<Text::CharacterMetrics> metrics; // a copy: the options' span is the caller's
         };
 
         std::optional<Inputs> _inputs;

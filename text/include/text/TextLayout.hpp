@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -31,6 +32,18 @@ namespace N2Engine::Text
         Baseline,
     };
 
+    /// How one character lays out when it differs from the rest (rich text)
+    struct CharacterMetrics
+    {
+        /// Multiplies fontSize for the character: its glyph, advance, kerning, letter spacing and its share of the
+        /// line's height. A negative or non-finite one counts as 1.
+        float scale = 1.0f;
+        /// Added to the character's advance, in its own ems (a non-finite one counts as 0)
+        float extraAdvance = 0.0f;
+
+        bool operator==(const CharacterMetrics &) const = default;
+    };
+
     /// fontSize, maxWidth, lineSpacing and tabWidth below 0 (or NaN) are treated as 0. letterSpacing may be
     /// negative, to tighten text; a non-finite one is treated as 0.
     struct LayoutOptions
@@ -49,6 +62,9 @@ namespace N2Engine::Text
         float tabWidth = 4.0f;
         /// nullptr uses GetBasicShaper()
         const IShaper *shaper = nullptr;
+        /// Per character, indexed by the byte offset of the character in the text (a glyph's cluster); a character
+        /// past the end, or all of them when empty, is laid out as usual. Not owned: it must live through the call.
+        std::span<const CharacterMetrics> metrics = {};
     };
 
     /// One glyph's quad, ready for a mesh: four corners from position, with matching texture coordinates
@@ -75,6 +91,10 @@ namespace N2Engine::Text
         float x = 0.0f;
         float baseline = 0.0f;
         float width = 0.0f;
+        /// The largest CharacterMetrics::scale on the line (1 without metrics): what its height follows
+        float scale = 1.0f;
+        /// The line's lowest point: its baseline plus the font's descent at that scale
+        float bottom = 0.0f;
     };
 
     struct TextLayout
@@ -85,7 +105,8 @@ namespace N2Engine::Text
         /// The box the lines fill: from the widest line's edges, and from the first line's ascent to the
         /// last line's descent. All zero for empty text.
         Rect bounds;
-        /// Distance between consecutive baselines (layout units)
+        /// Distance between consecutive baselines (layout units) of lines at scale 1; lines with larger or smaller
+        /// characters (CharacterMetrics) are spaced by their own size
         float lineHeight = 0.0f;
         /// Codepoints the font couldn't draw, in order of first appearance (drawn as the fallback glyph)
         std::vector<char32_t> missingCodepoints;

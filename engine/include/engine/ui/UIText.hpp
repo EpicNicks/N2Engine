@@ -9,6 +9,7 @@
 
 #include <math/Matrix.hpp>
 #include <math/Vector2.hpp>
+#include <text/RichText.hpp>
 #include <text/TextLayout.hpp>
 
 #include "engine/rendering/TextDrawing.hpp"
@@ -109,11 +110,32 @@ namespace N2Engine::UI
         /// What happens to text that doesn't fit the rect (issue #445; default Overflow)
         void SetOverflow(const TextOverflow overflow) { _overflow = overflow; }
         [[nodiscard]] TextOverflow GetOverflow() const { return _overflow; }
+        /**
+         * Rich text (issue #445; default off, so a "<" in existing text stays text): the tags of Text::ParseRichText,
+         * <b>, <i>, <color=...>, <size=...> and <noparse>, style parts of the text; anything else is shown as written.
+         * Sizes are canvas pixels (<size=30>) or percentages of fontSize. A <color> replaces the text's colour (a
+         * Button's tint still multiplies it) and its alpha multiplies the text's. A font asset is one face, so bold is
+         * drawn twice, a little apart, and italic is slanted. The per-character offsets, scales and colours count the
+         * characters that show, not the tags.
+         */
+        void SetRichText(const bool richText) { _richText = richText; }
+        [[nodiscard]] bool GetRichText() const { return _richText; }
+        /// The characters that show: GetText() without its tags when rich text is on
+        [[nodiscard]] std::string GetPlainText() const;
+        /// The whole text laid out wrapped at the width of a rect `rectWidth` wide (0, or wrap off: not wrapped),
+        /// whatever the overflow setting: what a ContentSizeFitter or a layout group measures. Not cached
+        [[nodiscard]] Text::TextLayout Measure(float rectWidth) const;
+
+        /// How far bold text's second drawing is moved, and by how much a bold character's advance grows, in its ems
+        static constexpr float BoldOffsetEms = 0.04f;
+        /// How far italic text leans: x moves by this much per unit above the baseline
+        static constexpr float ItalicSlant = 0.2f;
+
         /// Whether the text doesn't fit its current rect (GetCurrentRect): a line wider than it, or more lines than its
         /// height holds. With Truncate or Ellipsis, whether something is left out.
         [[nodiscard]] bool IsOverflowing() const;
 
-        /// A text as drawn: `text`, and for each of its characters (code points) the index of the character of the
+        /// A text cut to fit: `text`, and for each of its characters (code points) the index of the character of the
         /// original it is, or NoCharacter for one that was added (an ellipsis, a line break put where a line wrapped)
         struct FittedText
         {
@@ -128,7 +150,8 @@ namespace N2Engine::UI
          * height, broken where the layout broke them; a line wider than the width is cut after its last character that
          * fits; with Ellipsis, a cut line, and the last line when lines were left out, ends with an ellipsis (U+2026, or
          * "..." in a font without it), trailing spaces before it removed. A width too small even for the ellipsis leaves
-         * that line empty, and a height too small for one line leaves nothing.
+         * that line empty, and a height too small for one line leaves nothing. options.metrics, when given, are those of
+         * `text`'s characters (the ellipsis takes the one before it).
          */
         [[nodiscard]] static std::optional<FittedText> FitText(const Text::Font &font, const std::string &text,
                                                                const Text::LayoutOptions &options, float width,
@@ -284,11 +307,23 @@ namespace N2Engine::UI
         std::vector<Common::Color> _clippedColors;
         std::uint64_t _clippedVersion = ~std::uint64_t{0};
 
-        // The text cut to fit (Truncate and Ellipsis), kept for the inputs it was made from
-        struct FitCache
+        bool _richText = false;
+
+        // The text as drawn when that is not _text itself: rich text without its tags, or what Truncate and Ellipsis
+        // leave of it
+        struct Shown
+        {
+            std::string text;
+            std::vector<std::uint32_t> source;  // per character: its index among the plain text's, or NoCharacter
+            std::vector<Text::RichStyle> styles; // per character; empty without rich text
+            std::vector<Text::CharacterMetrics> metrics; // per byte; empty without rich text
+        };
+        // Kept for the inputs it was made from
+        struct ShownCache
         {
             std::string text;
             std::shared_ptr<Text::Font> font;
+            bool richText = false;
             float fontSize = 0.0f;
             float letterSpacing = 0.0f;
             float lineSpacing = 0.0f;
@@ -296,14 +331,21 @@ namespace N2Engine::UI
             float width = 0.0f;
             float height = 0.0f;
             TextOverflow overflow = TextOverflow::Overflow;
-            std::optional<FittedText> result;
+            std::optional<Shown> result;
         };
-        mutable std::optional<FitCache> _fit;
-        mutable std::uint64_t _fitVersion = 0; // up whenever _fit is computed again
-        std::uint64_t _drawnFitVersion = 0;
+        mutable std::optional<ShownCache> _shown;
+        mutable std::uint64_t _shownVersion = 0; // up whenever _shown is computed again
+        std::uint64_t _drawnShownVersion = 0;
+        // Rich text drawing: the mesh with bold and italic worked in, and the draw colour the quad colours of <color>
+        // text include
+        Renderer::Common::MeshData _styledMesh;
+        bool _styled = false;
+        Common::Color _styledBase{Common::Color::White};
 
-        /// The fitted text for `rect`, or nullptr when the text is drawn as it is
-        [[nodiscard]] const FittedText *Fitted(const Rect &rect) const;
+        /// What is drawn in `rect`, or nullptr when that is _text as it is
+        [[nodiscard]] const Shown *ShownIn(const Rect &rect) const;
+        /// The plain text's characters and their styles, and the per-byte metrics they lay out with
+        [[nodiscard]] Shown Parse() const;
 
         // Layout cache and GPU resources, the code TextRenderer uses
         mutable Rendering::TextDrawing::LayoutCache _layoutCache;

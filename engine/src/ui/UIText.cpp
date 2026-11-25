@@ -25,6 +25,7 @@ namespace N2Engine::UI
         RegisterMember("lineSpacing", _lineSpacing);
         RegisterMember("letterSpacing", _letterSpacing);
         RegisterMember("overflow", _overflow).Tooltip("What happens to text that doesn't fit the rect");
+        RegisterMember("richText", _richText).Tooltip("Read <b>, <i>, <color> and <size> tags in the text");
         // Effects, one key each (a scene saved before effects existed loads with them all off)
         RegisterMember("outlineWidth", _effects.outlineWidth);
         RegisterMember("outlineColor", _effects.outlineColor);
@@ -64,13 +65,77 @@ namespace N2Engine::UI
 
     const Text::TextLayout &UIText::GetLayout(const Rect &rect) const
     {
-        const FittedText *fitted = Fitted(rect);
-        return _layoutCache.Get(fitted ? fitted->text : _text, GetEffectiveFont(), GetLayoutOptions(rect.width));
+        const Shown *shown = ShownIn(rect);
+        Text::LayoutOptions options = GetLayoutOptions(rect.width);
+        if (shown)
+        {
+            options.metrics = shown->metrics;
+        }
+        return _layoutCache.Get(shown ? shown->text : _text, GetEffectiveFont(), options);
     }
 
-    const UIText::FittedText *UIText::Fitted(const Rect &rect) const
+    namespace
     {
-        if (_overflow != TextOverflow::Truncate && _overflow != TextOverflow::Ellipsis)
+        /// The per-byte metrics of `text` whose characters have these styles
+        std::vector<Text::CharacterMetrics> MetricsFor(const std::string &text, const std::vector<Text::RichStyle> &styles)
+        {
+            std::vector<Text::CharacterMetrics> metrics(text.size());
+            std::size_t character = 0;
+            for (std::size_t position = 0; position < text.size() && character < styles.size(); ++character)
+            {
+                const std::size_t begin = position;
+                static_cast<void>(Text::DecodeUtf8Next(text, position));
+                const Text::RichStyle &style = styles[character];
+                for (std::size_t byte = begin; byte < position; ++byte)
+                {
+                    metrics[byte] = Text::CharacterMetrics{style.scale, style.bold ? UIText::BoldOffsetEms : 0.0f};
+                }
+            }
+            return metrics;
+        }
+    }
+
+    UIText::Shown UIText::Parse() const
+    {
+        Text::RichText rich = Text::ParseRichText(_text, _fontSize);
+        Shown parsed;
+        parsed.source.resize(rich.styles.size());
+        for (std::size_t i = 0; i < parsed.source.size(); ++i)
+        {
+            parsed.source[i] = static_cast<std::uint32_t>(i);
+        }
+        parsed.text = std::move(rich.text);
+        parsed.styles = std::move(rich.styles);
+        parsed.metrics = MetricsFor(parsed.text, parsed.styles);
+        return parsed;
+    }
+
+    std::string UIText::GetPlainText() const
+    {
+        return _richText ? Text::ParseRichText(_text, _fontSize).text : _text;
+    }
+
+    Text::TextLayout UIText::Measure(const float rectWidth) const
+    {
+        const std::shared_ptr<Text::Font> font = GetEffectiveFont();
+        if (!font)
+        {
+            return {};
+        }
+        Text::LayoutOptions options = GetLayoutOptions(rectWidth);
+        if (!_richText)
+        {
+            return font->Layout(_text, options);
+        }
+        const Shown parsed = Parse();
+        options.metrics = parsed.metrics;
+        return font->Layout(parsed.text, options);
+    }
+
+    const UIText::Shown *UIText::ShownIn(const Rect &rect) const
+    {
+        const bool fits = _overflow == TextOverflow::Truncate || _overflow == TextOverflow::Ellipsis;
+        if (!fits && !_richText)
         {
             return nullptr;
         }
@@ -79,41 +144,69 @@ namespace N2Engine::UI
         {
             return nullptr;
         }
-        const Text::LayoutOptions options = GetLayoutOptions(rect.width);
-        if (!_fit || _fit->font != font || _fit->fontSize != options.fontSize ||
-            _fit->letterSpacing != options.letterSpacing || _fit->lineSpacing != options.lineSpacing ||
-            _fit->maxWidth != options.maxWidth || _fit->width != rect.width || _fit->height != rect.height ||
-            _fit->overflow != _overflow || _fit->text != _text)
+        Text::LayoutOptions options = GetLayoutOptions(rect.width);
+        // The rect matters only to the modes that cut the text to it
+        const float width = fits ? rect.width : 0.0f;
+        const float height = fits ? rect.height : 0.0f;
+        const float maxWidth = fits ? options.maxWidth : 0.0f;
+        if (!_shown || _shown->font != font || _shown->richText != _richText || _shown->fontSize != options.fontSize ||
+            _shown->letterSpacing != options.letterSpacing || _shown->lineSpacing != options.lineSpacing ||
+            _shown->maxWidth != maxWidth || _shown->width != width || _shown->height != height ||
+            _shown->overflow != _overflow || _shown->text != _text)
         {
-            _fit = FitCache{_text,      font,        options.fontSize, options.letterSpacing, options.lineSpacing,
-                            options.maxWidth, rect.width, rect.height,      _overflow,
-                            FitText(*font, _text, options, rect.width, rect.height, _overflow)};
-            ++_fitVersion;
+            std::optional<Shown> result;
+            if (_richText)
+            {
+                result = Parse();
+            }
+            if (fits)
+            {
+                if (result)
+                {
+                    options.metrics = result->metrics;
+                }
+                if (std::optional<FittedText> fitted =
+                        FitText(*font, result ? result->text : _text, options, rect.width, rect.height, _overflow))
+                {
+                    Shown cut;
+                    if (result)
+                    {
+                        // Each character keeps its style; an added one takes the style before it
+                        Text::RichStyle last = result->styles.empty() ? Text::RichStyle{} : result->styles.front();
+                        cut.styles.reserve(fitted->source.size());
+                        for (const std::uint32_t source : fitted->source)
+                        {
+                            if (source < result->styles.size())
+                            {
+                                last = result->styles[source];
+                            }
+                            cut.styles.push_back(last);
+                        }
+                        cut.metrics = MetricsFor(fitted->text, cut.styles);
+                    }
+                    cut.text = std::move(fitted->text);
+                    cut.source = std::move(fitted->source);
+                    result = std::move(cut);
+                }
+            }
+            _shown = ShownCache{_text,    font,  _richText, options.fontSize, options.letterSpacing,
+                                options.lineSpacing, maxWidth, width, height, _overflow, std::move(result)};
+            ++_shownVersion;
         }
-        return _fit->result ? &*_fit->result : nullptr;
+        return _shown->result ? &*_shown->result : nullptr;
     }
 
     namespace
     {
-        /// How many lines of `layout` fit `height` (all of them when their spacing is 0)
+        /// How many lines of `layout`, from the first, end within `height` of the block's top
         std::size_t LinesThatFit(const Text::TextLayout &layout, const float height, const float tolerance)
         {
-            const std::size_t count = layout.lines.size();
-            if (count == 0)
+            std::size_t count = 0;
+            while (count < layout.lines.size() && layout.bounds.maxY - layout.lines[count].bottom <= height + tolerance)
             {
-                return 0;
+                ++count;
             }
-            const float oneLine = layout.bounds.Height() - static_cast<float>(count - 1) * layout.lineHeight;
-            if (height + tolerance < oneLine)
-            {
-                return 0;
-            }
-            if (!(layout.lineHeight > 0.0f))
-            {
-                return count;
-            }
-            const float more = std::floor((height + tolerance - oneLine) / layout.lineHeight);
-            return more >= static_cast<float>(count - 1) ? count : static_cast<std::size_t>(more) + 1;
+            return count;
         }
 
         /// Rounding slack for "does it fit": a text sized exactly to its content fits
@@ -151,8 +244,24 @@ namespace N2Engine::UI
         const std::string mark = font.GetSdfFont().GetAtlas().FindCodepoint(U'\u2026') ? "\xE2\x80\xA6" : "...";
         Text::LayoutOptions oneLine = options;
         oneLine.maxWidth = 0.0f;
-        const auto widthOf = [&](const std::string &candidate)
+        // The width of a candidate for a line: `prefix`, the bytes of `text` from `begin`, then `suffix`, styled as the
+        // byte before it
+        std::vector<Text::CharacterMetrics> candidateMetrics;
+        const auto widthOf = [&](const std::size_t begin, const std::string &prefix, const std::string &suffix)
         {
+            const std::string candidate = prefix + suffix;
+            if (!options.metrics.empty())
+            {
+                candidateMetrics.clear();
+                for (std::size_t i = 0; i < candidate.size(); ++i)
+                {
+                    const std::size_t within = i < prefix.size() ? i : prefix.empty() ? 0 : prefix.size() - 1;
+                    const std::size_t byte = begin + within;
+                    candidateMetrics.push_back(byte < options.metrics.size() ? options.metrics[byte]
+                                                                             : Text::CharacterMetrics{});
+                }
+                oneLine.metrics = candidateMetrics;
+            }
             const Text::TextLayout layout = font.Layout(candidate, oneLine);
             return layout.lines.empty() ? 0.0f : layout.lines.front().width;
         };
@@ -206,7 +315,7 @@ namespace N2Engine::UI
                     }
                     return prefix;
                 };
-                if (widthOf(candidate(characters) + suffix) > width + tolerance)
+                if (widthOf(line.byteBegin, candidate(characters), suffix) > width + tolerance)
                 {
                     // The most characters that fit, by halving (the width grows with the characters)
                     std::size_t low = 0;
@@ -214,10 +323,11 @@ namespace N2Engine::UI
                     while (high - low > 1)
                     {
                         const std::size_t middle = low + (high - low) / 2;
-                        (widthOf(candidate(middle) + suffix) <= width + tolerance ? low : high) = middle;
+                        (widthOf(line.byteBegin, candidate(middle), suffix) <= width + tolerance ? low : high) = middle;
                     }
                     keep = low;
-                    if (keep == 0 && !suffix.empty() && widthOf(suffix) > width + tolerance)
+                    if (keep == 0 && !suffix.empty() &&
+                        widthOf(line.byteBegin, std::string{}, suffix) > width + tolerance)
                     {
                         suffix.clear(); // no room even for the mark
                     }
@@ -264,7 +374,7 @@ namespace N2Engine::UI
         }
         const Rect rect = GetCurrentRect();
         const Text::LayoutOptions options = GetLayoutOptions(rect.width);
-        const Text::TextLayout full = font->Layout(_text, options);
+        const Text::TextLayout full = Measure(rect.width);
         const float tolerance = FitTolerance(options);
         if (LinesThatFit(full, rect.height, tolerance) < full.lines.size())
         {
@@ -427,6 +537,49 @@ namespace N2Engine::UI
             }
             values.clear();
             return true;
+        }
+
+        /// What rich text does to one glyph quad of the mesh
+        struct QuadStyle
+        {
+            float slant = 0.0f; // x moves by this per unit above the baseline (italic)
+            float baseline = 0.0f;
+            float doubled = 0.0f; // drawn again this far to the right (bold)
+        };
+
+        /// `quads` (TextDrawing::BuildMesh: four vertices per quad) slanted and doubled as `styles` say, still four
+        /// vertices per quad
+        Renderer::Common::MeshData StyleMesh(const Renderer::Common::MeshData &quads, const std::vector<QuadStyle> &styles)
+        {
+            Renderer::Common::MeshData mesh;
+            const auto add = [&mesh](const Renderer::Common::Vertex (&corners)[4])
+            {
+                const auto base = static_cast<std::uint32_t>(mesh.vertices.size());
+                mesh.vertices.insert(mesh.vertices.end(), std::begin(corners), std::end(corners));
+                for (const std::uint32_t index : {0u, 1u, 2u, 0u, 2u, 3u})
+                {
+                    mesh.indices.push_back(base + index);
+                }
+            };
+            for (std::size_t q = 0; q < styles.size() && (q + 1) * 4 <= quads.vertices.size(); ++q)
+            {
+                Renderer::Common::Vertex corners[4];
+                for (std::size_t i = 0; i < 4; ++i)
+                {
+                    corners[i] = quads.vertices[q * 4 + i];
+                    corners[i].position[0] += styles[q].slant * (corners[i].position[1] - styles[q].baseline);
+                }
+                add(corners);
+                if (styles[q].doubled > 0.0f)
+                {
+                    for (Renderer::Common::Vertex &corner : corners)
+                    {
+                        corner.position[0] += styles[q].doubled;
+                    }
+                    add(corners);
+                }
+            }
+            return mesh;
         }
 
         void MoveQuad(Text::Rect &p, const Math::Vector2 &o)
@@ -622,30 +775,51 @@ namespace N2Engine::UI
         // on a copy of the layout; the colours become one vertex colour per quad, rebuilt only when they or the layout
         // changed (an animated offset leaves them as they are)
         const bool moved = !_characterOffsets.empty() || !_characterScales.empty();
-        const bool layoutChanged = _layoutCache.GetVersion() != _drawnLayoutVersion || _fitVersion != _drawnFitVersion;
-        if (layoutChanged || _charactersChanged)
+        const Shown *shown = ShownIn(rect);
+        // What the rich text styles ask of the mesh
+        bool coloured = false;
+        bool styled = false;
+        if (shown)
+        {
+            for (const Text::RichStyle &style : shown->styles)
+            {
+                coloured = coloured || style.hasColor;
+                styled = styled || style.bold || style.italic;
+            }
+        }
+        // With <color> text the colour is in the vertices, the whole of it, so a change of the text's colour or tint
+        // builds the mesh again; the material then carries only its alpha, which the effects don't follow
+        const Common::Color drawColor = GetDrawColor();
+        const bool baseChanged = coloured && !SameColor(_styledBase, drawColor);
+        const bool layoutChanged =
+            _layoutCache.GetVersion() != _drawnLayoutVersion || _shownVersion != _drawnShownVersion;
+        if (layoutChanged || _charactersChanged || baseChanged)
         {
             _drawnLayoutVersion = _layoutCache.GetVersion();
-            _drawnFitVersion = _fitVersion;
+            _drawnShownVersion = _shownVersion;
+            _styledBase = drawColor;
             ++_meshVersion;
-            const bool recolor = !_characterColors.empty() && (layoutChanged || _colorsChanged);
-            // The characters of GetText() the quads are: through the fitted text's map when some of it was left out
+            const bool recolor = coloured || (!_characterColors.empty() && (layoutChanged || _colorsChanged));
+            // The characters the quads are: of the shown text, and through its map of GetPlainText()
+            std::vector<std::uint32_t> shownCharacterOf;
             std::vector<std::uint32_t> characterOf;
-            if (moved || recolor)
+            if (moved || recolor || styled)
             {
-                if (const FittedText *fitted = Fitted(rect))
+                shownCharacterOf = CharacterOfQuads(layout, shown ? shown->text : _text);
+                characterOf = shownCharacterOf;
+                if (shown)
                 {
-                    characterOf = CharacterOfQuads(layout, fitted->text);
                     for (std::uint32_t &index : characterOf)
                     {
-                        index = index < fitted->source.size() ? fitted->source[index] : NoCharacter;
+                        index = index < shown->source.size() ? shown->source[index] : NoCharacter;
                     }
                 }
-                else
-                {
-                    characterOf = CharacterOfQuads(layout, _text);
-                }
             }
+            const auto styleOf = [&](const std::size_t q)
+            {
+                const std::uint32_t index = shownCharacterOf[q];
+                return shown && index < shown->styles.size() ? shown->styles[index] : Text::RichStyle{};
+            };
             if (moved)
             {
                 _offsetLayout = layout;
@@ -667,7 +841,7 @@ namespace N2Engine::UI
             {
                 _offsetLayout = Text::TextLayout{}; // nothing moved: the copy is not kept
             }
-            if (_characterColors.empty())
+            if (_characterColors.empty() && !coloured)
             {
                 _quadColors.clear();
             }
@@ -675,10 +849,44 @@ namespace N2Engine::UI
             {
                 _quadColors.clear();
                 _quadColors.reserve(characterOf.size());
-                for (const std::uint32_t index : characterOf)
+                const Common::Color &tint = GetTint();
+                for (std::size_t q = 0; q < characterOf.size(); ++q)
                 {
-                    _quadColors.push_back(index < _characterColors.size() ? _characterColors[index] : Common::Color::White);
+                    const std::uint32_t index = characterOf[q];
+                    Common::Color color =
+                        index < _characterColors.size() ? _characterColors[index] : Common::Color::White;
+                    if (coloured)
+                    {
+                        const Text::RichStyle style = styleOf(q);
+                        const Common::Color base =
+                            style.hasColor ? Common::Color{style.colorR * tint.r, style.colorG * tint.g,
+                                                           style.colorB * tint.b, style.colorA}
+                                           : Common::Color{drawColor.r, drawColor.g, drawColor.b, 1.0f};
+                        color = Common::Color{color.r * base.r, color.g * base.g, color.b * base.b, color.a * base.a};
+                    }
+                    _quadColors.push_back(color);
                 }
+            }
+            _styled = styled;
+            _styledMesh = Renderer::Common::MeshData{};
+            if (styled)
+            {
+                const Text::TextLayout &source = moved ? _offsetLayout : layout;
+                std::vector<QuadStyle> quadStyles(source.quads.size());
+                for (const Text::LineInfo &line : layout.lines)
+                {
+                    for (std::size_t q = line.firstQuad; q < line.firstQuad + line.quadCount && q < quadStyles.size(); ++q)
+                    {
+                        const Text::RichStyle style = styleOf(q);
+                        const std::uint32_t index = characterOf[q];
+                        // A moved character leans about its own moved baseline
+                        const float baseline =
+                            line.baseline + (index < _characterOffsets.size() ? _characterOffsets[index].y : 0.0f);
+                        quadStyles[q] = QuadStyle{style.italic ? ItalicSlant : 0.0f, baseline,
+                                                  style.bold ? BoldOffsetEms * _fontSize * style.scale : 0.0f};
+                    }
+                }
+                _styledMesh = StyleMesh(Rendering::TextDrawing::BuildMesh(source, _quadColors), quadStyles);
             }
             _charactersChanged = false;
             _colorsChanged = false;
@@ -704,6 +912,15 @@ namespace N2Engine::UI
                     return; // nothing of the rect is inside the mask
                 }
             }
+        }
+        // Slanted and doubled glyphs are no longer the layout's rects, so a rect clip cuts their mesh as a polygon does
+        if (_styled && clipRect && clipPolygon.empty())
+        {
+            if (!clipRect->HasArea())
+            {
+                return;
+            }
+            clipPolygon = TransformedCorners(*clipRect, Transform2D{});
         }
         std::optional<Text::Rect> clip;
         if (clipRect && clipPolygon.empty())
@@ -731,14 +948,20 @@ namespace N2Engine::UI
             {
                 point = Math::Vector2{point.x - anchor.x, point.y - anchor.y};
             }
-            const bool cuts = std::ranges::any_of(drawn.quads, [&local](const Text::GlyphQuad &quad)
+            const auto outside = [&local](const float x, const float y)
             {
-                const Text::Rect &p = quad.position;
-                return !ConvexContains(local, Math::Vector2{p.minX, p.minY}) ||
-                       !ConvexContains(local, Math::Vector2{p.maxX, p.minY}) ||
-                       !ConvexContains(local, Math::Vector2{p.maxX, p.maxY}) ||
-                       !ConvexContains(local, Math::Vector2{p.minX, p.maxY});
-            });
+                return !ConvexContains(local, Math::Vector2{x, y});
+            };
+            const bool cuts =
+                _styled ? std::ranges::any_of(_styledMesh.vertices,
+                                              [&outside](const Renderer::Common::Vertex &vertex)
+                                              { return outside(vertex.position[0], vertex.position[1]); })
+                        : std::ranges::any_of(drawn.quads, [&outside](const Text::GlyphQuad &quad)
+                          {
+                              const Text::Rect &p = quad.position;
+                              return outside(p.minX, p.minY) || outside(p.maxX, p.minY) || outside(p.maxX, p.maxY) ||
+                                     outside(p.minX, p.maxY);
+                          });
             if (cuts)
             {
                 polygon = std::move(local);
@@ -760,12 +983,15 @@ namespace N2Engine::UI
         }
         if (!polygon.empty() && _clippedVersion != _meshVersion)
         {
-            _clippedMesh = ClipQuadMesh(Rendering::TextDrawing::BuildMesh(drawn, _quadColors), polygon);
+            _clippedMesh = ClipQuadMesh(_styled ? _styledMesh : Rendering::TextDrawing::BuildMesh(drawn, _quadColors),
+                                        polygon);
             _clippedVersion = _meshVersion;
         }
-        _resources.Draw(_layoutCache.GetFont(), clip ? _clippedLayout : drawn, _meshVersion, model.Data(), GetDrawColor(),
-                        _effects, state, "UIText", clip ? _clippedColors : _quadColors,
-                        polygon.empty() ? nullptr : &_clippedMesh);
+        const Common::Color materialColor = coloured ? Common::Color{1.0f, 1.0f, 1.0f, drawColor.a} : drawColor;
+        const Renderer::Common::MeshData *geometry =
+            !polygon.empty() ? &_clippedMesh : _styled ? &_styledMesh : nullptr;
+        _resources.Draw(_layoutCache.GetFont(), clip ? _clippedLayout : drawn, _meshVersion, model.Data(), materialColor,
+                        _effects, state, "UIText", clip ? _clippedColors : _quadColors, geometry);
 #endif
     }
 

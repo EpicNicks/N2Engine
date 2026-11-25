@@ -4,6 +4,7 @@
 #include <cmath>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 #include "text/SdfFont.hpp"
 #include "text/Shaper.hpp"
@@ -69,14 +70,15 @@ namespace N2Engine::Text
                         {
                             const ShapedGlyph &glyph = glyphs[i];
                             const bool space = IsBreakingSpace(glyph.codepoint);
-                            if (!space && i > start && pen + glyph.xAdvance * _options.fontSize > limit)
+                            const float size = _options.fontSize * ScaleOf(glyph.cluster);
+                            if (!space && i > start && pen + glyph.xAdvance * size + ExtraOf(glyph.cluster) > limit)
                             {
                                 // Break after the last space/hyphen, or mid-word if the word fills the line
                                 end = lastBreak > start ? lastBreak : i;
                                 break;
                             }
                             // Kerned against the next glyph, which is on this line unless it breaks it
-                            pen = Advance(glyph, pen) + glyph.kern * _options.fontSize;
+                            pen = Advance(glyph, pen) + glyph.kern * size;
                             if (space || IsHyphen(glyph.codepoint))
                             {
                                 lastBreak = i + 1;
@@ -94,13 +96,35 @@ namespace N2Engine::Text
             }
 
         private:
+            float ScaleOf(const std::uint32_t cluster) const
+            {
+                if (cluster >= _options.metrics.size())
+                {
+                    return 1.0f;
+                }
+                const float scale = _options.metrics[cluster].scale;
+                return std::isfinite(scale) && scale >= 0.0f ? scale : 1.0f;
+            }
+
+            /// The character's extra advance, in layout units
+            float ExtraOf(const std::uint32_t cluster) const
+            {
+                if (cluster >= _options.metrics.size())
+                {
+                    return 0.0f;
+                }
+                const float extra = _options.metrics[cluster].extraAdvance;
+                return std::isfinite(extra) ? extra * _options.fontSize * ScaleOf(cluster) : 0.0f;
+            }
+
             float Advance(const ShapedGlyph &glyph, const float pen) const
             {
                 if (glyph.codepoint == U'\t' && _tabStop > 0.0f)
                 {
                     return (std::floor(pen / _tabStop + 1e-4f) + 1.0f) * _tabStop;
                 }
-                return pen + glyph.xAdvance * _options.fontSize + _letterSpacing;
+                return pen + glyph.xAdvance * _options.fontSize * ScaleOf(glyph.cluster) +
+                       _letterSpacing * ScaleOf(glyph.cluster) + ExtraOf(glyph.cluster);
             }
 
             // Adds glyphs [start, end) as a line, x from the line start and y from the baseline (LayoutText
@@ -113,12 +137,15 @@ namespace N2Engine::Text
                 line.byteBegin = start < glyphs.size() ? glyphs[start].cluster : paragraph.byteBegin;
                 line.byteEnd = end < glyphs.size() ? glyphs[end].cluster : paragraph.byteEnd;
 
-                const float size = _options.fontSize;
                 float pen = 0.0f;
                 float visibleEnd = 0.0f;
+                // An empty line is as high as the style where it stands
+                float largest = start < end ? 0.0f : ScaleOf(line.byteBegin);
                 for (std::size_t i = start; i < end; ++i)
                 {
                     const ShapedGlyph &glyph = glyphs[i];
+                    const float size = _options.fontSize * ScaleOf(glyph.cluster);
+                    largest = std::max(largest, ScaleOf(glyph.cluster));
                     if (!IsBreakingSpace(glyph.codepoint))
                     {
                         const AtlasGlyph *entry = glyph.missing ? nullptr : _atlas.FindGlyph(glyph.glyph);
@@ -140,7 +167,7 @@ namespace N2Engine::Text
                             quad.cluster = glyph.cluster;
                             _layout.quads.push_back(quad);
                         }
-                        visibleEnd = pen + glyph.xAdvance * size;
+                        visibleEnd = pen + glyph.xAdvance * size + ExtraOf(glyph.cluster);
                     }
                     pen = Advance(glyph, pen);
                     if (i + 1 < end)
@@ -151,6 +178,7 @@ namespace N2Engine::Text
 
                 line.quadCount = _layout.quads.size() - line.firstQuad;
                 line.width = std::max(0.0f, visibleEnd);
+                line.scale = largest;
                 _layout.lines.push_back(line);
             }
 
@@ -240,7 +268,33 @@ namespace N2Engine::Text
         const float descent = static_cast<float>(metrics.descent) * scale;
         layout.lineHeight = static_cast<float>(metrics.ascent - metrics.descent + metrics.lineGap) * scale * sanitized.lineSpacing;
 
-        const float blockHeight = (ascent - descent) + static_cast<float>(layout.lines.size() - 1) * layout.lineHeight;
+        // Each line's baseline, down from the block's top, and the block's height. Lines of one size are lineHeight
+        // apart; with per-character metrics each pair is spaced by the descent above and the ascent below.
+        std::vector<float> drop(layout.lines.size());
+        float blockHeight = 0.0f;
+        if (sanitized.metrics.empty())
+        {
+            for (std::size_t i = 0; i < drop.size(); ++i)
+            {
+                drop[i] = ascent + static_cast<float>(i) * layout.lineHeight;
+            }
+            blockHeight = (ascent - descent) + static_cast<float>(layout.lines.size() - 1) * layout.lineHeight;
+        }
+        else
+        {
+            const float gap = static_cast<float>(metrics.lineGap) * scale;
+            float baseline = ascent * layout.lines.front().scale;
+            for (std::size_t i = 0; i < drop.size(); ++i)
+            {
+                if (i > 0)
+                {
+                    baseline += (-descent * layout.lines[i - 1].scale + (ascent + gap) * layout.lines[i].scale) *
+                                sanitized.lineSpacing;
+                }
+                drop[i] = baseline;
+                blockHeight = std::max(blockHeight, baseline - descent * layout.lines[i].scale);
+            }
+        }
         float top = 0.0f;
         switch (sanitized.verticalAlign)
         {
@@ -254,7 +308,7 @@ namespace N2Engine::Text
             top = blockHeight;
             break;
         case VerticalAlign::Baseline:
-            top = ascent;
+            top = drop.front();
             break;
         }
 
@@ -275,7 +329,8 @@ namespace N2Engine::Text
                 line.x = -line.width;
                 break;
             }
-            line.baseline = top - ascent - static_cast<float>(i) * layout.lineHeight;
+            line.baseline = top - drop[i];
+            line.bottom = line.baseline + descent * line.scale;
 
             for (std::size_t q = line.firstQuad; q < line.firstQuad + line.quadCount; ++q)
             {

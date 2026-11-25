@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -517,6 +518,96 @@ TEST_P(TextLayoutTest, ACustomShaperReplacesTheBasicOne)
     }
     EXPECT_EQ(layout.quads[0].codepoint, U'a');
     EXPECT_NEAR(layout.lines[0].width, 3.0f * x->advance, kEpsilon);
+}
+
+// ===== Per-character metrics (issue #445, rich text) =====
+
+TEST_P(TextLayoutTest, DefaultMetricsChangeNothing)
+{
+    LayoutOptions options;
+    options.fontSize = 20.0f;
+    options.maxWidth = 80.0f;
+    options.verticalAlign = VerticalAlign::Middle;
+    options.lineSpacing = 1.2f;
+    options.letterSpacing = 0.05f;
+    const std::string text = "Hello there, wide world\n\nagain";
+    const TextLayout plain = Layout(text, options);
+    const std::vector<CharacterMetrics> metrics(text.size());
+    options.metrics = metrics;
+    const TextLayout with = Layout(text, options);
+    ASSERT_EQ(with.lines.size(), plain.lines.size());
+    ASSERT_EQ(with.quads.size(), plain.quads.size());
+    for (std::size_t i = 0; i < plain.quads.size(); ++i)
+    {
+        EXPECT_NEAR(with.quads[i].position.minX, plain.quads[i].position.minX, 1e-3f);
+        EXPECT_NEAR(with.quads[i].position.minY, plain.quads[i].position.minY, 1e-3f);
+        EXPECT_NEAR(with.quads[i].position.maxY, plain.quads[i].position.maxY, 1e-3f);
+    }
+    for (std::size_t i = 0; i < plain.lines.size(); ++i)
+    {
+        EXPECT_NEAR(with.lines[i].baseline, plain.lines[i].baseline, 1e-3f);
+        EXPECT_NEAR(with.lines[i].bottom, plain.lines[i].bottom, 1e-3f);
+        EXPECT_EQ(with.lines[i].scale, 1.0f);
+    }
+    EXPECT_NEAR(with.bounds.minY, plain.bounds.minY, 1e-3f);
+    EXPECT_NEAR(with.bounds.maxY, plain.bounds.maxY, 1e-3f);
+}
+
+TEST_P(TextLayoutTest, ALargerCharacterIsWiderAndItsLineTaller)
+{
+    const std::string text = "aa\naa\naa";
+    std::vector<CharacterMetrics> metrics(text.size());
+    metrics[3].scale = 2.0f; // the first 'a' of the middle line
+    LayoutOptions options;
+    options.metrics = metrics;
+    const TextLayout layout = Layout(text, options);
+    const TextLayout plain = Layout(text);
+    ASSERT_EQ(layout.lines.size(), 3u);
+    EXPECT_NEAR(layout.lines[1].width, plain.lines[1].width + Advance(U'a'), kEpsilon);
+    EXPECT_EQ(layout.lines[1].scale, 2.0f);
+    EXPECT_NEAR(layout.quads[2].position.Width(), 2.0f * plain.quads[2].position.Width(), kEpsilon);
+
+    const FontMetrics &font = DefaultFont().GetMetrics();
+    const float ascent = static_cast<float>(font.ascent) * Scale();
+    const float descent = static_cast<float>(font.descent) * Scale();
+    const float gap = static_cast<float>(font.lineGap) * Scale();
+    EXPECT_NEAR(layout.lines[0].baseline - layout.lines[1].baseline, -descent + 2.0f * (ascent + gap), kEpsilon);
+    EXPECT_NEAR(layout.lines[1].baseline - layout.lines[2].baseline, -2.0f * descent + ascent + gap, kEpsilon);
+    EXPECT_NEAR(layout.bounds.Height(), layout.bounds.maxY - layout.lines[2].bottom, kEpsilon);
+    EXPECT_GT(layout.bounds.Height(), plain.bounds.Height());
+}
+
+TEST_P(TextLayoutTest, AnEmptyLineTakesTheSizeWhereItStands)
+{
+    const std::string text = "a\n\nb";
+    std::vector<CharacterMetrics> metrics(text.size(), CharacterMetrics{3.0f, 0.0f});
+    LayoutOptions options;
+    options.metrics = metrics;
+    const TextLayout layout = Layout(text, options);
+    ASSERT_EQ(layout.lines.size(), 3u);
+    EXPECT_EQ(layout.lines[1].scale, 3.0f);
+}
+
+TEST_P(TextLayoutTest, ExtraAdvanceWidensAndWraps)
+{
+    const std::string text = "aa aa";
+    std::vector<CharacterMetrics> metrics(text.size(), CharacterMetrics{1.0f, 0.5f});
+    LayoutOptions options;
+    options.metrics = metrics;
+    const TextLayout plain = Layout(text);
+    EXPECT_NEAR(Width(text, options), plain.lines[0].width + 5 * 0.5f, kEpsilon);
+    options.maxWidth = plain.lines[0].width + 0.1f;
+    EXPECT_EQ(Layout(text, options).lines.size(), 2u) << "it no longer fits on one";
+}
+
+TEST_P(TextLayoutTest, BadMetricsCountAsDefault)
+{
+    const std::string text = "abc";
+    std::vector<CharacterMetrics> metrics{{-1.0f, std::numeric_limits<float>::quiet_NaN()},
+                                          {std::numeric_limits<float>::infinity(), 0.0f}}; // 'c' has none
+    LayoutOptions options;
+    options.metrics = metrics;
+    EXPECT_NEAR(Width(text, options), Width(text), kEpsilon);
 }
 
 INSTANTIATE_TEST_SUITE_P(Backends, TextLayoutTest, ::testing::ValuesIn(Backends()), BackendName);
