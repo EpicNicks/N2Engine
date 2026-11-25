@@ -1174,6 +1174,66 @@ namespace N2Engine::Scripting::Bindings
                 const auto ps = c.Pin();
                 return std::make_tuple(ps->collideWithGround, ps->groundHeight, ps->bounce);
             },
+            // Per-particle collision with the scene's colliders (issue #445): which kinds, and what a hit does
+            "SetColliderCollision", [](const ParticleSystemRef &c, const bool with2D, const bool with3D)
+            {
+                const auto ps = c.Pin();
+                ps->collideWith2D = with2D;
+                ps->collideWith3D = with3D;
+            },
+            "GetColliderCollision", [](const ParticleSystemRef &c)
+            {
+                const auto ps = c.Pin();
+                return std::make_tuple(ps->collideWith2D, ps->collideWith3D);
+            },
+            "SetCollisionResponse", [](const ParticleSystemRef &c, const float radius, const float bounce,
+                                       const float dampen, const float lifetimeLoss)
+            {
+                if (!(std::isfinite(radius) && radius >= 0.0f) || !(bounce >= 0.0f && bounce <= 1.0f) ||
+                    !(dampen >= 0.0f && dampen <= 1.0f) || !(lifetimeLoss >= 0.0f && lifetimeLoss <= 1.0f))
+                {
+                    throw std::runtime_error("ParticleSystem:SetCollisionResponse: the radius must be 0 or more, and "
+                                             "bounce, dampen and lifetimeLoss 0 to 1");
+                }
+                const auto ps = c.Pin();
+                ps->collisionRadius = radius;
+                ps->bounce = bounce;
+                ps->collisionDampen = dampen;
+                ps->collisionLifetimeLoss = lifetimeLoss;
+            },
+            "GetCollisionResponse", [](const ParticleSystemRef &c)
+            {
+                const auto ps = c.Pin();
+                return std::make_tuple(ps->collisionRadius, ps->bounce, ps->collisionDampen, ps->collisionLifetimeLoss);
+            },
+            // A layer mask, as the physics queries take
+            "SetCollisionLayers", [](const ParticleSystemRef &c, const std::int64_t mask)
+            { c.Pin()->collisionLayers = static_cast<int>(static_cast<std::uint32_t>(mask)); },
+            "GetCollisionLayers", [](const ParticleSystemRef &c)
+            { return static_cast<std::int64_t>(static_cast<std::uint32_t>(c.Pin()->collisionLayers)); },
+            "GetCollisionCount", [](const ParticleSystemRef &c)
+            { return static_cast<int>(c.Pin()->GetCollisionCount()); },
+            // The last fixed step's collisions (at most 64): { position = Vector3, normal = Vector3, gameObject = go }
+            "GetCollisions", [](const ParticleSystemRef &c, sol::this_state state)
+            {
+                const auto ps = c.Pin();
+                sol::state_view view(state);
+                sol::table result = view.create_table();
+                int index = 0;
+                for (const Rendering::ParticleSystem::Collision &collision : ps->GetCollisions())
+                {
+                    sol::table entry = view.create_table();
+                    entry["position"] = collision.position;
+                    entry["normal"] = collision.normal;
+                    if (const std::shared_ptr<GameObject> object = collision.gameObject.lock();
+                        object && !object->IsDestroyed())
+                    {
+                        entry["gameObject"] = GameObjectRef(object);
+                    }
+                    result[++index] = entry;
+                }
+                return result;
+            },
             // "Alpha" or "Additive"
             "SetBlendMode", [](const ParticleSystemRef &c, const std::string &name)
             {

@@ -95,6 +95,7 @@
 <li><a href="#play-mode">Play mode, pause and saving</a></li>
 <li><a href="#rendering">Drawing</a></li>
 <li><a href="#per-particle">Per-particle control: kills, rotation, motion</a></li>
+<li><a href="#collision">Per-particle collision</a></li>
 <li><a href="#health">The Particles health row</a></li>
 <li><a href="#lua">Lua</a></li>
 <li><a href="#tests">Tests and what is not verified</a></li>
@@ -142,7 +143,8 @@ ps:Stop()          -- no new ones; the flying ones finish
 <tr><td><code>startColor</code>, <code>endColor</code></td><td>white, white with alpha 0</td><td>The colour at birth and at death; linear in between.</td></tr>
 <tr><td><code>gravityScale</code></td><td>1</td><td>Multiplies the world gravity (the physics backend's, else (0, -9.81, 0)); 0 floats.</td></tr>
 <tr><td><code>drag</code></td><td>0</td><td>The share of the velocity lost per second.</td></tr>
-<tr><td><code>collideWithGround</code>, <code>groundHeight</code>, <code>bounce</code></td><td>false, 0, 0.3</td><td>Bounce off the plane y = groundHeight, keeping <code>bounce</code> of the speed. The only collision the CPU backend does.</td></tr>
+<tr><td><code>collideWithGround</code>, <code>groundHeight</code>, <code>bounce</code></td><td>false, 0, 0.3</td><td>Bounce off the plane y = groundHeight, keeping <code>bounce</code> of the speed. <code>bounce</code> applies to colliders too.</td></tr>
+<tr><td><code>collideWith2D</code>, <code>collideWith3D</code>, <code>collisionLayers</code>, <code>collisionRadius</code>, <code>collisionDampen</code>, <code>collisionLifetimeLoss</code> <span class="badge">issue #445</span></td><td>false, false, all but IgnoreRaycast, 0, 0, 0</td><td><a href="#collision">Per-particle collision</a> with the scene's colliders, on the CPU backend</td></tr>
 <tr><td><code>blendMode</code></td><td><code>Alpha</code></td><td><code>Alpha</code> or <code>Additive</code> (the names of the material <code>BlendMode</code>s they match).</td></tr>
 <tr><td><code>renderMode</code> <span class="badge">issue #445</span></td><td><code>Billboard</code></td><td>Which way the quads face: <code>Billboard</code>, <code>Stretched</code>, <code>HorizontalBillboard</code> or <code>VerticalBillboard</code> (<a href="#render-modes">render modes</a>).</td></tr>
 <tr><td><code>lengthScale</code>, <code>speedScale</code> <span class="badge">issue #445</span></td><td>2, 0</td><td><code>Stretched</code>: the quad's length is <code>size * lengthScale + speed * speedScale</code>; its width is the size.</td></tr>
@@ -271,12 +273,12 @@ build\bin\Release\engine_tests.exe --gtest_filter=PhysXGpuParticlesGoldenTest.*<
 <li><strong>Integration.</strong> Semi-implicit Euler per particle: velocity gets gravity, then drag, then the position moves. A particle that reaches its lifetime is removed by moving the last particle into its slot, so the order of particles changes as they die (the same way every run).</li>
 <li><strong>Determinism.</strong> The same seed and the same calls give the same particles: the generator (<code>ParticleRandom</code>) is integer-only, the simulation is plain float code in a fixed order, and the emitter and the backend have separate seeded streams. It is exact on one machine and build; floats are not promised to match bit for bit across compilers.</li>
 <li><strong>The cap.</strong> A system never holds more than <code>maxParticles</code> (limit 100000: a larger setting is lowered with a warning). Particles that don't fit are dropped, and the system logs <strong>one warning</strong> naming the object ("reached maxParticles"), not one per particle. <code>Clear</code> lets it warn again.</li>
-<li><strong>Collision.</strong> Only the optional ground plane. Particles do not collide with colliders or with each other, and the CPU backend never queries the physics world (so it behaves the same with no physics backend). Collision with rigid bodies is what the PhysX backend is for.</li>
+<li><strong>Collision.</strong> The optional ground plane, and, when asked for <span class="badge">issue #445</span>, the scene's colliders (<a href="#collision">Per-particle collision</a>). Particles never collide with each other. With collision off the CPU backend never queries the physics world.</li>
 <li><strong>No per-step allocation.</strong> The backend's arrays, the spawn buffers and the position copy keep their capacity, so a steady system allocates nothing after it has grown.</li>
 </ul>
 <div class="callout note" id="design-particles-cpu-collision">
-<p class="callout-title">Design decision: the ground plane is the only CPU collision <span class="badge">PR #125</span></p>
-<p>A raycast per particle per step against the physics world is not cheap, needs a physics backend (the headless host and CI may have none) and would make the CPU backend depend on it. The plan allowed it only if cheap, so the CPU backend does a ground plane and nothing else; documented here and in the field's tooltip. Real collision comes with the PhysX backend.</p>
+<p class="callout-title">Design decision: collision is opt-in, a ray cast per particle <span class="badge">PR #125</span> <span class="badge">issue #445</span></p>
+<p>A cast per particle per step is not free, needs the physics worlds, and makes the particles depend on them, so a system does it only when asked. The backend does not know the physics code: the component hands it an <code>IParticleCollider</code>, which casts against the 2D world and the 3D backend. Casting each particle's movement (rather than testing overlaps after it) catches thin and fast contacts without sub-steps, works with every collider shape including polygons and meshes, and needs nothing new from either physics backend.</p>
 </div>
 <p class="src">Source: <code>engine/src/particles/CpuParticleBackend.cpp</code>, <code>ParticleEmitter.cpp</code>, <code>ParticleRandom.hpp</code>; tests: <code>CpuParticleBackendTest.*</code>, <code>ParticleEmitterTest.*</code>, <code>ParticleRandomTest.*</code> (<code>tests/engine/particles/ParticleSimulationTests.cpp</code>)</p>
 
@@ -334,12 +336,29 @@ build\bin\Release\engine_tests.exe --gtest_filter=PhysXGpuParticlesGoldenTest.*<
 </table>
 </div>
 <p><strong>Lua reads.</strong> <code>ps:GetParticles([max])</code> copies at most <code>max</code> living particles into tables (<code>{ position, velocity, age, rotation }</code>, rotation in degrees). It is capped at 1024 a call (<code>kLuaParticleReadLimit</code>), so a script can test particles against its game objects without copying a large system into tables every frame. There is no per-particle <em>write</em> from Lua beyond the kills: no per-particle set of position, velocity or lifetime.</p>
-<p><strong>Not there.</strong> Per-particle collision is missing: particles still collide only with the optional ground plane (CPU, WebGPU) or the scene's colliders (PhysX), not with 2D colliders or with each other on the CPU. A script that needs hits can read the particles (<code>GetParticles</code>) and kill the ones that hit (<code>KillInCircle</code>). There is no lifetime override for a particle in flight; a kill is the way to end one early.</p>
+<p><strong>Not there.</strong> There is no lifetime override for a particle in flight from a script; a kill, or a <a href="#collision">collision's</a> lifetime loss, is the way to end one early. Particles do not collide with each other.</p>
 <div class="callout note" id="design-particles-per-particle">
 <p class="callout-title">Design decision: regions, not predicates, and new calls with defaults <span class="badge">issue #445</span></p>
 <p>A kill takes a region rather than a Lua predicate, so it runs inside each backend (on the host mirror for PhysX, on the CPU bookkeeping for WebGPU) without a call into Lua per particle. The three calls have defaults in <code>IParticleBackend</code> instead of being pure, so a wrapper or test backend that predates them still builds; the engine's three backends override all of them, and the shapes and render modes need no backend at all (the emitter and the billboard builder are shared).</p>
 </div>
 <p class="src">Source: <code>engine/include/engine/physics/IParticleBackend.hpp</code> (<code>ParticleRegion</code>, <code>SpawnWithSpin</code>, <code>CopyMotion</code>, <code>Kill</code>), the three backends, <code>ParticleSystem::Kill*</code>; tests: <code>CpuParticleBackendTest.CopyMotionGivesTheVelocityAndTheRotationAtTheParticlesAge</code>, <code>CpuParticleBackendTest.KillRemovesTheParticlesInsideARegionAndKeepsTheRest</code>, <code>PbdParticleBackendTest.KillRemovesTheParticlesInARegionCompactsAndUploadsAndMotionFollows</code>, <code>WebGpuComputeTest.KillFreesTheParticlesInsideARegionAndMotionGivesVelocitiesAndRotations</code> (the <code>webgpu (Dawn, lavapipe)</code> job), <code>ParticleSystemTest.KillMethodsRemoveTheParticlesInsideTheRegion</code>, <code>ParticleSystemTest.RotationSettingsReachTheBackendAndTheMotionComesBack</code></p>
+
+<h2 id="collision">Per-particle collision <span class="badge">issue #445</span></h2>
+<p>With <code>collideWith2D</code> or <code>collideWith3D</code> on, each particle's movement in a fixed step is cast against the scene's colliders on <code>collisionLayers</code>, one particle at a time. A particle that meets one is put on its surface (its <code>collisionRadius</code> and a hair off it), the speed into the surface is turned back times <code>bounce</code>, the speed along it loses <code>collisionDampen</code>, and it ages by <code>collisionLifetimeLoss</code> of its lifetime (1 removes it at the first hit: sparks that die where they land).</p>
+<ul>
+<li><strong>2D colliders</strong> are met in the XY plane, at any depth (the particle keeps its z). <strong>3D colliders</strong> are met in space, through the application's physics backend (without one, nothing). With both, the nearer wins.</li>
+<li><strong>Left out:</strong> triggers, layers not in the mask, and any collider a particle is <em>inside</em> at the start of a step, so an emitter inside its own object's collider still emits; a particle spawned inside a wall leaves it. A ray is cast, not a shape: a particle with a radius can graze past a corner.</li>
+<li><strong>The CPU backend only.</strong> A system that has collision on when it starts runs on the CPU backend (with a warning if it asked for PhysX or WebGPU). Turned on later for a system on a GPU backend, it logs one warning and does nothing there. PhysX particles collide with the scene's colliders by themselves, whatever these fields say.</li>
+<li><strong>Moving colliders</strong> are cast against where they are in that step; a collider moving into a particle can swallow it, after which it is let go.</li>
+<li><strong>Cost.</strong> One cast per living particle per step (two with both kinds). Hundreds to a few thousand are fine; turn it on only where it shows.</li>
+<li><strong>Hits.</strong> <code>GetCollisionCount()</code> is how many the last fixed step had; <code>GetCollisions()</code> the first 64 of them, each <code>{ position, normal, gameObject }</code>, for sounds, splashes or damage. Read them in <code>OnFixedUpdate</code> to see every step's.</li>
+</ul>
+<pre class="lang-lua"><code>local sparks = go:AddComponent("ParticleSystem")
+sparks:SetColliderCollision(true, false)       -- 2D colliders; set before the system starts
+sparks:SetCollisionResponse(0.05, 0.4, 0.2, 0.25) -- radius, bounce, dampen, lifetime lost per hit
+-- later, in OnFixedUpdate
+if sparks:GetCollisionCount() > 0 then self.tick:Play() end</code></pre>
+<p class="src">Source: <code>engine/src/rendering/ParticleSystem.cpp</code> (<code>SceneCollider</code>), <code>engine/src/particles/CpuParticleBackend.cpp</code> (<code>System::Collide</code>), <code>engine/include/engine/physics/IParticleBackend.hpp</code> (<code>IParticleCollider</code>); tests: <code>CpuParticleBackendTest.*Collider*</code>, <code>ParticleCollisionTest.*</code> (<code>tests/engine/particles/ParticleCollisionTests.cpp</code>), <code>LuaParticleSystemTest.SetsPerParticleCollision</code></p>
 
 <h2 id="lua">Lua</h2>
 <p><code>go:AddComponent("ParticleSystem")</code> returns a handle with these methods (full annotations in <code>engine-api.lua</code>). Enum values are strings; an unknown name raises an error that lists the options and changes nothing. Getters that return several values (<code>GetLifetime</code>, <code>GetSpeed</code>, <code>GetSize</code>, <code>GetGround</code>) return them in the order the setter takes them.</p>
@@ -361,6 +380,7 @@ build\bin\Release\engine_tests.exe --gtest_filter=PhysXGpuParticlesGoldenTest.*<
 <tr><td><code>SetLifetime(min, max)</code>, <code>SetSpeed(min, max)</code>, <code>SetSize(start, end)</code></td><td>Ranges and over-life values.</td></tr>
 <tr><td><code>SetStartColor(color)</code>, <code>SetEndColor(color)</code></td><td>Colours, with getters.</td></tr>
 <tr><td><code>SetGravityScale</code>, <code>SetDrag</code>, <code>SetGround(enabled, height, bounce)</code></td><td>Motion, with getters.</td></tr>
+<tr><td><code>SetColliderCollision(with2D, with3D)</code>, <code>SetCollisionResponse(radius, bounce, dampen, lifetimeLoss)</code>, <code>SetCollisionLayers(mask)</code>, <code>GetCollisionCount()</code>, <code>GetCollisions()</code> <span class="badge">issue #445</span></td><td><a href="#collision">Per-particle collision</a>, with getters.</td></tr>
 <tr><td><code>SetBlendMode(name)</code>, <code>SetTexture(path)</code></td><td><code>"Alpha"</code> or <code>"Additive"</code>; an image file, or nil for none (a path that doesn't load is an error and keeps the old texture).</td></tr>
 </tbody>
 </table>

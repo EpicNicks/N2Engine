@@ -32,6 +32,7 @@ endif()
 # module's simulation are left out (its code is not in the engine to test), and modules/LeftOutModulesTests.cpp checks what such
 # a build does instead. The tests of what stays (the GPU mode and setting, the health rows' mapping) still run.
 set(N2ENGINE_PARTICLES_TESTS
+    particles/ParticleCollisionTests.cpp
     particles/ParticleHeadlessTests.cpp
     particles/ParticleSimulationTests.cpp
     particles/ParticleSystemTests.cpp
@@ -154,7 +155,7 @@ endif()
 
 # On this file only, so a build without Box2D recompiles almost nothing else
 if(N2ENGINE_USE_BOX2D)
-    set_source_files_properties(physics2d/Physics2DTests.cpp physics2d/LuaPhysics2DTests.cpp physics2d/Joint2DTests.cpp physics2d/Picking2DTests.cpp physics2d/SoftBody2DTests.cpp network/Rollback2DTests.cpp PROPERTIES COMPILE_DEFINITIONS N2ENGINE_BOX2D_ENABLED=1)
+    set_source_files_properties(physics2d/Physics2DTests.cpp physics2d/LuaPhysics2DTests.cpp physics2d/Joint2DTests.cpp physics2d/Picking2DTests.cpp physics2d/SoftBody2DTests.cpp network/Rollback2DTests.cpp particles/ParticleCollisionTests.cpp PROPERTIES COMPILE_DEFINITIONS N2ENGINE_BOX2D_ENABLED=1)
 endif()
 # The particles and soft-body modules: on the whole program, not per file as Box2D's, because the shared test fakes
 # (particles/FakePhysicsBackend.hpp, included by tests of other subsystems too) run those modules' CPU backends.
