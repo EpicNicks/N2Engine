@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "engine/audio/AudioClip.hpp"
+#include "engine/audio/AudioSynth.hpp"
 #include "engine/audio/AudioSystem.hpp"
 
 using namespace N2Engine::Audio;
@@ -144,6 +145,51 @@ protected:
         const AudioHandle handle = AudioSystem::Instance().PlayOneShot(clip);
         _handles.push_back(handle);
         return handle;
+    }
+
+    /// A one-shot scheduled on the DSP clock (AudioSystem::PlayOneShotAt)
+    AudioHandle PlayAt(const std::shared_ptr<AudioClip> &clip, double dspTime)
+    {
+        const AudioHandle handle = AudioSystem::Instance().PlayOneShotAt(clip, dspTime);
+        _handles.push_back(handle);
+        return handle;
+    }
+
+    /// A mono 16-bit clip at the loopback rate whose every sample is value (-1..1): its first sample is as loud
+    /// as the rest, so the frame it starts on is the first non-silent frame of the mix
+    std::shared_ptr<AudioClip> ConstantClip(float value, double seconds)
+    {
+        AudioData data;
+        data.sampleRate = static_cast<int>(AudioSystem::LoopbackSampleRate);
+        data.channels = 1;
+        data.bitsPerSample = 16;
+        const auto sample = static_cast<std::int16_t>(std::lround(value * 32767.0f));
+        const std::uint32_t frames = Frames(seconds);
+        data.samples.resize(static_cast<std::size_t>(frames) * sizeof(sample));
+        for (std::uint32_t i = 0; i < frames; ++i)
+        {
+            std::memcpy(data.samples.data() + static_cast<std::size_t>(i) * sizeof(sample), &sample, sizeof(sample));
+        }
+        auto clip = std::make_shared<AudioClip>();
+        if (!clip->CreateFromData(data))
+        {
+            return nullptr;
+        }
+        _clips.push_back(clip);
+        return clip;
+    }
+
+    /// The first frame (from 0) whose left channel is louder than threshold, or -1
+    [[nodiscard]] long FirstLoudFrame(const std::vector<float> &out, float threshold = 0.05f) const
+    {
+        for (std::size_t i = 0; i < out.size(); i += Channels())
+        {
+            if (std::abs(out[i]) > threshold)
+            {
+                return static_cast<long>(i / Channels());
+            }
+        }
+        return -1;
     }
 
     /// Renders frames directly (RenderSamples) and returns them as floats
@@ -465,4 +511,138 @@ TEST_F(LoopbackAudioTest, StreamBufferKeepsTheNewestAudioInOrder)
         largestStep = std::max(largestStep, std::abs(out[i] - out[i - Channels()]));
     }
     EXPECT_LT(largestStep, 0.15f) << "the stream has a discontinuity: chunks came out of order";
+}
+
+// ============================================================================
+// DSP clock and scheduled playback (issue #445)
+// ============================================================================
+
+TEST_F(LoopbackAudioTest, DspClockAdvancesByExactlyTheSamplesMixed)
+{
+    auto &audio = AudioSystem::Instance();
+    EXPECT_EQ(audio.GetOutputSampleRate(), AudioSystem::LoopbackSampleRate);
+
+    const std::uint64_t start = audio.GetDspSampleCount();
+    EXPECT_EQ(audio.GetDspSampleCount(), start) << "nothing mixed, nothing moved";
+
+    Render(1000);
+    EXPECT_EQ(audio.GetDspSampleCount(), start + 1000);
+    Render(1); // odd counts too: the clock is samples, not update steps
+    EXPECT_EQ(audio.GetDspSampleCount(), start + 1001);
+    Render(48000 + 123); // across a whole second (OpenAL Soft folds whole seconds into its clock base)
+    EXPECT_EQ(audio.GetDspSampleCount(), start + 1001 + 48123);
+
+    // AdvanceStream mixes whole frames of elapsed time: 0.5 s is 24000 of them
+    audio.AdvanceStream(0.5);
+    const std::uint64_t samples = audio.GetDspSampleCount();
+    EXPECT_EQ(samples, start + 1001 + 48123 + 24000);
+    EXPECT_DOUBLE_EQ(audio.GetDspTime(), static_cast<double>(samples) / 48000.0);
+    EXPECT_EQ(audio.DspTimeToSamples(audio.GetDspTime()), samples) << "a DSP time names its sample exactly";
+}
+
+TEST_F(LoopbackAudioTest, ScheduledOneShotStartsOnTheExactSample)
+{
+    auto &audio = AudioSystem::Instance();
+    if (!audio.IsSampleAccurateScheduling())
+    {
+        GTEST_SKIP() << "This OpenAL has no AL_SOFT_source_start_delay";
+    }
+    const auto clip = ConstantClip(0.5f, 0.2);
+    ASSERT_NE(clip, nullptr);
+
+    // An immediate play first: whatever fixed delay the output path adds (none expected), it adds to both
+    Render(500);
+    const AudioHandle now = Play(clip);
+    ASSERT_TRUE(now.IsValid());
+    const long immediate = FirstLoudFrame(Render(300));
+    ASSERT_GE(immediate, 0) << "the immediate play is heard";
+    audio.Stop(now);
+    Render(Frames(0.1)); // the stop's short fade, and anything still in flight, drains
+    ASSERT_EQ(FirstLoudFrame(Render(200)), -1) << "silent again before scheduling";
+
+    // 1037 frames ahead: not a multiple of any mixer update size, so it lands inside an update
+    constexpr std::uint64_t ahead = 1037;
+    const std::uint64_t target = audio.GetDspSampleCount() + ahead;
+    ASSERT_TRUE(PlayAt(clip, static_cast<double>(target) / 48000.0).IsValid());
+    const std::vector<float> out = Render(4000);
+    EXPECT_EQ(FirstLoudFrame(out), static_cast<long>(ahead) + immediate)
+        << "the scheduled one-shot starts on its sample";
+}
+
+TEST_F(LoopbackAudioTest, AScheduledTimeAlreadyPastPlaysAtOnce)
+{
+    auto &audio = AudioSystem::Instance();
+    const auto clip = ConstantClip(0.5f, 0.2);
+    ASSERT_NE(clip, nullptr);
+    Render(2000);
+
+    ASSERT_TRUE(PlayAt(clip, 0.01).IsValid()) << "0.01 s is long past (2000 frames mixed)";
+    const long first = FirstLoudFrame(Render(300));
+    EXPECT_GE(first, 0);
+    EXPECT_LT(first, 64) << "played at once, not dropped or delayed";
+
+    // NaN and negative times are "now" too
+    audio.Stop(PlayAt(clip, std::nan("")));
+    audio.Stop(PlayAt(clip, -5.0));
+}
+
+TEST_F(LoopbackAudioTest, SourcesScheduledForTheSameSampleStayAligned)
+{
+    auto &audio = AudioSystem::Instance();
+    if (!audio.IsSampleAccurateScheduling())
+    {
+        GTEST_SKIP() << "This OpenAL has no AL_SOFT_source_start_delay";
+    }
+    // Two "stems" that cancel exactly when aligned: +x and -x. One frame of misalignment leaves a loud frame.
+    const auto positive = ConstantClip(0.25f, 0.5);
+    const auto negative = ConstantClip(-0.25f, 0.5);
+    ASSERT_NE(positive, nullptr);
+    ASSERT_NE(negative, nullptr);
+
+    Render(333);
+    const double start = static_cast<double>(audio.GetDspSampleCount() + 2500) / 48000.0;
+    ASSERT_TRUE(PlayAt(positive, start).IsValid());
+    Render(700); // scheduled in different mixer updates: still the same sample
+    ASSERT_TRUE(PlayAt(negative, start).IsValid());
+
+    const std::vector<float> out = Render(Frames(0.4));
+    EXPECT_EQ(FirstLoudFrame(out, 1e-3f), -1) << "the two stems are sample-aligned (they cancel everywhere)";
+
+    // And each alone is heard: the silence above is cancellation, not nothing playing
+    Render(Frames(0.2));
+    const double alone = static_cast<double>(audio.GetDspSampleCount() + 100) / 48000.0;
+    ASSERT_TRUE(PlayAt(positive, alone).IsValid());
+    EXPECT_GE(FirstLoudFrame(Render(1000)), 100);
+}
+
+TEST_F(LoopbackAudioTest, OneShotPlaybackPositionFollowsTheMix)
+{
+    auto &audio = AudioSystem::Instance();
+    const auto clip = ConstantClip(0.5f, 1.0);
+    ASSERT_NE(clip, nullptr);
+    const AudioHandle handle = Play(clip);
+    ASSERT_TRUE(handle.IsValid());
+    EXPECT_FLOAT_EQ(audio.GetOneShotTime(handle), 0.0f);
+
+    Render(Frames(0.25));
+    EXPECT_NEAR(audio.GetOneShotTime(handle), 0.25f, 0.002f);
+    EXPECT_FLOAT_EQ(audio.GetOneShotTime(AudioHandle{987654}), 0.0f) << "unknown handle";
+}
+
+TEST_F(LoopbackAudioTest, SynthesisedToneBecomesAPlayableClip)
+{
+    ToneParams params;
+    params.waveform = Waveform::Square;
+    params.frequency = 1000.0;
+    params.duration = 0.1;
+    params.sampleRate = static_cast<int>(AudioSystem::LoopbackSampleRate);
+    AudioData data;
+    ASSERT_FALSE(GenerateTone(params, data).has_value());
+
+    const auto clip = std::make_shared<AudioClip>();
+    ASSERT_TRUE(clip->CreateFromData(data));
+    EXPECT_EQ(clip->GetFrameCount(), 4800u);
+    EXPECT_NEAR(clip->GetDuration(), 0.1f, 1e-6f);
+    ASSERT_TRUE(Play(clip).IsValid());
+    EXPECT_GT(ChannelRms(Render(2400), Channels(), 0), 0.05) << "the tone is heard";
 }

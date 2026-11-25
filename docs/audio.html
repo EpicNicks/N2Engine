@@ -92,6 +92,8 @@
 <li><a href="#audio-source">AudioSource component</a></li>
 <li><a href="#audio-listener">AudioListener component</a></li>
 <li><a href="#one-shots">One-shots</a></li>
+<li><a href="#dsp-clock">DSP clock and scheduled playback</a></li>
+<li><a href="#synthesis">Synthesised clips</a></li>
 <li><a href="#mixer-groups">Mixer groups and master volume</a></li>
 <li><a href="#source-pool">Source pool</a></li>
 <li><a href="#shutdown">Shutdown semantics</a></li>
@@ -228,7 +230,7 @@
 </div>
 
 <h2 id="frame-timing">Where audio runs in the frame</h2>
-<p>In <code>Application::Run</code>, <code>AudioSystem::Update()</code> runs once per frame <strong>after</strong> the scene's <code>LateUpdate</code> (and coroutines) and before <code>Render</code>, right after <code>AdvanceStream</code>, which mixes a loopback device for the frame's unscaled time (a no-op on a sound card) so that <code>Update</code> sees what finished <span class="badge">PR #56</span>. Components push positions in <code>OnLateUpdate</code>: <code>AudioListener</code> sets the listener, and a playing spatial <code>AudioSource</code> sets its source position. So positions are current when the frame's audio work happens. <code>AudioSystem::Update</code> itself only reclaims finished one-shots (see <a href="#one-shots">One-shots</a>). <code>Application::RenderEditorFrame</code> also calls it.</p>
+<p>In <code>Application::Run</code>, <code>AudioSystem::Update()</code> runs once per frame <strong>after</strong> the scene's <code>LateUpdate</code> (and coroutines) and before <code>Render</code>, right after <code>AdvanceStream</code>, which mixes a loopback device for the frame's unscaled time (a no-op on a sound card) so that <code>Update</code> sees what finished <span class="badge">PR #56</span>. Components push positions in <code>OnLateUpdate</code>: <code>AudioListener</code> sets the listener, and a playing spatial <code>AudioSource</code> sets its source position. So positions are current when the frame's audio work happens. <code>AudioSystem::Update</code> itself reclaims finished one-shots (see <a href="#one-shots">One-shots</a>) and, on the web only, starts scheduled sounds whose time has come (see <a href="#dsp-clock">DSP clock</a>) <span class="badge">issue #445</span>. <code>Application::RenderEditorFrame</code> also calls it.</p>
 <p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Run</code>, <code>RenderEditorFrame</code>; <code>engine/src/audio/AudioSystem.cpp</code> — <code>AudioSystem::Update</code>, <code>CleanupFinishedSources</code></p>
 
 <h2 id="audio-source">AudioSource component</h2>
@@ -271,8 +273,10 @@
 </div>
 <h3 id="source-mixing">Volume, pitch and group</h3>
 <ul>
-<li><code>SetVolume</code> clamps to 0..1; <code>SetPitch</code> clamps to 0.5..2.</li>
-<li>Applied gain is <code>ComputeFinalVolume(volume, group)</code>; applied pitch is <code>pitch × group pitch</code> (see <a href="#mixer-groups">mixer groups</a>).</li>
+<li><code>SetVolume</code> clamps to 0..1; <code>SetPitch</code> clamps to 1/8..8 (<code>AudioSystem::MinPitch</code>, <code>MaxPitch</code>; it was 0.5..2 before issue #445) <span class="badge">issue #445</span>. NaN reads as 1.</li>
+<li>Applied gain is <code>ComputeFinalVolume(volume, group)</code>; applied pitch is <code>pitch × group pitch</code>, clamped to 1/8..8 again (see <a href="#mixer-groups">mixer groups</a> and <a href="#pitch-range">why 1/8..8</a>).</li>
+<li><code>GetTime()</code> is the playback position in seconds into the clip (<code>AL_SEC_OFFSET</code>; within the current loop for a looping clip; 0 without a source), and <code>SetTime(seconds)</code> moves a playing or paused source there, clamped to the clip's length. <code>Play</code> and <code>PlayScheduled</code> always start from the beginning <span class="badge">issue #445</span>.</li>
+<li><code>PlayScheduled(dspTime)</code> is <code>Play()</code> started on the exact output sample of a <a href="#dsp-clock">DSP time</a> <span class="badge">issue #445</span>.</li>
 <li><code>SetVolume</code>, <code>SetPitch</code> and <code>SetMixerGroup</code> re-apply to a held source immediately. <code>ApplyMixing()</code> re-applies both and is what the system calls when a group changes.</li>
 <li>A group name that does not exist is accepted: the source's own volume and pitch are used and there is no concurrency limit.</li>
 </ul>
@@ -341,6 +345,48 @@ if (!h.IsValid()) { /* not initialized, group full, or no source */ }
 </code></pre>
 <p class="src">Source: <code>engine/src/audio/AudioSystem.cpp</code> — <code>PlayOneShot</code>, <code>Stop</code>, <code>IsPlaying</code>, <code>GetOneShotSource</code>, <code>CleanupFinishedSources</code>; <code>engine/include/engine/audio/AudioHandle.hpp</code>; tests: <code>PlayOneShotRejectsMissingOrUnloadedClip</code>, <code>PlayOneShotStartsPlayback</code>, <code>PlayOneShotReturnsUniqueHandles</code>, <code>StopEndsPlayback</code>, <code>StopAndIsPlayingIgnoreUnknownHandles</code>, <code>FinishedOneShotIsCleanedUpByUpdate</code>, <code>LoopingOneShotKeepsPlaying</code></p>
 
+<h2 id="dsp-clock">DSP clock and scheduled playback <span class="badge">issue #445</span></h2>
+<p>Frame time (<code>Time.time</code>) and the audio output run on different clocks, so a sound started from a frame callback lands up to a frame late, by a different amount each time. A beat clock built on frames drifts by about one frame. The engine therefore exposes the mixer's own clock and lets a sound start on a chosen sample of it.</p>
+<ul>
+<li><strong>The DSP clock.</strong> <code>AudioSystem::GetDspSampleCount()</code> is the number of samples (frames) the mixer has produced since the output opened; <code>GetDspTime()</code> is that count divided by <code>GetOutputSampleRate()</code>, in seconds. It is read from OpenAL Soft's device clock (<code>ALC_SOFT_device_clock</code>, nanoseconds) and rounded back to the exact sample count, so it advances by exactly the samples mixed. It is monotonic (a read never goes below an earlier one). On a sound card it moves in the mixer's update steps (often 5 to 20 ms), not continuously; on the loopback device it moves only when samples are rendered. Without an output it reads 0, and every <code>Initialize</code> starts it again.</li>
+<li><strong>Scheduling.</strong> <code>PlayOneShotAt(clip, dspTime, params)</code> and <code>AudioSource::PlayScheduled(dspTime)</code> set the sound up exactly as <code>PlayOneShot</code> and <code>Play</code> do (the same checks, group limit and suspended-output rule), then start it at <code>dspTime</code> with <code>alSourcePlayAtTimeSOFT</code> (<code>AL_SOFT_source_start_delay</code>). The mixer starts the voice <code>round((start − now) × rate)</code> samples into the update that contains it, so it begins on the exact output sample <code>DspTimeToSamples(dspTime)</code>, not at the next frame or update. A one-shot or source waiting for its time reads as playing (<code>AL_PLAYING</code>) and counts toward its group's <code>maxConcurrent</code>.</li>
+<li><strong>A time already reached plays at once</strong> (as <code>PlayOneShot</code> would), and so do a negative time and NaN. Nothing is dropped for being late.</li>
+<li><strong>Cancelling.</strong> <code>Stop</code>, <code>Pause</code> or a new <code>Play</code> before the time cancels the start; so does <code>Audio.StopOneShot</code> for a one-shot.</li>
+<li><strong>Position.</strong> <code>AudioSource::GetTime()</code> and <code>AudioSystem::GetOneShotTime(handle)</code> read the playback position in seconds into the clip.</li>
+<li><code>IsSampleAccurateScheduling()</code> is true when the start-at-time entry point was found: every native build with OpenAL Soft (1.24). It is false on the web.</li>
+</ul>
+<h3 id="stems">Music stems in sync</h3>
+<p>Sources (or one-shots) scheduled for the <strong>same DSP time</strong> start on the same output sample, even when they are scheduled in different frames or in different mixer updates, and they stay sample-aligned for as long as they play at the same pitch and sample rate (the mixer advances every voice by the same step each sample). This is how layered music stays in sync: schedule every stem with one <code>dspTime</code> a little ahead of now (for example <code>Audio.GetDspTime() + 0.1</code>, to cover the time between the call and the mixer's next update), and start or unmute layers later by volume, or by scheduling them on a bar boundary computed from the same start time. Starting stems with <code>Play()</code> in the same frame does not guarantee this: each starts at whichever mixer update follows its call.</p>
+<pre class="lang-lua"><code>local bpm = 120
+local start = Audio.GetDspTime() + 0.1
+for _, stem in ipairs(self.stems) do      -- AudioSource handles, one clip each
+    stem:PlayScheduled(start)
+end
+-- a note on every beat of the next bar, on the same clock
+for beat = 0, 3 do
+    Audio.PlayOneShotAt(self.click, start + beat * 60 / bpm, 0.8, "SFX")
+end
+</code></pre>
+<h3 id="pitch-range">Pitch range</h3>
+<p>Pitch was clamped to 0.5..2. It is now 1/8..8 (three octaves each way) for sources, one-shots, groups and their product. OpenAL Soft's resampler steps through the clip at <code>pitch × clip rate / output rate</code> and caps that step at 10 (<code>MaxPitch</code> in its <code>core/voice.h</code>), so 8 leaves room for a 44.1 kHz or 48 kHz clip on a 48 kHz output; a 96 kHz clip on a 48 kHz output is capped above pitch 5. Low pitches have no such limit, but below 1/8 a clip is mostly a rumble and its length grows eightfold, so the range stops there. Web Audio (the web build) takes the same range as its <code>playbackRate</code>.</p>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>The DSP clock advances by exactly the samples rendered (1000, 1, 48123 and an <code>AdvanceStream(0.5)</code> of 24000); a one-shot scheduled 1037 samples ahead is first heard exactly 1037 samples after an immediate one would be; a time already past plays within the first update; two clips of opposite sign scheduled for the same time, in different updates, cancel on every sample; a one-shot's position reads 0.25 s after 0.25 s of mixing.</p>
+</div>
+<p class="src">Source: <code>engine/include/engine/audio/AudioSystem.hpp</code>, <code>engine/src/audio/AudioSystem.cpp</code> — <code>LoadClockFunctions</code>, <code>GetDspSampleCount</code>, <code>GetDspTime</code>, <code>DspTimeToSamples</code>, <code>PlayOneShotAt</code>, <code>StartSourceAt</code>, <code>CancelScheduledStart</code>, <code>StartDueSources</code>, <code>GetOneShotTime</code>, <code>ClampPitch</code>; <code>engine/src/audio/AudioSource.cpp</code> — <code>PlayScheduled</code>, <code>PrepareToPlay</code>, <code>GetTime</code>, <code>SetTime</code>; tests: <code>LoopbackAudioTest.DspClockAdvancesByExactlyTheSamplesMixed</code>, <code>ScheduledOneShotStartsOnTheExactSample</code>, <code>AScheduledTimeAlreadyPastPlaysAtOnce</code>, <code>SourcesScheduledForTheSameSampleStayAligned</code>, <code>OneShotPlaybackPositionFollowsTheMix</code>, <code>AudioSystemTest.GroupSettersClampValues</code>, <code>AudioSourceTest.SettersClampValues</code></p>
+
+<h2 id="synthesis">Synthesised clips <span class="badge">issue #445</span></h2>
+<p>Notes and chords need not be recorded: <code>GenerateTone(ToneParams, AudioData&amp;)</code> (<code>engine/audio/AudioSynth.hpp</code>) makes one note as mono 16-bit PCM, and <code>PcmFromFloats(samples, sampleRate, channels, AudioData&amp;)</code> converts float samples. Both need no audio device and return an error message instead of writing anything when the input is invalid; <code>AudioClip::CreateFromData</code> then makes the clip (that part needs an output, like every clip).</p>
+<ul>
+<li><strong>Waveforms:</strong> <code>sine</code>, <code>square</code>, <code>saw</code>, <code>triangle</code> and <code>noise</code>. Each starts at phase 0 (sine, saw and triangle at 0 rising, square at +1). Noise is white, from a seeded xorshift generator, so the same parameters always make the same clip.</li>
+<li><strong>Parameters</strong> (defaults): <code>frequency</code> 440 Hz (more than 0, at most half the sample rate), <code>duration</code> 0.25 s (more than 0, at most 30 s), <code>volume</code> 0.5 (peak, 0..1), <code>attack</code> 0.005 s, <code>decay</code> 0.05 s, <code>sustain</code> 0.7 (level, 0..1), <code>release</code> 0.05 s, <code>sampleRate</code> 48000 (8000..192000), <code>seed</code> 1.</li>
+<li><strong>Length:</strong> exactly <code>round(duration × sampleRate)</code> frames.</li>
+<li><strong>Envelope:</strong> a linear ADSR inside that length: up from 0 over the attack, down to the sustain level over the decay, held, then down to exactly 0 on the last frame over the last <code>release</code> seconds. When attack + decay + release is longer than the note, the three shrink in proportion to fit.</li>
+<li><strong>PCM:</strong> 1 or 2 channels (interleaved left, right), 8000..192000 Hz, at most 30 s, every sample finite; values are clamped to −1..1.</li>
+</ul>
+<p>Make the clips once (in <code>Start</code>) and reuse them: each is one OpenAL buffer. A chord is several one-shots scheduled for the same DSP time.</p>
+<p class="src">Source: <code>engine/include/engine/audio/AudioSynth.hpp</code>, <code>engine/src/audio/AudioSynth.cpp</code> — <code>GenerateTone</code>, <code>PcmFromFloats</code>, <code>WaveformFromString</code>; tests: <code>tests/engine/audio/AudioSynthTests.cpp</code> (<code>AudioSynthTest.*</code>: length, the four waveforms' shapes sample by sample, noise determinism, the envelope's stages, refusals), <code>LoopbackAudioTest.SynthesisedToneBecomesAPlayableClip</code></p>
+
 <h2 id="mixer-groups">Mixer groups and master volume</h2>
 <p>A mixer group (<code>AudioMixerGroup</code>) has <code>AudioMixerGroupSettings</code>: <code>volume</code> (1), <code>maxSourceVolume</code> (1), <code>pitch</code> (1), <code>muted</code> (false) and an optional <code>maxConcurrent</code> (no limit). <code>Initialize</code> (re)creates the defaults:</p>
 <div class="table-wrap">
@@ -359,7 +405,8 @@ if (!h.IsValid()) { /* not initialized, group full, or no source */ }
 <h3 id="mixing-rules">Mixing rules</h3>
 <ul>
 <li><strong>Gain:</strong> <code>ComputeFinalVolume(v, group)</code> = 0 if the group is muted, else <code>min(v, maxSourceVolume) × group volume</code>. Unknown group: <code>v</code>.</li>
-<li><strong>Pitch:</strong> <code>ComputeFinalPitch(p, group)</code> = <code>p × group pitch</code> (1 for an unknown group). Before PR #23 group pitch was stored but never applied.</li>
+<li><strong>Pitch:</strong> <code>ComputeFinalPitch(p, group)</code> = <code>p × group pitch</code> (1 for an unknown group), with <code>p</code> and the product each clamped to 1/8..8 <span class="badge">issue #445</span>. Before PR #23 group pitch was stored but never applied.</li>
+<li><strong>Groups are flat:</strong> a group has no parent group, so there is no nesting of volumes; the master volume is the one level above every group.</li>
 <li><strong>Master volume:</strong> <code>SetMasterVolume</code> clamps to 0..1 and sets the OpenAL listener gain (only stored while uninitialized; <code>Initialize</code> applies it). It is applied exactly once, through the listener, not in <code>ComputeFinalVolume</code>.</li>
 <li><strong>Concurrency:</strong> <code>CountPlayingInGroup(group)</code> counts one-shots and registered <code>AudioSource</code>s in that group that are currently <code>AL_PLAYING</code> (paused ones do not count). <code>Play()</code> and <code>PlayOneShot</code> refuse to start when the count is ≥ <code>maxConcurrent</code> (for <code>Play()</code> on a source that is already playing, the count excludes the source itself). A limit only gates new playback; lowering it does not stop anything.</li>
 </ul>
@@ -370,7 +417,7 @@ if (!h.IsValid()) { /* not initialized, group full, or no source */ }
 <tbody>
 <tr><td><code>SetGroupVolume</code></td><td>0..1</td><td>Yes</td></tr>
 <tr><td><code>SetGroupMaxVolume</code></td><td>0..1</td><td>Yes</td></tr>
-<tr><td><code>SetGroupPitch</code></td><td>0.5..2</td><td>Yes</td></tr>
+<tr><td><code>SetGroupPitch</code></td><td>1/8..8 (0.5..2 before issue #445)</td><td>Yes</td></tr>
 <tr><td><code>SetGroupMuted</code></td><td>—</td><td>Yes</td></tr>
 <tr><td><code>SetGroupMaxConcurrent</code></td><td>—</td><td>New playback only</td></tr>
 </tbody>
@@ -449,6 +496,7 @@ if (!h.IsValid()) { /* not initialized, group full, or no source */ }
 <li><strong>No loopback output</strong> (the editor's streamed audio): the capability is absent, <code>IsLoopbackSupported()</code> is false and <code>Initialize(AudioOutput::Loopback)</code> fails.</li>
 <li><strong>Distance attenuation</strong> uses Web Audio's <code>inverse</code> model, which has no maximum distance: <code>SetMaxDistance</code> reaches the panner but a sound beyond it keeps falling off (not verified by ear).</li>
 <li>Master volume, mixer groups, pitch, looping, one-shots and the source pool (32 pre-allocated) work as described above (the audible result is not verified in a browser).</li>
+<li><strong>The DSP clock and scheduling</strong> <span class="badge">issue #445</span>: Emscripten's OpenAL has neither the device clock nor start-at-time, so the DSP clock is the <code>AudioContext</code>'s <code>currentTime</code> (times its <code>sampleRate</code>), and <code>IsSampleAccurateScheduling()</code> is false. A scheduled sound waits in the engine and starts in the first <code>AudioSystem::Update</code> at or after its time: frame accuracy (up to one frame late), not sample accuracy; until then it does not read as playing or count toward its group. Stems scheduled for the same time still start in the same frame, but not necessarily on the same sample. The clock is frozen while the context is suspended. Not verified in a browser.</li>
 </ul>
 <p>What the engine calls, what the port covers, the backend choice (<code>N2ENGINE_WEB_AUDIO</code>), the node behaviour and what is not verified: <a href="web-build.html#audio">Web build: Audio</a>. By hand: <a href="web-checklist.html#audio">the checklist</a>.</p>
 <p class="src">Source: <code>engine/src/audio/AudioSystem.cpp</code> � <code>IsOutputSuspended</code>, <code>RefuseWhileSuspended</code>, <code>OpenLoopbackDevice</code>, <code>PlayOneShot</code>; <code>engine/src/audio/AudioSource.cpp</code> � <code>Play</code>; <code>engine/src/Application.cpp</code> � <code>Application::Init</code>; <code>web/n2-loader.js</code> � <code>createAudioUnlock</code>; tests: <code>WebAudioDegradeTests</code> (<code>tests/web/WebAudioTests.cpp</code>), <code>scripts/web-audio-unlock-test.mjs</code></p>
@@ -474,21 +522,40 @@ if (!h.IsValid()) { /* not initialized, group full, or no source */ }
 <tr><td><code>Set/GetVolume</code>, <code>Set/GetPitch</code>, <code>Set/GetLoop</code>, <code>Set/GetSpatial</code>, <code>Set/GetMixerGroup</code>, <code>SetMinDistance</code>, <code>SetMaxDistance</code>, <code>SetRolloffFactor</code></td><td>Same, with the same clamping</td></tr>
 <tr><td><code>Audio.SetMasterVolume(v)</code>, <code>Audio.GetMasterVolume()</code></td><td><code>AudioSystem</code> master volume</td></tr>
 <tr><td><code>Audio.SetListenerPosition(x, y, z)</code>, <code>Audio.SetListenerOrientation(fx, fy, fz, ux, uy, uz)</code></td><td>Sets the listener directly (an active <code>AudioListener</code> overwrites it in its next <code>OnLateUpdate</code>)</td></tr>
-<tr><td><code>source:SetClip(path)</code>, <code>HasClip()</code>, <code>Set/GetPlayOnAwake</code> <span class="badge">PR #334</span></td><td><code>SetClip</code> loads the clip through <code>ResourceLoader</code> (cached) and calls <code>AudioSource::SetClip</code>. A clip that does not load is a Lua error naming the path, and the source keeps its clip.</td></tr>
-<tr><td><code>Audio.PlayOneShot(path [, volume [, pitch [, group]]])</code> <span class="badge">PR #334</span></td><td><code>AudioSystem::PlayOneShot</code> with those <code>PlaybackParams</code> (volume 1, pitch 1, group <code>"SFX"</code> by default, not spatial). Returns the handle id, 0 when the sound was dropped (no device, the group's <code>maxConcurrent</code>, a suspended output). A clip that does not load is a Lua error.</td></tr>
+<tr><td><code>source:SetClip(clip)</code>, <code>HasClip()</code>, <code>Set/GetPlayOnAwake</code> <span class="badge">PR #334</span></td><td><code>clip</code> is a path, loaded through <code>ResourceLoader</code> (cached), or an <code>AudioClip</code> from <code>Audio.CreateTone</code> / <code>Audio.CreateClip</code> <span class="badge">issue #445</span>; then <code>AudioSource::SetClip</code>. A clip that does not load is a Lua error naming the path, and the source keeps its clip.</td></tr>
+<tr><td><code>source:PlayScheduled(dspTime)</code>, <code>source:GetTime()</code>, <code>source:SetTime(seconds)</code> <span class="badge">issue #445</span></td><td><code>AudioSource::PlayScheduled</code>, <code>GetTime</code>, <code>SetTime</code> (see <a href="#dsp-clock">DSP clock</a>)</td></tr>
+<tr><td><code>Audio.PlayOneShot(clip [, volume [, pitch [, group]]])</code> <span class="badge">PR #334</span></td><td><code>AudioSystem::PlayOneShot</code> with those <code>PlaybackParams</code> (volume 1, pitch 1, group <code>"SFX"</code> by default, not spatial). <code>clip</code> is a path or an <code>AudioClip</code> <span class="badge">issue #445</span>. Returns the handle id, 0 when the sound was dropped (no device, the group's <code>maxConcurrent</code>, a suspended output). A clip that does not load is a Lua error.</td></tr>
+<tr><td><code>Audio.PlayOneShotAt(clip, dspTime [, volume [, group [, pitch]]])</code>, <code>Audio.GetOneShotTime(id)</code> <span class="badge">issue #445</span></td><td><code>AudioSystem::PlayOneShotAt</code>: <code>PlayOneShot</code> started on the exact sample of <code>dspTime</code>; a time already reached plays at once. Note the order: group before pitch. <code>GetOneShotTime</code> is the position in seconds (0 for an unknown id).</td></tr>
+<tr><td><code>Audio.GetDspTime()</code>, <code>Audio.GetSampleRate()</code>, <code>Audio.IsSampleAccurate()</code> <span class="badge">issue #445</span></td><td>The <a href="#dsp-clock">DSP clock</a> in seconds (0 without an output), the output's sample rate (0 without one), and whether scheduled starts are sample-accurate (false on the web)</td></tr>
+<tr><td><code>Audio.CreateGroup(name [, {volume, maxVolume, pitch, muted, maxConcurrent}])</code> <span class="badge">issue #445</span></td><td>Creates a mixer group with those settings (clamped as the setters clamp; <code>maxConcurrent</code> below 1 is no limit) and returns <code>true</code>, or <code>false</code> when the group exists (it is not changed). A field of the wrong type is a Lua error and nothing is created.</td></tr>
+<tr><td><code>Audio.SetGroupMaxConcurrent(group, n)</code>, <code>GetGroupMaxConcurrent</code>, <code>SetGroupPitch(group, p)</code>, <code>GetGroupPitch</code>, <code>SetGroupMaxVolume(group, v)</code> <span class="badge">issue #445</span></td><td>The group's concurrency limit (<code>nil</code> or 0 removes it; <code>GetGroupMaxConcurrent</code> reads <code>nil</code> for no limit or an unknown group), pitch (1/8..8; reads 1 for an unknown group) and maximum source volume</td></tr>
+<tr><td><code>Audio.CreateTone{waveform, frequency, duration, volume, attack, decay, sustain, release, sampleRate, seed}</code> <span class="badge">issue #445</span></td><td>An <code>AudioClip</code> of one note (<a href="#synthesis">Synthesised clips</a>; every field optional). Invalid parameters are a Lua error; <code>nil</code> when there is no audio output to hold the clip (headless without loopback, no sound card, a build without audio)</td></tr>
+<tr><td><code>Audio.CreateClip(samples [, sampleRate [, channels]])</code> <span class="badge">issue #445</span></td><td>An <code>AudioClip</code> from a list of numbers (−1..1, clamped; 48000 Hz and 1 channel by default; stereo interleaved), at most 30 s. A non-number sample or an invalid rate, channel count or length is a Lua error; <code>nil</code> without an output</td></tr>
+<tr><td><code>clip:GetDuration()</code>, <code>GetFrameCount()</code>, <code>GetSampleRate()</code>, <code>GetChannels()</code>, <code>IsLoaded()</code> <span class="badge">issue #445</span></td><td>The <code>AudioClip</code> userdata's metadata</td></tr>
 <tr><td><code>Audio.StopOneShot(id)</code>, <code>Audio.IsOneShotPlaying(id)</code> <span class="badge">PR #334</span></td><td><code>AudioSystem::Stop</code>, <code>IsPlaying</code> with that handle; an unknown id is ignored or reads false</td></tr>
 <tr><td><code>Audio.SetGroupVolume(group, v)</code>, <code>GetGroupVolume</code>, <code>SetGroupMuted(group, muted)</code>, <code>IsGroupMuted</code>, <code>HasGroup</code> <span class="badge">PR #334</span></td><td>The mixer group's settings, with the same clamping. The setters ignore an unknown group; <code>GetGroupVolume</code> reads 1 and <code>IsGroupMuted</code> false for one.</td></tr>
 </tbody>
 </table>
 </div>
-<p>Lua cannot create mixer groups, change a group's pitch, maximum volume or concurrency, or read the distance and rolloff settings. Clips come from Lua (<code>SetClip</code>, PR #334), C++ or scene data, where the clip is saved as an asset reference <span class="badge">PR #34</span>.</p>
+<p>Lua cannot nest groups (they are flat) or read the distance and rolloff settings. Clips come from Lua (<code>SetClip</code>, PR #334; <code>CreateTone</code> and <code>CreateClip</code>, issue #445), C++ or scene data, where the clip is saved as an asset reference <span class="badge">PR #34</span>.</p>
+<pre class="lang-lua"><code>-- a C major chord, made once and played on the next beat
+local notes = {}
+for i, hz in ipairs({261.63, 329.63, 392.0}) do
+    notes[i] = Audio.CreateTone{waveform = "triangle", frequency = hz, duration = 0.6,
+                                attack = 0.01, decay = 0.1, sustain = 0.6, release = 0.2}
+end
+local nextBeat = Audio.GetDspTime() + 0.1
+for _, clip in ipairs(notes) do
+    if clip then Audio.PlayOneShotAt(clip, nextBeat, 0.4, "SFX") end
+end
+</code></pre>
 <pre class="lang-lua"><code>local source = self.gameObject:GetComponent("AudioSource")
 if source ~= nil and source:IsValid() then
     source:SetMixerGroup("UI")
     source:Play()
 end
 </code></pre>
-<p class="src">Source: <code>engine/src/scripting/bindings/LuaAudioBindings.cpp</code> — <code>BindAudio</code>, <code>LoadClip</code>; tests: <code>LuaAudioBindingTest.AMissingClipIsALuaErrorNamingThePath</code></p>
+<p class="src">Source: <code>engine/src/scripting/bindings/LuaAudioBindings.cpp</code> — <code>BindAudio</code>, <code>LoadClip</code>, <code>ResolveClip</code>, <code>MakeClip</code>; tests: <code>LuaAudioBindingTest.AMissingClipIsALuaErrorNamingThePath</code>, <code>tests/engine/scripting/LuaAudioApiTests.cpp</code> (<code>LuaAudioApiTest.*</code>: the clock without an output, <code>CreateGroup</code>, <code>SetGroupMaxConcurrent</code>, the synthesis functions' validation)</p>
 
 <div class="page-footer">
 <span>Describes master through PR #34.</span>
