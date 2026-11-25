@@ -34,6 +34,7 @@
 #include "engine/scripting/LuaComponent.hpp"
 #include "engine/ui/Button.hpp"
 #include "engine/ui/Canvas.hpp"
+#include "engine/ui/CanvasScaler.hpp"
 #include "engine/ui/Image.hpp"
 #include "engine/ui/LayoutGroup.hpp"
 #include "engine/ui/RectMask.hpp"
@@ -93,6 +94,7 @@ namespace N2Engine
         Add<Physics::SoftBody>(registry, "SoftBody");
         Add<Scripting::LuaComponent>(registry, "LuaComponent");
         Add<UI::Canvas>(registry, "Canvas");
+        Add<UI::CanvasScaler>(registry, "CanvasScaler");
         Add<UI::RectTransform>(registry, "RectTransform");
         Add<UI::Image>(registry, "Image");
         Add<UI::UIText>(registry, "UIText");
