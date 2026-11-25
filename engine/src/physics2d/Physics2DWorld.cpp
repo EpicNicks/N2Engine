@@ -462,7 +462,7 @@ namespace N2Engine::Physics2D
                     }
                     if (const auto soft = _softBodies.find(handle); soft != _softBodies.end())
                     {
-                        MoveSoftBody(body, soft->second, position.x, position.y);
+                        MoveSoftBody(body.id, soft->second, position.x, position.y);
                         continue;
                     }
                     const b2Rot rotation = ToRot(positionable->GetRotation());
@@ -2144,9 +2144,9 @@ namespace N2Engine::Physics2D
             }
 
             /// The game moved a soft body's object: the whole body moves with it, keeping its shape and speeds
-            void MoveSoftBody(const BodyRecord &centre, const SoftRecord &soft, const float x, const float y)
+            void MoveSoftBody(const b2BodyId centre, const SoftRecord &soft, const float x, const float y)
             {
-                const b2Pos at = b2Body_GetPosition(centre.id);
+                const b2Pos at = b2Body_GetPosition(centre);
                 const float dx = x - static_cast<float>(at.x);
                 const float dy = y - static_cast<float>(at.y);
                 if (dx == 0.0f && dy == 0.0f)
@@ -2163,13 +2163,13 @@ namespace N2Engine::Physics2D
                         b2Body_SetAwake(id, true);
                     }
                 };
-                WakeBodiesTouching(centre.id);
+                WakeBodiesTouching(centre);
                 for (const b2BodyId node : soft.nodes)
                 {
                     WakeBodiesTouching(node);
                     move(node);
                 }
-                move(centre.id);
+                move(centre);
             }
 
             struct JointRecord
