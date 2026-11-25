@@ -281,6 +281,99 @@ TEST(CpuParticleBackendTest, DragSlowsParticlesDown)
     EXPECT_GT(out[0].x, 3.0f);
 }
 
+namespace
+{
+    /// A wall at x = 1 facing -x
+    class Wall final : public Physics::IParticleCollider
+    {
+    public:
+        bool Cast(const Math::Vector3 &from, const Math::Vector3 &direction, const float distance,
+                  Physics::ParticleHit &hit) override
+        {
+            ++casts;
+            if (!(direction.x > 0.0f) || from.x >= 1.0f)
+            {
+                return false;
+            }
+            const float along = (1.0f - from.x) / direction.x;
+            if (along > distance)
+            {
+                return false;
+            }
+            hit.point = Math::Vector3(1.0f, from.y + direction.y * along, from.z + direction.z * along);
+            hit.normal = Math::Vector3(-1.0f, 0.0f, 0.0f);
+            return true;
+        }
+        int casts = 0;
+    };
+
+    /// One particle at the origin moving at (10, 5, 0) with no gravity into the wall, after `steps` steps
+    struct IntoTheWall
+    {
+        Wall wall;
+        CpuParticleBackend backend;
+        ParticleSystemHandle handle{};
+        std::vector<Math::Vector4> positions;
+        std::vector<Math::Vector4> motion;
+
+        explicit IntoTheWall(const float radius, const float bounce, const float dampen, const float loss,
+                             const int steps = 10)
+        {
+            ParticleParams params;
+            params.gravity = Math::Vector3();
+            params.lifetimeMin = 100.0f;
+            params.lifetimeMax = 100.0f;
+            params.bounce = bounce;
+            params.collider = &wall;
+            params.collisionRadius = radius;
+            params.collisionDampen = dampen;
+            params.collisionLifetimeLoss = loss;
+            handle = Make(backend, 4, 1, params);
+            backend.Spawn(handle, std::vector<Math::Vector3>{Math::Vector3()},
+                          std::vector<Math::Vector3>{Math::Vector3(10.0f, 5.0f, 0.0f)});
+            for (int i = 0; i < steps; ++i)
+            {
+                backend.Step(kStep);
+            }
+            backend.CopyPositions(handle, positions);
+            backend.CopyMotion(handle, motion);
+        }
+    };
+}
+
+TEST(CpuParticleBackendTest, AParticleBouncesOffACollider)
+{
+    const IntoTheWall run(0.0f, 0.5f, 0.0f, 0.0f);
+    ASSERT_EQ(run.positions.size(), 1u);
+    EXPECT_LT(run.positions[0].x, 1.0f) << "never through the wall";
+    EXPECT_NEAR(run.motion[0].x, -5.0f, 1e-4f) << "half the speed into it, turned back";
+    EXPECT_NEAR(run.motion[0].y, 5.0f, 1e-4f) << "the speed along it kept";
+    EXPECT_EQ(run.wall.casts, 10) << "one cast per particle per step";
+}
+
+TEST(CpuParticleBackendTest, TheColliderRadiusDampeningAndLifetimeLossApply)
+{
+    const IntoTheWall wide(0.25f, 0.0f, 0.4f, 0.0f, 6);
+    ASSERT_EQ(wide.positions.size(), 1u);
+    EXPECT_LT(wide.positions[0].x, 0.751f) << "stopped a radius short";
+    EXPECT_NEAR(wide.motion[0].x, 0.0f, 1e-4f) << "no bounce";
+    EXPECT_NEAR(wide.motion[0].y, 3.0f, 1e-4f) << "40 percent of the speed along it lost, once";
+
+    const IntoTheWall ageing(0.0f, 1.0f, 0.0f, 0.25f);
+    ASSERT_EQ(ageing.positions.size(), 1u);
+    EXPECT_NEAR(ageing.positions[0].w, 0.25f + 0.002f, 1e-3f) << "a quarter of its life, and the time passed";
+
+    const IntoTheWall deadly(0.0f, 1.0f, 0.0f, 1.0f);
+    EXPECT_TRUE(deadly.positions.empty()) << "the first hit removes it";
+}
+
+TEST(CpuParticleBackendTest, BadCollisionSettingsAreClamped)
+{
+    const IntoTheWall run(-3.0f, 0.5f, 7.0f, -1.0f);
+    ASSERT_EQ(run.positions.size(), 1u);
+    EXPECT_NEAR(run.motion[0].y, 0.0f, 1e-4f) << "dampening clamped to 1";
+}
+
 TEST(CpuParticleBackendTest, TheGroundPlaneBouncesAndNothingGoesBelowIt)
 {
     CpuParticleBackend backend;
