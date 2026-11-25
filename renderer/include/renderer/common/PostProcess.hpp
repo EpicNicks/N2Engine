@@ -27,6 +27,7 @@ namespace Renderer::Common
         static constexpr int MaxBloomIterations = 8;
         static constexpr float MaxBloomIntensity = 16.0f;
         static constexpr float MaxChromaticAberration = 0.25f;
+        static constexpr int MaxBlurIterations = 8;
 
         bool bloom = false;
         /// The brightness (the largest of r, g and b) above which a pixel glows: 0 makes everything glow, 1 nothing
@@ -43,16 +44,26 @@ namespace Renderer::Common
         float chromaticAberration = 0.0f;
         /// 0 (none) to 1 (black corners)
         float vignette = 0.0f;
+        /// A blur of the whole scene, applied before every other effect (issue #445)
+        bool blur = false;
+        /// 0 (the sharp image) to 1 (the blurred one): a mix of the two
+        float blurStrength = 1.0f;
+        /// Blur passes, 1 to MaxBlurIterations: the radius grows with each (a cost of two half-resolution passes each)
+        int blurIterations = 3;
 
         /// Every value clamped to its range; a value that is not finite takes its default (bloom keeps its flag)
         [[nodiscard]] static PostProcessSettings Sanitized(const PostProcessSettings &settings);
         /// Bloom is on and adds something
         [[nodiscard]] bool BloomActive() const { return bloom && bloomIntensity > 0.0f && bloomThreshold < 1.0f; }
-        /// Any effect changes the image (a frame with none skips the passes)
-        [[nodiscard]] bool IsActive() const
+        /// The blur is on and shows
+        [[nodiscard]] bool BlurActive() const { return blur && blurStrength > 0.0f; }
+        /// An effect of the composite pass (everything but the blur) changes the image
+        [[nodiscard]] bool CompositeActive() const
         {
             return BloomActive() || invert > 0.0f || chromaticAberration > 0.0f || vignette > 0.0f;
         }
+        /// Any effect changes the image (a frame with none skips the passes)
+        [[nodiscard]] bool IsActive() const { return BlurActive() || CompositeActive(); }
     };
 
     /// What one pass of the GPU post shaders does (PostProcessParams::mode)
@@ -62,6 +73,7 @@ namespace Renderer::Common
         Bright = 1,    ///< the source above the threshold (the bloom's first, half-resolution, pass)
         Blur = 2,      ///< a 9-tap Gaussian along (stepX, stepY)
         Composite = 3, ///< chromatic aberration, bloom added, invert, vignette: the pass that writes the frame
+        Mix = 4,       ///< from the source towards the second image by `intensity`, keeping the source's alpha: the blur
     };
 
     /// The bloom blur's taps: weight 0 at the centre, 1-4 on each side (they sum to 1). The GPU shaders hold the same numbers
@@ -71,7 +83,8 @@ namespace Renderer::Common
 
     /**
      * The block every GPU post shader reads (48 bytes: three vec4, the same in std140, push constants and WGSL):
-     * a = (mode, threshold, intensity, invert), b = (stepX, stepY, chromaticAberration, vignette),
+     * a = (mode, threshold, intensity, invert), b = (stepX, stepY, chromaticAberration, vignette); for Mix the intensity
+     * is the blur's strength.
      * c = (tint r, tint g, tint b, flipY). stepX/stepY are the blur direction in uv of the source (one texel times the
      * pass's spread); flipY 1 makes the vertex stage read the source upside down (a capture into a texture whose first row
      * is the bottom of the picture).
@@ -92,6 +105,12 @@ namespace Renderer::Common
     {
         return frameExtent / 2 > 0 ? frameExtent / 2 : 1;
     }
+
+    /**
+     * The order every backend runs the passes in. With the blur active: the frame is copied, drawn at half size (Copy),
+     * blurred (blurIterations pairs of Blur passes, as the bloom's), and drawn back over the frame mixed with the sharp
+     * copy (Mix). Then, if CompositeActive, the bloom's passes and the composite run on that result.
+     */
 
     /**
      * The software renderer's post-processing, and the reference of the GPU shaders: `settings` (sanitized here) applied in

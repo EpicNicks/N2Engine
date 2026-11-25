@@ -1833,6 +1833,36 @@ function Canvas:GetSize() end
 ---@param size Vector2
 function Canvas:SetSize(size) end
 
+---Scales a screen-space overlay canvas with the window (on the object with the root Canvas). With a scale s the
+---canvas is the viewport divided by s, laid out in canvas units and drawn and hit s times as large: GetRect is in canvas
+---units, the mouse and RectTransform:LocalToCanvas stay in window coordinates.
+---@class CanvasScaler : Component
+CanvasScaler = {}
+
+---@return "ConstantPixelSize"|"ScaleWithScreenSize"
+function CanvasScaler:GetUIScaleMode() end
+---@param mode "ConstantPixelSize"|"ScaleWithScreenSize" an unknown name raises an error
+function CanvasScaler:SetUIScaleMode(mode) end
+---@return number
+function CanvasScaler:GetScaleFactor() end
+---@param factor number pixels per canvas unit, used with ConstantPixelSize
+function CanvasScaler:SetScaleFactor(factor) end
+---@return Vector2
+function CanvasScaler:GetReferenceResolution() end
+---@param resolution Vector2 the size the UI is laid out for, used with ScaleWithScreenSize (800 x 600 by default)
+function CanvasScaler:SetReferenceResolution(resolution) end
+---@return "MatchWidthOrHeight"|"Expand"|"Shrink"
+function CanvasScaler:GetScreenMatchMode() end
+---@param mode "MatchWidthOrHeight"|"Expand"|"Shrink" an unknown name raises an error
+function CanvasScaler:SetScreenMatchMode(mode) end
+---@return number
+function CanvasScaler:GetMatchWidthOrHeight() end
+---@param match number 0 follows the width, 1 the height
+function CanvasScaler:SetMatchWidthOrHeight(match) end
+---The scale the last layout used (1 before any)
+---@return number
+function CanvasScaler:GetAppliedScale() end
+
 ---A coloured rectangle over its object's rect, optionally showing a sprite (an image file). A raycast target
 ---(the default) takes the pointer: its object gets the OnMouse* callbacks and Input.IsPointerOverUI() is true.
 ---@class Image : Component
@@ -4538,6 +4568,9 @@ function Graphics.CanPostProcess() end
 ---@field invert number|nil 0 (none) to 1 (a full negative)
 ---@field chromaticAberration number|nil red and blue fringes, 0 to 0.25 (0.02 is strong)
 ---@field vignette number|nil darkened corners, 0 to 1
+---@field blur boolean|nil blur the whole scene, before the other effects
+---@field blurStrength number|nil 0 (sharp) to 1 (blurred, the default)
+---@field blurIterations integer|nil blur passes, 1 to 8 (default 3): the blur widens with each
 
 ---The scene's full-screen effects, run after the scene and before the screen-space UI (the HUD is not bloomed). The first
 ---active PostProcessStack of the scene is used; add it with go:AddComponent("PostProcessStack"). Saved with the scene and

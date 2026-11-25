@@ -20,6 +20,7 @@
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/ui/Button.hpp"
 #include "engine/ui/Canvas.hpp"
+#include "engine/ui/CanvasScaler.hpp"
 #include "engine/ui/Image.hpp"
 #include "engine/ui/LayoutGroup.hpp"
 #include "engine/ui/RectMask.hpp"
@@ -372,10 +373,21 @@ namespace N2Engine::UI
         // Lower sortOrder first (underneath); ties keep hierarchy order
         std::ranges::stable_sort(canvases, std::less{}, &RootCanvas::sortOrder);
 
-        const Rect canvasRect{0.0f, 0.0f, static_cast<float>(viewport[0]), static_cast<float>(viewport[1])};
         for (const RootCanvas &canvas : canvases)
         {
-            LayOut(*canvas.gameObject, canvasRect, true, Transform2D{}, MaskClip{}, items);
+            // Issue #445: with a CanvasScaler the canvas is laid out in its own units and drawn that many pixels each
+            float scale = 1.0f;
+            if (CanvasScaler *scaler = canvas.gameObject->GetComponent<CanvasScaler>(); scaler && scaler->IsActive())
+            {
+                scale = scaler->ComputeScale(viewport);
+                scaler->SetAppliedScale(scale);
+            }
+            const Rect canvasRect{0.0f, 0.0f, static_cast<float>(viewport[0]) / scale,
+                                  static_cast<float>(viewport[1]) / scale};
+            Transform2D toScreen;
+            toScreen.a = scale;
+            toScreen.d = scale;
+            LayOut(*canvas.gameObject, canvasRect, true, toScreen, MaskClip{}, items);
         }
         return items;
 #endif
