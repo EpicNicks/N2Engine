@@ -133,7 +133,12 @@ TEST_F(Features445SampleTest, TheSampleRunsAndItsChecksPass)
         local director = SceneManager.GetCurrentScene():FindGameObject('Director'):GetScript('res://scripts/Director.lua')
         return director.done == true, director.passed or 0, table.concat(director.failures or {}, '; ')
     )", sol::script_pass_on_error);
-    ASSERT_TRUE(result.valid()) << sol::error(result).what();
+    if (!result.valid())
+    {
+        // Copy-initialised: MSVC finds sol::error(result) ambiguous
+        const sol::error error = result;
+        FAIL() << error.what();
+    }
     const auto [done, passed, failures] = result.get<std::tuple<bool, int, std::string>>();
     EXPECT_TRUE(done);
     EXPECT_EQ(failures, "");
