@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -289,4 +290,166 @@ TEST(UITextOverflowComponentTest, ItIsSavedAndOldDataOverflows)
     const auto old = UISystem::CreateText("Old", "z");
     old->GetComponent<UIText>()->Deserialize(saved);
     EXPECT_EQ(old->GetComponent<UIText>()->GetOverflow(), TextOverflow::Overflow);
+}
+
+// ============================================================================
+// Rich text
+// ============================================================================
+
+TEST(UIRichTextTest, OffByDefaultSoTagsAreText)
+{
+    const auto element = UISystem::CreateText("Label", "<b>x</b>");
+    auto *text = element->GetComponent<UIText>();
+    EXPECT_FALSE(text->GetRichText());
+    EXPECT_EQ(text->GetPlainText(), "<b>x</b>");
+    const Rect rect{0.0f, 0.0f, 400.0f, 100.0f};
+    EXPECT_EQ(text->GetLayout(rect).quads.size(), 8u);
+    text->SetRichText(true);
+    EXPECT_EQ(text->GetPlainText(), "x");
+    EXPECT_EQ(text->GetLayout(rect).quads.size(), 1u);
+    text->SetRichText(false);
+    EXPECT_EQ(text->GetLayout(rect).quads.size(), 8u) << "and back";
+}
+
+TEST(UIRichTextTest, SizesChangeTheLayoutAndWhatIsMeasured)
+{
+    const auto element = UISystem::CreateText("Label", "ab<size=200%>cd</size>");
+    auto *text = element->GetComponent<UIText>();
+    text->SetRichText(true);
+    text->SetFontSize(20.0f);
+    const Rect rect{0.0f, 0.0f, 400.0f, 100.0f};
+    const Text::TextLayout &layout = text->GetLayout(rect);
+    ASSERT_EQ(layout.quads.size(), 4u);
+    EXPECT_GT(layout.quads[2].position.Height(), 1.5f * layout.quads[0].position.Height());
+    const float measured = text->Measure(0.0f).bounds.Height();
+    EXPECT_NEAR(measured, layout.bounds.Height(), 1e-3f);
+    text->SetText("abcd");
+    EXPECT_LT(text->Measure(0.0f).bounds.Height(), measured);
+    // A new font size changes what <size=N> means
+    text->SetText("<size=40>a</size>");
+    const float tall = text->GetLayout(rect).bounds.Height();
+    text->SetFontSize(40.0f);
+    EXPECT_NEAR(text->GetLayout(rect).bounds.Height(), tall, 1e-2f);
+}
+
+TEST(UIRichTextTest, TruncationKeepsTheStylesAndCountsPlainCharacters)
+{
+    const auto element = UISystem::CreateText("Label", "<size=200%>WW</size>WWWWWWWWWW");
+    auto *text = element->GetComponent<UIText>();
+    text->SetRichText(true);
+    text->SetWrap(false);
+    text->SetFontSize(20.0f);
+    text->SetOverflow(TextOverflow::Ellipsis);
+    const Rect rect{0.0f, 0.0f, 160.0f, 100.0f};
+    const Text::TextLayout &layout = text->GetLayout(rect);
+    ASSERT_GE(layout.quads.size(), 3u);
+    EXPECT_LE(layout.lines.front().width, rect.width + 0.1f);
+    EXPECT_GT(layout.quads[0].position.Height(), 1.5f * layout.quads[2].position.Height()) << "still large";
+    EXPECT_TRUE(text->IsOverflowing());
+}
+
+TEST(UIRichTextTest, TheSoftwareRendererDrawsColoursBoldAndItalic)
+{
+    constexpr int width = 120;
+    constexpr int height = 60;
+    const auto scene = Scene::Create("RichText_Software");
+    const auto canvas = UISystem::CreateCanvas("Canvas");
+    scene->AddRootGameObject(canvas);
+    const auto element = UISystem::CreateText("Label", "I");
+    canvas->AddChild(element, false);
+    element->GetComponent<RectTransform>()->StretchToParent();
+    auto *text = element->GetComponent<UIText>();
+    text->SetRichText(true);
+    text->SetFontSize(40.0f);
+    text->SetHorizontalAlign(Text::HorizontalAlign::Center);
+    text->SetVerticalAlign(Text::VerticalAlign::Middle);
+    // Black text: a colour tag must still show
+    text->SetColor(Common::Color{0.0f, 0.0f, 0.0f, 1.0f});
+
+    struct Lit
+    {
+        int red = 0;
+        int green = 0;
+        int minX = width;
+        int maxX = -1;
+    };
+    const auto render = [&](const std::string &markup)
+    {
+        text->SetText(markup);
+        Renderer::Software::SoftwareRenderer renderer;
+        EXPECT_TRUE(renderer.Initialize(nullptr, width, height));
+        renderer.Clear(0.0f, 0.0f, 1.0f, 1.0f);
+        std::vector<std::uint8_t> rgba(static_cast<std::size_t>(width) * height * 4);
+        renderer.BeginFrame();
+        UISystem::Render(*scene, &renderer, Vector2i{width, height});
+        renderer.EndFrame();
+        renderer.Present();
+        renderer.ReadFramebuffer(rgba.data(), width, height);
+        renderer.Shutdown();
+        Lit lit;
+        for (int y = 0; y < height; ++y)
+        {
+            for (int x = 0; x < width; ++x)
+            {
+                const std::size_t at = (static_cast<std::size_t>(y) * width + x) * 4;
+                const bool red = rgba[at] > 200 && rgba[at + 2] < 80;
+                const bool green = rgba[at + 1] > 200 && rgba[at + 2] < 80;
+                lit.red += red ? 1 : 0;
+                lit.green += green ? 1 : 0;
+                if (red || green)
+                {
+                    lit.minX = std::min(lit.minX, x);
+                    lit.maxX = std::max(lit.maxX, x);
+                }
+            }
+        }
+        return lit;
+    };
+
+    const Lit plain = render("<color=#ff0000>I</color>");
+    EXPECT_GT(plain.red, 20);
+    EXPECT_EQ(plain.green, 0);
+    const Lit two = render("<color=#ff0000>I</color><color=#00ff00>I</color>");
+    EXPECT_GT(two.red, 20);
+    EXPECT_GT(two.green, 20);
+    const Lit bold = render("<color=#ff0000><b>I</b></color>");
+    EXPECT_GT(bold.red, plain.red) << "bold covers more";
+    const Lit italic = render("<color=#ff0000><i>I</i></color>");
+    EXPECT_GT(italic.maxX - italic.minX, plain.maxX - plain.minX + 3) << "slanted";
+
+    // A change of the tint reaches coloured text without a change of the markup
+    text->SetText("<color=#ffff00>I</color>");
+    const Lit yellow = render("<color=#ffff00>I</color>");
+    EXPECT_GT(yellow.green, 20);
+    text->SetTint(Common::Color{1.0f, 0.0f, 0.0f, 1.0f});
+    const Lit tinted = render("<color=#ffff00>I</color>");
+    EXPECT_EQ(tinted.green, 0) << "the tint takes the green out";
+    EXPECT_GT(tinted.red, 20);
+
+    // Clipped with overflow Clip, slanted glyphs stay inside the rect
+    text->SetTint(Common::Color::White);
+    element->GetComponent<RectTransform>()->SetAnchorMin(Vector2{0.5f, 0.5f});
+    element->GetComponent<RectTransform>()->SetAnchorMax(Vector2{0.5f, 0.5f});
+    element->GetComponent<RectTransform>()->SetSizeDelta(Vector2{30.0f, 40.0f}); // x 45..75
+    text->SetOverflow(TextOverflow::Clip);
+    text->SetWrap(false);
+    const Lit clipped = render("<color=#ff0000><i>WWWWWWWW</i></color>");
+    EXPECT_GT(clipped.red, 20);
+    EXPECT_GE(clipped.minX, 44);
+    EXPECT_LE(clipped.maxX, 75);
+}
+
+TEST(UIRichTextTest, ItIsSavedAndOldDataHasItOff)
+{
+    const auto element = UISystem::CreateText("Label", "x");
+    auto *text = element->GetComponent<UIText>();
+    text->SetRichText(true);
+    nlohmann::json saved = text->Serialize();
+    const auto other = UISystem::CreateText("Other", "y");
+    other->GetComponent<UIText>()->Deserialize(saved);
+    EXPECT_TRUE(other->GetComponent<UIText>()->GetRichText());
+    saved.erase("richText");
+    const auto old = UISystem::CreateText("Old", "z");
+    old->GetComponent<UIText>()->Deserialize(saved);
+    EXPECT_FALSE(old->GetComponent<UIText>()->GetRichText());
 }

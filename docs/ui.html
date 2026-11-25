@@ -374,6 +374,30 @@ canvas-&gt;AddChild(label, false);
 </ul>
 <p class="src">Source: <code>engine/src/ui/UIText.cpp</code> &mdash; <code>UIText::FitText</code>, <code>IsOverflowing</code>, <code>RenderUI</code>; tests: <code>UITextOverflowTest.*</code>, <code>UITextOverflowComponentTest.*</code> (<code>tests/engine/ui/UITextOverflowTests.cpp</code>), <code>LuaUITest.SetsATextsOverflow</code></p>
 
+<h3 id="text-rich">Rich text <span class="badge">issue #445</span></h3>
+<p>With <code>richText</code> on (<code>SetRichText</code>; <strong>off by default</strong>, so a <code>&lt;</code> in existing text stays text), these tags style parts of the text. They are a subset of Unity's TextMesh Pro tags.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Tag</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>&lt;b&gt;…&lt;/b&gt;</code></td><td>Bold</td></tr>
+<tr><td><code>&lt;i&gt;…&lt;/i&gt;</code></td><td>Italic</td></tr>
+<tr><td><code>&lt;color=#RGB&gt;</code>, <code>#RRGGBB</code>, <code>#RRGGBBAA</code> or a name … <code>&lt;/color&gt;</code></td><td>The text's colour for the part; a <code>Button</code>'s tint still multiplies it, and its alpha multiplies the text's. Names: black, blue, cyan, gray, green, grey, magenta, orange, purple, red, white, yellow.</td></tr>
+<tr><td><code>&lt;size=30&gt;</code> or <code>&lt;size=150%&gt;</code> … <code>&lt;/size&gt;</code></td><td>A size in canvas units, or a percentage of <code>fontSize</code> (also when nested); at most 100 times <code>fontSize</code>. A line is as high as its largest character.</td></tr>
+<tr><td><code>&lt;noparse&gt;…&lt;/noparse&gt;</code></td><td>What is between is shown as it is</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li>Tag names, colour names and hex digits ignore case, and a value may be in double quotes. Tags nest, and a closing tag ends the innermost open tag of its name, so <code>&lt;b&gt;&lt;i&gt;…&lt;/b&gt;…&lt;/i&gt;</code> works as written.</li>
+<li><strong>Bad markup is shown as written</strong>, never an error: an unknown tag, a missing or unreadable value (or one on a tag that takes none), spaces inside the brackets, a size that is not a positive number, or a closing tag with nothing of its name open. A tag left open lasts to the end of the text.</li>
+<li><strong>Bold and italic are made from the one font face.</strong> A text has one font asset, so bold draws each glyph twice, 0.04 em apart (and advances that much more), and italic slants the glyphs by 0.2. A separate bold or italic face is not chosen. Translucent bold text is a little darker where the two drawings overlap.</li>
+<li><code>GetPlainText()</code> is the text without its tags. The <a href="#text-character-offsets">per-character</a> offsets, colours and scales count its characters; a per-character colour multiplies a tag's colour.</li>
+<li><a href="#text-overflow">Overflow modes</a>, <a href="#mask">masks</a>, effects, layout groups and the <code>ContentSizeFitter</code> work with it. <code>TextRenderer</code> (world text) does not read tags.</li>
+<li>Changing the colour or tint of text with a <code>&lt;color&gt;</code> tag rebuilds its mesh (the colours are in its vertices).</li>
+</ul>
+<p class="src">Source: <code>text/include/text/RichText.hpp</code>, <code>text/src/text/RichText.cpp</code>; <code>text/src/text/TextLayout.cpp</code> (<code>CharacterMetrics</code>); <code>engine/src/ui/UIText.cpp</code> &mdash; <code>ShownIn</code>, <code>RenderUI</code>, <code>StyleMesh</code>; tests: <code>RichTextTest.*</code> (<code>tests/text/RichTextTests.cpp</code>), <code>TextLayoutTest.*Metrics*</code>, <code>UIRichTextTest.*</code>, <code>LuaUITest.TurnsOnRichText</code></p>
+
 <h3 id="text-character-offsets">Moving single characters <span class="badge">PR #336</span></h3>
 <p><code>SetCharacterOffset(index, offset)</code> moves one character away from where the layout put it, by <code>offset</code> in canvas units (+y up): what TextMeshPro scripts do to vertices for waving, shaking or bouncing text. <code>index</code> counts characters (code points) of the text from 0, spaces and line breaks included; a space has no glyph, so nothing moves. <code>ClearCharacterOffsets()</code> puts every character back. The offsets are runtime state: not saved with the scene, and kept across <code>SetText</code> (a script that changes the text sets them again). Changing them does not lay the text out again: the draw applies them to a copy of the layout&rsquo;s glyph quads (<code>ApplyCharacterOffsets</code>) and rebuilds the mesh once, so animating a few characters each frame costs one mesh update per frame for that text. Every renderer draws the moved quads the same way, since the change is in the mesh. Per-character colour and scale are below.</p>
 <pre class="lang-lua"><code>-- a bobbing word: characters 5 to 8, phase by place
@@ -815,7 +839,7 @@ open:GetComponent("Button"):AddOnClick(function() print("opening") end)
 <h2 id="not-yet">Not yet</h2>
 <ul>
 <li>For <strong>Button</strong>: sprite-swap and animation transitions, keyboard and gamepad navigation and selection (Unity's <code>Selected</code> state), persistent (saved) listeners, and pointer events bubbling to a parent.</li>
-<li>For <strong>UI text</strong>: best-fit sizing and rich text.</li>
+<li>For <strong>UI text</strong>: best-fit sizing, real bold and italic faces, underline and strikethrough, inline sprites, and tags in world text (<code>TextRenderer</code>).</li>
 <li>For <strong>world-space canvases</strong>: Unity's Screen Space - Camera mode, a per-canvas event camera (the main camera is used), clipping a transparent object that crosses the canvas's plane, and blending on the software renderer (<a href="#world-sw-text">text writes depth there</a>).</li>
 <li>Flexible layout sizes and Unity's <code>MinSize</code> fit, soft (feathered) mask edges and masks of any shape (<span class="badge">issue #445</span> rectangular masks and scroll views are done), and events for buttons other than the left.</li>
 <li>For <strong>Image</strong>: sprite sub-rects and atlases, tiled (repeating) slices, and preserving the aspect ratio (a sprite is stretched over the whole rect).</li>

@@ -246,13 +246,15 @@ namespace N2Engine::Rendering::TextDrawing
                                              const Text::LayoutOptions &options)
     {
         if (_inputs && _inputs->font == font.get() && SameOptions(_inputs->options, options) &&
-            _inputs->text == text)
+            std::ranges::equal(_inputs->metrics, options.metrics) && _inputs->text == text)
         {
             return _layout;
         }
 
         _layout = font ? font->Layout(text, options) : Text::TextLayout{};
-        _inputs = Inputs{.text = text, .font = font.get(), .options = options};
+        _inputs = Inputs{.text = text, .font = font.get(), .options = options,
+                         .metrics = {options.metrics.begin(), options.metrics.end()}};
+        _inputs->options.metrics = {}; // not kept: it may not outlive this call
         _font = std::move(font);
         ++_version;
         return _layout;

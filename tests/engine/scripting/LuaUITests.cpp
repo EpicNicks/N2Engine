@@ -542,3 +542,17 @@ TEST_F(LuaUITest, SetsATextsOverflow)
     )");
     Run("lua_ui_over = nil; lua_ui_over_text = nil");
 }
+
+TEST_F(LuaUITest, TurnsOnRichText)
+{
+    // Issue #445
+    Run(R"(
+        lua_ui_rich = UI.CreateText("Rich", "<b>Hi</b> <color=red>there</color>")
+        lua_ui_rich_text = lua_ui_rich:GetComponent("UIText")
+        assert(lua_ui_rich_text:GetRichText() == false)
+        lua_ui_rich_text:SetRichText(true)
+        assert(lua_ui_rich_text:GetRichText())
+        assert(lua_ui_rich_text:GetPlainText() == "Hi there", lua_ui_rich_text:GetPlainText())
+    )");
+    Run("lua_ui_rich = nil; lua_ui_rich_text = nil");
+}

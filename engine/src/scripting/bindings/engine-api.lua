@@ -2007,6 +2007,16 @@ function UIText:GetOverflow() end
 ---Whether the text doesn't fit the rect of the last layout (a line too wide, or too many lines)
 ---@return boolean
 function UIText:IsOverflowing() end
+---Reads tags in the text (default off): <b>, <i>, <color=#RRGGBB|#RRGGBBAA|#RGB|name>, <size=24> or <size=150%>, each
+---closed by </name>, and <noparse>. Anything else, a bad value or an unmatched closing tag is shown as written; an
+---unclosed tag lasts to the end
+---@param richText boolean
+function UIText:SetRichText(richText) end
+---@return boolean
+function UIText:GetRichText() end
+---The characters that show: the text without its tags when rich text is on (what the character indices count)
+---@return string
+function UIText:GetPlainText() end
 ---An outline around the glyphs, drawn under them. Lengths are in ems (fontSize pixels each); effects are
 ---limited to 90% of the font's SDF spread (about 0.15 em for the default font), with one warning when reduced.
 ---@param width number outline width in ems; 0 (the default) turns it off

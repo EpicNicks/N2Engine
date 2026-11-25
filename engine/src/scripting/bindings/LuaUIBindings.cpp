@@ -537,6 +537,9 @@ namespace N2Engine::Scripting::Bindings
             },
             "GetOverflow", [](const UITextRef &c) -> std::string { return OverflowName(c.Pin()->GetOverflow()); },
             "IsOverflowing", Forward<UITextRef, &UI::UIText::IsOverflowing>(),
+            "SetRichText", Forward<UITextRef, &UI::UIText::SetRichText>(),
+            "GetRichText", Forward<UITextRef, &UI::UIText::GetRichText>(),
+            "GetPlainText", Forward<UITextRef, &UI::UIText::GetPlainText>(),
             // Effects (Text::TextEffects), lengths in ems
             "SetOutline", [](const UITextRef &c, const float width, const Common::Color &color)
             {

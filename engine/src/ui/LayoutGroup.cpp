@@ -76,10 +76,10 @@ namespace N2Engine::UI
                 {
                     return Math::Vector2{0.0f, 0.0f};
                 }
-                const Text::Rect natural = font->Layout(text->GetText(), text->GetLayoutOptions(0.0f)).bounds;
+                const Text::Rect natural = text->Measure(0.0f).bounds;
                 const float wrapWidth = text->GetWrap() && current.width > 0.0f ? current.width : 0.0f;
                 const float height = wrapWidth > 0.0f && natural.Width() > wrapWidth
-                                         ? font->Layout(text->GetText(), text->GetLayoutOptions(wrapWidth)).bounds.Height()
+                                         ? text->Measure(wrapWidth).bounds.Height()
                                          : natural.Height();
                 return Math::Vector2{natural.Width(), height};
             }
