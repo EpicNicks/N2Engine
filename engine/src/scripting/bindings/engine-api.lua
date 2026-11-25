@@ -911,7 +911,8 @@ function GameObject:Destroy() end
 ---Add a component by type name and return it.
 ---Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CharacterController", "Joint", "Rigidbody2D", "BoxCollider2D",
 ---"CircleCollider2D", "PolygonCollider2D", "Joint2D", "CubeRenderer",
----"SphereRenderer", "QuadRenderer", "Sprite2D", "MeshRenderer", "TextRenderer", "ParticleSystem", "SoftBody", "Light", "AudioSource", "AudioListener",
+---"SphereRenderer", "QuadRenderer", "Sprite2D", "MeshRenderer", "TextRenderer", "ParticleSystem", "LineRenderer", "TrailRenderer", "MeshRenderer2D",
+---"SoftBody", "Light", "AudioSource", "AudioListener",
 ---"LuaComponent", "RectTransform", "Canvas", "Image", "UIText", "Button", "RectMask", "ScrollView", "Slider", "HorizontalLayoutGroup", "VerticalLayoutGroup", "GridLayoutGroup",
 ---"LayoutElement", "ContentSizeFitter". Unknown names raise an error.
 ---@param typeName string
@@ -1020,9 +1021,9 @@ function QuadRenderer:GetMaterial() end
 ---@class MeshRenderer : Component
 MeshRenderer = {}
 
----A built-in mesh by name, or a mesh asset's path (a model's mesh is "<model path>#<key>"); nil clears it. Raises an
----error (keeping the current mesh) if it doesn't load.
----@param nameOrPath string|nil "Cube", "Sphere", "Quad", or e.g. "res://models/robot.glb#mesh/Body"
+---A built-in mesh by name, a mesh asset's path (a model's mesh is "<model path>#<key>") or a ProceduralMesh (Mesh.Create);
+---nil clears it. Raises an error (keeping the current mesh) if it doesn't load.
+---@param nameOrPath string|ProceduralMesh|nil "Cube", "Sphere", "Quad", or e.g. "res://models/robot.glb#mesh/Body"
 function MeshRenderer:SetMesh(nameOrPath) end
 
 ---@return string|nil nameOrPath the built-in's name or the asset's path ("res://models/robot.glb#mesh/Body" for a
@@ -3090,6 +3091,200 @@ function Sprite2D:GetPivot() end
 function Sprite2D:SetSortingOrder(order) end
 ---@return integer
 function Sprite2D:GetSortingOrder() end
+
+---@alias Blend2DName "Alpha"|"Additive"
+---@alias LineJoinName "Miter"|"Bevel"
+---@alias LineCapName "Butt"|"Square"
+
+---A polyline drawn as one mesh (docs/meshes.html#lines): flat in the x, y plane of its space, in the Transparent queue by
+---sorting order. Points are in the object's space unless SetUseWorldSpace(true).
+---@class LineRenderer : Component
+LineRenderer = {}
+---Replaces every point (at most 16384; more is an error)
+---@param points (Vector2|Vector3)[]
+function LineRenderer:SetPositions(points) end
+---@return Vector3[]
+function LineRenderer:GetPositions() end
+---Point i (1-based, 1 to the count; anything else is an error)
+---@param index integer
+---@param point Vector2|Vector3
+function LineRenderer:SetPosition(index, point) end
+---@param index integer
+---@return Vector3
+function LineRenderer:GetPosition(index) end
+---Fewer drops the last points, more adds points at the origin (0 to 16384)
+---@param count integer
+function LineRenderer:SetPositionCount(count) end
+---@return integer
+function LineRenderer:GetPositionCount() end
+---Both the start and end width
+---@param width number
+function LineRenderer:SetWidth(width) end
+---@param width number
+function LineRenderer:SetStartWidth(width) end
+---@return number
+function LineRenderer:GetStartWidth() end
+---@param width number
+function LineRenderer:SetEndWidth(width) end
+---@return number
+function LineRenderer:GetEndWidth() end
+---Both the start and end colour
+---@param color Color
+function LineRenderer:SetColor(color) end
+---@param color Color
+function LineRenderer:SetStartColor(color) end
+---@return Color
+function LineRenderer:GetStartColor() end
+---@param color Color
+function LineRenderer:SetEndColor(color) end
+---@return Color
+function LineRenderer:GetEndColor() end
+---@param loop boolean joins the last point back to the first
+function LineRenderer:SetLoop(loop) end
+---@return boolean
+function LineRenderer:GetLoop() end
+---@param world boolean
+function LineRenderer:SetUseWorldSpace(world) end
+---@return boolean
+function LineRenderer:GetUseWorldSpace() end
+---@param join LineJoinName
+function LineRenderer:SetJoin(join) end
+---@return LineJoinName
+function LineRenderer:GetJoin() end
+---The longest miter, in half widths, before a corner is bevelled (default 4)
+---@param limit number
+function LineRenderer:SetMiterLimit(limit) end
+---@return number
+function LineRenderer:GetMiterLimit() end
+---@param cap LineCapName
+function LineRenderer:SetCap(cap) end
+---@return LineCapName
+function LineRenderer:GetCap() end
+---@param mode Blend2DName
+function LineRenderer:SetBlendMode(mode) end
+---@return Blend2DName
+function LineRenderer:GetBlendMode() end
+---Lower draws first
+---@param order integer
+function LineRenderer:SetSortingOrder(order) end
+---@return integer
+function LineRenderer:GetSortingOrder() end
+
+---A trail behind its object (docs/meshes.html#trails). Points age by the scaled delta time and are dropped after `time`
+---seconds; width and colour go from start (the head) to end (a point `time` old).
+---@class TrailRenderer : Component
+TrailRenderer = {}
+---Forgets every point: call it after a teleport
+function TrailRenderer:Clear() end
+---@return integer
+function TrailRenderer:GetPointCount() end
+---@param seconds number how long a point lives (default 1)
+function TrailRenderer:SetTime(seconds) end
+---@return number
+function TrailRenderer:GetTime() end
+---@param distance number how far the object moves before a new point (default 0.1)
+function TrailRenderer:SetMinVertexDistance(distance) end
+---@return number
+function TrailRenderer:GetMinVertexDistance() end
+---@param emitting boolean false: no new points; the old ones still age away
+function TrailRenderer:SetEmitting(emitting) end
+---@return boolean
+function TrailRenderer:IsEmitting() end
+---@param width number
+function TrailRenderer:SetWidth(width) end
+---@param width number
+function TrailRenderer:SetStartWidth(width) end
+---@return number
+function TrailRenderer:GetStartWidth() end
+---@param width number
+function TrailRenderer:SetEndWidth(width) end
+---@return number
+function TrailRenderer:GetEndWidth() end
+---@param color Color
+function TrailRenderer:SetColor(color) end
+---@param color Color
+function TrailRenderer:SetStartColor(color) end
+---@return Color
+function TrailRenderer:GetStartColor() end
+---@param color Color
+function TrailRenderer:SetEndColor(color) end
+---@return Color
+function TrailRenderer:GetEndColor() end
+---@param join LineJoinName
+function TrailRenderer:SetJoin(join) end
+---@return LineJoinName
+function TrailRenderer:GetJoin() end
+---@param limit number
+function TrailRenderer:SetMiterLimit(limit) end
+---@return number
+function TrailRenderer:GetMiterLimit() end
+---@param mode Blend2DName
+function TrailRenderer:SetBlendMode(mode) end
+---@return Blend2DName
+function TrailRenderer:GetBlendMode() end
+---@param order integer
+function TrailRenderer:SetSortingOrder(order) end
+---@return integer
+function TrailRenderer:GetSortingOrder() end
+
+---Draws a mesh as Sprite2D draws its shapes: unlit, both faces, blended, in the vertex colours times its colour, by sorting order
+---(docs/meshes.html#mesh-renderer-2d)
+---@class MeshRenderer2D : Component
+MeshRenderer2D = {}
+---@param mesh ProceduralMesh|string|nil a ProceduralMesh, a built-in name ("Quad"), a mesh asset's path, or nil
+function MeshRenderer2D:SetMesh(mesh) end
+---@return ProceduralMesh|nil
+function MeshRenderer2D:GetMesh() end
+---@param color Color
+function MeshRenderer2D:SetColor(color) end
+---@return Color
+function MeshRenderer2D:GetColor() end
+---@param path string|nil an image file; nil for the vertex colours alone. One that doesn't load is an error
+function MeshRenderer2D:SetTexture(path) end
+---@return string|nil
+function MeshRenderer2D:GetTexture() end
+---@param mode Blend2DName
+function MeshRenderer2D:SetBlendMode(mode) end
+---@return Blend2DName
+function MeshRenderer2D:GetBlendMode() end
+---@param order integer
+function MeshRenderer2D:SetSortingOrder(order) end
+---@return integer
+function MeshRenderer2D:GetSortingOrder() end
+
+---A mesh description for Mesh.Create and ProceduralMesh:SetData. Without indices the vertices are a simple polygon's outline
+---(x, y), triangulated.
+---@class MeshDescription
+---@field vertices (Vector2|Vector3)[] 1 to Mesh.MaxVertices
+---@field indices integer[]|nil 1-based, three per triangle, at most Mesh.MaxIndices
+---@field colors Color[]|nil one per vertex
+---@field uvs Vector2[]|nil one per vertex
+
+---A mesh made at runtime (docs/meshes.html#script-meshes)
+---@class ProceduralMesh
+ProceduralMesh = {}
+---Replaces the geometry (the same rules as Mesh.Create); a bad description is an error and keeps the old geometry
+---@param desc MeshDescription
+function ProceduralMesh:SetData(desc) end
+---@return integer
+function ProceduralMesh:GetVertexCount() end
+---@return integer
+function ProceduralMesh:GetIndexCount() end
+---@return BoundingBox
+function ProceduralMesh:GetBounds() end
+
+---@class MeshStatic
+---@field MaxVertices integer 65536
+---@field MaxIndices integer 196608
+Mesh = {}
+---A new mesh; any problem (an index outside the vertices, counts that don't match, over a limit) is an error
+---@param desc MeshDescription
+---@return ProceduralMesh
+function Mesh.Create(desc) end
+---Triangles covering a simple polygon (concave allowed, 3 to 1024 points): 1-based indices, three per triangle
+---@param points Vector2[]
+---@return integer[]
+function Mesh.Triangulate(points) end
 
 ---@class PhysicsMaterial
 ---@field staticFriction number Friction when not moving (0-1)
