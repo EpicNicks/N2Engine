@@ -84,8 +84,44 @@ namespace N2Engine::UI
             return mask && mask->IsActive();
         }
 
-        void LayOut(GameObject &gameObject, const Rect &parentRect, const bool isCanvas, const std::optional<Rect> &clip,
-                    std::vector<UIDrawItem> &out)
+        /// The region the masks above an object leave (canvas space): nothing without a mask; a rect while every mask
+        /// is along the axes; otherwise the polygon, with `rect` the box around it
+        struct MaskClip
+        {
+            std::optional<Rect> rect;
+            ConvexPolygon polygon;
+        };
+
+        /// `clip` narrowed by a mask over `rect`, placed on the canvas by `transform`
+        MaskClip Narrow(const MaskClip &clip, const Rect &rect, const Transform2D &transform)
+        {
+            if (transform.IsIdentity() && clip.polygon.empty())
+            {
+                return MaskClip{clip.rect ? Rect::Intersect(*clip.rect, rect) : rect, {}};
+            }
+            ConvexPolygon region = TransformedCorners(rect, transform);
+            if (!clip.polygon.empty())
+            {
+                region = IntersectConvex(region, clip.polygon);
+            }
+            else if (clip.rect)
+            {
+                region = IntersectConvex(region, TransformedCorners(*clip.rect, Transform2D{}));
+            }
+            if (!(PolygonArea(region) > 0.0f))
+            {
+                return MaskClip{Rect{rect.x, rect.y, 0.0f, 0.0f}, {}}; // nothing shows below it
+            }
+            if (const std::optional<Rect> aligned = AsAxisAlignedRect(region))
+            {
+                return MaskClip{*aligned, {}};
+            }
+            const Rect bounds = BoundsOf(region);
+            return MaskClip{bounds, std::move(region)};
+        }
+
+        void LayOut(GameObject &gameObject, const Rect &parentRect, const bool isCanvas, const Transform2D &parentTransform,
+                    const MaskClip &clip, std::vector<UIDrawItem> &out)
         {
             if (!gameObject.IsActiveInHierarchy())
             {
@@ -105,9 +141,20 @@ namespace N2Engine::UI
                 }
                 rect = rectTransform->ResolveIn(parentRect);
             }
+            // Rotation and scale turn the resolved rect, and everything below it, about its pivot. The canvas's own are
+            // not used: it covers its rect (a world canvas is placed by its transform).
+            Transform2D transform = parentTransform;
+            if (rectTransform && !isCanvas)
+            {
+                if (const Transform2D local = rectTransform->LocalTransform(rect); !local.IsIdentity())
+                {
+                    transform = parentTransform * local;
+                }
+            }
             if (rectTransform)
             {
                 rectTransform->SetResolvedRect(rect);
+                rectTransform->SetLocalToCanvas(transform);
             }
             // Issue #445: a layout group places the children before they resolve their rects in it
             for (const LayoutGroup *group : gameObject.GetComponents<LayoutGroup>())
@@ -123,21 +170,19 @@ namespace N2Engine::UI
             {
                 if (graphic && graphic->IsActive())
                 {
-                    out.push_back(UIDrawItem{graphic, rect, clip});
+                    out.push_back(UIDrawItem{graphic, rect, clip.rect, transform, clip.polygon});
                 }
             }
 
             // A RectMask clips the descendants (not its own object's graphics) to its rect, within any clip above it
-            std::optional<Rect> childClip = clip;
-            if (HasActiveMask(gameObject))
-            {
-                childClip = clip ? Rect::Intersect(*clip, rect) : rect;
-            }
+            const bool masks = HasActiveMask(gameObject);
+            const MaskClip narrowed = masks ? Narrow(clip, rect, transform) : MaskClip{};
+            const MaskClip &childClip = masks ? narrowed : clip;
             for (const auto &child : gameObject.GetChildren())
             {
                 if (child)
                 {
-                    LayOut(*child, rect, false, childClip, out);
+                    LayOut(*child, rect, false, transform, childClip, out);
                 }
             }
         }
@@ -155,6 +200,43 @@ namespace N2Engine::UI
             return canvases;
         }
 
+        /// Sets the item's clip on its graphic in the space of the item's rect: a rect when it is one there (no turn
+        /// between the graphic and its masks), else the polygon
+        void SetClipOf(const UIDrawItem &item)
+        {
+            if (!item.clip)
+            {
+                return;
+            }
+            if (item.transform.IsIdentity() && item.clipPolygon.empty())
+            {
+                item.graphic->SetRenderClip(item.clip);
+                return;
+            }
+            const std::optional<Transform2D> toLocal = item.transform.Inverse();
+            if (!toLocal)
+            {
+                return; // a flattened item is not visible and never gets here
+            }
+            ConvexPolygon region = item.clipPolygon.empty() ? TransformedCorners(*item.clip, Transform2D{}) : item.clipPolygon;
+            for (Math::Vector2 &point : region)
+            {
+                point = toLocal->Apply(point);
+            }
+            if (toLocal->a * toLocal->d - toLocal->b * toLocal->c < 0.0f)
+            {
+                std::ranges::reverse(region); // mirrored: counter-clockwise again
+            }
+            if (const std::optional<Rect> aligned = AsAxisAlignedRect(region))
+            {
+                item.graphic->SetRenderClip(*aligned);
+            }
+            else
+            {
+                item.graphic->SetRenderClipPolygon(std::move(region));
+            }
+        }
+
         /// Draws one item that can show (UIDrawItem::IsVisible), with its clip set on the graphic for the draw only
         void DrawItem(const UIDrawItem &item, Renderer::Common::IRenderer *renderer,
                       const Renderer::Common::RenderState &state, const Math::Matrix<float, 4, 4> &canvasToWorld)
@@ -164,8 +246,17 @@ namespace N2Engine::UI
                 return;
             }
             // Each graphic decides whether the clip cuts it (text can overflow its rect): one inside it draws as without
-            item.graphic->SetRenderClip(item.clip);
-            item.graphic->RenderUI(renderer, item.rect, state, canvasToWorld);
+            SetClipOf(item);
+            // Rotation and scale are part of the matrix the graphic draws with, so graphics need not know about them
+            if (item.transform.IsIdentity())
+            {
+                item.graphic->RenderUI(renderer, item.rect, state, canvasToWorld);
+            }
+            else
+            {
+                item.graphic->RenderUI(renderer, item.rect, state,
+                                       UIGraphic::ComposeModel(canvasToWorld, item.transform.ToMatrix()));
+            }
             item.graphic->SetRenderClip(std::nullopt);
         }
 
@@ -187,6 +278,51 @@ namespace N2Engine::UI
     // The UI module (N2ENGINE_USE_UI, defined on this file, Image.cpp and UIText.cpp only by engine/CMakeLists.txt). Without
     // it nothing is laid out: the two Collect functions below are empty, so nothing is drawn or hit, and the hit tests stop
     // before the ray maths. The objects, their components and the factories (CreateCanvas, ...) are the same in both builds.
+    bool UIDrawItem::Covers(const Math::Vector2 &point) const
+    {
+        if (transform.IsIdentity())
+        {
+            return rect.Contains(point);
+        }
+        const std::optional<Transform2D> toLocal = transform.Inverse();
+        return toLocal && rect.Contains(toLocal->Apply(point));
+    }
+
+    bool UIDrawItem::Hits(const Math::Vector2 &point) const
+    {
+        if (!Covers(point))
+        {
+            return false;
+        }
+        if (!clipPolygon.empty())
+        {
+            return ConvexContains(clipPolygon, point);
+        }
+        return !clip || clip->Contains(point);
+    }
+
+    bool UIDrawItem::IsVisible() const
+    {
+        if (!rect.HasArea())
+        {
+            return false;
+        }
+        if (transform.IsIdentity() && clipPolygon.empty())
+        {
+            return !clip || Rect::Intersect(rect, *clip).HasArea();
+        }
+        if (!transform.Inverse())
+        {
+            return false; // a zero scale
+        }
+        if (!clip)
+        {
+            return true;
+        }
+        const ConvexPolygon region = clipPolygon.empty() ? TransformedCorners(*clip, Transform2D{}) : clipPolygon;
+        return !IntersectConvex(TransformedCorners(rect, transform), region).empty();
+    }
+
     bool UISystem::IsInBuild()
     {
 #ifdef N2ENGINE_UI_ENABLED
@@ -239,7 +375,7 @@ namespace N2Engine::UI
         const Rect canvasRect{0.0f, 0.0f, static_cast<float>(viewport[0]), static_cast<float>(viewport[1])};
         for (const RootCanvas &canvas : canvases)
         {
-            LayOut(*canvas.gameObject, canvasRect, true, std::nullopt, items);
+            LayOut(*canvas.gameObject, canvasRect, true, Transform2D{}, MaskClip{}, items);
         }
         return items;
 #endif
@@ -328,7 +464,7 @@ namespace N2Engine::UI
         {
             return items;
         }
-        LayOut(gameObject, WorldCanvasRect(canvas), true, std::nullopt, items);
+        LayOut(gameObject, WorldCanvasRect(canvas), true, Transform2D{}, MaskClip{}, items);
         return items;
 #endif
     }

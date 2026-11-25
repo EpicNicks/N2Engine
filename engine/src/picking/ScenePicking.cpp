@@ -463,7 +463,7 @@ namespace N2Engine::Picking
                 }
                 for (auto it = items.rbegin(); it != items.rend(); ++it)
                 {
-                    if (it->rect.Contains(plane->canvasPoint))
+                    if (it->Covers(plane->canvasPoint))
                     {
                         return ExactHit{&it->graphic->GetGameObject(), plane->distance, normal};
                     }
@@ -585,7 +585,11 @@ namespace N2Engine::Picking
                 if (const UI::Canvas *canvas = WorldCanvasAbove(gameObject); canvas != nullptr && canvas->IsActive())
                 {
                     (void)LaidOut(layouts, *canvas); // resolves every rect under it, once
-                    const UI::Rect &rect = rectTransform->GetRect();
+                    // Where it is drawn: the box around its corners, turned and scaled as the element is
+                    const UI::Rect rect = rectTransform->GetRect().HasArea()
+                                              ? UI::BoundsOf(UI::TransformedCorners(rectTransform->GetRect(),
+                                                                                    rectTransform->GetLocalToCanvas()))
+                                              : UI::Rect{};
                     if (rect.HasArea())
                     {
                         const BoundingBox local{Math::Vector3{rect.XMin(), rect.YMin(), 0.0f},

@@ -457,3 +457,39 @@ TEST_F(LuaUITest, LayoutGroupsAndContentSizeFitter)
     Run("lua_ui_layout_canvas = nil; lua_ui_layout_list = nil; lua_ui_layout_group = nil; lua_ui_layout_fitter = nil; "
         "lua_ui_layout_grid = nil; lua_ui_layout_element = nil; lua_ui_layout_grid_go = nil; lua_ui_layout_element_go = nil");
 }
+
+TEST_F(LuaUITest, RotatesAndScalesAnElement)
+{
+    // Issue #445
+    const auto scene = Scene::Create("LuaUI_Rotation");
+    Run(R"(
+        lua_ui_rot_canvas = UI.CreateCanvas("RotationCanvas")
+        lua_ui_rot = UI.CreateElement("Turned")
+        lua_ui_rot_canvas:AddChild(lua_ui_rot)
+        local rt = lua_ui_rot:GetComponent("RectTransform")
+        rt:SetAnchorMin(Vector2(0, 0))
+        rt:SetAnchorMax(Vector2(0, 0))
+        rt:SetAnchoredPosition(Vector2(100, 100))
+        rt:SetSizeDelta(Vector2(100, 40))
+        rt:SetRotation(90)
+        rt:SetScale(Vector2(2, 1))
+    )");
+    const auto canvas = Lua()["lua_ui_rot_canvas"].get<GameObjectRef>().Pin();
+    scene->AddRootGameObject(canvas);
+    static_cast<void>(UI::UISystem::CollectGraphics(*scene, Vector2i{800, 600}));
+
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_rot:GetComponent('RectTransform'):GetRotation()"), 90.0f);
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_rot:GetComponent('RectTransform'):GetScale().x"), 2.0f);
+    // Centre (100, 100); the right edge's middle (150, 100) goes 100 up (doubled)
+    EXPECT_NEAR(Eval<float>("lua_ui_rot:GetComponent('RectTransform'):LocalToCanvas(Vector2(150, 100)).y"), 200.0f, 1e-3f);
+    EXPECT_NEAR(Eval<float>("lua_ui_rot:GetComponent('RectTransform'):CanvasToLocal(Vector2(100, 200)).x"), 150.0f, 1e-3f);
+    EXPECT_EQ(Eval<int>("#lua_ui_rot:GetComponent('RectTransform'):GetCanvasCorners()"), 4);
+    // The bottom-left corner goes to the bottom-right
+    EXPECT_NEAR(Eval<float>("lua_ui_rot:GetComponent('RectTransform'):GetCanvasCorners()[1].x"), 120.0f, 1e-3f);
+    EXPECT_NEAR(Eval<float>("lua_ui_rot:GetComponent('RectTransform'):GetCanvasCorners()[1].y"), 0.0f, 1e-3f);
+    Run("lua_ui_rot:GetComponent('RectTransform'):SetScale(Vector2(0, 1))");
+    static_cast<void>(UI::UISystem::CollectGraphics(*scene, Vector2i{800, 600}));
+    EXPECT_TRUE(Eval<bool>("lua_ui_rot:GetComponent('RectTransform'):CanvasToLocal(Vector2(0, 0)) == nil"));
+
+    Run("lua_ui_rot_canvas = nil; lua_ui_rot = nil");
+}

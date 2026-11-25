@@ -199,18 +199,21 @@ namespace N2Engine::Rendering::TextDrawing
          * or if the renderer has no text shader; the last logs one warning per process, naming
          * `componentName`.
          *
-         * `quadColors` are the vertex colours of BuildMesh, one per quad (empty: white). They are read only
-         * when the mesh is built, so a change to them must come with a new layoutVersion.
+         * `quadColors` are the vertex colours of BuildMesh, one per quad (empty: white). `geometry`, when
+         * given, is the mesh to draw instead of BuildMesh(layout, quadColors): the same glyphs, cut or reshaped
+         * by the caller (nothing is drawn when it is empty). Both are read only when the mesh is built, so a
+         * change to them must come with a new layoutVersion.
          */
         bool Draw(const std::shared_ptr<Text::Font> &font, const Text::TextLayout &layout,
                   std::uint64_t layoutVersion, const float *modelMatrix, const Common::Color &color,
                   const Text::TextEffects &effects, const Renderer::Common::RenderState &state,
-                  std::string_view componentName, std::span<const Common::Color> quadColors = {});
+                  std::string_view componentName, std::span<const Common::Color> quadColors = {},
+                  const Renderer::Common::MeshData *geometry = nullptr);
 
     private:
         bool EnsureAtlasTexture(const std::shared_ptr<Text::Font> &font);
         bool EnsureMesh(const Text::TextLayout &layout, std::uint64_t layoutVersion,
-                        std::span<const Common::Color> quadColors);
+                        std::span<const Common::Color> quadColors, const Renderer::Common::MeshData *geometry);
         /// The draws of a text with extra passes: each effect pass, then the face (see Draw)
         bool DrawPasses(const Text::TextEffects &effects, const Text::AtlasSettings &settings,
                         const Text::FontAtlas &atlas, const Common::Color &color, const float *modelMatrix,
