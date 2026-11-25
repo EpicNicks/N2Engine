@@ -12,6 +12,7 @@
 #include <text/TextLayout.hpp>
 
 #include "engine/rendering/TextDrawing.hpp"
+#include "engine/serialization/FieldInfo.hpp"
 #include "engine/text/Font.hpp"
 #include "engine/text/TextEffects.hpp"
 #include "engine/text/TextJson.hpp" // the alignments' JSON names: every user must see the same serializer
