@@ -66,7 +66,7 @@ namespace N2Engine::Physics2D
 
 #include "ContactTracker2D.hpp"
 #include "engine/Application.hpp"
-#include "engine/GameObject.hpp"
+#include "engine/GameObjectScene.hpp"
 #include "engine/Layers.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/Time.hpp"
