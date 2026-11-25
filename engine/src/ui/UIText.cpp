@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "engine/GameObjectScene.hpp"
+#include "engine/ui/QuadClip.hpp"
 #include "engine/ui/RectTransform.hpp"
 
 namespace N2Engine::UI
@@ -464,7 +465,7 @@ namespace N2Engine::UI
         // Issue #445: a RectMask's clip, in the layout's space, only when it cuts some glyph (text inside it draws as
         // without one). A new clip is a new mesh; the clipped copy is made once per mesh version.
         std::optional<Text::Rect> clip;
-        if (_renderClip)
+        if (_renderClip && _renderClipPolygon.empty())
         {
             const Math::Vector2 anchor = GetAnchor(rect);
             const Text::Rect local{_renderClip->XMin() - anchor.x, _renderClip->YMin() - anchor.y,
@@ -479,9 +480,35 @@ namespace N2Engine::UI
                 clip = local;
             }
         }
-        if (clip != _drawnClip)
+        // A clip that is no rect (a mask turned against the text), likewise in the layout's space and only when it cuts
+        ConvexPolygon polygon;
+        if (!_renderClipPolygon.empty())
+        {
+            const Math::Vector2 anchor = GetAnchor(rect);
+            ConvexPolygon local = _renderClipPolygon;
+            for (Math::Vector2 &point : local)
+            {
+                point = Math::Vector2{point.x - anchor.x, point.y - anchor.y};
+            }
+            const bool cuts = std::ranges::any_of(drawn.quads, [&local](const Text::GlyphQuad &quad)
+            {
+                const Text::Rect &p = quad.position;
+                return !ConvexContains(local, Math::Vector2{p.minX, p.minY}) ||
+                       !ConvexContains(local, Math::Vector2{p.maxX, p.minY}) ||
+                       !ConvexContains(local, Math::Vector2{p.maxX, p.maxY}) ||
+                       !ConvexContains(local, Math::Vector2{p.minX, p.maxY});
+            });
+            if (cuts)
+            {
+                polygon = std::move(local);
+            }
+        }
+        const bool samePolygon = std::ranges::equal(polygon, _drawnClipPolygon, [](const auto &a, const auto &b)
+                                                    { return a.x == b.x && a.y == b.y; });
+        if (clip != _drawnClip || !samePolygon)
         {
             _drawnClip = clip;
+            _drawnClipPolygon = polygon;
             ++_meshVersion;
         }
         if (clip && _clippedVersion != _meshVersion)
@@ -490,8 +517,14 @@ namespace N2Engine::UI
             _clippedLayout = ClipLayout(drawn, *clip, &_clippedColors);
             _clippedVersion = _meshVersion;
         }
+        if (!polygon.empty() && _clippedVersion != _meshVersion)
+        {
+            _clippedMesh = ClipQuadMesh(Rendering::TextDrawing::BuildMesh(drawn, _quadColors), polygon);
+            _clippedVersion = _meshVersion;
+        }
         _resources.Draw(_layoutCache.GetFont(), clip ? _clippedLayout : drawn, _meshVersion, model.Data(), GetDrawColor(),
-                        _effects, state, "UIText", clip ? _clippedColors : _quadColors);
+                        _effects, state, "UIText", clip ? _clippedColors : _quadColors,
+                        polygon.empty() ? nullptr : &_clippedMesh);
 #endif
     }
 

@@ -267,8 +267,16 @@ namespace N2Engine::UI
             return;
         }
         const Math::Vector2 current = content->GetAnchoredPosition();
-        Math::Vector2 position{_dragStartContent.x + (pointer.x - _dragStartPointer.x),
-                               _dragStartContent.y + (pointer.y - _dragStartPointer.y)};
+        // The movement along the view's own axes: a turned or scaled view scrolls as it is drawn (issue #445)
+        Math::Vector2 moved{pointer.x - _dragStartPointer.x, pointer.y - _dragStartPointer.y};
+        if (const RectTransform *view = GetGameObject().GetComponent<RectTransform>())
+        {
+            if (const std::optional<Transform2D> toLocal = view->GetLocalToCanvas().Inverse())
+            {
+                moved = toLocal->ApplyVector(moved);
+            }
+        }
+        Math::Vector2 position{_dragStartContent.x + moved.x, _dragStartContent.y + moved.y};
         const Math::Vector2 offset = CalculateOffset(Math::Vector2{position.x - current.x, position.y - current.y});
         position = Math::Vector2{position.x + offset.x, position.y + offset.y};
         if (_movementType == ScrollMovementType::Elastic)
@@ -603,15 +611,18 @@ namespace N2Engine::UI
             const float contentSize = vertical ? content.height : content.width;
             const float size = contentSize > 0.0f ? Clamp01(viewSize / contentSize) : 1.0f;
             const float travel = (vertical ? track->GetRect().height : track->GetRect().width) * (1.0f - size);
-            if (travel > 0.0f)
+            // The pointer's movement along the track as it is drawn (issue #445)
+            const std::optional<Math::Vector2> now = track->CanvasToLocal(pointer);
+            const std::optional<Math::Vector2> start = track->CanvasToLocal(_handleStartPointer);
+            if (travel > 0.0f && now && start)
             {
                 if (vertical)
                 {
-                    SetVerticalNormalizedPosition(_handleStartPosition.y + (pointer.y - _handleStartPointer.y) / travel);
+                    SetVerticalNormalizedPosition(_handleStartPosition.y + (now->y - start->y) / travel);
                 }
                 else
                 {
-                    SetHorizontalNormalizedPosition(_handleStartPosition.x + (pointer.x - _handleStartPointer.x) / travel);
+                    SetHorizontalNormalizedPosition(_handleStartPosition.x + (now->x - start->x) / travel);
                 }
             }
             return;

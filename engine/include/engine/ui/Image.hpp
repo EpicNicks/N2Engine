@@ -156,16 +156,19 @@ namespace N2Engine::UI
         std::weak_ptr<const void> _rendererLifetime; // expired once _renderer is destroyed
         Renderer::Common::IMesh *_mesh = nullptr;
         Renderer::Common::IMaterial *_material = nullptr;
-        // The mesh of a clipped image (BuildQuads), relative to its rect's corner, and the quads it was built from
+        // The mesh of a clipped image (BuildQuads), relative to its rect's corner, and the quads (and, under a turned
+        // mask, the clip polygon) it was built from
         Renderer::Common::IMesh *_quadMesh = nullptr;
         std::vector<Quad> _quadMeshQuads;
+        ConvexPolygon _quadMeshPolygon;
         Rendering::UserShaderSlot _shaderSlot; // the user shader and its Material, when one is set
 
         /// Creates the quad and material on first use; false if the renderer couldn't
         bool EnsureResources(Renderer::Common::IRenderer *renderer);
-        /// The mesh of `quads` (relative to `origin`), updated in place when they change; nullptr if the renderer can't
+        /// The mesh of `quads` (relative to `origin`), cut to `polygon` when it has corners, updated in place when they
+        /// change; nullptr if the renderer can't, or if the polygon leaves nothing
         Renderer::Common::IMesh *EnsureQuadMesh(Renderer::Common::IRenderer *renderer, const std::vector<Quad> &quads,
-                                                const Math::Vector2 &origin);
+                                                const Math::Vector2 &origin, const ConvexPolygon &polygon = {});
         /// The sprite's texture on `renderer` (nullptr for no sprite, or one the renderer can't upload)
         Renderer::Common::ITexture *EnsureSpriteTexture(Renderer::Common::IRenderer *renderer);
         void ReleaseResources();
