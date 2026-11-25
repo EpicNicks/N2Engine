@@ -40,6 +40,13 @@ TEST_F(WebGpuPostProcessTest, InvertVignetteAndChromaticAberrationMatchTheRefere
     scenes.CheckComposite(4);
 }
 
+TEST_F(WebGpuPostProcessTest, BlurMatchesTheReference)
+{
+    PostProcessScenes::Scenes scenes(R());
+    ASSERT_TRUE(scenes.Ready());
+    scenes.CheckBlur(12);
+}
+
 TEST_F(WebGpuPostProcessTest, DrawsAfterThePostProcessAreNotProcessed)
 {
     PostProcessScenes::Scenes scenes(R());

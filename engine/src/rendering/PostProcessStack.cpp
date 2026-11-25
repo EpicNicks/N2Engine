@@ -23,6 +23,11 @@ namespace N2Engine::Rendering
             .Range(0.0, PostProcessSettings::MaxChromaticAberration)
             .Tooltip("Red and blue fringes, growing towards the edges (0.02 is strong)");
         RegisterMember(NAMEOF(vignette), vignette).Range(0.0, 1.0).Tooltip("How dark the corners get");
+        RegisterMember(NAMEOF(blur), blur).Tooltip("Blur the whole scene, before the other effects");
+        RegisterMember(NAMEOF(blurStrength), blurStrength).Range(0.0, 1.0)
+            .Tooltip("0 the sharp image, 1 the blurred one");
+        RegisterMember(NAMEOF(blurIterations), blurIterations).Range(1.0, PostProcessSettings::MaxBlurIterations)
+            .Tooltip("Blur passes: the blur widens with each");
     }
 
     std::string PostProcessStack::GetTypeName() const
@@ -43,6 +48,9 @@ namespace N2Engine::Rendering
         settings.invert = invert;
         settings.chromaticAberration = chromaticAberration;
         settings.vignette = vignette;
+        settings.blur = blur;
+        settings.blurStrength = blurStrength;
+        settings.blurIterations = blurIterations;
         return settings;
     }
 
@@ -58,5 +66,8 @@ namespace N2Engine::Rendering
         invert = settings.invert;
         chromaticAberration = settings.chromaticAberration;
         vignette = settings.vignette;
+        blur = settings.blur;
+        blurStrength = settings.blurStrength;
+        blurIterations = settings.blurIterations;
     }
 }

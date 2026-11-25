@@ -5,7 +5,7 @@
 // texture's first row is the bottom of the frame.
 //
 // params.a = (mode, threshold, intensity, invert), params.b = (stepX, stepY, chromatic aberration, vignette),
-// params.c = (tint rgb, flipY). Modes: 0 copy (alpha 1), 1 bright, 2 blur, 3 composite. Every read is textureSampleLevel at
+// params.c = (tint rgb, flipY). Modes: 0 copy (alpha 1), 1 bright, 2 blur, 3 composite, 4 mix (the blur's last pass). Every read is textureSampleLevel at
 // level 0, so no read needs derivatives or uniform control flow.
 
 struct PostParams {
@@ -65,6 +65,11 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         sum = sum + (readSource(uv + o3).rgb + readSource(uv - o3).rgb) * 0.0540540541;
         sum = sum + (readSource(uv + o4).rgb + readSource(uv - o4).rgb) * 0.0162162162;
         return vec4<f32>(sum, 1.0);
+    }
+    if (mode == 4) {
+        let sharp = readSource(uv);
+        let soft = textureSampleLevel(bloomTexture, linearSampler, uv, 0.0).rgb;
+        return vec4<f32>(clamp(mix(sharp.rgb, soft, params.a.z), vec3<f32>(0.0), vec3<f32>(1.0)), sharp.a);
     }
     let d = (uv - vec2<f32>(0.5, 0.5)) * params.b.z;
     let base = readSource(uv);
