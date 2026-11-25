@@ -84,7 +84,7 @@ namespace
             Frame(NavigationInput{});
         }
 
-        Scene::Ptr scene;
+        std::unique_ptr<Scene> scene;
         GameObject::Ptr canvas;
         UINavigator navigator;
     };
