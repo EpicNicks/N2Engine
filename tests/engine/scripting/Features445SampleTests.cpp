@@ -80,6 +80,7 @@ namespace
             ASSERT_TRUE(Time::SetFixedTimestep(0.02));
         }
 
+        /// (x, y) in window pixels, y up (ReadFramebuffer gives the bottom row first)
         static Rgb PixelAt(const std::vector<std::uint8_t> &pixels, const int x, const int y)
         {
             const std::size_t i = (static_cast<std::size_t>(y) * Width + static_cast<std::size_t>(x)) * 4;
@@ -127,21 +128,21 @@ TEST_F(Features445SampleTest, TheSampleRunsAndItsChecksPass)
     const auto [done, passed, failures] = result.get<std::tuple<bool, int, std::string>>();
     EXPECT_TRUE(done);
     EXPECT_EQ(failures, "");
-    EXPECT_EQ(passed, 13);
+    EXPECT_EQ(passed, 14);
 
     // The HUD, laid out for 400 x 300 and drawn at twice that
     auto *renderer = Application::GetInstance().GetWindow().GetRenderer();
     std::vector<std::uint8_t> pixels(static_cast<std::size_t>(Width) * Height * 4);
     renderer->ReadFramebuffer(pixels.data(), Width, Height);
-    const Rgb stripe = PixelAt(pixels, 160, 140);
+    const Rgb stripe = PixelAt(pixels, 160, 460);
     EXPECT_TRUE(stripe.r > 180 && stripe.g > 130 && stripe.b < 90)
         << "the stripe at the turned panel's middle: " << stripe.r << "," << stripe.g << "," << stripe.b;
-    const Rgb panel = PixelAt(pixels, 140, 105);
+    const Rgb panel = PixelAt(pixels, 140, 495);
     EXPECT_TRUE(panel.b > 110 && panel.r < 90) << "the turned panel: " << panel.r << "," << panel.g << "," << panel.b;
-    const Rgb masked = PixelAt(pixels, 326, 44);
+    const Rgb masked = PixelAt(pixels, 326, 556);
     EXPECT_FALSE(masked.r > 180 && masked.g > 130 && masked.b < 90) << "the stripe is cut at the panel's edge";
-    const Rgb options = PixelAt(pixels, 530, 152);
-    const Rgb quit = PixelAt(pixels, 530, 224);
+    const Rgb options = PixelAt(pixels, 530, 448);
+    const Rgb quit = PixelAt(pixels, 530, 376);
     EXPECT_GT(options.b, options.r + 40) << "the selected button: " << options.r << "," << options.g << "," << options.b;
     EXPECT_LT(std::abs(quit.b - quit.r), 10) << "an unselected one: " << quit.r << "," << quit.g << "," << quit.b;
 }

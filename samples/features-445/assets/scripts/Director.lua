@@ -12,6 +12,14 @@ local function root(gameObject)
     return gameObject
 end
 
+-- A new object in the world at (x, y). GameObject.Create makes an object without a position, so one is added
+local function thing(name, x, y)
+    local gameObject = root(GameObject.Create(name))
+    gameObject:CreatePositionable()
+    gameObject:GetPositionable():SetPosition(Vector3.new(x, y, 0))
+    return gameObject
+end
+
 -- An element centred on the canvas, `x` and `y` from its middle, in canvas units
 local function place(parent, element, x, y, width, height)
     parent:AddChild(element)
@@ -79,21 +87,18 @@ function Director:BuildWorld()
         camera:SetOrthographic(-8, 8, -6, 6, 0.1, 100)
     end
 
-    local floor = root(GameObject.Create("Floor"))
+    local floor = thing("Floor", 0, FLOOR_TOP - 0.5)
     floor:AddComponent("BoxCollider2D"):SetSize(Vector2.new(16, 1))
-    floor:GetPositionable():SetPosition(Vector3.new(0, FLOOR_TOP - 0.5, 0))
     floor:AddComponent("Sprite2D"):SetSize(Vector2.new(16, 1))
 
     -- A soft ball dropped on the floor
-    local ball = root(GameObject.Create("Jelly"))
-    ball:GetPositionable():SetPosition(Vector3.new(-3, 0, 0))
+    local ball = thing("Jelly", -3, 0)
     self.jelly = ball:AddComponent("SoftBody2D")
     self.jelly:SetCircle(1.0, 16)
     self.jelly:SetColor(Color.new(0.9, 0.3, 0.5, 1.0))
 
     -- Sparks that land on the floor. Collision is set before the system starts, so it runs on the CPU backend
-    local fountain = root(GameObject.Create("Sparks"))
-    fountain:GetPositionable():SetPosition(Vector3.new(3, -1, 0))
+    local fountain = thing("Sparks", 3, -1)
     local sparks = fountain:AddComponent("ParticleSystem")
     sparks:SetShape("Circle")
     sparks:SetShapeRadius(0.3)
@@ -107,8 +112,7 @@ function Director:BuildWorld()
     self.hits = 0
 
     -- A user shader: drawn by its "fallback" where it can't run (the software renderer)
-    local lamp = root(GameObject.Create("Lamp"))
-    lamp:GetPositionable():SetPosition(Vector3.new(0, 2, 0))
+    local lamp = thing("Lamp", 0, 2)
     self.lamp = lamp:AddComponent("Sprite2D")
     self.lamp:SetSize(Vector2.new(1.5, 1.5))
     self.lamp:SetShader("res://shaders/pulse.n2shader")
@@ -121,6 +125,7 @@ end
 
 function Director:OnAttach()
     self.frames = 0
+    self.checked = false
     self.done = false
     self.passed = 0
     self.failures = {}
@@ -183,9 +188,10 @@ end
 
 function Director:OnUpdate()
     self.frames = self.frames + 1
-    if self.done or self.frames < CHECK_AT_FRAME then
+    if self.checked or self.frames < CHECK_AT_FRAME then
         return
     end
+    self.checked = true -- once, even if a check raises an error: `done` then stays false
     self:RunChecks()
     self.done = true
     local summary = string.format("%d checks passed, %d failed", self.passed, #self.failures)
