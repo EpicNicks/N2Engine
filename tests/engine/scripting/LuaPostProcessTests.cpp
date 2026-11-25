@@ -74,6 +74,23 @@ TEST_F(LuaPostProcessTest, SetChangesTheFieldsGivenAndGetReturnsThemAll)
     )");
 }
 
+TEST_F(LuaPostProcessTest, SetsTheBlur)
+{
+    // Issue #445
+    Run(R"(
+        local stack = GameObject.Create('LuaPostProcessBlur'):AddComponent('PostProcessStack')
+        local before = stack:Get()
+        assert(before.blur == false and before.blurStrength == 1 and before.blurIterations == 3)
+        stack:Set{blur = true, blurStrength = 0.5, blurIterations = 6}
+        local after = stack:Get()
+        assert(after.blur == true and after.blurStrength == 0.5 and after.blurIterations == 6)
+        assert(not pcall(function() stack:Set{blur = 1} end))
+        assert(not pcall(function() stack:Set{blurIterations = 1.5} end))
+        assert(not pcall(function() stack:Set{blurStrength = 'a lot'} end))
+        assert(stack:Get().blurIterations == 6)
+    )");
+}
+
 TEST_F(LuaPostProcessTest, BadFieldsAreErrorsAndChangeNothing)
 {
     Run("post_stack = GameObject.Create('LuaPostProcessErrors'):AddComponent('PostProcessStack')");

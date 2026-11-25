@@ -206,6 +206,53 @@ namespace PostProcessScenes
             EXPECT_EQ(MaxDifference(untouched, plain, true), 0);
         }
 
+        /// The blur (issue #445): a white square spreads past its edges and fades in the middle, the frame matches the CPU
+        /// reference at full and part strength, alone and before the composite's effects
+        void CheckBlur(const int tolerance)
+        {
+            const auto draw = [&] { _r.DrawMesh(_centre, Identity, _white, Flat()); };
+            const Image plain = Frame(draw);
+            const auto processed = [&](const PostProcessSettings &settings) {
+                return Frame([&] {
+                    draw();
+                    _r.ApplyPostProcess(settings);
+                });
+            };
+
+            PostProcessSettings settings;
+            settings.blur = true;
+            settings.blurIterations = 2;
+            const Image blurred = processed(settings);
+            EXPECT_GT(blurred.At(38, 32)[0], 10) << "nothing spread past the square";
+            EXPECT_LT(blurred.At(35, 32)[0], 240) << "the edge stayed sharp";
+            EXPECT_LE(blurred.At(0, 0)[0], 2);
+            EXPECT_LE(MaxDifference(blurred, Reference(plain, settings)), tolerance);
+
+            settings.blurStrength = 0.5f;
+            const Image half = processed(settings);
+            EXPECT_NEAR(half.At(38, 32)[0], blurred.At(38, 32)[0] / 2, tolerance + 1);
+            EXPECT_LE(MaxDifference(half, Reference(plain, settings)), tolerance);
+
+            // The other effects see the blurred frame
+            settings.blurStrength = 1.0f;
+            settings.invert = 1.0f;
+            const Image inverted = processed(settings);
+            EXPECT_NEAR(inverted.At(38, 32)[0], 255 - blurred.At(38, 32)[0], tolerance + 1);
+            EXPECT_LE(MaxDifference(inverted, Reference(plain, settings)), tolerance);
+
+            settings.invert = 0.0f;
+            settings.bloom = true;
+            settings.bloomThreshold = 0.2f;
+            settings.bloomIntensity = 2.0f;
+            EXPECT_LE(MaxDifference(processed(settings), Reference(plain, settings)), tolerance);
+
+            // No strength, no change
+            PostProcessSettings off;
+            off.blur = true;
+            off.blurStrength = 0.0f;
+            EXPECT_EQ(MaxDifference(processed(off), plain, true), 0);
+        }
+
         /// What is drawn after the post-process (the UI) is not processed, and the draws before it are
         void CheckLaterDrawsAreUntouched()
         {

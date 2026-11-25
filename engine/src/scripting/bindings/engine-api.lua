@@ -4538,6 +4538,9 @@ function Graphics.CanPostProcess() end
 ---@field invert number|nil 0 (none) to 1 (a full negative)
 ---@field chromaticAberration number|nil red and blue fringes, 0 to 0.25 (0.02 is strong)
 ---@field vignette number|nil darkened corners, 0 to 1
+---@field blur boolean|nil blur the whole scene, before the other effects
+---@field blurStrength number|nil 0 (sharp) to 1 (blurred, the default)
+---@field blurIterations integer|nil blur passes, 1 to 8 (default 3): the blur widens with each
 
 ---The scene's full-screen effects, run after the scene and before the screen-space UI (the HUD is not bloomed). The first
 ---active PostProcessStack of the scene is used; add it with go:AddComponent("PostProcessStack"). Saved with the scene and
