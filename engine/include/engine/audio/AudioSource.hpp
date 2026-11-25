@@ -23,6 +23,16 @@ namespace N2Engine::Audio
         /// Plays the clip from the beginning, also when it's already playing or paused (a restart, which
         /// doesn't count against the group's limit twice). Refused if the group is full of other sounds.
         void Play();
+        /// Play, started on the exact output sample of the DSP time dspTime (AudioSystem::GetDspTime) instead of now.
+        /// A time already reached plays at once. Sources scheduled for the same time start on the same sample and stay
+        /// aligned (music stems). Natively IsPlaying is true from the call; on the web the start waits for the first
+        /// AudioSystem::Update at or after the time. Play, Stop or Pause before then cancels it.
+        void PlayScheduled(double dspTime);
+        /// Playback position in seconds into the clip (0 without a source); for a looping clip, within the current loop
+        [[nodiscard]] float GetTime() const;
+        /// Moves a playing or paused source's position (clamped to the clip's length); Play and PlayScheduled always
+        /// start from the beginning
+        void SetTime(float seconds);
         /// Pauses where it is; UnPause resumes from there, Play starts over
         void Pause();
         /// Resumes a paused source from where it was paused (if its group has room); does nothing otherwise
@@ -81,6 +91,8 @@ namespace N2Engine::Audio
 
     private:
         void EnsureSource();
+        /// Everything Play does before starting: checks, a source, the clip bound and mixing applied. False: don't start
+        bool PrepareToPlay();
         /// Whether the mixer group's maxConcurrent leaves room for this source to play
         [[nodiscard]] bool HasRoomInGroup() const;
         void UpdateVolume();

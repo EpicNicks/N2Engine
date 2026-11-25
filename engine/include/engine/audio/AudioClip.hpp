@@ -39,6 +39,8 @@ namespace N2Engine::Audio
         float GetDuration() const { return _duration; }
         int GetSampleRate() const { return _sampleRate; }
         int GetChannels() const { return _channels; }
+        /// Sample frames in the clip (one sample per channel each)
+        std::uint64_t GetFrameCount() const { return _frameCount; }
 
     private:
         ALuint _buffer = 0;
@@ -46,5 +48,6 @@ namespace N2Engine::Audio
         float _duration = 0.0f;
         int _sampleRate = 0;
         int _channels = 0;
+        std::uint64_t _frameCount = 0;
     };
 }

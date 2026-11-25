@@ -81,6 +81,7 @@ namespace N2Engine::Audio
         _contextGeneration = audio.GetContextGeneration();
         _sampleRate = data.sampleRate;
         _channels = data.channels;
+        _frameCount = data.samples.size() / static_cast<std::size_t>(data.channels * (data.bitsPerSample / 8));
         _duration = static_cast<float>(data.samples.size()) /
                    (data.sampleRate * data.channels * (data.bitsPerSample / 8));
 
@@ -111,5 +112,6 @@ namespace N2Engine::Audio
         _duration = 0.0f;
         _sampleRate = 0;
         _channels = 0;
+        _frameCount = 0;
     }
 }

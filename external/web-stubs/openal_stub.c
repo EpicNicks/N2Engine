@@ -31,6 +31,11 @@ ALCvoid *alcGetProcAddress(ALCdevice *device, const ALCchar *funcname)
     (void)device; (void)funcname;
     return NULL;
 }
+void alcGetIntegerv(ALCdevice *device, ALCenum param, ALCsizei size, ALCint *values)
+{
+    (void)device; (void)param;
+    if (values && size > 0) values[0] = 0;
+}
 
 ALenum alGetError(void)
 {
@@ -63,6 +68,13 @@ void alGetSourcei(ALuint source, ALenum param, ALint *value)
 {
     (void)source; (void)param;
     if (value) *value = 0;
+    SetNoContextError();
+}
+
+void alGetSourcef(ALuint source, ALenum param, ALfloat *value)
+{
+    (void)source; (void)param;
+    if (value) *value = 0.0f;
     SetNoContextError();
 }
 
