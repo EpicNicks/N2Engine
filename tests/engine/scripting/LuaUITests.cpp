@@ -526,3 +526,19 @@ TEST_F(LuaUITest, ScalesACanvasForTheWindow)
 
     Run("lua_ui_scaled = nil; lua_ui_scaled_panel = nil");
 }
+
+TEST_F(LuaUITest, SetsATextsOverflow)
+{
+    // Issue #445
+    Run(R"(
+        lua_ui_over = UI.CreateText("Long", "A long line of text")
+        lua_ui_over_text = lua_ui_over:GetComponent("UIText")
+        assert(lua_ui_over_text:GetOverflow() == "Overflow")
+        lua_ui_over_text:SetOverflow("Ellipsis")
+        assert(lua_ui_over_text:GetOverflow() == "Ellipsis")
+        assert(not pcall(function() lua_ui_over_text:SetOverflow("Scroll") end))
+        assert(lua_ui_over_text:GetOverflow() == "Ellipsis")
+        assert(type(lua_ui_over_text:IsOverflowing()) == "boolean")
+    )");
+    Run("lua_ui_over = nil; lua_ui_over_text = nil");
+}

@@ -1997,6 +1997,16 @@ function UIText:GetLineSpacing() end
 function UIText:SetLetterSpacing(spacing) end
 ---@return number
 function UIText:GetLetterSpacing() end
+---What happens to text that doesn't fit the rect: "Overflow" runs past it (the default), "Clip" cuts it at the edges,
+---"Truncate" leaves out the characters and lines that don't fit, "Ellipsis" does so and marks it with an ellipsis. An
+---unknown name raises an error
+---@param mode "Overflow"|"Clip"|"Truncate"|"Ellipsis"
+function UIText:SetOverflow(mode) end
+---@return "Overflow"|"Clip"|"Truncate"|"Ellipsis"
+function UIText:GetOverflow() end
+---Whether the text doesn't fit the rect of the last layout (a line too wide, or too many lines)
+---@return boolean
+function UIText:IsOverflowing() end
 ---An outline around the glyphs, drawn under them. Lengths are in ems (fontSize pixels each); effects are
 ---limited to 90% of the font's SDF spread (about 0.15 em for the default font), with one warning when reduced.
 ---@param width number outline width in ems; 0 (the default) turns it off
