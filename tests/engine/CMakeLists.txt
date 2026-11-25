@@ -81,6 +81,7 @@ set(N2ENGINE_UI_TESTS
     ui/UITests.cpp
     ui/UITextCharacterStyleTests.cpp
     ui/UITextOffsetTests.cpp
+    ui/UITextOverflowTests.cpp
     ui/UITextTests.cpp
     ui/WorldCanvasTests.cpp
 )
