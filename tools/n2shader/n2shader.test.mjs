@@ -829,8 +829,10 @@ test('cook: parse and lint failures stop before any tool, with file:line', () =>
 });
 
 test('cook: the same input gives the same bytes, whatever the line endings and working directory', () => {
-  const a = cookShader(spikeText, { path: 'one/spike.n2shader', tools: noTools });
-  const b = cookShader(spikeText.replace(/\n/g, '\r\n'), { path: 'two/spike.n2shader', tools: noTools });
+  // A checkout may already have CRLF (Git on Windows): start from LF, so that one cook gets LF and the other CRLF
+  const lf = spikeText.replace(/\r\n/g, '\n');
+  const a = cookShader(lf, { path: 'one/spike.n2shader', tools: noTools });
+  const b = cookShader(lf.replace(/\n/g, '\r\n'), { path: 'two/spike.n2shader', tools: noTools });
   assert.ok(manifestBytes(a.manifest).equals(manifestBytes(b.manifest)));
   assert.ok(a.outputs.gl.data.equals(b.outputs.gl.data), 'the GL text cites no path (#line uses a source string number)');
 });
