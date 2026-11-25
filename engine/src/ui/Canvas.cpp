@@ -151,7 +151,8 @@ namespace N2Engine::UI
         cover(Rect{0.0f, 0.0f, size.x, size.y});
         for (const UIDrawItem &item : graphics)
         {
-            cover(item.rect);
+            // Where the rect is drawn, turned and scaled as it is (issue #445)
+            cover(item.transform.IsIdentity() ? item.rect : BoundsOf(TransformedCorners(item.rect, item.transform)));
         }
         if (!any)
         {

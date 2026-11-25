@@ -181,7 +181,13 @@ namespace N2Engine::UI
         {
             return;
         }
-        float t = IsVertical() ? (canvasPoint.y - rect.y) / length : (canvasPoint.x - rect.x) / length;
+        // Along the bar as it is drawn: a turned or scaled slider is read along its own axis (issue #445)
+        const std::optional<Math::Vector2> point = rectTransform->CanvasToLocal(canvasPoint);
+        if (!point)
+        {
+            return;
+        }
+        float t = IsVertical() ? (point->y - rect.y) / length : (point->x - rect.x) / length;
         if (IsReversed())
         {
             t = 1.0f - t;

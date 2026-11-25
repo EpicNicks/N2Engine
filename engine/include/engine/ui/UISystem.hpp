@@ -18,6 +18,7 @@
 #include "engine/input/PointerDispatcher.hpp"
 #include "engine/ui/Canvas.hpp"
 #include "engine/ui/Rect.hpp"
+#include "engine/ui/Transform2D.hpp"
 
 namespace N2Engine
 {
@@ -30,25 +31,29 @@ namespace N2Engine::UI
 {
     class UIGraphic;
 
-    /// One graphic of the UI pass and the rect it draws over (canvas space)
+    /// One graphic of the UI pass, the rect it draws over and where that rect is on the canvas
     struct UIDrawItem
     {
         UIGraphic *graphic = nullptr;
+        /// The object's resolved rect (RectTransform::GetRect): in canvas space, or, when `transform` is not the
+        /// identity, in the space `transform` maps to the canvas
         Rect rect{};
         /// Issue #445: the overlap of the rects of the active RectMask objects above the graphic's object (nested masks
-        /// intersect); nothing without a mask. The graphic draws, and is hit, only inside it.
+        /// intersect), in canvas space; nothing without a mask. The graphic draws, and is hit, only inside it. With a
+        /// turned mask the region is `clipPolygon` and this is the box around it.
         std::optional<Rect> clip{};
+        /// Issue #445: the rotation and scale of the object and its parents (RectTransform::GetLocalToCanvas)
+        Transform2D transform{};
+        /// Issue #445: the exact clip region (canvas space, counter-clockwise) when a mask above is turned against the
+        /// canvas's axes, so no rect describes it; empty otherwise
+        ConvexPolygon clipPolygon{};
 
-        /// Whether a canvas point hits this item: inside its rect and inside its clip, if any
-        [[nodiscard]] bool Hits(const Math::Vector2 &point) const
-        {
-            return rect.Contains(point) && (!clip || clip->Contains(point));
-        }
-        /// Whether any of it can show: a rect with area, and with the clip, an overlap with area
-        [[nodiscard]] bool IsVisible() const
-        {
-            return rect.HasArea() && (!clip || Rect::Intersect(rect, *clip).HasArea());
-        }
+        /// Whether a canvas point is on the graphic's rect as drawn, whatever the clip
+        [[nodiscard]] bool Covers(const Math::Vector2 &point) const;
+        /// Whether a canvas point hits this item: on its rect as drawn and inside its clip, if any
+        [[nodiscard]] bool Hits(const Math::Vector2 &point) const;
+        /// Whether any of it can show: a rect with area that no zero scale flattens, and with a clip, an overlap with area
+        [[nodiscard]] bool IsVisible() const;
     };
 
     /// Where a ray crosses a world-space canvas's plane
