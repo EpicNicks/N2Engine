@@ -61,6 +61,17 @@ namespace
             } else if (mode == 4) {
                 vec4 base = texture(uSource, uv);
                 FragColor = vec4(clamp(mix(base.rgb, texture(uBloom, uv).rgb, uA.z), 0.0, 1.0), base.a);
+            } else if (mode == 5) {
+                bool topFirst = uB.y > 0.5;
+                vec2 point = vec2(uv.x, topFirst ? 1.0 - uv.y : uv.y);
+                vec2 fromCentre = point - 0.5;
+                float radius = dot(fromCentre, fromCentre) * 2.0;
+                vec2 source = 0.5 + fromCentre * (1.0 + uA.y * 0.5 * (radius - 1.0));
+                if (uA.z > 0.0) {
+                    source += uA.z * sin(6.28318530718 * (uA.w * point.yx + uB.x));
+                }
+                if (topFirst) source.y = 1.0 - source.y;
+                FragColor = vec4(texture(uSource, source).rgb, texture(uSource, uv).a);
             } else {
                 vec2 d = (uv - 0.5) * uB.z;
                 vec4 base = texture(uSource, uv);
@@ -307,6 +318,11 @@ void OpenGLRenderer::ApplyPostProcess(const PostProcessSettings &input)
         beginStage();
         halfPasses(PostProcessParams::For(PostPassMode::Copy, settings), settings.blurIterations);
         toFrame(m_postBloomA.texture, PostPassMode::Mix);
+    }
+    if (settings.WarpActive())
+    {
+        beginStage();
+        toFrame(m_postScene.texture, PostPassMode::Warp); // GL's first row is the bottom: params as they are
     }
     if (settings.CompositeActive())
     {
