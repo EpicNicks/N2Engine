@@ -1,5 +1,8 @@
 #include "engine/rendering/PostProcessStack.hpp"
 
+#include <cmath>
+
+#include "engine/Time.hpp"
 #include "engine/common/ScriptUtils.hpp"
 #include "engine/serialization/MathSerialization.hpp"
 
@@ -28,6 +31,14 @@ namespace N2Engine::Rendering
             .Tooltip("0 the sharp image, 1 the blurred one");
         RegisterMember(NAMEOF(blurIterations), blurIterations).Range(1.0, PostProcessSettings::MaxBlurIterations)
             .Tooltip("Blur passes: the blur widens with each");
+        RegisterMember(NAMEOF(distortion), distortion).Range(-1.0, 1.0)
+            .Tooltip("Lens distortion: above 0 the middle bulges, below 0 it pinches");
+        RegisterMember(NAMEOF(waveAmplitude), waveAmplitude).Range(0.0, PostProcessSettings::MaxWaveAmplitude)
+            .Tooltip("How far the wave moves a point, as a fraction of the screen");
+        RegisterMember(NAMEOF(waveFrequency), waveFrequency).Range(0.0, PostProcessSettings::MaxWaveFrequency)
+            .Tooltip("Waves from one edge to the other");
+        RegisterMember(NAMEOF(wavePhase), wavePhase).Tooltip("Where the wave is in its cycle, in cycles");
+        RegisterMember(NAMEOF(waveSpeed), waveSpeed).Tooltip("Cycles a second the wave travels by itself");
     }
 
     std::string PostProcessStack::GetTypeName() const
@@ -51,6 +62,21 @@ namespace N2Engine::Rendering
         settings.blur = blur;
         settings.blurStrength = blurStrength;
         settings.blurIterations = blurIterations;
+        settings.distortion = distortion;
+        settings.waveAmplitude = waveAmplitude;
+        settings.waveFrequency = waveFrequency;
+        settings.wavePhase = wavePhase;
+        return settings;
+    }
+
+    PostProcessSettings PostProcessStack::GetFrameSettings() const
+    {
+        PostProcessSettings settings = GetSettings();
+        // In double, so a long run keeps its fraction of a cycle
+        const double travelled = std::isfinite(waveSpeed)
+                                     ? static_cast<double>(waveSpeed) * static_cast<double>(Time::GetUnscaledTime())
+                                     : 0.0;
+        settings.wavePhase = wavePhase + static_cast<float>(travelled - std::floor(travelled));
         return settings;
     }
 
@@ -69,5 +95,9 @@ namespace N2Engine::Rendering
         blur = settings.blur;
         blurStrength = settings.blurStrength;
         blurIterations = settings.blurIterations;
+        distortion = settings.distortion;
+        waveAmplitude = settings.waveAmplitude;
+        waveFrequency = settings.waveFrequency;
+        wavePhase = settings.wavePhase;
     }
 }

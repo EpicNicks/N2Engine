@@ -4690,6 +4690,11 @@ function Graphics.CanPostProcess() end
 ---@field blur boolean|nil blur the whole scene, before the other effects
 ---@field blurStrength number|nil 0 (sharp) to 1 (blurred, the default)
 ---@field blurIterations integer|nil blur passes, 1 to 8 (default 3): the blur widens with each
+---@field distortion number|nil lens distortion, -1 to 1: above 0 the middle bulges, below 0 it pinches
+---@field waveAmplitude number|nil how far a wave moves points, 0 to 0.1 of the screen
+---@field waveFrequency number|nil waves from edge to edge, 0 to 64 (default 4)
+---@field wavePhase number|nil where the wave is in its cycle, in cycles
+---@field waveSpeed number|nil cycles a second the wave travels by itself (unscaled time)
 
 ---The scene's full-screen effects, run after the scene and before the screen-space UI (the HUD is not bloomed). The first
 ---active PostProcessStack of the scene is used; add it with go:AddComponent("PostProcessStack"). Saved with the scene and

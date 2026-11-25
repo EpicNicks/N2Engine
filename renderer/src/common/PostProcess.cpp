@@ -174,6 +174,12 @@ namespace Renderer::Common
         result.vignette = std::clamp(Finite(settings.vignette, 0.0f), 0.0f, 1.0f);
         result.blurStrength = std::clamp(Finite(settings.blurStrength, defaults.blurStrength), 0.0f, 1.0f);
         result.blurIterations = std::clamp(settings.blurIterations, 1, MaxBlurIterations);
+        result.distortion = std::clamp(Finite(settings.distortion, 0.0f), -1.0f, 1.0f);
+        result.waveAmplitude = std::clamp(Finite(settings.waveAmplitude, 0.0f), 0.0f, MaxWaveAmplitude);
+        result.waveFrequency = std::clamp(Finite(settings.waveFrequency, defaults.waveFrequency), 0.0f, MaxWaveFrequency);
+        // The whole cycles dropped here, so a phase that has run for hours stays exact in the shader
+        const float phase = Finite(settings.wavePhase, 0.0f);
+        result.wavePhase = phase - std::floor(phase);
         return result;
     }
 
@@ -193,10 +199,64 @@ namespace Renderer::Common
         {
             params.a[2] = settings.blurStrength;
         }
+        if (mode == PostPassMode::Warp)
+        {
+            params.a[1] = settings.distortion;
+            params.a[2] = settings.waveAmplitude;
+            params.a[3] = settings.waveFrequency;
+            params.b[0] = settings.wavePhase;
+        }
         return params;
     }
 
-    void ApplyPostProcessCpu(std::uint32_t *pixels, const int width, const int height, const PostProcessSettings &input)
+    void WarpSource(const PostProcessSettings &settings, const float u, const float v, float &sourceU, float &sourceV)
+    {
+        const float x = u - 0.5f;
+        const float y = v - 0.5f;
+        const float radius = (x * x + y * y) * 2.0f; // 1 in the corners
+        const float factor = 1.0f + settings.distortion * 0.5f * (radius - 1.0f);
+        sourceU = 0.5f + x * factor;
+        sourceV = 0.5f + y * factor;
+        if (settings.waveAmplitude > 0.0f)
+        {
+            constexpr float TwoPi = 6.28318530718f;
+            sourceU += settings.waveAmplitude * std::sin(TwoPi * (settings.waveFrequency * v + settings.wavePhase));
+            sourceV += settings.waveAmplitude * std::sin(TwoPi * (settings.waveFrequency * u + settings.wavePhase));
+        }
+    }
+
+    namespace
+    {
+        /// The warp, in place
+        void WarpFrame(std::uint32_t *pixels, const int width, const int height, const PostProcessSettings &settings,
+                       const bool topRowFirst)
+        {
+            const RgbImage scene = ReadPixels(pixels, width, height);
+            for (int y = 0; y < height; ++y)
+            {
+                const float row = (static_cast<float>(y) + 0.5f) / static_cast<float>(height);
+                const float v = topRowFirst ? 1.0f - row : row;
+                for (int x = 0; x < width; ++x)
+                {
+                    float sourceU = 0.0f;
+                    float sourceV = 0.0f;
+                    WarpSource(settings, (static_cast<float>(x) + 0.5f) / static_cast<float>(width), v, sourceU, sourceV);
+                    float colour[3];
+                    Bilinear(scene, sourceU, topRowFirst ? 1.0f - sourceV : sourceV, colour);
+                    const std::size_t index = static_cast<std::size_t>(y) * width + x;
+                    std::uint32_t packed = pixels[index] & 0xFF000000u;
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        packed |= static_cast<std::uint32_t>(std::clamp(colour[i], 0.0f, 1.0f) * 255.0f + 0.5f) << (8 * i);
+                    }
+                    pixels[index] = packed;
+                }
+            }
+        }
+    }
+
+    void ApplyPostProcessCpu(std::uint32_t *pixels, const int width, const int height, const PostProcessSettings &input,
+                             const bool topRowFirst)
     {
         if (pixels == nullptr || width <= 0 || height <= 0)
         {
@@ -212,10 +272,14 @@ namespace Renderer::Common
         if (settings.BlurActive())
         {
             BlurFrame(pixels, width, height, settings);
-            if (!settings.CompositeActive())
-            {
-                return;
-            }
+        }
+        if (settings.WarpActive())
+        {
+            WarpFrame(pixels, width, height, settings, topRowFirst);
+        }
+        if (!settings.CompositeActive())
+        {
+            return;
         }
 
         const RgbImage scene = ReadPixels(pixels, width, height);
