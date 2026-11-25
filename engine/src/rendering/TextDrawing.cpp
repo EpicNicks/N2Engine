@@ -331,14 +331,16 @@ namespace N2Engine::Rendering::TextDrawing
     }
 
     bool DrawResources::EnsureMesh(const Text::TextLayout &layout, const std::uint64_t layoutVersion,
-                                   const std::span<const Common::Color> quadColors)
+                                   const std::span<const Common::Color> quadColors,
+                                   const Renderer::Common::MeshData *geometry)
     {
         if (_mesh && _meshVersion == layoutVersion)
         {
             return true;
         }
 
-        const Renderer::Common::MeshData data = BuildMesh(layout, quadColors);
+        const Renderer::Common::MeshData built = geometry ? Renderer::Common::MeshData{} : BuildMesh(layout, quadColors);
+        const Renderer::Common::MeshData &data = geometry ? *geometry : built;
         if (_mesh && !_renderer->UpdateMesh(_mesh, data))
         {
             // The backend can't update meshes in place: replace it
@@ -426,14 +428,15 @@ namespace N2Engine::Rendering::TextDrawing
                              const std::uint64_t layoutVersion, const float *modelMatrix,
                              const Common::Color &color, const Text::TextEffects &effects,
                              const Renderer::Common::RenderState &state, const std::string_view componentName,
-                             const std::span<const Common::Color> quadColors)
+                             const std::span<const Common::Color> quadColors,
+                             const Renderer::Common::MeshData *geometry)
     {
         Renderer::Common::IRenderer *renderer = _renderer;
         if (!renderer || _rendererLifetime.expired() || !modelMatrix)
         {
             return false;
         }
-        if (!font || !font->IsLoaded() || layout.quads.empty())
+        if (!font || !font->IsLoaded() || layout.quads.empty() || (geometry && geometry->vertices.empty()))
         {
             return false;
         }
@@ -461,7 +464,7 @@ namespace N2Engine::Rendering::TextDrawing
                 return false;
             }
         }
-        if (!EnsureMesh(layout, layoutVersion, quadColors))
+        if (!EnsureMesh(layout, layoutVersion, quadColors, geometry))
         {
             return false;
         }

@@ -227,6 +227,8 @@ namespace N2Engine::UI
         // The RectMask clip of the last draw (relative to the anchor; nullopt: none that cuts the text), and the clipped
         // layout and quad colours made for it at _clippedVersion
         std::optional<Text::Rect> _drawnClip;
+        ConvexPolygon _drawnClipPolygon; // a turned mask's region that cuts the text (empty: none)
+        Renderer::Common::MeshData _clippedMesh; // and the mesh cut to it
         Text::TextLayout _clippedLayout;
         std::vector<Common::Color> _clippedColors;
         std::uint64_t _clippedVersion = ~std::uint64_t{0};

@@ -9,6 +9,7 @@
 #include <renderer/common/RenderTypes.hpp>
 
 #include "engine/rendering/MeshDrawing.hpp"
+#include "engine/ui/QuadClip.hpp"
 
 namespace N2Engine::UI
 {
@@ -192,7 +193,7 @@ namespace N2Engine::UI
     }
 
     Renderer::Common::IMesh *Image::EnsureQuadMesh(Renderer::Common::IRenderer *renderer, const std::vector<Quad> &quads,
-                                                   const Math::Vector2 &origin)
+                                                   const Math::Vector2 &origin, const ConvexPolygon &polygon)
     {
         // Relative to the rect's corner, so moving the rect alone changes only the model matrix
         std::vector<Quad> local = quads;
@@ -201,7 +202,14 @@ namespace N2Engine::UI
             quad.position.x -= origin.x;
             quad.position.y -= origin.y;
         }
-        if (_quadMesh && local == _quadMeshQuads)
+        ConvexPolygon localPolygon = polygon;
+        for (Math::Vector2 &point : localPolygon)
+        {
+            point = Math::Vector2{point.x - origin.x, point.y - origin.y};
+        }
+        const bool samePolygon = std::ranges::equal(localPolygon, _quadMeshPolygon, [](const auto &a, const auto &b)
+                                                    { return a.x == b.x && a.y == b.y; });
+        if (_quadMesh && local == _quadMeshQuads && samePolygon)
         {
             return _quadMesh;
         }
@@ -220,6 +228,10 @@ namespace N2Engine::UI
             data.vertices.push_back({{p.XMin(), p.YMax(), 0.0f}, {0.0f, 0.0f, 1.0f}, {t.XMin(), t.YMax()}, {1.0f, 1.0f, 1.0f, 1.0f}});
             data.indices.insert(data.indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
         }
+        if (!localPolygon.empty())
+        {
+            data = ClipQuadMesh(data, localPolygon);
+        }
         if (data.vertices.empty())
         {
             return nullptr;
@@ -234,6 +246,7 @@ namespace N2Engine::UI
             _quadMesh = renderer->CreateMesh(data);
         }
         _quadMeshQuads = _quadMesh ? std::move(local) : std::vector<Quad>{};
+        _quadMeshPolygon = _quadMesh ? std::move(localPolygon) : ConvexPolygon{};
         return _quadMesh;
     }
 
@@ -296,6 +309,7 @@ namespace N2Engine::UI
         _material = nullptr;
         _quadMesh = nullptr;
         _quadMeshQuads.clear();
+        _quadMeshPolygon.clear();
         _renderer = nullptr;
         _rendererLifetime.reset();
     }
@@ -339,14 +353,24 @@ namespace N2Engine::UI
         {
             textureSize = Math::Vector2{static_cast<float>(_sprite->GetWidth()), static_cast<float>(_sprite->GetHeight())};
         }
-        if (const std::vector<Quad> quads = BuildQuads(rect, _renderClip, textureSize); !quads.empty())
+        // A clip that is no rect (a mask turned against the image) cuts the mesh itself, and only when it cuts the image
+        const ConvexPolygon &polygon = _renderClipPolygon;
+        const bool turnedClip = !polygon.empty() && !std::ranges::all_of(
+            TransformedCorners(rect, Transform2D{}),
+            [&polygon](const Math::Vector2 &corner) { return ConvexContains(polygon, corner); });
+        std::vector<Quad> quads = BuildQuads(rect, polygon.empty() ? _renderClip : std::nullopt, textureSize);
+        if (turnedClip && quads.empty())
+        {
+            quads.push_back(Quad{rect});
+        }
+        if (!quads.empty())
         {
             if (quads.size() == 1 && !quads.front().position.HasArea())
             {
                 return; // clipped away
             }
             const Math::Vector2 origin{rect.x, rect.y};
-            mesh = EnsureQuadMesh(renderer, quads, origin);
+            mesh = EnsureQuadMesh(renderer, quads, origin, turnedClip ? polygon : ConvexPolygon{});
             if (!mesh)
             {
                 return;
