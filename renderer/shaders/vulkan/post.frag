@@ -45,6 +45,11 @@ void main()
         sum += (texture(uSource, uv + o4).rgb + texture(uSource, uv - o4).rgb) * 0.0162162162;
         outColor = vec4(sum, 1.0);
     }
+    else if (mode == 4)
+    {
+        vec4 base = texture(uSource, uv);
+        outColor = vec4(clamp(mix(base.rgb, texture(uBloom, uv).rgb, p.a.z), 0.0, 1.0), base.a);
+    }
     else
     {
         vec2 d = (uv - 0.5) * p.b.z;

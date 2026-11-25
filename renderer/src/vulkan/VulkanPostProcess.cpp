@@ -553,35 +553,40 @@ void VulkanRenderer::ApplyPostProcess(const PostProcessSettings& input)
         return set;
     };
     const bool bloom = settings.BloomActive();
+    const bool blur = settings.BlurActive();
+    const bool halves = bloom || blur; // the half-size images are drawn
     const VkDescriptorSet sceneSet = makeSet(post.scene.view, post.scene.view);
-    const VkDescriptorSet bloomASet = bloom ? makeSet(post.bloomA.view, post.bloomA.view) : VK_NULL_HANDLE;
-    const VkDescriptorSet bloomBSet = bloom ? makeSet(post.bloomB.view, post.bloomB.view) : VK_NULL_HANDLE;
+    const VkDescriptorSet bloomASet = halves ? makeSet(post.bloomA.view, post.bloomA.view) : VK_NULL_HANDLE;
+    const VkDescriptorSet bloomBSet = halves ? makeSet(post.bloomB.view, post.bloomB.view) : VK_NULL_HANDLE;
     const VkDescriptorSet compositeSet = makeSet(post.scene.view, bloom ? post.bloomA.view : post.scene.view);
+    const VkDescriptorSet mixSet = blur ? makeSet(post.scene.view, post.bloomA.view) : VK_NULL_HANDLE;
     if (sceneSet == VK_NULL_HANDLE || compositeSet == VK_NULL_HANDLE ||
-        (bloom && (bloomASet == VK_NULL_HANDLE || bloomBSet == VK_NULL_HANDLE)))
+        (halves && (bloomASet == VK_NULL_HANDLE || bloomBSet == VK_NULL_HANDLE)) || (blur && mixSet == VK_NULL_HANDLE))
     {
         LogOnce("could not allocate the post-processing descriptor sets; post-processing is skipped");
         return;
     }
 
-    SuspendFramePassLocked(commandBuffer);
 
     // The copy of the frame: whatever read it last (an earlier composite) finishes before it is overwritten
-    VkImageMemoryBarrier toCopy = ImageBarrier(post.scene.image, VK_IMAGE_LAYOUT_UNDEFINED,
-                                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
-    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr,
-                         0, nullptr, 1, &toCopy);
-    VkImageCopy region{};
-    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.extent = {_targetWidth, _targetHeight, 1};
-    vkCmdCopyImage(commandBuffer, _color.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, post.scene.image,
-                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-    VkImageMemoryBarrier toRead =
-        ImageBarrier(post.scene.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                     VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
-    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
-                         0, nullptr, 1, &toRead);
+    const auto copyFrame = [&]
+    {
+        VkImageMemoryBarrier toCopy = ImageBarrier(post.scene.image, VK_IMAGE_LAYOUT_UNDEFINED,
+                                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
+                             nullptr, 0, nullptr, 1, &toCopy);
+        VkImageCopy region{};
+        region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.extent = {_targetWidth, _targetHeight, 1};
+        vkCmdCopyImage(commandBuffer, _color.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, post.scene.image,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        VkImageMemoryBarrier toRead = ImageBarrier(post.scene.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+                                                   VK_ACCESS_SHADER_READ_BIT);
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0,
+                             nullptr, 0, nullptr, 1, &toRead);
+    };
 
     const auto drawPass = [&](const VkPipeline pipeline, const VkDescriptorSet set, const PostProcessParams& params)
     {
@@ -592,7 +597,9 @@ void VulkanRenderer::ApplyPostProcess(const PostProcessSettings& input)
         vkCmdDraw(commandBuffer, 3, 1, 0, 0);
     };
 
-    if (bloom)
+    // A half-size image from the copy (the first pass given), then `iterations` pairs of blur passes; the result is in
+    // bloomA
+    const auto halfPasses = [&](const PostProcessParams& first, const int iterations)
     {
         const uint32_t bloomWidth = Common::BloomExtent(_targetWidth);
         const uint32_t bloomHeight = Common::BloomExtent(_targetHeight);
@@ -608,8 +615,8 @@ void VulkanRenderer::ApplyPostProcess(const PostProcessSettings& input)
             drawPass(post.offscreenPipeline, set, params);
             vkCmdEndRenderPass(commandBuffer);
         };
-        offscreen(post.bloomAFramebuffer, sceneSet, PostProcessParams::For(PostPassMode::Bright, settings));
-        for (int pass = 0; pass < settings.bloomIterations; ++pass)
+        offscreen(post.bloomAFramebuffer, sceneSet, first);
+        for (int pass = 0; pass < iterations; ++pass)
         {
             const float spread = static_cast<float>(pass + 1);
             PostProcessParams params = PostProcessParams::For(PostPassMode::Blur, settings);
@@ -620,10 +627,27 @@ void VulkanRenderer::ApplyPostProcess(const PostProcessSettings& input)
             params.b[1] = spread / static_cast<float>(bloomHeight);
             offscreen(post.bloomAFramebuffer, bloomBSet, params);
         }
-    }
+    };
 
-    ResumeFramePassLocked(commandBuffer);
-    drawPass(post.framePipeline, compositeSet, PostProcessParams::For(PostPassMode::Composite, settings));
+    if (blur)
+    {
+        SuspendFramePassLocked(commandBuffer);
+        copyFrame();
+        halfPasses(PostProcessParams::For(PostPassMode::Copy, settings), settings.blurIterations);
+        ResumeFramePassLocked(commandBuffer);
+        drawPass(post.framePipeline, mixSet, PostProcessParams::For(PostPassMode::Mix, settings));
+    }
+    if (settings.CompositeActive())
+    {
+        SuspendFramePassLocked(commandBuffer);
+        copyFrame();
+        if (bloom)
+        {
+            halfPasses(PostProcessParams::For(PostPassMode::Bright, settings), settings.bloomIterations);
+        }
+        ResumeFramePassLocked(commandBuffer);
+        drawPass(post.framePipeline, compositeSet, PostProcessParams::For(PostPassMode::Composite, settings));
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

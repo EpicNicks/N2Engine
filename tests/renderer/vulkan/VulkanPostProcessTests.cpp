@@ -40,6 +40,13 @@ TEST_F(VulkanPostProcessTest, InvertVignetteAndChromaticAberrationMatchTheRefere
     scenes.CheckComposite(4);
 }
 
+TEST_F(VulkanPostProcessTest, BlurMatchesTheReference)
+{
+    PostProcessScenes::Scenes scenes(R());
+    ASSERT_TRUE(scenes.Ready());
+    scenes.CheckBlur(12);
+}
+
 TEST_F(VulkanPostProcessTest, DrawsAfterThePostProcessAreNotProcessed)
 {
     PostProcessScenes::Scenes scenes(R());
