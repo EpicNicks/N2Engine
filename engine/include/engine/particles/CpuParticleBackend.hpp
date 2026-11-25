@@ -71,6 +71,9 @@ namespace N2Engine::Particles
 
             [[nodiscard]] std::size_t Count() const { return age.size(); }
             void Remove(std::size_t index);
+            /// Moves particle i by one step against params.collider: true when it hit (it is then placed at the surface,
+            /// its velocity and age changed), false when nothing is in the way (the caller moves it)
+            bool Collide(std::size_t index, float dt);
         };
 
         static Physics::ParticleParams Sanitized(Physics::ParticleParams params);

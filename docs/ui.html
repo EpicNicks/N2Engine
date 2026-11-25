@@ -353,6 +353,27 @@ canvas-&gt;AddChild(label, false);
 </tbody>
 </table>
 </div>
+<h3 id="text-overflow">Overflow <span class="badge">issue #445</span></h3>
+<p>The <code>overflow</code> setting (<code>SetOverflow</code>) says what happens to text that doesn't fit the rect:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Mode</th><th>Text that doesn't fit</th></tr></thead>
+<tbody>
+<tr><td><code>Overflow</code> (default)</td><td>Runs past the rect, as before</td></tr>
+<tr><td><code>Clip</code></td><td>Cut at the rect's edges, through a glyph if need be (effects such as an outline are cut with it). A <code>RectMask</code> above still applies.</td></tr>
+<tr><td><code>Truncate</code></td><td>Lines that don't fit the height are left out, and a line wider than the rect (with <code>wrap</code> off, or a rect narrower than one character) ends after its last character that fits</td></tr>
+<tr><td><code>Ellipsis</code></td><td>As <code>Truncate</code>, with an ellipsis (U+2026, or <code>...</code> in a font without it) at the end of a cut line and of the last line when lines were left out; spaces before it are removed</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li>A line counts as fitting the height when its ascent to descent fits; a rect lower than one line shows nothing with <code>Truncate</code> and <code>Ellipsis</code>, and so does a line too narrow even for the ellipsis. Wrapped lines break where they would without the setting.</li>
+<li><code>GetLayout(rect)</code> and <code>GetBoundsIn(rect)</code> describe what is drawn (the cut text). The <a href="#text-character-offsets">per-character</a> offsets, colours and scales still count the characters of <code>GetText()</code>, so they stay on their characters; the ellipsis has none.</li>
+<li><code>IsOverflowing()</code> says whether the text fits its current rect, whatever the mode. A <code>ContentSizeFitter</code> or layout group measures the whole text.</li>
+<li>The fitted text is worked out again only when the text, font, size, spacing, wrapping, mode or the rect's size changes.</li>
+</ul>
+<p class="src">Source: <code>engine/src/ui/UIText.cpp</code> &mdash; <code>UIText::FitText</code>, <code>IsOverflowing</code>, <code>RenderUI</code>; tests: <code>UITextOverflowTest.*</code>, <code>UITextOverflowComponentTest.*</code> (<code>tests/engine/ui/UITextOverflowTests.cpp</code>), <code>LuaUITest.SetsATextsOverflow</code></p>
+
 <h3 id="text-character-offsets">Moving single characters <span class="badge">PR #336</span></h3>
 <p><code>SetCharacterOffset(index, offset)</code> moves one character away from where the layout put it, by <code>offset</code> in canvas units (+y up): what TextMeshPro scripts do to vertices for waving, shaking or bouncing text. <code>index</code> counts characters (code points) of the text from 0, spaces and line breaks included; a space has no glyph, so nothing moves. <code>ClearCharacterOffsets()</code> puts every character back. The offsets are runtime state: not saved with the scene, and kept across <code>SetText</code> (a script that changes the text sets them again). Changing them does not lay the text out again: the draw applies them to a copy of the layout&rsquo;s glyph quads (<code>ApplyCharacterOffsets</code>) and rebuilds the mesh once, so animating a few characters each frame costs one mesh update per frame for that text. Every renderer draws the moved quads the same way, since the change is in the mesh. Per-character colour and scale are below.</p>
 <pre class="lang-lua"><code>-- a bobbing word: characters 5 to 8, phase by place
@@ -378,7 +399,7 @@ text:SetCharacterScale(n, 1 + 0.5 * math.max(0, 1 - (Time.time - typedAt) * 8))
 </code></pre>
 <p class="src">Source: <code>engine/src/ui/UIText.cpp</code> &mdash; <code>UIText::SetCharacterColor</code>, <code>SetCharacterScale</code>, <code>CharacterQuadColors</code>, <code>ApplyCharacterScales</code>, <code>RenderUI</code>; <code>engine/src/rendering/TextDrawing.cpp</code> &mdash; <code>BuildMesh</code> (the vertex colours); tests: <code>UITextCharacterStyleTest.*</code> (<code>tests/engine/ui/UITextCharacterStyleTests.cpp</code>), <code>SoftwareUIGoldenTest.UITextCharacterColourColoursOnlyThatCharacter</code>, <code>SoftwareUIGoldenTest.UITextCharacterScaleHidesGrowsAndClears</code></p>
 
-<p>Nothing is clipped by the rect itself (<span class="badge">issue #445</span> only a <a href="#mask">RectMask</a> above the text clips it): text taller than the rect, or wider with <code>wrap</code> off, overflows it. <code>GetLayout(rect)</code> returns the layout relative to the anchor, <code>GetBoundsIn(rect)</code> the block in canvas space, and <code>GetCurrentRect()</code> the rect the last layout resolved (its <code>RectTransform</code>'s, or the rect it was last drawn in).</p>
+<p>By default nothing is clipped by the rect itself: text taller than the rect, or wider with <code>wrap</code> off, overflows it (<a href="#text-overflow">Overflow</a> <span class="badge">issue #445</span> can cut or shorten it, and a <a href="#mask">RectMask</a> above the text clips it). <code>GetLayout(rect)</code> returns the layout relative to the anchor, <code>GetBoundsIn(rect)</code> the block in canvas space, and <code>GetCurrentRect()</code> the rect the last layout resolved (its <code>RectTransform</code>'s, or the rect it was last drawn in).</p>
 <p>Drawing:</p>
 <ul>
 <li>It draws with <code>IRenderer::GetStandardTextShader()</code> and the UI pass's state: no depth, no culling, blending on. On the software renderer, which can't blend, the text shader alpha-tests the glyphs instead, so text drawn over an <code>Image</code> covers it exactly where its glyphs are. OpenGL and the Vulkan renderer (stage E of <a href="https://github.com/EpicNicks/N2Engine/issues/43">#43</a> <span class="badge">PR #165</span>) antialias and blend instead: a glyph's edge pixel is the text colour mixed with the <code>Image</code> behind it. Where the text shader is null (a renderer or a build without it) nothing is drawn, and one warning is logged per process.</li>
@@ -794,7 +815,7 @@ open:GetComponent("Button"):AddOnClick(function() print("opening") end)
 <h2 id="not-yet">Not yet</h2>
 <ul>
 <li>For <strong>Button</strong>: sprite-swap and animation transitions, keyboard and gamepad navigation and selection (Unity's <code>Selected</code> state), persistent (saved) listeners, and pointer events bubbling to a parent.</li>
-<li>For <strong>UI text</strong>: clipping to its own rect (a <a href="#mask">RectMask</a> clips it <span class="badge">issue #445</span>), best-fit sizing and rich text.</li>
+<li>For <strong>UI text</strong>: best-fit sizing and rich text.</li>
 <li>For <strong>world-space canvases</strong>: Unity's Screen Space - Camera mode, a per-canvas event camera (the main camera is used), clipping a transparent object that crosses the canvas's plane, and blending on the software renderer (<a href="#world-sw-text">text writes depth there</a>).</li>
 <li>Flexible layout sizes and Unity's <code>MinSize</code> fit, soft (feathered) mask edges and masks of any shape (<span class="badge">issue #445</span> rectangular masks and scroll views are done), and events for buttons other than the left.</li>
 <li>For <strong>Image</strong>: sprite sub-rects and atlases, tiled (repeating) slices, and preserving the aspect ratio (a sprite is stretched over the whole rect).</li>

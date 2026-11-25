@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include <text/Utf8.hpp>
+
 #include "engine/GameObjectScene.hpp"
 #include "engine/ui/QuadClip.hpp"
 #include "engine/ui/RectTransform.hpp"
@@ -22,6 +24,7 @@ namespace N2Engine::UI
         RegisterMember("wrap", _wrap);
         RegisterMember("lineSpacing", _lineSpacing);
         RegisterMember("letterSpacing", _letterSpacing);
+        RegisterMember("overflow", _overflow).Tooltip("What happens to text that doesn't fit the rect");
         // Effects, one key each (a scene saved before effects existed loads with them all off)
         RegisterMember("outlineWidth", _effects.outlineWidth);
         RegisterMember("outlineColor", _effects.outlineColor);
@@ -61,7 +64,213 @@ namespace N2Engine::UI
 
     const Text::TextLayout &UIText::GetLayout(const Rect &rect) const
     {
-        return _layoutCache.Get(_text, GetEffectiveFont(), GetLayoutOptions(rect.width));
+        const FittedText *fitted = Fitted(rect);
+        return _layoutCache.Get(fitted ? fitted->text : _text, GetEffectiveFont(), GetLayoutOptions(rect.width));
+    }
+
+    const UIText::FittedText *UIText::Fitted(const Rect &rect) const
+    {
+        if (_overflow != TextOverflow::Truncate && _overflow != TextOverflow::Ellipsis)
+        {
+            return nullptr;
+        }
+        const std::shared_ptr<Text::Font> font = GetEffectiveFont();
+        if (!font)
+        {
+            return nullptr;
+        }
+        const Text::LayoutOptions options = GetLayoutOptions(rect.width);
+        if (!_fit || _fit->font != font || _fit->fontSize != options.fontSize ||
+            _fit->letterSpacing != options.letterSpacing || _fit->lineSpacing != options.lineSpacing ||
+            _fit->maxWidth != options.maxWidth || _fit->width != rect.width || _fit->height != rect.height ||
+            _fit->overflow != _overflow || _fit->text != _text)
+        {
+            _fit = FitCache{_text,      font,        options.fontSize, options.letterSpacing, options.lineSpacing,
+                            options.maxWidth, rect.width, rect.height,      _overflow,
+                            FitText(*font, _text, options, rect.width, rect.height, _overflow)};
+            ++_fitVersion;
+        }
+        return _fit->result ? &*_fit->result : nullptr;
+    }
+
+    namespace
+    {
+        /// How many lines of `layout` fit `height` (all of them when their spacing is 0)
+        std::size_t LinesThatFit(const Text::TextLayout &layout, const float height, const float tolerance)
+        {
+            const std::size_t count = layout.lines.size();
+            if (count == 0)
+            {
+                return 0;
+            }
+            const float oneLine = layout.bounds.Height() - static_cast<float>(count - 1) * layout.lineHeight;
+            if (height + tolerance < oneLine)
+            {
+                return 0;
+            }
+            if (!(layout.lineHeight > 0.0f))
+            {
+                return count;
+            }
+            const float more = std::floor((height + tolerance - oneLine) / layout.lineHeight);
+            return more >= static_cast<float>(count - 1) ? count : static_cast<std::size_t>(more) + 1;
+        }
+
+        /// Rounding slack for "does it fit": a text sized exactly to its content fits
+        float FitTolerance(const Text::LayoutOptions &options) { return 1e-3f * std::max(1.0f, options.fontSize); }
+    }
+
+    std::optional<UIText::FittedText> UIText::FitText(const Text::Font &font, const std::string &text,
+                                                      const Text::LayoutOptions &options, const float width,
+                                                      const float height, const TextOverflow overflow)
+    {
+        if ((overflow != TextOverflow::Truncate && overflow != TextOverflow::Ellipsis) || text.empty() || !font.IsLoaded())
+        {
+            return std::nullopt;
+        }
+        const Text::TextLayout full = font.Layout(text, options);
+        if (full.lines.empty())
+        {
+            return std::nullopt;
+        }
+        const float tolerance = FitTolerance(options);
+        const std::size_t count = full.lines.size();
+        const std::size_t kept = std::min(count, LinesThatFit(full, height, tolerance));
+        const auto tooWide = [&](const std::size_t line) { return full.lines[line].width > width + tolerance; };
+        bool cuts = kept < count;
+        for (std::size_t i = 0; i < kept; ++i)
+        {
+            cuts = cuts || tooWide(i);
+        }
+        if (!cuts)
+        {
+            return std::nullopt;
+        }
+
+        const bool ellipsis = overflow == TextOverflow::Ellipsis;
+        const std::string mark = font.GetSdfFont().GetAtlas().FindCodepoint(U'\u2026') ? "\xE2\x80\xA6" : "...";
+        Text::LayoutOptions oneLine = options;
+        oneLine.maxWidth = 0.0f;
+        const auto widthOf = [&](const std::string &candidate)
+        {
+            const Text::TextLayout layout = font.Layout(candidate, oneLine);
+            return layout.lines.empty() ? 0.0f : layout.lines.front().width;
+        };
+
+        FittedText result;
+        // The character index of each line's first byte, counted along as the lines go
+        std::size_t countedBytes = 0;
+        std::uint32_t countedCharacters = 0;
+        const auto characterAt = [&](const std::size_t byte)
+        {
+            while (countedBytes < byte && countedBytes < text.size())
+            {
+                static_cast<void>(Text::DecodeUtf8Next(text, countedBytes));
+                ++countedCharacters;
+            }
+            return countedCharacters;
+        };
+
+        for (std::size_t i = 0; i < kept; ++i)
+        {
+            const Text::LineInfo &line = full.lines[i];
+            std::string_view content{text.data() + line.byteBegin, line.byteEnd - line.byteBegin};
+            if (!content.empty() && content.back() == '\r')
+            {
+                content.remove_suffix(1);
+            }
+            // Where each character of the line ends, in bytes
+            std::vector<std::size_t> ends{0};
+            for (std::size_t position = 0; position < content.size();)
+            {
+                static_cast<void>(Text::DecodeUtf8Next(content, position));
+                ends.push_back(position);
+            }
+            const std::size_t characters = ends.size() - 1;
+            const bool wide = tooWide(i);
+            const bool marked = ellipsis && (wide || (i + 1 == kept && kept < count));
+
+            std::size_t keep = characters;
+            std::string suffix = marked ? mark : std::string{};
+            if (wide || marked)
+            {
+                const auto candidate = [&](const std::size_t n)
+                {
+                    std::string prefix(content.substr(0, ends[n]));
+                    if (marked)
+                    {
+                        while (!prefix.empty() && (prefix.back() == ' ' || prefix.back() == '\t'))
+                        {
+                            prefix.pop_back();
+                        }
+                    }
+                    return prefix;
+                };
+                if (widthOf(candidate(characters) + suffix) > width + tolerance)
+                {
+                    // The most characters that fit, by halving (the width grows with the characters)
+                    std::size_t low = 0;
+                    std::size_t high = characters;
+                    while (high - low > 1)
+                    {
+                        const std::size_t middle = low + (high - low) / 2;
+                        (widthOf(candidate(middle) + suffix) <= width + tolerance ? low : high) = middle;
+                    }
+                    keep = low;
+                    if (keep == 0 && !suffix.empty() && widthOf(suffix) > width + tolerance)
+                    {
+                        suffix.clear(); // no room even for the mark
+                    }
+                }
+            }
+
+            std::string shown(content.substr(0, ends[keep]));
+            std::size_t shownCharacters = keep;
+            if (marked)
+            {
+                while (!shown.empty() && (shown.back() == ' ' || shown.back() == '\t'))
+                {
+                    shown.pop_back();
+                    --shownCharacters;
+                }
+            }
+            const std::uint32_t first = characterAt(line.byteBegin);
+            for (std::size_t c = 0; c < shownCharacters; ++c)
+            {
+                result.source.push_back(first + static_cast<std::uint32_t>(c));
+            }
+            result.text += shown;
+            for (std::size_t position = 0; position < suffix.size();)
+            {
+                static_cast<void>(Text::DecodeUtf8Next(suffix, position));
+                result.source.push_back(NoCharacter);
+            }
+            result.text += suffix;
+            if (i + 1 < kept)
+            {
+                result.text += '\n';
+                result.source.push_back(NoCharacter);
+            }
+        }
+        return result;
+    }
+
+    bool UIText::IsOverflowing() const
+    {
+        const std::shared_ptr<Text::Font> font = GetEffectiveFont();
+        if (!font || _text.empty())
+        {
+            return false;
+        }
+        const Rect rect = GetCurrentRect();
+        const Text::LayoutOptions options = GetLayoutOptions(rect.width);
+        const Text::TextLayout full = font->Layout(_text, options);
+        const float tolerance = FitTolerance(options);
+        if (LinesThatFit(full, rect.height, tolerance) < full.lines.size())
+        {
+            return true;
+        }
+        return std::ranges::any_of(full.lines, [&](const Text::LineInfo &line) { return line.width > rect.width + tolerance; });
     }
 
     Math::Vector2 UIText::AnchorFor(const Rect &rect, const Text::HorizontalAlign horizontal,
@@ -137,10 +346,8 @@ namespace N2Engine::UI
 
     namespace
     {
-        constexpr std::uint32_t NoCharacter = ~std::uint32_t{0};
-
-        /// The character index (code points of `text`, from 0) of each quad of `layout`; NoCharacter for a quad
-        /// whose cluster is outside the text
+        /// The character index (code points of `text`, from 0) of each quad of `layout`; UIText::NoCharacter for a
+        /// quad whose cluster is outside the text
         std::vector<std::uint32_t> CharacterOfQuads(const Text::TextLayout &layout, const std::string &text)
         {
             // The character index of each byte: lead bytes start a character, continuation bytes (10xxxxxx) don't
@@ -158,7 +365,7 @@ namespace N2Engine::UI
             result.reserve(layout.quads.size());
             for (const Text::GlyphQuad &quad : layout.quads)
             {
-                result.push_back(quad.cluster < text.size() ? characterOf[quad.cluster] : NoCharacter);
+                result.push_back(quad.cluster < text.size() ? characterOf[quad.cluster] : UIText::NoCharacter);
             }
             return result;
         }
@@ -415,14 +622,30 @@ namespace N2Engine::UI
         // on a copy of the layout; the colours become one vertex colour per quad, rebuilt only when they or the layout
         // changed (an animated offset leaves them as they are)
         const bool moved = !_characterOffsets.empty() || !_characterScales.empty();
-        const bool layoutChanged = _layoutCache.GetVersion() != _drawnLayoutVersion;
+        const bool layoutChanged = _layoutCache.GetVersion() != _drawnLayoutVersion || _fitVersion != _drawnFitVersion;
         if (layoutChanged || _charactersChanged)
         {
             _drawnLayoutVersion = _layoutCache.GetVersion();
+            _drawnFitVersion = _fitVersion;
             ++_meshVersion;
             const bool recolor = !_characterColors.empty() && (layoutChanged || _colorsChanged);
-            const std::vector<std::uint32_t> characterOf =
-                moved || recolor ? CharacterOfQuads(layout, _text) : std::vector<std::uint32_t>{};
+            // The characters of GetText() the quads are: through the fitted text's map when some of it was left out
+            std::vector<std::uint32_t> characterOf;
+            if (moved || recolor)
+            {
+                if (const FittedText *fitted = Fitted(rect))
+                {
+                    characterOf = CharacterOfQuads(layout, fitted->text);
+                    for (std::uint32_t &index : characterOf)
+                    {
+                        index = index < fitted->source.size() ? fitted->source[index] : NoCharacter;
+                    }
+                }
+                else
+                {
+                    characterOf = CharacterOfQuads(layout, _text);
+                }
+            }
             if (moved)
             {
                 _offsetLayout = layout;
@@ -464,12 +687,30 @@ namespace N2Engine::UI
 
         // Issue #445: a RectMask's clip, in the layout's space, only when it cuts some glyph (text inside it draws as
         // without one). A new clip is a new mesh; the clipped copy is made once per mesh version.
+        // With overflow Clip the text's own rect clips it too
+        std::optional<Rect> clipRect = _renderClip;
+        ConvexPolygon clipPolygon = _renderClipPolygon;
+        if (_overflow == TextOverflow::Clip)
+        {
+            if (clipPolygon.empty())
+            {
+                clipRect = clipRect ? Rect::Intersect(*clipRect, rect) : rect;
+            }
+            else
+            {
+                clipPolygon = IntersectConvex(clipPolygon, TransformedCorners(rect, Transform2D{}));
+                if (clipPolygon.empty())
+                {
+                    return; // nothing of the rect is inside the mask
+                }
+            }
+        }
         std::optional<Text::Rect> clip;
-        if (_renderClip && _renderClipPolygon.empty())
+        if (clipRect && clipPolygon.empty())
         {
             const Math::Vector2 anchor = GetAnchor(rect);
-            const Text::Rect local{_renderClip->XMin() - anchor.x, _renderClip->YMin() - anchor.y,
-                                   _renderClip->XMax() - anchor.x, _renderClip->YMax() - anchor.y};
+            const Text::Rect local{clipRect->XMin() - anchor.x, clipRect->YMin() - anchor.y,
+                                   clipRect->XMax() - anchor.x, clipRect->YMax() - anchor.y};
             const bool cuts = std::ranges::any_of(drawn.quads, [&local](const Text::GlyphQuad &quad)
             {
                 const Text::Rect &p = quad.position;
@@ -482,10 +723,10 @@ namespace N2Engine::UI
         }
         // A clip that is no rect (a mask turned against the text), likewise in the layout's space and only when it cuts
         ConvexPolygon polygon;
-        if (!_renderClipPolygon.empty())
+        if (!clipPolygon.empty())
         {
             const Math::Vector2 anchor = GetAnchor(rect);
-            ConvexPolygon local = _renderClipPolygon;
+            ConvexPolygon local = std::move(clipPolygon);
             for (Math::Vector2 &point : local)
             {
                 point = Math::Vector2{point.x - anchor.x, point.y - anchor.y};

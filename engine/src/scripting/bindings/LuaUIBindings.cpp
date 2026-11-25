@@ -94,6 +94,26 @@ namespace N2Engine::Scripting::Bindings
                                      "\" (expected \"MatchWidthOrHeight\", \"Expand\" or \"Shrink\")");
         }
 
+        constexpr const char *OverflowNames[] = {"Overflow", "Clip", "Truncate", "Ellipsis"};
+
+        UI::TextOverflow ParseOverflow(const std::string &name)
+        {
+            for (int i = 0; i < 4; ++i)
+            {
+                if (name == OverflowNames[i])
+                {
+                    return static_cast<UI::TextOverflow>(i);
+                }
+            }
+            throw std::runtime_error("UIText:SetOverflow: unknown mode \"" + name +
+                                     "\" (expected \"Overflow\", \"Clip\", \"Truncate\" or \"Ellipsis\")");
+        }
+
+        std::string OverflowName(const UI::TextOverflow overflow)
+        {
+            return OverflowNames[static_cast<int>(overflow)];
+        }
+
         std::string RenderModeName(const UI::CanvasRenderMode mode)
         {
             return mode == UI::CanvasRenderMode::WorldSpace ? "WorldSpace" : "ScreenSpaceOverlay";
@@ -509,6 +529,14 @@ namespace N2Engine::Scripting::Bindings
             "GetLineSpacing", Forward<UITextRef, &UI::UIText::GetLineSpacing>(),
             "SetLetterSpacing", Forward<UITextRef, &UI::UIText::SetLetterSpacing>(),
             "GetLetterSpacing", Forward<UITextRef, &UI::UIText::GetLetterSpacing>(),
+            // "Overflow", "Clip", "Truncate" or "Ellipsis"; an unknown name raises an error and changes nothing
+            "SetOverflow", [](const UITextRef &c, const std::string &mode)
+            {
+                const UI::TextOverflow overflow = ParseOverflow(mode);
+                c.Pin()->SetOverflow(overflow);
+            },
+            "GetOverflow", [](const UITextRef &c) -> std::string { return OverflowName(c.Pin()->GetOverflow()); },
+            "IsOverflowing", Forward<UITextRef, &UI::UIText::IsOverflowing>(),
             // Effects (Text::TextEffects), lengths in ems
             "SetOutline", [](const UITextRef &c, const float width, const Common::Color &color)
             {

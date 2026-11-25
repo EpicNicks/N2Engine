@@ -1307,6 +1307,34 @@ function ParticleSystem:GetDrag() end
 ---@param bounce number the share of its speed a particle keeps, 0 to 1 (default 0.3)
 function ParticleSystem:SetGround(enabled, height, bounce) end
 
+---Each particle collides with the scene's colliders (CPU backend; a ray cast per particle per fixed step). Set it
+---before the system starts, so that it runs on the CPU backend
+---@param with2D boolean 2D colliders, in the XY plane
+---@param with3D boolean 3D colliders
+function ParticleSystem:SetColliderCollision(with2D, with3D) end
+---@return boolean with2D
+---@return boolean with3D
+function ParticleSystem:GetColliderCollision() end
+---@param radius number a particle's radius in world units (default 0)
+---@param bounce number share of the speed into a surface turned back, 0 to 1 (default 0.3, shared with the ground)
+---@param dampen number share of the speed along a surface lost at a hit, 0 to 1 (default 0)
+---@param lifetimeLoss number share of its lifetime a particle loses at a hit; 1 removes it (default 0)
+function ParticleSystem:SetCollisionResponse(radius, bounce, dampen, lifetimeLoss) end
+---@return number radius
+---@return number bounce
+---@return number dampen
+---@return number lifetimeLoss
+function ParticleSystem:GetCollisionResponse() end
+---@param mask integer the layers particles collide with (default: all but IgnoreRaycast)
+function ParticleSystem:SetCollisionLayers(mask) end
+---@return integer
+function ParticleSystem:GetCollisionLayers() end
+---@return integer how many collisions the last fixed step had
+function ParticleSystem:GetCollisionCount() end
+---The last fixed step's collisions, at most 64
+---@return {position: Vector3, normal: Vector3, gameObject: GameObject?}[]
+function ParticleSystem:GetCollisions() end
+
 ---@return boolean enabled
 ---@return number height
 ---@return number bounce
@@ -1969,6 +1997,16 @@ function UIText:GetLineSpacing() end
 function UIText:SetLetterSpacing(spacing) end
 ---@return number
 function UIText:GetLetterSpacing() end
+---What happens to text that doesn't fit the rect: "Overflow" runs past it (the default), "Clip" cuts it at the edges,
+---"Truncate" leaves out the characters and lines that don't fit, "Ellipsis" does so and marks it with an ellipsis. An
+---unknown name raises an error
+---@param mode "Overflow"|"Clip"|"Truncate"|"Ellipsis"
+function UIText:SetOverflow(mode) end
+---@return "Overflow"|"Clip"|"Truncate"|"Ellipsis"
+function UIText:GetOverflow() end
+---Whether the text doesn't fit the rect of the last layout (a line too wide, or too many lines)
+---@return boolean
+function UIText:IsOverflowing() end
 ---An outline around the glyphs, drawn under them. Lengths are in ems (fontSize pixels each); effects are
 ---limited to 90% of the font's SDF spread (about 0.15 em for the default font), with one warning when reduced.
 ---@param width number outline width in ems; 0 (the default) turns it off
