@@ -102,6 +102,47 @@ TEST(PostProcessMaths, ParamsCarryTheSettings)
     EXPECT_EQ(BloomExtent(1), 1u);
 }
 
+TEST(PostProcessMaths, TheWarpKeepsTheCornersAndCentreAndIsSanitized)
+{
+    PostProcessSettings settings;
+    EXPECT_FALSE(settings.WarpActive());
+    settings.distortion = 5.0f;
+    settings.waveAmplitude = 1.0f;
+    settings.waveFrequency = -2.0f;
+    settings.wavePhase = 7.25f;
+    const PostProcessSettings clean = PostProcessSettings::Sanitized(settings);
+    EXPECT_FLOAT_EQ(clean.distortion, 1.0f);
+    EXPECT_FLOAT_EQ(clean.waveAmplitude, PostProcessSettings::MaxWaveAmplitude);
+    EXPECT_FLOAT_EQ(clean.waveFrequency, 0.0f);
+    EXPECT_FLOAT_EQ(clean.wavePhase, 0.25f);
+    EXPECT_TRUE(clean.WarpActive());
+    EXPECT_FALSE(clean.CompositeActive());
+
+    PostProcessSettings lens;
+    lens.distortion = 0.6f;
+    float u = 0.0f;
+    float v = 0.0f;
+    for (const float corner : {0.0f, 1.0f})
+    {
+        WarpSource(lens, corner, corner, u, v);
+        EXPECT_NEAR(u, corner, 1e-6f);
+        EXPECT_NEAR(v, corner, 1e-6f);
+    }
+    WarpSource(lens, 0.5f, 0.5f, u, v);
+    EXPECT_FLOAT_EQ(u, 0.5f);
+    WarpSource(lens, 0.6f, 0.5f, u, v);
+    EXPECT_LT(u, 0.6f) << "a bulge reads nearer the centre";
+    lens.distortion = -0.6f;
+    WarpSource(lens, 0.6f, 0.5f, u, v);
+    EXPECT_GT(u, 0.6f);
+
+    PostProcessSettings wave;
+    wave.waveAmplitude = 0.1f;
+    wave.waveFrequency = 1.0f;
+    WarpSource(wave, 0.5f, 0.25f, u, v);
+    EXPECT_NEAR(u, 0.6f, 1e-5f) << "a quarter wave up the screen";
+}
+
 TEST_F(SoftwarePostProcessTest, SupportsPostProcess)
 {
     EXPECT_TRUE(renderer.SupportsPostProcess());
@@ -152,6 +193,13 @@ TEST(PostProcessMaths, TheBlurIsSanitizedAndRunsBeforeTheComposite)
     EXPECT_FLOAT_EQ(mix.a[2], 0.25f);
     clean.blurStrength = 0.0f;
     EXPECT_FALSE(clean.IsActive());
+}
+
+TEST_F(SoftwarePostProcessTest, WarpMatchesTheReference)
+{
+    PostProcessScenes::Scenes scenes(renderer);
+    ASSERT_TRUE(scenes.Ready());
+    scenes.CheckWarp(1);
 }
 
 TEST_F(SoftwarePostProcessTest, DrawsAfterThePostProcessAreNotProcessed)

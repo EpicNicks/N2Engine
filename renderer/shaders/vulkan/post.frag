@@ -50,6 +50,23 @@ void main()
         vec4 base = texture(uSource, uv);
         outColor = vec4(clamp(mix(base.rgb, texture(uBloom, uv).rgb, p.a.z), 0.0, 1.0), base.a);
     }
+    else if (mode == 5)
+    {
+        bool topFirst = p.b.y > 0.5;
+        vec2 point = vec2(uv.x, topFirst ? 1.0 - uv.y : uv.y);
+        vec2 fromCentre = point - 0.5;
+        float radius = dot(fromCentre, fromCentre) * 2.0;
+        vec2 source = 0.5 + fromCentre * (1.0 + p.a.y * 0.5 * (radius - 1.0));
+        if (p.a.z > 0.0)
+        {
+            source += p.a.z * sin(6.28318530718 * (p.a.w * point.yx + p.b.x));
+        }
+        if (topFirst)
+        {
+            source.y = 1.0 - source.y;
+        }
+        outColor = vec4(texture(uSource, source).rgb, texture(uSource, uv).a);
+    }
     else
     {
         vec2 d = (uv - 0.5) * p.b.z;

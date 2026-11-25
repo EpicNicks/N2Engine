@@ -47,6 +47,13 @@ TEST_F(WebGpuPostProcessTest, BlurMatchesTheReference)
     scenes.CheckBlur(12);
 }
 
+TEST_F(WebGpuPostProcessTest, WarpMatchesTheReference)
+{
+    PostProcessScenes::Scenes scenes(R());
+    ASSERT_TRUE(scenes.Ready());
+    scenes.CheckWarp(12);
+}
+
 TEST_F(WebGpuPostProcessTest, DrawsAfterThePostProcessAreNotProcessed)
 {
     PostProcessScenes::Scenes scenes(R());

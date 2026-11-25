@@ -253,6 +253,50 @@ namespace PostProcessScenes
             EXPECT_EQ(MaxDifference(processed(off), plain, true), 0);
         }
 
+        /// The warp (issue #445): the frame matches the CPU reference for a barrel, a pinch and a wave, which moves a
+        /// picture that is not symmetric, so the backends' row orders are checked; the corners stay put
+        void CheckWarp(const int tolerance)
+        {
+            const auto draw = [&] {
+                _r.DrawMesh(_bottomLeft, Identity, _blue, Flat());
+                _r.DrawMesh(_centre, Identity, _white, Flat());
+                _r.DrawMesh(_corner, Identity, _red, Flat());
+            };
+            const Image plain = Frame(draw);
+            const auto processed = [&](const PostProcessSettings &settings) {
+                return Frame([&] {
+                    draw();
+                    _r.ApplyPostProcess(settings);
+                });
+            };
+
+            PostProcessSettings barrel;
+            barrel.distortion = 1.0f;
+            const Image bulged = processed(barrel);
+            EXPECT_LE(MaxDifference(bulged, Reference(plain, barrel)), tolerance);
+            ASSERT_EQ(plain.At(38, 32)[0], 0);
+            EXPECT_GT(bulged.At(38, 32)[0], 200) << "the middle square did not grow";
+            EXPECT_EQ(bulged.At(1, 1)[0], plain.At(1, 1)[0]) << "the corner stays";
+
+            PostProcessSettings pinch;
+            pinch.distortion = -0.8f;
+            EXPECT_LE(MaxDifference(processed(pinch), Reference(plain, pinch)), tolerance);
+
+            PostProcessSettings wave;
+            wave.waveAmplitude = 0.05f;
+            wave.waveFrequency = 1.5f;
+            wave.wavePhase = 0.2f;
+            const Image waved = processed(wave);
+            EXPECT_GT(MaxDifference(waved, plain), 100) << "nothing moved";
+            EXPECT_LE(MaxDifference(waved, Reference(plain, wave)), tolerance);
+
+            // With the blur before it and the composite after
+            wave.blur = true;
+            wave.vignette = 0.5f;
+            wave.distortion = 0.3f;
+            EXPECT_LE(MaxDifference(processed(wave), Reference(plain, wave)), tolerance);
+        }
+
         /// What is drawn after the post-process (the UI) is not processed, and the draws before it are
         void CheckLaterDrawsAreUntouched()
         {
