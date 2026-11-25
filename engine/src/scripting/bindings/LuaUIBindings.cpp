@@ -303,7 +303,31 @@ namespace N2Engine::Scripting::Bindings
             "GetOffsetMax", Forward<RectTransformRef, &UI::RectTransform::GetOffsetMax>(),
             "SetOffsetMax", Forward<RectTransformRef, &UI::RectTransform::SetOffsetMax>(),
             "StretchToParent", Forward<RectTransformRef, &UI::RectTransform::StretchToParent>(),
-            "GetRect", Forward<RectTransformRef, &UI::RectTransform::GetRect>()
+            "GetRect", Forward<RectTransformRef, &UI::RectTransform::GetRect>(),
+            // Rotation (degrees, counter-clockwise) and scale about the pivot
+            "GetRotation", Forward<RectTransformRef, &UI::RectTransform::GetRotation>(),
+            "SetRotation", Forward<RectTransformRef, &UI::RectTransform::SetRotation>(),
+            "GetScale", Forward<RectTransformRef, &UI::RectTransform::GetScale>(),
+            "SetScale", Forward<RectTransformRef, &UI::RectTransform::SetScale>(),
+            "LocalToCanvas", Forward<RectTransformRef, &UI::RectTransform::LocalToCanvas>(),
+            // nil when a scale of 0 flattens the element
+            "CanvasToLocal", [](const RectTransformRef &self, const Math::Vector2 &point, sol::this_state state)
+            {
+                const std::optional<Math::Vector2> local = self.Pin()->CanvasToLocal(point);
+                return local ? sol::make_object(state, *local) : sol::make_object(state, sol::lua_nil);
+            },
+            // { bottomLeft, topLeft, topRight, bottomRight }, as drawn
+            "GetCanvasCorners", [](const RectTransformRef &self, sol::this_state state)
+            {
+                const std::array<Math::Vector2, 4> corners = self.Pin()->GetCanvasCorners();
+                sol::state_view view(state);
+                sol::table result = view.create_table(4, 0);
+                for (std::size_t i = 0; i < corners.size(); ++i)
+                {
+                    result[i + 1] = corners[i];
+                }
+                return result;
+            }
         );
 
         // ===== Canvas =====

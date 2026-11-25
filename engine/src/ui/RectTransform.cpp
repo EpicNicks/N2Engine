@@ -9,6 +9,8 @@ namespace N2Engine::UI
         RegisterMember("pivot", _pivot);
         RegisterMember("anchoredPosition", _anchoredPosition);
         RegisterMember("sizeDelta", _sizeDelta);
+        RegisterMember("rotation", _rotation).Tooltip("Degrees, counter-clockwise, about the pivot");
+        RegisterMember("scale", _scale).Tooltip("About the pivot");
     }
 
     Math::Vector2 RectTransform::GetOffsetMin() const
@@ -50,6 +52,30 @@ namespace N2Engine::UI
         _anchorMax = Math::Vector2{1.0f, 1.0f};
         _anchoredPosition = Math::Vector2{0.0f, 0.0f};
         _sizeDelta = Math::Vector2{0.0f, 0.0f};
+    }
+
+    Transform2D RectTransform::LocalTransform(const Rect &rect) const
+    {
+        const Math::Vector2 pivot{rect.x + _pivot.x * rect.width, rect.y + _pivot.y * rect.height};
+        return Transform2D::AroundPivot(pivot, _rotation, _scale);
+    }
+
+    std::optional<Math::Vector2> RectTransform::CanvasToLocal(const Math::Vector2 &point) const
+    {
+        const std::optional<Transform2D> inverse = _localToCanvas.Inverse();
+        if (!inverse)
+        {
+            return std::nullopt;
+        }
+        return inverse->Apply(point);
+    }
+
+    std::array<Math::Vector2, 4> RectTransform::GetCanvasCorners() const
+    {
+        return {_localToCanvas.Apply(Math::Vector2{_rect.XMin(), _rect.YMin()}),
+                _localToCanvas.Apply(Math::Vector2{_rect.XMin(), _rect.YMax()}),
+                _localToCanvas.Apply(Math::Vector2{_rect.XMax(), _rect.YMax()}),
+                _localToCanvas.Apply(Math::Vector2{_rect.XMax(), _rect.YMin()})};
     }
 
     Rect RectTransform::ResolveIn(const Rect &parent) const
