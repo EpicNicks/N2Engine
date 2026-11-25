@@ -483,16 +483,20 @@ TEST_F(ExtensionHookTest, AHookHasNoFunctionOfACapabilityItDidNotDeclare)
 
 TEST_F(ExtensionHookTest, AHookIsCappedAtAThousandRequests)
 {
-    // The time of a thousand round trips is not what this test is about: the wall budget is made generous. Each request builds
-    // every component schema, and in Debug on the Windows CI runner a thousand took more than the earlier 60 s (the hook was
-    // stopped by its deadline before the request cap, so the log line was never written); a passing run is unaffected
+    // The time of a thousand round trips is not what this test is about: the wall budget is made generous. The request is a
+    // small one on purpose: with GetComponentTypes a thousand replies (every component's schema) passed the 64 MiB an
+    // invocation may move once more component types were registered, and that limit stopped the hook before the cap. Here
+    // the server has no project, so every listing is refused with the same text and still counts as a request: the cap is
+    // the first refusal that says something else
     ExtensionHost::SetHookBudgetForTest(20'000'000, 300000);
     TempProject project;
-    project.Write("a.lua", HookExtension("Chatty", "\"scene.read\"",
+    project.Write("a.lua", HookExtension("Chatty", "\"scene.read\", \"assets.read\"",
                                          "    OnSceneSaved = function(info)\n"
+                                         "      local first\n"
                                          "      for i = 1, 2000 do\n"
-                                         "        local ok = pcall(Editor.Scene.GetComponentTypes)\n"
-                                         "        if not ok then Editor.Log.Info('stopped at ' .. i) return end\n"
+                                         "        local ok, message = pcall(Editor.Assets.List)\n"
+                                         "        first = first or message\n"
+                                         "        if message ~= first then Editor.Log.Info('stopped at ' .. i) return end\n"
                                          "      end\n"
                                          "      Editor.Log.Info('never stopped')\n"
                                          "    end,"));
