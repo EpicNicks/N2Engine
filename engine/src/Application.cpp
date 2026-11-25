@@ -784,6 +784,8 @@ void Application::Tick(const TickOptions &options)
             // OnMouse*: after the fixed steps (so it picks against this frame's physics) and before Update,
             // where Unity sends them
             _pointerDispatcher.Update();
+            // UI selection by keyboard and gamepad (issue #445), after the pointer so a click can move it
+            _uiNavigator.Update();
             curScene.Update();
             curScene.AdvanceCoroutines();
             curScene.LateUpdate();

@@ -68,6 +68,7 @@
 #include "engine/ui/CanvasScaler.hpp"
 #include "engine/ui/Image.hpp"
 #include "engine/ui/LayoutGroup.hpp"
+#include "engine/ui/Navigation.hpp"
 #include "engine/ui/RectMask.hpp"
 #include "engine/ui/RectTransform.hpp"
 #include "engine/ui/ScrollView.hpp"
@@ -183,6 +184,7 @@ namespace N2Engine::Scripting::Bindings
                 {"GridLayoutGroup", MakeAccess<UI::GridLayoutGroup>()},
                 {"LayoutElement", MakeAccess<UI::LayoutElement>()},
                 {"ContentSizeFitter", MakeAccess<UI::ContentSizeFitter>()},
+                {"Navigation", MakeAccess<UI::Navigation>()},
             };
             return table;
         }

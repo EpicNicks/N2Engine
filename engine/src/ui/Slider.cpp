@@ -14,6 +14,7 @@
 #include "engine/input/PointerDispatcher.hpp"
 #include "engine/ui/Canvas.hpp"
 #include "engine/ui/RectTransform.hpp"
+#include "engine/ui/UIGraphic.hpp"
 #include "engine/ui/UISystem.hpp"
 
 namespace N2Engine::UI
@@ -43,6 +44,7 @@ namespace N2Engine::UI
         RegisterMember("wholeNumbers", _wholeNumbers);
         RegisterMember("direction", _direction);
         RegisterMember("interactable", _interactable);
+        RegisterMember("selectedColor", _selectedColor);
         RegisterComponentRef("fillRect", _fillRect).Tooltip("Anchored over its parent's rect up to the value");
         RegisterComponentRef("handleRect", _handleRect).Tooltip("Anchored at the value across its parent's rect");
     }
@@ -232,6 +234,60 @@ namespace N2Engine::UI
     void Slider::OnDisable()
     {
         _dragging = false;
+        // A deactivated selection is dropped without OnDeselect
+        _selected = false;
+        ApplySelectionTint();
+    }
+
+    void Slider::OnDestroy()
+    {
+        _selected = false;
+        ApplySelectionTint();
+    }
+
+    void Slider::OnSelect()
+    {
+        _selected = true;
+        ApplySelectionTint();
+    }
+
+    void Slider::OnDeselect()
+    {
+        _selected = false;
+        ApplySelectionTint();
+    }
+
+    void Slider::SetSelectedColor(const Common::Color &color)
+    {
+        _selectedColor = color;
+        ApplySelectionTint();
+    }
+
+    void Slider::ApplySelectionTint()
+    {
+        UIGraphic *target = nullptr;
+        if (_selected)
+        {
+            const GameObject &owner = _handleRect ? _handleRect->GetGameObject() : GetGameObject();
+            for (const auto &component : owner.GetAllComponents())
+            {
+                if (auto *graphic = dynamic_cast<UIGraphic *>(component.get()); graphic && !graphic->IsDestroyed())
+                {
+                    target = graphic;
+                    break;
+                }
+            }
+        }
+        if (_tinted && !_tintedLifetime.expired() && _tinted != target)
+        {
+            _tinted->SetTint(Common::Color::White);
+        }
+        _tinted = target;
+        if (target)
+        {
+            _tintedLifetime = target->GetLifetimeToken();
+            target->SetTint(_selectedColor);
+        }
     }
 
     void Slider::OnUpdate()

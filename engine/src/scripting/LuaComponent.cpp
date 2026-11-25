@@ -1223,6 +1223,10 @@ namespace N2Engine::Scripting
             _hasOnMouseDrag = false;
             _hasOnMouseUp = false;
             _hasOnMouseUpAsButton = false;
+            _hasOnSelect = false;
+            _hasOnDeselect = false;
+            _hasOnSubmit = false;
+            _hasOnCancel = false;
             _instructionBudget = 0;
             return;
         }
@@ -1251,6 +1255,10 @@ namespace N2Engine::Scripting
         _hasOnMouseDrag = HasMethod("OnMouseDrag");
         _hasOnMouseUp = HasMethod("OnMouseUp");
         _hasOnMouseUpAsButton = HasMethod("OnMouseUpAsButton");
+        _hasOnSelect = HasMethod("OnSelect");
+        _hasOnDeselect = HasMethod("OnDeselect");
+        _hasOnSubmit = HasMethod("OnSubmit");
+        _hasOnCancel = HasMethod("OnCancel");
         ReadInstructionBudget();
     }
 
@@ -1529,6 +1537,38 @@ namespace N2Engine::Scripting
         if (_hasOnMouseUpAsButton && !_hasMissingScript)
         {
             CallLuaMethod("OnMouseUpAsButton");
+        }
+    }
+
+    void LuaComponent::OnSelect()
+    {
+        if (_hasOnSelect && !_hasMissingScript)
+        {
+            CallLuaMethod("OnSelect");
+        }
+    }
+
+    void LuaComponent::OnDeselect()
+    {
+        if (_hasOnDeselect && !_hasMissingScript)
+        {
+            CallLuaMethod("OnDeselect");
+        }
+    }
+
+    void LuaComponent::OnSubmit()
+    {
+        if (_hasOnSubmit && !_hasMissingScript)
+        {
+            CallLuaMethod("OnSubmit");
+        }
+    }
+
+    void LuaComponent::OnCancel()
+    {
+        if (_hasOnCancel && !_hasMissingScript)
+        {
+            CallLuaMethod("OnCancel");
         }
     }
 

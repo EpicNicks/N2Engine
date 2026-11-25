@@ -36,6 +36,7 @@
 #include "engine/ui/CanvasScaler.hpp"
 #include "engine/ui/Image.hpp"
 #include "engine/ui/LayoutGroup.hpp"
+#include "engine/ui/Navigation.hpp"
 #include "engine/ui/RectMask.hpp"
 #include "engine/ui/RectTransform.hpp"
 #include "engine/ui/ScrollView.hpp"
@@ -105,6 +106,7 @@ namespace N2Engine
         Add<UI::GridLayoutGroup>(registry, "GridLayoutGroup");
         Add<UI::LayoutElement>(registry, "LayoutElement");
         Add<UI::ContentSizeFitter>(registry, "ContentSizeFitter");
+        Add<UI::Navigation>(registry, "Navigation");
         Add<Network::NetworkObject>(registry, "NetworkObject");
         Add<Network::LagCompensatedHitbox>(registry, "LagCompensatedHitbox");
         Add<Network::NetworkTransform>(registry, "NetworkTransform");

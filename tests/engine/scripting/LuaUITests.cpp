@@ -556,3 +556,40 @@ TEST_F(LuaUITest, TurnsOnRichText)
     )");
     Run("lua_ui_rich = nil; lua_ui_rich_text = nil");
 }
+
+TEST_F(LuaUITest, SelectsAndNavigates)
+{
+    // Issue #445
+    Run(R"(
+        lua_ui_nav_events = {}
+        lua_ui_nav = UI.CreateButton("NavButton", "Go")
+        lua_ui_nav_other = UI.CreateButton("Other", "No")
+        local clicks = 0
+        lua_ui_nav:GetComponent("Button"):AddOnClick(function() table.insert(lua_ui_nav_events, "click") end)
+        assert(UI.GetSelected() == nil)
+        assert(UI.IsNavigationEnabled())
+        UI.SetSelected(lua_ui_nav)
+        assert(UI.GetSelected():GetName() == "NavButton")
+        assert(lua_ui_nav:GetComponent("Button"):GetState() == "Selected")
+        UI.Submit()
+        assert(#lua_ui_nav_events == 1)
+        assert(not pcall(function() UI.SetSelected(5) end))
+        assert(not pcall(function() UI.MoveSelection("Sideways") end))
+        local navigation = lua_ui_nav:AddComponent("Navigation")
+        assert(navigation:GetMode() == "Automatic")
+        navigation:SetMode("Explicit")
+        navigation:SetNeighbor("Down", lua_ui_nav_other:GetComponent("RectTransform"))
+        assert(navigation:GetNeighbor("Down") ~= nil)
+        assert(navigation:GetNeighbor("Up") == nil)
+        assert(not pcall(function() navigation:SetMode("Sideways") end))
+        lua_ui_nav:GetComponent("Button"):SetSelectedColor(Color.new(1, 0, 0, 1))
+        assert(lua_ui_nav:GetComponent("Button"):GetSelectedColor().g == 0)
+        UI.SetSelected(nil)
+        assert(UI.GetSelected() == nil)
+        UI.SetNavigationEnabled(false)
+        assert(not UI.IsNavigationEnabled())
+        UI.SetNavigationEnabled(true)
+        assert(UI.WasSubmitPressed() == false and UI.WasCancelPressed() == false)
+    )");
+    Run("lua_ui_nav = nil; lua_ui_nav_other = nil; lua_ui_nav_events = nil");
+}
