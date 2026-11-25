@@ -5,6 +5,8 @@
 #include "engine/Positionable.hpp"
 #include "engine/common/ScriptUtils.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <format>
 
 namespace N2Engine::Audio
@@ -13,7 +15,7 @@ namespace N2Engine::Audio
         : SerializableComponent(gameObject)
     {
         RegisterMember(NAMEOF(_volume), _volume).Range(0.0, 1.0).Tooltip("Linear gain");
-        RegisterMember(NAMEOF(_pitch), _pitch).Range(0.5, 2.0);
+        RegisterMember(NAMEOF(_pitch), _pitch).Range(AudioSystem::MinPitch, AudioSystem::MaxPitch);
         RegisterMember(NAMEOF(_loop), _loop);
         RegisterMember(NAMEOF(_spatial), _spatial);
         RegisterMember(NAMEOF(_playOnAwake), _playOnAwake);
@@ -52,30 +54,69 @@ namespace N2Engine::Audio
 
     void AudioSource::Play()
     {
-        if (!_clip || !_clip->IsLoaded())
+        if (PrepareToPlay())
+        {
+            alSourcePlay(_source);
+        }
+    }
+
+    void AudioSource::PlayScheduled(const double dspTime)
+    {
+        if (PrepareToPlay())
+        {
+            AudioSystem::Instance().StartSourceAt(_source, dspTime);
+        }
+    }
+
+    float AudioSource::GetTime() const
+    {
+        if (_source == 0)
+        {
+            return 0.0f;
+        }
+        ALfloat seconds = 0.0f;
+        alGetSourcef(_source, AL_SEC_OFFSET, &seconds);
+        return seconds;
+    }
+
+    void AudioSource::SetTime(const float seconds)
+    {
+        if (_source == 0 || !_clip)
         {
             return;
+        }
+        // OpenAL refuses an offset past the end of the buffer; land on the last moment instead
+        const float clamped = std::clamp(std::isfinite(seconds) ? seconds : 0.0f, 0.0f, _clip->GetDuration());
+        alSourcef(_source, AL_SEC_OFFSET, clamped);
+    }
+
+    bool AudioSource::PrepareToPlay()
+    {
+        if (!_clip || !_clip->IsLoaded())
+        {
+            return false;
         }
 
         if (!HasRoomInGroup())
         {
-            return;
+            return false;
         }
 
         // Web: the browser has not let the AudioContext run (yet): drop the sound (AudioSystem::IsOutputSuspended)
         if (AudioSystem::Instance().RefuseWhileSuspended())
         {
-            return;
+            return false;
         }
 
         EnsureSource();
         if (_source == 0)
         {
-            return;
+            return false;
         }
 
         // OpenAL only takes a new buffer on a stopped (or new) source; binding to a playing or paused one
         // failed, and alSourcePlay then just carried on (or resumed). Stopping first makes it a restart.
+        AudioSystem::Instance().CancelScheduledStart(_source);
         alSourceStop(_source);
         alSourcei(_source, AL_BUFFER, static_cast<ALint>(_clip->GetBuffer()));
         ApplyMixing();
@@ -95,14 +136,14 @@ namespace N2Engine::Audio
             alSource3f(_source, AL_POSITION, 0.0f, 0.0f, 0.0f);
             alSourcef(_source, AL_ROLLOFF_FACTOR, 0.0f);
         }
-
-        alSourcePlay(_source);
+        return true;
     }
 
     void AudioSource::Pause()
     {
         if (_source != 0)
         {
+            AudioSystem::Instance().CancelScheduledStart(_source);
             alSourcePause(_source);
         }
     }
@@ -136,6 +177,7 @@ namespace N2Engine::Audio
     {
         if (_source != 0)
         {
+            AudioSystem::Instance().CancelScheduledStart(_source);
             alSourceStop(_source);
         }
     }
@@ -185,7 +227,7 @@ namespace N2Engine::Audio
 
     void AudioSource::SetPitch(float pitch)
     {
-        _pitch = std::clamp(pitch, 0.5f, 2.0f);
+        _pitch = AudioSystem::ClampPitch(pitch);
         ApplyMixing();
     }
 
