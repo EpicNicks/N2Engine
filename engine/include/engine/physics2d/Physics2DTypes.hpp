@@ -20,6 +20,7 @@ namespace N2Engine::Physics2D
 {
     class Rigidbody2D;
     class Collider2D;
+    class Joint2D;
 
     enum class BodyType2D
     {
@@ -33,6 +34,27 @@ namespace N2Engine::Physics2D
                       {BodyType2D::Static, "Static"},
                       {BodyType2D::Dynamic, "Dynamic"},
                       {BodyType2D::Kinematic, "Kinematic"}
+                      })
+
+    /// What a Joint2D allows (docs/physics2d.html#joints). The first four are the 3D JointType's names; Ball has no 2D meaning.
+    enum class JointType2D : std::uint8_t
+    {
+        Fixed,    // welded: no relative movement (Box2D's weld joint; springs make it soft)
+        Hinge,    // rotation about the anchor (revolute): limits in degrees, a motor, a spring back to angle 0
+        Slider,   // movement along the axis, no rotation (prismatic): limits in metres, a motor, a spring back to 0
+        Distance, // the anchors kept their distance apart: a rod, a rope with limits, or a spring
+        Wheel,    // a wheel on a suspension along the axis: free rotation (a motor drives it), a spring along the axis
+        Target    // pulls the anchor toward a world point with a spring of limited force, for dragging (Unity's TargetJoint2D)
+    };
+
+    // Literals as values, so renaming a constant does not change what scenes save
+    N2_SERIALIZE_ENUM(JointType2D, {
+                      {JointType2D::Fixed, "Fixed"},
+                      {JointType2D::Hinge, "Hinge"},
+                      {JointType2D::Slider, "Slider"},
+                      {JointType2D::Distance, "Distance"},
+                      {JointType2D::Wheel, "Wheel"},
+                      {JointType2D::Target, "Target"}
                       })
 
     struct ContactPoint2D

@@ -17,6 +17,7 @@
 #include "engine/GameObject.hpp"
 #include "engine/Layers.hpp"
 #include "engine/physics2d/Collider2D.hpp"
+#include "engine/physics2d/Joint2D.hpp"
 #include "engine/physics2d/Physics2DQueries.hpp"
 #include "engine/physics2d/Physics2DWorld.hpp"
 #include "engine/physics2d/Rigidbody2D.hpp"
@@ -236,6 +237,68 @@ namespace N2Engine::Scripting::Bindings
             return argument.as<float>();
         }
 
+        // Joint2D's arguments, read strictly: a wrong type or a non-finite number is a Lua error, not a warning
+        bool RequireBool(const sol::object &argument, const char *method, const char *name)
+        {
+            if (argument.get_type() != sol::type::boolean)
+            {
+                throw std::runtime_error(std::string(method) + ": " + name + " must be a boolean");
+            }
+            return argument.as<bool>();
+        }
+
+        float RequireFinite(const sol::object &argument, const char *method, const char *name)
+        {
+            if (argument.get_type() != sol::type::number)
+            {
+                throw std::runtime_error(std::string(method) + ": " + name + " must be a number");
+            }
+            const float value = static_cast<float>(argument.as<double>());
+            if (!std::isfinite(value))
+            {
+                throw std::runtime_error(std::string(method) + ": " + name + " must be finite");
+            }
+            return value;
+        }
+
+        float RequireNonNegative(const sol::object &argument, const char *method, const char *name)
+        {
+            const float value = RequireFinite(argument, method, name);
+            if (value < 0.0f)
+            {
+                throw std::runtime_error(std::string(method) + ": " + name + " must not be negative");
+            }
+            return value;
+        }
+
+        /// A break threshold: 0 or more, math.huge allowed (never breaks, like 0)
+        float RequireThreshold(const sol::object &argument, const char *method)
+        {
+            if (argument.get_type() != sol::type::number)
+            {
+                throw std::runtime_error(std::string(method) + ": the threshold must be a number");
+            }
+            const double value = argument.as<double>();
+            if (std::isnan(value) || value < 0.0)
+            {
+                throw std::runtime_error(std::string(method) + ": the threshold must be 0 or more (0 never breaks)");
+            }
+            return static_cast<float>(value);
+        }
+
+        Math::Vector2 RequireVector2(const sol::object &argument, const char *method, const char *name)
+        {
+            if (!argument.is<Math::Vector2>())
+            {
+                throw std::runtime_error(std::string(method) + ": " + name + " must be a Vector2");
+            }
+            const Math::Vector2 value = argument.as<Math::Vector2>();
+            if (!std::isfinite(value.x) || !std::isfinite(value.y))
+            {
+                throw std::runtime_error(std::string(method) + ": " + name + " must be finite");
+            }
+            return value;
+        }
     }
 
     sol::object Collision2DToLua(const Physics2D::Collision2D &collision, lua_State *state)
@@ -485,6 +548,107 @@ namespace N2Engine::Scripting::Bindings
                 return result;
             },
             N2_COLLIDER2D_MEMBERS(PolygonRef, Physics2D::PolygonCollider2D)
+        );
+
+        // ===== Joint2D (docs/physics2d.html#joints) =====
+        // A value of the wrong type, a non-finite number or settings the joint cannot use is a Lua error
+        lua.new_enum("JointType2D",
+            "Fixed", Physics2D::JointType2D::Fixed,
+            "Hinge", Physics2D::JointType2D::Hinge,
+            "Slider", Physics2D::JointType2D::Slider,
+            "Distance", Physics2D::JointType2D::Distance,
+            "Wheel", Physics2D::JointType2D::Wheel,
+            "Target", Physics2D::JointType2D::Target
+        );
+        using Joint2DRef = ComponentRef<Physics2D::Joint2D>;
+        BindComponentType<Physics2D::Joint2D>(lua, "Joint2D",
+            "SetJointType", Forward<Joint2DRef, &Physics2D::Joint2D::SetJointType>(),
+            "GetJointType", Forward<Joint2DRef, &Physics2D::Joint2D::GetJointType>(),
+            // SetConnectedBody(object|nil): nil joins the body to the world
+            "SetConnectedBody", [](const Joint2DRef &j, const sol::object body)
+            {
+                if (IsAbsent(body))
+                {
+                    j.Pin()->SetConnectedBody(nullptr);
+                    return;
+                }
+                if (!body.is<GameObjectRef>() || !body.as<GameObjectRef>().IsValid())
+                {
+                    throw std::runtime_error("Joint2D:SetConnectedBody: body must be a GameObject or nil");
+                }
+                j.Pin()->SetConnectedBody(body.as<GameObjectRef>().Lock().get());
+            },
+            "GetConnectedBody", [](const Joint2DRef &j) { return RefOrNil(j.Pin()->GetConnectedBody()); },
+            "SetAnchor", [](const Joint2DRef &j, const sol::object anchor) { j.Pin()->SetAnchor(RequireVector2(anchor, "Joint2D:SetAnchor", "anchor")); },
+            "GetAnchor", Forward<Joint2DRef, &Physics2D::Joint2D::GetAnchor>(),
+            "SetConnectedAnchor", [](const Joint2DRef &j, const sol::object anchor)
+            {
+                j.Pin()->SetConnectedAnchor(RequireVector2(anchor, "Joint2D:SetConnectedAnchor", "anchor"));
+            },
+            "GetConnectedAnchor", Forward<Joint2DRef, &Physics2D::Joint2D::GetConnectedAnchor>(),
+            "SetAxis", [](const Joint2DRef &j, const sol::object axis)
+            {
+                const Math::Vector2 value = RequireVector2(axis, "Joint2D:SetAxis", "axis");
+                if (!(value.x * value.x + value.y * value.y > 0.0f))
+                {
+                    throw std::runtime_error("Joint2D:SetAxis: axis must not be zero");
+                }
+                j.Pin()->SetAxis(value);
+            },
+            "GetAxis", Forward<Joint2DRef, &Physics2D::Joint2D::GetAxis>(),
+            "SetCollideConnected", Forward<Joint2DRef, &Physics2D::Joint2D::SetCollideConnected>(),
+            "GetCollideConnected", Forward<Joint2DRef, &Physics2D::Joint2D::GetCollideConnected>(),
+            // SetLimits(enabled, min, max): degrees for a hinge, metres otherwise
+            "SetLimits", [](const Joint2DRef &j, const sol::object enabled, const sol::object minimum, const sol::object maximum)
+            {
+                const bool on = RequireBool(enabled, "Joint2D:SetLimits", "enabled");
+                const float low = RequireFinite(minimum, "Joint2D:SetLimits", "min");
+                const float high = RequireFinite(maximum, "Joint2D:SetLimits", "max");
+                const auto joint = j.Pin();
+                if (const std::string problem = Physics2D::Joint2D::DescribeProblem(joint->GetJointType(), on, low, high, false, 0.0f, 0.0f);
+                    !problem.empty())
+                {
+                    throw std::runtime_error("Joint2D:SetLimits: " + problem);
+                }
+                joint->SetLimits(on, low, high);
+            },
+            "GetUseLimits", Forward<Joint2DRef, &Physics2D::Joint2D::GetUseLimits>(),
+            "GetLimitMin", Forward<Joint2DRef, &Physics2D::Joint2D::GetLimitMin>(),
+            "GetLimitMax", Forward<Joint2DRef, &Physics2D::Joint2D::GetLimitMax>(),
+            // SetSpring(enabled, frequencyHz, dampingRatio)
+            "SetSpring", [](const Joint2DRef &j, const sol::object enabled, const sol::object frequency, const sol::object damping)
+            {
+                const bool on = RequireBool(enabled, "Joint2D:SetSpring", "enabled");
+                j.Pin()->SetSpring(on, RequireNonNegative(frequency, "Joint2D:SetSpring", "frequency"),
+                                   RequireNonNegative(damping, "Joint2D:SetSpring", "damping"));
+            },
+            "GetUseSpring", Forward<Joint2DRef, &Physics2D::Joint2D::GetUseSpring>(),
+            "GetSpringFrequency", Forward<Joint2DRef, &Physics2D::Joint2D::GetSpringFrequency>(),
+            "GetSpringDamping", Forward<Joint2DRef, &Physics2D::Joint2D::GetSpringDamping>(),
+            // SetMotor(enabled, speed, maxForce): degrees per second and newton-metres for a hinge or wheel
+            "SetMotor", [](const Joint2DRef &j, const sol::object enabled, const sol::object speed, const sol::object maxForce)
+            {
+                const bool on = RequireBool(enabled, "Joint2D:SetMotor", "enabled");
+                j.Pin()->SetMotor(on, RequireFinite(speed, "Joint2D:SetMotor", "speed"),
+                                  RequireNonNegative(maxForce, "Joint2D:SetMotor", "maxForce"));
+            },
+            "GetUseMotor", Forward<Joint2DRef, &Physics2D::Joint2D::GetUseMotor>(),
+            "GetMotorSpeed", Forward<Joint2DRef, &Physics2D::Joint2D::GetMotorSpeed>(),
+            "GetMaxMotorForce", Forward<Joint2DRef, &Physics2D::Joint2D::GetMaxMotorForce>(),
+            "SetTarget", [](const Joint2DRef &j, const sol::object target) { j.Pin()->SetTarget(RequireVector2(target, "Joint2D:SetTarget", "target")); },
+            "GetTarget", Forward<Joint2DRef, &Physics2D::Joint2D::GetTarget>(),
+            "SetMaxForce", [](const Joint2DRef &j, const sol::object force) { j.Pin()->SetMaxForce(RequireNonNegative(force, "Joint2D:SetMaxForce", "force")); },
+            "GetMaxForce", Forward<Joint2DRef, &Physics2D::Joint2D::GetMaxForce>(),
+            // 0 or math.huge never breaks
+            "SetBreakForce", [](const Joint2DRef &j, const sol::object force) { j.Pin()->SetBreakForce(RequireThreshold(force, "Joint2D:SetBreakForce")); },
+            "GetBreakForce", Forward<Joint2DRef, &Physics2D::Joint2D::GetBreakForce>(),
+            "SetBreakTorque", [](const Joint2DRef &j, const sol::object torque) { j.Pin()->SetBreakTorque(RequireThreshold(torque, "Joint2D:SetBreakTorque")); },
+            "GetBreakTorque", Forward<Joint2DRef, &Physics2D::Joint2D::GetBreakTorque>(),
+            "IsCreated", Forward<Joint2DRef, &Physics2D::Joint2D::IsCreated>(),
+            "GetJointAngle", Forward<Joint2DRef, &Physics2D::Joint2D::GetJointAngle>(),
+            "GetJointTranslation", Forward<Joint2DRef, &Physics2D::Joint2D::GetJointTranslation>(),
+            "GetReactionForce", Forward<Joint2DRef, &Physics2D::Joint2D::GetReactionForce>(),
+            "GetReactionTorque", Forward<Joint2DRef, &Physics2D::Joint2D::GetReactionTorque>()
         );
     }
 

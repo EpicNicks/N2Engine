@@ -139,6 +139,7 @@ namespace N2Engine::Scripting
         bool _hasOnTriggerEnter2D = false;
         bool _hasOnTriggerStay2D = false;
         bool _hasOnTriggerExit2D = false;
+        bool _hasOnJointBreak2D = false;
         bool _hasOnApplicationQuit = false;
         bool _hasOnMouseEnter = false;
         bool _hasOnMouseOver = false;
@@ -297,6 +298,7 @@ namespace N2Engine::Scripting
         void OnTriggerEnter2D(const Physics2D::Trigger2D& trigger) override;
         void OnTriggerStay2D(const Physics2D::Trigger2D& trigger) override;
         void OnTriggerExit2D(const Physics2D::Trigger2D& trigger) override;
+        void OnJointBreak2D(Physics2D::Joint2D& joint) override;
 
         // Pointer events (PointerDispatcher)
         void OnMouseEnter() override;
