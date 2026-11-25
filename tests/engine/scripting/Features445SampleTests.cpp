@@ -1,6 +1,6 @@
 // Issue #445: samples/features-445, the sample project that uses the issue's features together, run headless for two
 // seconds with the software renderer. Its Director script checks what it built; this test fails on any of those checks,
-// on any logged error, and on a few pixels of the screen-space HUD.
+// on any logged error but the expected shader stand-in notice, and on a few pixels of the screen-space HUD.
 
 #include <gtest/gtest.h>
 
@@ -115,10 +115,19 @@ TEST_F(Features445SampleTest, TheSampleRunsAndItsChecksPass)
     }
     Logger::logEvent -= listener;
     ASSERT_TRUE(ran);
+    // The one error expected: the software renderer says, once, that it draws the lamp's user shader with its stand-in
+    int standInNotices = 0;
     for (const std::string &error : errors)
     {
+        if (error.find("pulse.n2shader") != std::string::npos &&
+            error.find("cannot draw user shaders") != std::string::npos)
+        {
+            ++standInNotices;
+            continue;
+        }
         ADD_FAILURE() << "logged: " << error;
     }
+    EXPECT_EQ(standInNotices, 1);
 
     const sol::protected_function_result result = LuaRuntime::Instance().GetState().safe_script(R"(
         local director = SceneManager.GetCurrentScene():FindGameObject('Director'):GetScript('res://scripts/Director.lua')

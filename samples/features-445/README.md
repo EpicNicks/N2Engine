@@ -18,7 +18,8 @@ A small Lua project that uses the features of issue #445 together in one scene:
 ## Running it headless
 
 `Features445SampleTest` (`tests/engine/scripting/Features445SampleTests.cpp`) runs the project with the software renderer,
-no window and a fixed 60 frames a second, fails on any failed check or logged error, and looks at a few pixels:
+no window and a fixed 60 frames a second, fails on any failed check or logged error (but for the one notice that this renderer draws the shader's
+stand-in), and looks at a few pixels:
 
 ```sh
 ./bin/engine_tests --gtest_filter='Features445SampleTest.*'
