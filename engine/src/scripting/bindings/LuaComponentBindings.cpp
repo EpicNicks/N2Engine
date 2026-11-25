@@ -65,6 +65,7 @@
 #include "engine/text/Font.hpp"
 #include "engine/ui/Button.hpp"
 #include "engine/ui/Canvas.hpp"
+#include "engine/ui/CanvasScaler.hpp"
 #include "engine/ui/Image.hpp"
 #include "engine/ui/LayoutGroup.hpp"
 #include "engine/ui/RectMask.hpp"
@@ -170,6 +171,7 @@ namespace N2Engine::Scripting::Bindings
                 {"LuaComponent", MakeAccess<LuaComponent>()},
                 {"RectTransform", MakeAccess<UI::RectTransform>()},
                 {"Canvas", MakeAccess<UI::Canvas>()},
+                {"CanvasScaler", MakeAccess<UI::CanvasScaler>()},
                 {"Image", MakeAccess<UI::Image>()},
                 {"UIText", MakeAccess<UI::UIText>()},
                 {"Button", MakeAccess<UI::Button>()},
