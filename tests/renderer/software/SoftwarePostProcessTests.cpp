@@ -121,6 +121,39 @@ TEST_F(SoftwarePostProcessTest, InvertVignetteAndChromaticAberrationMatchTheRefe
     scenes.CheckComposite(1);
 }
 
+TEST_F(SoftwarePostProcessTest, BlurMatchesTheReference)
+{
+    PostProcessScenes::Scenes scenes(renderer);
+    ASSERT_TRUE(scenes.Ready());
+    scenes.CheckBlur(1);
+}
+
+TEST(PostProcessMaths, TheBlurIsSanitizedAndRunsBeforeTheComposite)
+{
+    PostProcessSettings settings;
+    EXPECT_FALSE(settings.BlurActive());
+    settings.blur = true;
+    EXPECT_TRUE(settings.BlurActive());
+    EXPECT_TRUE(settings.IsActive());
+    EXPECT_FALSE(settings.CompositeActive()) << "a blur alone needs no composite";
+    settings.blurStrength = 7.0f;
+    settings.blurIterations = -3;
+    PostProcessSettings clean = PostProcessSettings::Sanitized(settings);
+    EXPECT_FLOAT_EQ(clean.blurStrength, 1.0f);
+    EXPECT_EQ(clean.blurIterations, 1);
+    settings.blurStrength = std::numeric_limits<float>::quiet_NaN();
+    settings.blurIterations = 100;
+    clean = PostProcessSettings::Sanitized(settings);
+    EXPECT_FLOAT_EQ(clean.blurStrength, 1.0f) << "the default";
+    EXPECT_EQ(clean.blurIterations, PostProcessSettings::MaxBlurIterations);
+    clean.blurStrength = 0.25f;
+    const PostProcessParams mix = PostProcessParams::For(PostPassMode::Mix, clean);
+    EXPECT_FLOAT_EQ(mix.a[0], 4.0f);
+    EXPECT_FLOAT_EQ(mix.a[2], 0.25f);
+    clean.blurStrength = 0.0f;
+    EXPECT_FALSE(clean.IsActive());
+}
+
 TEST_F(SoftwarePostProcessTest, DrawsAfterThePostProcessAreNotProcessed)
 {
     PostProcessScenes::Scenes scenes(renderer);

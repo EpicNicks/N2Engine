@@ -84,6 +84,78 @@ namespace Renderer::Common
                 }
             }
         }
+
+        /// `iterations` pairs of Gaussian passes, across and then down, each spread one texel further than the last
+        void BlurPasses(RgbImage &image, const int iterations)
+        {
+            RgbImage temp{image.width, image.height, std::vector<float>(image.rgb.size())};
+            for (int pass = 0; pass < iterations; ++pass)
+            {
+                Blur(image, temp, pass + 1, 0);
+                Blur(temp, image, 0, pass + 1);
+            }
+        }
+
+        /// The image at half size: a bilinear read at each half-resolution pixel centre (the average of the 2x2 block under
+        /// it)
+        RgbImage HalfSize(const RgbImage &source)
+        {
+            RgbImage half;
+            half.width = static_cast<int>(BloomExtent(static_cast<std::uint32_t>(source.width)));
+            half.height = static_cast<int>(BloomExtent(static_cast<std::uint32_t>(source.height)));
+            half.rgb.resize(static_cast<std::size_t>(half.width) * half.height * 3);
+            for (int y = 0; y < half.height; ++y)
+            {
+                for (int x = 0; x < half.width; ++x)
+                {
+                    Bilinear(source, (static_cast<float>(x) + 0.5f) / static_cast<float>(half.width),
+                             (static_cast<float>(y) + 0.5f) / static_cast<float>(half.height),
+                             half.rgb.data() + (static_cast<std::size_t>(y) * half.width + x) * 3);
+                }
+            }
+            return half;
+        }
+
+        RgbImage ReadPixels(const std::uint32_t *pixels, const int width, const int height)
+        {
+            const std::size_t count = static_cast<std::size_t>(width) * height;
+            RgbImage image{width, height, std::vector<float>(count * 3)};
+            for (std::size_t i = 0; i < count; ++i)
+            {
+                const std::uint32_t packed = pixels[i];
+                image.rgb[i * 3 + 0] = static_cast<float>(packed & 0xFFu) / 255.0f;
+                image.rgb[i * 3 + 1] = static_cast<float>((packed >> 8) & 0xFFu) / 255.0f;
+                image.rgb[i * 3 + 2] = static_cast<float>((packed >> 16) & 0xFFu) / 255.0f;
+            }
+            return image;
+        }
+
+        /// The blur stage, in place: each pixel mixed towards the half-size blurred image
+        void BlurFrame(std::uint32_t *pixels, const int width, const int height, const PostProcessSettings &settings)
+        {
+            const RgbImage scene = ReadPixels(pixels, width, height);
+            RgbImage blurred = HalfSize(scene);
+            BlurPasses(blurred, settings.blurIterations);
+            for (int y = 0; y < height; ++y)
+            {
+                const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(height);
+                for (int x = 0; x < width; ++x)
+                {
+                    float soft[3];
+                    Bilinear(blurred, (static_cast<float>(x) + 0.5f) / static_cast<float>(width), v, soft);
+                    const float *sharp = scene.At(x, y);
+                    const std::size_t index = static_cast<std::size_t>(y) * width + x;
+                    std::uint32_t packed = pixels[index] & 0xFF000000u;
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        const float value =
+                            std::clamp(sharp[i] + (soft[i] - sharp[i]) * settings.blurStrength, 0.0f, 1.0f);
+                        packed |= static_cast<std::uint32_t>(value * 255.0f + 0.5f) << (8 * i);
+                    }
+                    pixels[index] = packed;
+                }
+            }
+        }
     }
 
     PostProcessSettings PostProcessSettings::Sanitized(const PostProcessSettings &settings)
@@ -100,6 +172,8 @@ namespace Renderer::Common
         result.invert = std::clamp(Finite(settings.invert, 0.0f), 0.0f, 1.0f);
         result.chromaticAberration = std::clamp(Finite(settings.chromaticAberration, 0.0f), 0.0f, MaxChromaticAberration);
         result.vignette = std::clamp(Finite(settings.vignette, 0.0f), 0.0f, 1.0f);
+        result.blurStrength = std::clamp(Finite(settings.blurStrength, defaults.blurStrength), 0.0f, 1.0f);
+        result.blurIterations = std::clamp(settings.blurIterations, 1, MaxBlurIterations);
         return result;
     }
 
@@ -115,6 +189,10 @@ namespace Renderer::Common
         params.c[0] = settings.bloomTint[0];
         params.c[1] = settings.bloomTint[1];
         params.c[2] = settings.bloomTint[2];
+        if (mode == PostPassMode::Mix)
+        {
+            params.a[2] = settings.blurStrength;
+        }
         return params;
     }
 
@@ -130,15 +208,17 @@ namespace Renderer::Common
             return;
         }
 
-        const std::size_t count = static_cast<std::size_t>(width) * height;
-        RgbImage scene{width, height, std::vector<float>(count * 3)};
-        for (std::size_t i = 0; i < count; ++i)
+        // The blur first, written back as the GPU passes write the frame; the other effects read its result
+        if (settings.BlurActive())
         {
-            const std::uint32_t packed = pixels[i];
-            scene.rgb[i * 3 + 0] = static_cast<float>(packed & 0xFFu) / 255.0f;
-            scene.rgb[i * 3 + 1] = static_cast<float>((packed >> 8) & 0xFFu) / 255.0f;
-            scene.rgb[i * 3 + 2] = static_cast<float>((packed >> 16) & 0xFFu) / 255.0f;
+            BlurFrame(pixels, width, height, settings);
+            if (!settings.CompositeActive())
+            {
+                return;
+            }
         }
+
+        const RgbImage scene = ReadPixels(pixels, width, height);
 
         // Bloom: the bright pass at half resolution (a bilinear read at each half-resolution pixel centre: the average of the
         // 2x2 block under it), then the blur passes, across and then down, each spread one texel further than the last
@@ -164,12 +244,7 @@ namespace Renderer::Common
                     out[2] = c[2] * weight;
                 }
             }
-            RgbImage temp{bloom.width, bloom.height, std::vector<float>(bloom.rgb.size())};
-            for (int pass = 0; pass < settings.bloomIterations; ++pass)
-            {
-                Blur(bloom, temp, pass + 1, 0);
-                Blur(temp, bloom, 0, pass + 1);
-            }
+            BlurPasses(bloom, settings.bloomIterations);
         }
 
         // The composite, at each pixel centre

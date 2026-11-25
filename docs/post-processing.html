@@ -81,7 +81,7 @@
 <div class="content">
 
 <h1>Post-processing and render textures</h1>
-<p class="lead">A <code>PostProcessStack</code> component gives a scene full-screen effects: bloom, colour inversion, chromatic aberration and a vignette. A <code>RenderTexture</code> is a texture a frame can be drawn into, for a snapshot of the scene shown on a sprite or UI image. Both are from <a href="https://github.com/EpicNicks/N2Engine/issues/445">issue #445</a> and work on every renderer (OpenGL, Vulkan, WebGPU and software).</p>
+<p class="lead">A <code>PostProcessStack</code> component gives a scene full-screen effects: a blur, bloom, colour inversion, chromatic aberration and a vignette. A <code>RenderTexture</code> is a texture a frame can be drawn into, for a snapshot of the scene shown on a sprite or UI image. Both are from <a href="https://github.com/EpicNicks/N2Engine/issues/445">issue #445</a> and work on every renderer (OpenGL, Vulkan, WebGPU and software).</p>
 
 <h2 id="stack">PostProcessStack</h2>
 <p>Add it to any object of the scene (<code>go:AddComponent("PostProcessStack")</code>, or in the inspector). The first active one the scene finds is used. A scene with none, or with every effect off, draws exactly as before and runs no extra pass. The fields are saved with the scene.</p>
@@ -97,6 +97,9 @@
 <tr><td><code>invert</code></td><td>0</td><td>0 (none) to 1 (a full negative)</td></tr>
 <tr><td><code>chromaticAberration</code></td><td>0</td><td>Red and blue fringes, 0 to 0.25, as a fraction of the distance from the screen centre (0.02 is strong)</td></tr>
 <tr><td><code>vignette</code></td><td>0</td><td>Darkened corners, 0 to 1, starting 0.3 of the way out</td></tr>
+<tr><td><code>blur</code></td><td>false</td><td>Blur the whole scene (a pause menu, a focus pull)</td></tr>
+<tr><td><code>blurStrength</code></td><td>1</td><td>0 (the sharp image) to 1 (the blurred one): a mix of the two, so a fade in is a number going up</td></tr>
+<tr><td><code>blurIterations</code></td><td>3</td><td>Blur passes, 1 to 8. The blur widens with each, and each costs two half-resolution passes</td></tr>
 </tbody>
 </table>
 </div>
@@ -104,6 +107,7 @@
 
 <h2 id="order">Order and what it covers</h2>
 <ol>
+<li>Blur <span class="badge">issue #445</span>: the frame is drawn at half resolution, blurred <code>blurIterations</code> times (the bloom's Gaussian, across and then down, spread one texel further each pass) and drawn back over the frame, mixed with the sharp image by <code>blurStrength</code>. Everything after it, the bloom's bright parts included, sees the blurred frame. Since it works at half resolution, even one pass softens the picture by a couple of pixels; the radius in pixels does not follow the window's size.</li>
 <li>Chromatic aberration: the red channel is read from a point moved away from the screen centre, blue from one moved towards it.</li>
 <li>Bloom: the parts brighter than <code>bloomThreshold</code> are taken at half resolution, blurred <code>bloomIterations</code> times (a 9-tap Gaussian across and then down, spread one texel further each pass) and added back times <code>bloomIntensity</code> and <code>bloomTint</code>.</li>
 <li>Invert, then vignette.</li>
