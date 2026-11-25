@@ -147,7 +147,8 @@ namespace N2Engine::UI
 
     ConvexPolygon IntersectConvex(const ConvexPolygon &subject, const ConvexPolygon &clip)
     {
-        if (subject.size() < 3 || clip.size() < 3)
+        // A clip without area keeps nothing: every point would count as inside each of its edges
+        if (subject.size() < 3 || clip.size() < 3 || !(PolygonArea(clip) > 0.0f))
         {
             return {};
         }
