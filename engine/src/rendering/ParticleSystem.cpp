@@ -13,6 +13,8 @@
 #include "engine/Positionable.hpp"
 #include "engine/Time.hpp"
 #include "engine/common/ScriptUtils.hpp"
+#include "engine/physics/Raycast.hpp"
+#include "engine/physics2d/Physics2DQueries.hpp"
 #include "engine/rendering/MeshDrawing.hpp"
 #include "engine/rendering/RenderCamera.hpp"
 #include "engine/serialization/MathSerialization.hpp"
@@ -28,6 +30,75 @@
 
 namespace N2Engine::Rendering
 {
+    class ParticleSystem::SceneCollider final : public Physics::IParticleCollider
+    {
+    public:
+        bool use2D = false;
+        bool use3D = false;
+        std::uint32_t layers = Layers::DefaultRaycastMask;
+        std::vector<Collision> collisions; // this step's, the first kMaxRecordedCollisions
+        std::size_t count = 0;
+
+        bool Cast(const Math::Vector3 &from, const Math::Vector3 &direction, const float distance,
+                  Physics::ParticleHit &hit) override
+        {
+            // The nearer of the two, as a share of the movement
+            float nearest = distance;
+            GameObject *object = nullptr;
+            if (use2D)
+            {
+                // In the XY plane: the ray's shadow there, at the length it has there
+                const float planar = std::sqrt(direction.x * direction.x + direction.y * direction.y);
+                if (planar > 1e-4f)
+                {
+                    Physics2D::RaycastHit2D found;
+                    if (Physics2D::Raycast(Math::Vector2{from.x, from.y},
+                                           Math::Vector2{direction.x / planar, direction.y / planar}, found,
+                                           distance * planar, layers, Physics::QueryTriggers::Ignore) &&
+                        found.distance > 0.0f) // a particle inside a collider is let go
+                    {
+                        nearest = found.distance / planar;
+                        object = found.gameObject;
+                        hit.point = Math::Vector3{found.point.x, found.point.y, from.z + direction.z * nearest};
+                        hit.normal = Math::Vector3{found.normal.x, found.normal.y, 0.0f};
+                    }
+                }
+            }
+            if (use3D)
+            {
+                Physics::RaycastHit found;
+                if (Physics::Raycast::Single(from, direction, found, nearest, layers, Physics::QueryTriggers::Ignore) &&
+                    found.distance > 0.0f)
+                {
+                    object = found.gameObject;
+                    hit.point = found.point;
+                    hit.normal = found.normal;
+                }
+            }
+            if (!object)
+            {
+                return false;
+            }
+            ++count;
+            if (collisions.size() < kMaxRecordedCollisions)
+            {
+                collisions.push_back(Collision{hit.point, hit.normal, object->weak_from_this()});
+            }
+            return true;
+        }
+    };
+
+    const std::vector<ParticleSystem::Collision> &ParticleSystem::GetCollisions() const
+    {
+        static const std::vector<Collision> none;
+        return _collider ? _collider->collisions : none;
+    }
+
+    std::size_t ParticleSystem::GetCollisionCount() const
+    {
+        return _collider ? _collider->count : 0;
+    }
+
     namespace
     {
 #ifndef N2ENGINE_PARTICLES_ENABLED
@@ -114,7 +185,18 @@ namespace N2Engine::Rendering
         RegisterMember(NAMEOF(collideWithGround), collideWithGround)
             .Tooltip("Bounce off the plane y = groundHeight; the only collision the CPU backend does");
         RegisterMember(NAMEOF(groundHeight), groundHeight);
-        RegisterMember(NAMEOF(bounce), bounce).Range(0.0, 1.0).Tooltip("Share of its speed a particle keeps off the ground");
+        RegisterMember(NAMEOF(bounce), bounce).Range(0.0, 1.0)
+            .Tooltip("Share of its speed a particle keeps off the ground or a collider");
+        RegisterMember(NAMEOF(collideWith2D), collideWith2D)
+            .Tooltip("Each particle collides with 2D colliders (CPU backend; a ray cast per particle per step)");
+        RegisterMember(NAMEOF(collideWith3D), collideWith3D)
+            .Tooltip("Each particle collides with 3D colliders (CPU backend; a ray cast per particle per step)");
+        RegisterMember(NAMEOF(collisionLayers), collisionLayers).Tooltip("The layer mask particles collide with");
+        RegisterMember(NAMEOF(collisionRadius), collisionRadius).Range(0.0, 1000.0).Tooltip("A particle's radius");
+        RegisterMember(NAMEOF(collisionDampen), collisionDampen).Range(0.0, 1.0)
+            .Tooltip("Share of the speed along a surface lost at a hit");
+        RegisterMember(NAMEOF(collisionLifetimeLoss), collisionLifetimeLoss).Range(0.0, 1.0)
+            .Tooltip("Share of its lifetime a particle loses at a hit; 1 removes it");
 
         RegisterMember(NAMEOF(blendMode), blendMode);
         RegisterMember(NAMEOF(renderMode), renderMode)
@@ -254,6 +336,13 @@ namespace N2Engine::Rendering
         params.groundEnabled = collideWithGround;
         params.groundHeight = groundHeight;
         params.bounce = bounce;
+        if (collideWith2D || collideWith3D)
+        {
+            params.collider = _collider.get();
+            params.collisionRadius = collisionRadius;
+            params.collisionDampen = collisionDampen;
+            params.collisionLifetimeLoss = collisionLifetimeLoss;
+        }
         return params;
     }
 
@@ -311,8 +400,16 @@ namespace N2Engine::Rendering
         Application &application = Application::GetInstance();
         std::weak_ptr<const void> computeLifetime;
         Renderer::Common::IGpuCompute *compute = application.GetGpuCompute(&computeLifetime);
+        // Only the CPU backend collides particles one at a time, so a system that asks for it runs there
+        const bool collides = collideWith2D || collideWith3D;
+        if (collides && backend != Particles::ParticleBackend::Auto && backend != Particles::ParticleBackend::CPU)
+        {
+            Logger::Warn(std::format("ParticleSystem on '{}': particle collision runs on the CPU backend, so the system "
+                                     "uses it", GetGameObject().GetName()));
+        }
         const Particles::BackendSelection selection = Particles::SelectParticleBackend(
-            backend, application.Get3DPhysicsBackend(), compute, application.IsGpuSimulationAllowed());
+            collides ? Particles::ParticleBackend::CPU : backend, application.Get3DPhysicsBackend(), compute,
+            application.IsGpuSimulationAllowed());
         if (selection.fellBack)
         {
             Logger::Warn(std::format("{} (GameObject '{}')", selection.reason, GetGameObject().GetName()));
@@ -509,6 +606,27 @@ namespace N2Engine::Rendering
             return;
         }
 
+        if (collideWith2D || collideWith3D)
+        {
+            if (!_cpuBackend && !std::exchange(_warnedNoCollision, true))
+            {
+                Logger::Warn(std::format("ParticleSystem on '{}': its {} backend does not collide particles; turn collision "
+                                         "on before the system starts, or set its backend to CPU",
+                                         GetGameObject().GetName(), GetActiveBackendName()));
+            }
+            if (!_collider)
+            {
+                _collider = std::make_shared<SceneCollider>();
+            }
+            _collider->use2D = collideWith2D;
+            _collider->use3D = collideWith3D;
+            _collider->layers = static_cast<std::uint32_t>(collisionLayers);
+        }
+        if (_collider)
+        {
+            _collider->collisions.clear();
+            _collider->count = 0;
+        }
         sim->SetParams(_handle, BuildParams());
         sim->Step(dt); // a backend that runs inside the physics scene ignores this
         if (_playing)

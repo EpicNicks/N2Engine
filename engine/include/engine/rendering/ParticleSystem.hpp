@@ -17,6 +17,7 @@
 #include <renderer/common/RenderState.hpp>
 #include <renderer/common/RenderTypes.hpp>
 
+#include "engine/Layers.hpp"
 #include "engine/IRenderable.hpp"
 #include "engine/common/Color.hpp"
 #include "engine/particles/ParticleBackendSelection.hpp"
@@ -26,6 +27,11 @@
 #include "engine/rendering/GpuCache.hpp"
 #include "engine/rendering/UserShaderSlot.hpp"
 #include "engine/rendering/Texture.hpp"
+
+namespace N2Engine
+{
+    class GameObject;
+}
 
 namespace N2Engine::Rendering
 {
@@ -133,6 +139,20 @@ namespace N2Engine::Rendering
         /// The kill every Kill* method does
         std::size_t Kill(const Physics::ParticleRegion &region);
 
+        /// One particle meeting a collider
+        struct Collision
+        {
+            Math::Vector3 position; // the point of contact
+            Math::Vector3 normal;   // the surface's, towards the particle
+            std::weak_ptr<GameObject> gameObject;
+        };
+        /// The most collisions of one step that GetCollisions keeps
+        static constexpr std::size_t kMaxRecordedCollisions = 64;
+        /// The collisions of the last fixed step, the first kMaxRecordedCollisions of them
+        [[nodiscard]] const std::vector<Collision> &GetCollisions() const;
+        /// How many collisions the last fixed step had, however many are kept
+        [[nodiscard]] std::size_t GetCollisionCount() const;
+
         /// The simulation settings the current fields give (gravityScale applied to the world gravity)
         [[nodiscard]] Physics::ParticleParams BuildParams() const;
         /// The emitter shape settings the current fields give
@@ -199,8 +219,21 @@ namespace N2Engine::Rendering
         /// Particles bounce off the plane y = groundHeight (world space). The only collision the CPU backend does.
         bool collideWithGround = false;
         float groundHeight = 0.0f;
-        /// The share of its speed a particle keeps when it hits the ground, 0 to 1
+        /// The share of its speed a particle keeps when it hits the ground or a collider, 0 to 1
         float bounce = 0.3f;
+
+        // Collision with the scene's colliders, one particle at a time (issue #445; the CPU backend only: a system that
+        // asks for it when it starts runs there). Each particle's movement in a step is cast against the colliders on
+        // `collisionLayers` (triggers left out): 2D colliders in the XY plane at any depth, 3D colliders in space. It
+        // bounces (`bounce`), loses `collisionDampen` of its speed along the surface and `collisionLifetimeLoss` of
+        // its lifetime. A collider a particle is inside does not stop it.
+        bool collideWith2D = false;
+        bool collideWith3D = false;
+        int collisionLayers = static_cast<int>(Layers::DefaultRaycastMask);
+        /// A particle's radius for collisions, in world units
+        float collisionRadius = 0.0f;
+        float collisionDampen = 0.0f;
+        float collisionLifetimeLoss = 0.0f;
 
         // Drawing
         ParticleBlend blendMode = ParticleBlend::Alpha;
@@ -214,6 +247,10 @@ namespace N2Engine::Rendering
         std::shared_ptr<Texture> texture;
 
     private:
+        /// The collider the CPU backend casts particles with, which keeps the step's collisions
+        class SceneCollider;
+        std::shared_ptr<SceneCollider> _collider;
+        bool _warnedNoCollision = false;
         void ReleaseSystem();
         /// A PhysX-backed system whose physics backend was replaced drops its stale handle and restarts on the CPU
         /// backend with one warning, and so does a WebGPU-backed one whose backend stopped working (the renderer or

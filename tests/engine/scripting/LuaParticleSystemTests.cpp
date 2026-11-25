@@ -413,3 +413,27 @@ TEST_F(LuaParticleSystemTest, KillsAndAMovedBurstOnAPlayingScene)
     EXPECT_EQ(Eval<int>("lua_ps:GetAliveCount()"), 0);
     Run("lua_moved = nil");
 }
+
+TEST_F(LuaParticleSystemTest, SetsPerParticleCollision)
+{
+    // Issue #445
+    Run(R"(
+        local ps = GameObject.Create('LuaParticleCollision'):AddComponent('ParticleSystem')
+        local a, b = ps:GetColliderCollision()
+        assert(a == false and b == false)
+        ps:SetColliderCollision(true, false)
+        a, b = ps:GetColliderCollision()
+        assert(a == true and b == false)
+        ps:SetCollisionResponse(0.25, 0.5, 0.125, 1)
+        local radius, bounce, dampen, loss = ps:GetCollisionResponse()
+        assert(radius == 0.25 and bounce == 0.5 and dampen == 0.125 and loss == 1)
+        assert(not pcall(function() ps:SetCollisionResponse(-1, 0, 0, 0) end))
+        assert(not pcall(function() ps:SetCollisionResponse(0, 2, 0, 0) end))
+        assert(select(1, ps:GetCollisionResponse()) == 0.25)
+        ps:SetCollisionLayers(5)
+        assert(ps:GetCollisionLayers() == 5)
+        ps:SetCollisionLayers(0xFFFFFFFF)
+        assert(ps:GetCollisionLayers() == 0xFFFFFFFF)
+        assert(ps:GetCollisionCount() == 0 and #ps:GetCollisions() == 0)
+    )");
+}
