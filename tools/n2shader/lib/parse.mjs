@@ -14,7 +14,9 @@ export class ShaderError extends Error {
   }
 }
 
-const TOP_KEYS = ['n2shader', 'name', 'params', 'uses', 'state', 'targets'];
+const TOP_KEYS = ['n2shader', 'name', 'params', 'uses', 'state', 'targets', 'fallback'];
+/** "fallback" (issue #445, read by the engine only): what stands in where the shader cannot be drawn */
+const FALLBACK_KEYS = ['tint', 'opacity', 'hidden'];
 const PARAM_KEYS = ['name', 'type', 'default', 'min', 'max', 'step', 'label', 'tooltip', 'group', 'depth'];
 const STATE_KEYS = ['blend', 'cull', 'depthWrite', 'queue'];
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -166,6 +168,17 @@ export function validateHeader(raw, fail) {
   if (stateRaw.depthWrite !== undefined && typeof stateRaw.depthWrite !== 'boolean') fail('state.depthWrite must be true or false');
   const state = {};
   for (const key of STATE_KEYS) if (stateRaw[key] !== undefined) state[key] = stateRaw[key];
+
+  // Checked here so a mistake is found at cook time; the engine reads it from the file, so the cooked data has none of it
+  const fallbackRaw = raw.fallback ?? {};
+  if (fallbackRaw === null || typeof fallbackRaw !== 'object' || Array.isArray(fallbackRaw)) fail('"fallback" must be an object');
+  for (const key of Object.keys(fallbackRaw)) {
+    if (!FALLBACK_KEYS.includes(key)) fail(`unknown fallback key "${key}" (known: ${FALLBACK_KEYS.join(', ')})`);
+  }
+  const named = (name, types) => params.some((param) => param.name === name && types.includes(param.type));
+  if (fallbackRaw.tint !== undefined && !named(fallbackRaw.tint, ['color', 'vec4'])) fail('fallback.tint must name a color or vec4 parameter');
+  if (fallbackRaw.opacity !== undefined && !named(fallbackRaw.opacity, ['float'])) fail('fallback.opacity must name a float parameter');
+  if (fallbackRaw.hidden !== undefined && typeof fallbackRaw.hidden !== 'boolean') fail('fallback.hidden must be true or false');
 
   const targetsRaw = raw.targets ?? {};
   if (targetsRaw === null || typeof targetsRaw !== 'object' || Array.isArray(targetsRaw)) fail('"targets" must be an object');
