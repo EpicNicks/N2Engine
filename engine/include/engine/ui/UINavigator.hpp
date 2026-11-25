@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 
+#include <math/VectorN.hpp>
 #include <renderer/common/Renderer.hpp>
 
 #include "engine/ui/Navigation.hpp"
@@ -12,6 +13,7 @@ namespace N2Engine
 {
     class GameObject;
     class Scene;
+    using Vector2i = Math::VectorN<int, 2>; // as in Window.hpp
 }
 
 namespace N2Engine::UI
