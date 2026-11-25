@@ -29,6 +29,18 @@ EM_JS(int, N2WebAudioContextState, (), {
         return 0;
     }
 });
+
+// The web build's DSP clock: the AudioContext's currentTime (seconds of audio the browser has rendered), or -1 when
+// there is no context to ask
+EM_JS(double, N2WebAudioCurrentTime, (), {
+    try {
+        var current = AL.currentCtx;
+        if (!current || !current.audioCtx) return -1;
+        return current.audioCtx.currentTime;
+    } catch (error) {
+        return -1;
+    }
+});
 #endif
 
 namespace N2Engine::Audio
@@ -42,6 +54,180 @@ namespace N2Engine::Audio
         {
             return format.sampleRate * AudioSystem::StreamBufferMilliseconds / 1000u;
         }
+
+        constexpr std::int64_t NanosecondsPerSecond = 1'000'000'000;
+
+        /// OpenAL Soft's device clock (nanoseconds) as a sample count, rounded to the nearest sample. The clock is a
+        /// whole-sample count truncated to nanoseconds, so rounding recovers the exact count. Split into whole seconds
+        /// so nothing overflows.
+        [[maybe_unused]] std::uint64_t NanosecondsToSamples(const std::int64_t ns, const std::uint32_t rate)
+        {
+            if (ns <= 0 || rate == 0)
+            {
+                return 0;
+            }
+            const auto seconds = static_cast<std::uint64_t>(ns / NanosecondsPerSecond);
+            const auto rest = static_cast<std::uint64_t>(ns % NanosecondsPerSecond);
+            return seconds * rate + (rest * rate + NanosecondsPerSecond / 2) / NanosecondsPerSecond;
+        }
+
+        /// A sample index as a device clock time, rounded to the nearest nanosecond. The mixer starts a scheduled voice
+        /// round((start - now) * rate) samples into its update, so this lands on the sample itself.
+        [[maybe_unused]] std::int64_t SamplesToNanoseconds(const std::uint64_t samples, const std::uint32_t rate)
+        {
+            if (rate == 0)
+            {
+                return 0;
+            }
+            const std::uint64_t seconds = samples / rate;
+            const std::uint64_t rest = samples % rate;
+            return static_cast<std::int64_t>(seconds) * NanosecondsPerSecond +
+                   static_cast<std::int64_t>((rest * NanosecondsPerSecond + rate / 2) / rate);
+        }
+    }
+
+    float AudioSystem::ClampPitch(const float pitch)
+    {
+        if (std::isnan(pitch))
+        {
+            return 1.0f;
+        }
+        return std::clamp(pitch, MinPitch, MaxPitch);
+    }
+
+    void AudioSystem::LoadClockFunctions()
+    {
+        _getInteger64 = nullptr;
+        _playAtTime = nullptr;
+        _dspHighWater = 0;
+        _pendingStarts.clear();
+
+        if (_output == AudioOutput::Loopback)
+        {
+            _outputSampleRate = _loopbackFormat.sampleRate;
+        }
+        else
+        {
+            ALCint rate = 0;
+            alcGetIntegerv(_device, ALC_FREQUENCY, 1, &rate);
+            _outputSampleRate = rate > 0 ? static_cast<std::uint32_t>(rate) : LoopbackSampleRate;
+        }
+
+#if !(defined(N2ENGINE_PLATFORM_WEB) && defined(N2ENGINE_WEB_WEBAUDIO))
+        // Emscripten's OpenAL has neither extension (nor alcGetProcAddress): the web reads the AudioContext's clock
+        if (alcIsExtensionPresent(_device, "ALC_SOFT_device_clock") == ALC_TRUE)
+        {
+            _getInteger64 = reinterpret_cast<LPALCGETINTEGER64VSOFT>(alcGetProcAddress(_device, "alcGetInteger64vSOFT"));
+        }
+        if (_getInteger64)
+        {
+            _playAtTime = reinterpret_cast<LPALSOURCEPLAYATTIMESOFT>(alcGetProcAddress(_device, "alSourcePlayAtTimeSOFT"));
+        }
+#endif
+    }
+
+    std::uint64_t AudioSystem::GetDspSampleCount() const
+    {
+        if (!_initialized)
+        {
+            return 0;
+        }
+        std::uint64_t samples = 0;
+#if defined(N2ENGINE_PLATFORM_WEB) && defined(N2ENGINE_WEB_WEBAUDIO)
+        if (const double seconds = N2WebAudioCurrentTime(); seconds > 0.0)
+        {
+            samples = static_cast<std::uint64_t>(std::llround(seconds * static_cast<double>(_outputSampleRate)));
+        }
+#else
+        if (_getInteger64)
+        {
+            ALCint64SOFT ns = 0;
+            _getInteger64(_device, ALC_DEVICE_CLOCK_SOFT, 1, &ns);
+            samples = NanosecondsToSamples(static_cast<std::int64_t>(ns), _outputSampleRate);
+        }
+#endif
+        _dspHighWater = std::max(_dspHighWater, samples);
+        return _dspHighWater;
+    }
+
+    double AudioSystem::GetDspTime() const
+    {
+        const std::uint32_t rate = GetOutputSampleRate();
+        return rate == 0 ? 0.0 : static_cast<double>(GetDspSampleCount()) / static_cast<double>(rate);
+    }
+
+    std::uint64_t AudioSystem::DspTimeToSamples(const double dspTime) const
+    {
+        // !(x > 0) also catches NaN
+        if (!(dspTime > 0.0) || _outputSampleRate == 0)
+        {
+            return 0;
+        }
+        const double samples = dspTime * static_cast<double>(_outputSampleRate);
+        if (samples >= 9.0e18)
+        {
+            return std::numeric_limits<std::uint64_t>::max() / 2;
+        }
+        return static_cast<std::uint64_t>(std::llround(samples));
+    }
+
+    void AudioSystem::StartSourceAt(const ALuint source, const double dspTime)
+    {
+        if (!_initialized || source == 0)
+        {
+            return;
+        }
+        CancelScheduledStart(source);
+
+        const std::uint64_t target = DspTimeToSamples(dspTime);
+        if (target <= GetDspSampleCount())
+        {
+            alSourcePlay(source); // already due: now
+            return;
+        }
+        if (_playAtTime)
+        {
+            // The mixer starts the voice on this exact output sample (AL_SOFT_source_start_delay)
+            _playAtTime(source, static_cast<ALint64SOFT>(SamplesToNanoseconds(target, _outputSampleRate)));
+            return;
+        }
+        // No start-at-time in this OpenAL (the web): Update starts it once the clock reaches the time
+        _pendingStarts.push_back(PendingStart{.source = source, .sample = target});
+    }
+
+    void AudioSystem::CancelScheduledStart(const ALuint source)
+    {
+        std::erase_if(_pendingStarts, [source](const PendingStart &pending) { return pending.source == source; });
+    }
+
+    void AudioSystem::StartDueSources()
+    {
+        if (_pendingStarts.empty())
+        {
+            return;
+        }
+        const std::uint64_t now = GetDspSampleCount();
+        std::erase_if(_pendingStarts, [now](const PendingStart &pending)
+        {
+            if (pending.sample > now)
+            {
+                return false;
+            }
+            alSourcePlay(pending.source);
+            return true;
+        });
+    }
+
+    float AudioSystem::GetOneShotTime(const AudioHandle handle) const
+    {
+        const auto it = _oneShots.find(handle);
+        if (it == _oneShots.end())
+        {
+            return 0.0f;
+        }
+        ALfloat seconds = 0.0f;
+        alGetSourcef(it->second.source, AL_SEC_OFFSET, &seconds);
+        return seconds;
     }
 
     AudioSystem& AudioSystem::Instance()
@@ -260,6 +446,7 @@ namespace N2Engine::Audio
         }
 
         InitializeDefaultGroups();
+        LoadClockFunctions();
 
         // A new context starts with listener gain 1; restore the master volume
         alListenerf(AL_GAIN, _masterVolume);
@@ -285,6 +472,7 @@ namespace N2Engine::Audio
             alDeleteSources(1, &oneShot.source);
         }
         _oneShots.clear();
+        _pendingStarts.clear();
 
         // Delete pooled sources
         for (ALuint source : _sourcePool)
@@ -357,6 +545,7 @@ namespace N2Engine::Audio
             return;
         }
 
+        StartDueSources();
         CleanupFinishedSources();
     }
 
@@ -551,7 +740,7 @@ namespace N2Engine::Audio
     {
         if (auto* g = GetMixerGroup(group))
         {
-            g->settings.pitch = std::clamp(pitch, 0.5f, 2.0f);
+            g->settings.pitch = ClampPitch(pitch);
             RefreshGroup(group);
         }
     }
@@ -616,6 +805,18 @@ namespace N2Engine::Audio
 
     AudioHandle AudioSystem::PlayOneShot(const std::shared_ptr<AudioClip>& clip, const PlaybackParams& params)
     {
+        return StartOneShot(clip, params, std::nullopt);
+    }
+
+    AudioHandle AudioSystem::PlayOneShotAt(const std::shared_ptr<AudioClip>& clip, const double dspTime,
+                                           const PlaybackParams& params)
+    {
+        return StartOneShot(clip, params, dspTime);
+    }
+
+    AudioHandle AudioSystem::StartOneShot(const std::shared_ptr<AudioClip>& clip, const PlaybackParams& params,
+                                          const std::optional<double> at)
+    {
         if (!_initialized || !clip || !clip->IsLoaded())
         {
             return AudioHandle{};
@@ -663,7 +864,14 @@ namespace N2Engine::Audio
             alSourcef(source, AL_ROLLOFF_FACTOR, 0.0f);
         }
 
-        alSourcePlay(source);
+        if (at)
+        {
+            StartSourceAt(source, *at);
+        }
+        else
+        {
+            alSourcePlay(source);
+        }
 
         AudioHandle handle{ _nextHandleId++ };
         _oneShots[handle] = OneShot{
@@ -759,6 +967,7 @@ namespace N2Engine::Audio
         {
             return;
         }
+        CancelScheduledStart(source);
 
         // After Shutdown the context is gone and the id means nothing; pooling it would hand a stale
         // id out again (aliasing a fresh source) after the next Initialize
@@ -858,7 +1067,7 @@ namespace N2Engine::Audio
     {
         // A group's pitch scales every sound in it (it used to be stored but never applied)
         const auto* g = GetMixerGroup(group);
-        return sourcePitch * (g ? g->settings.pitch : 1.0f);
+        return ClampPitch(ClampPitch(sourcePitch) * (g ? g->settings.pitch : 1.0f));
     }
 
     void AudioSystem::RegisterSource(AudioSource* source)

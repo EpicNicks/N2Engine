@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include <AL/al.h>
@@ -151,7 +152,43 @@ namespace N2Engine::Audio
         /// The stream buffer's capacity in frames (StreamBufferMilliseconds of audio); 0 unless IsLoopback()
         [[nodiscard]] std::uint32_t GetStreamCapacityFrames() const;
 
-        // Mixer group management
+        // ==================== DSP clock and scheduled playback ====================
+        // The DSP clock is the mixer's own sample clock: samples mixed since the output opened, divided by the output
+        // rate. It is read from OpenAL Soft's device clock (ALC_SOFT_device_clock), so on a device output it moves in
+        // the mixer's update steps (not every frame), and on a loopback device only when samples are rendered. Sounds
+        // scheduled on it start on that exact output sample, inside the mixer (AL_SOFT_source_start_delay). On the web
+        // the clock is the AudioContext's currentTime, and a scheduled sound starts in the first AudioSystem::Update at or
+        // after its time (frame accuracy; IsSampleAccurateScheduling is false there). docs/audio.html#dsp-clock
+
+        /// Pitch limits for sources, one-shots, groups and their product (OpenAL Soft's resampler steps at most 10x)
+        static constexpr float MinPitch = 0.125f;
+        static constexpr float MaxPitch = 8.0f;
+        /// Clamps to MinPitch..MaxPitch (NaN reads as 1)
+        [[nodiscard]] static float ClampPitch(float pitch);
+
+        /// The output's sample rate (the device's mixing rate; 48000 on the loopback device); 0 when not initialized
+        [[nodiscard]] std::uint32_t GetOutputSampleRate() const { return _initialized ? _outputSampleRate : 0u; }
+        /// Samples (frames) mixed since the output opened; monotonic; 0 when not initialized
+        [[nodiscard]] std::uint64_t GetDspSampleCount() const;
+        /// GetDspSampleCount() / GetOutputSampleRate(), in seconds; 0 when not initialized
+        [[nodiscard]] double GetDspTime() const;
+        /// A DSP time in seconds as an output sample index (rounded to the nearest; negative or NaN is 0)
+        [[nodiscard]] std::uint64_t DspTimeToSamples(double dspTime) const;
+        /// Whether scheduled sounds start on their exact sample in the mixer (OpenAL Soft); false on the web
+        [[nodiscard]] bool IsSampleAccurateScheduling() const { return _initialized && _playAtTime != nullptr; }
+
+        /// PlayOneShot, started at the DSP time dspTime (seconds) instead of now. A time already reached plays at once.
+        AudioHandle PlayOneShotAt(const std::shared_ptr<AudioClip>& clip, double dspTime, const PlaybackParams& params = {});
+        /// Starts a source that is set up to play (buffer, gain, ...) at the DSP time dspTime; a past time plays at once.
+        /// Used by PlayOneShotAt and AudioSource::PlayScheduled.
+        void StartSourceAt(ALuint source, double dspTime);
+        /// Drops a start still waiting for its time (only the web build keeps such starts; stopping a source does this)
+        void CancelScheduledStart(ALuint source);
+        /// Playback position of a one-shot in seconds into its clip (0 if the handle is unknown)
+        [[nodiscard]] float GetOneShotTime(AudioHandle handle) const;
+
+        // Mixer group management. Groups are flat (no parent group): a sound's level is its own volume, capped by its
+        // group's maxSourceVolume, times the group's volume, times the master volume.
         void CreateMixerGroup(const std::string& name, const AudioMixerGroupSettings& settings = {});
         void SetGroupVolume(const std::string& group, float volume);
         void SetGroupMaxVolume(const std::string& group, float maxVolume);
@@ -211,6 +248,13 @@ namespace N2Engine::Audio
 
         void InitializeDefaultGroups();
         void CleanupFinishedSources();
+        /// PlayOneShot and PlayOneShotAt (at: the DSP time, or none for now)
+        AudioHandle StartOneShot(const std::shared_ptr<AudioClip>& clip, const PlaybackParams& params,
+                                 std::optional<double> at);
+        /// Loads the device clock and start-at-time entry points, and reads the output rate
+        void LoadClockFunctions();
+        /// Starts the pending (web) scheduled sounds whose time has come
+        void StartDueSources();
         /// Re-applies a group's current settings to everything playing in it
         void RefreshGroup(const std::string& group);
 
@@ -227,6 +271,18 @@ namespace N2Engine::Audio
         std::size_t _streamSize = 0;              // bytes held
         std::uint64_t _streamDroppedFrames = 0;   // since the last TakeStreamedAudio
         std::vector<std::uint8_t> _streamScratch; // one render chunk
+
+        // DSP clock and scheduled starts (extension entry points, loaded with alcGetProcAddress; null on the web)
+        LPALCGETINTEGER64VSOFT _getInteger64 = nullptr;
+        LPALSOURCEPLAYATTIMESOFT _playAtTime = nullptr;
+        std::uint32_t _outputSampleRate = 0;
+        mutable std::uint64_t _dspHighWater = 0; // keeps GetDspSampleCount monotonic
+        struct PendingStart
+        {
+            ALuint source = 0;
+            std::uint64_t sample = 0;
+        };
+        std::vector<PendingStart> _pendingStarts; // only without sample-accurate scheduling (web)
 
         std::unordered_map<std::string, AudioMixerGroup> _mixerGroups;
         struct OneShot
