@@ -20,6 +20,7 @@
 #include "engine/physics2d/Collider2D.hpp"
 #include "engine/physics2d/Physics2DWorld.hpp"
 #include "engine/physics2d/Rigidbody2D.hpp"
+#include "engine/physics2d/SoftBody2D.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
 
@@ -73,6 +74,13 @@ namespace N2Engine::Network
                         return true;
                     }
                 }
+                for (const Physics2D::SoftBody2D *const soft : object.GetComponents<Physics2D::SoftBody2D>())
+                {
+                    if (!soft->GetHandle().IsValid())
+                    {
+                        return true;
+                    }
+                }
                 return false;
             };
             if (lost(root))
@@ -104,7 +112,7 @@ namespace N2Engine::Network
         }
 
         /// The 2D bodies a node owns, in the order WorldSnapshot::Object::Body2D lists them: its Rigidbody2D's, then each
-        /// Collider2D's own (a collider on the Rigidbody2D's body adds nothing)
+        /// Collider2D's own (a collider on the Rigidbody2D's body adds nothing), then its SoftBody2D's centre
         std::vector<Physics::PhysicsBodyHandle> Bodies2DOf(const GameObject &node)
         {
             std::vector<Physics::PhysicsBodyHandle> out;
@@ -122,6 +130,10 @@ namespace N2Engine::Network
             for (const Physics2D::Collider2D *const collider : node.GetComponents<Physics2D::Collider2D>())
             {
                 add(collider->GetHandle());
+            }
+            for (const Physics2D::SoftBody2D *const soft : node.GetComponents<Physics2D::SoftBody2D>())
+            {
+                add(soft->GetHandle());
             }
             return out;
         }

@@ -66,13 +66,14 @@ namespace N2Engine::Physics2D
 
 #include "ContactTracker2D.hpp"
 #include "engine/Application.hpp"
-#include "engine/GameObject.hpp"
+#include "engine/GameObjectScene.hpp"
 #include "engine/Layers.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/Time.hpp"
 #include "engine/physics2d/Collider2D.hpp"
 #include "engine/physics2d/Joint2D.hpp"
 #include "engine/physics2d/Rigidbody2D.hpp"
+#include "engine/physics2d/SoftBody2D.hpp"
 
 namespace N2Engine::Physics2D
 {
@@ -414,6 +415,15 @@ namespace N2Engine::Physics2D
 
             void RefreshMatrix()
             {
+                for (const auto &[centre, soft] : _softBodies)
+                {
+                    b2Filter filter = MakeFilter(soft.layer);
+                    filter.groupIndex = soft.group;
+                    for (const ShapeKey key : soft.shapes)
+                    {
+                        b2Shape_SetFilter(b2LoadShapeId(key), filter);
+                    }
+                }
                 for (auto &[key, shape] : _shapes)
                 {
                     const b2Filter filter = MakeFilter(shape.layer);
@@ -448,6 +458,11 @@ namespace N2Engine::Physics2D
                     if (!std::isfinite(position.x) || !std::isfinite(position.y))
                     {
                         Logger::Warn(std::format("2D physics: '{}' has a position that is not finite; its body stays where it is", body.owner->GetName()));
+                        continue;
+                    }
+                    if (const auto soft = _softBodies.find(handle); soft != _softBodies.end())
+                    {
+                        MoveSoftBody(body.id, soft->second, position.x, position.y);
                         continue;
                     }
                     const b2Rot rotation = ToRot(positionable->GetRotation());
@@ -567,6 +582,14 @@ namespace N2Engine::Physics2D
                     }
                 }
                 std::erase_if(_joints, [handle](const auto &entry) { return entry.second.self == handle || entry.second.other == handle; });
+                if (const auto soft = _softBodies.find(handle); soft != _softBodies.end())
+                {
+                    for (const b2BodyId node : soft->second.nodes)
+                    {
+                        b2DestroyBody(node);
+                    }
+                    _softBodies.erase(soft);
+                }
                 b2DestroyBody(it->second.id); // Box2D ends the body's joints with it
                 std::erase_if(_targeted, [handle](const Targeted &targeted) { return targeted.body == handle; });
                 _bodies.erase(it);
@@ -580,6 +603,16 @@ namespace N2Engine::Physics2D
                     return;
                 }
                 body->enabled = enabled;
+                if (const auto soft = _softBodies.find(handle); soft != _softBodies.end())
+                {
+                    // A soft body comes back where it was: its nodes are not at its owner's pose
+                    for (const b2BodyId node : soft->second.nodes)
+                    {
+                        enabled ? b2Body_Enable(node) : b2Body_Disable(node);
+                    }
+                    enabled ? b2Body_Enable(body->id) : b2Body_Disable(body->id);
+                    return;
+                }
                 if (enabled)
                 {
                     _resyncTriggers = true;
@@ -1296,6 +1329,167 @@ namespace N2Engine::Physics2D
                 return true;
             }
 
+            // ===== Soft bodies =====
+            PhysicsBodyHandle CreateSoftBody(const SoftBodyDesc2D &desc) override
+            {
+                const std::size_t count = desc.ring.size();
+                if (count < 3 || count > kMaxSoftNodes || !IsFinite(desc.centre) ||
+                    !std::ranges::all_of(desc.ring, [](const Math::Vector2 &p) { return IsFinite(p); }) || !IsPositiveFinite(desc.nodeRadius))
+                {
+                    Logger::Warn("2D physics: a soft body needs 3 to 64 finite nodes and a node radius above zero; it was not made");
+                    return Physics::INVALID_PHYSICS_HANDLE;
+                }
+                BodyDesc2D centreDesc;
+                centreDesc.type = BodyType2D::Dynamic;
+                centreDesc.owner = desc.owner;
+                centreDesc.gravityScale = desc.gravityScale;
+                centreDesc.linearDamping = desc.linearDamping;
+                centreDesc.fixedRotation = true;
+                centreDesc.enabled = desc.enabled;
+                const PhysicsBodyHandle centre = CreateBody(centreDesc);
+                BodyRecord *centreRecord = Find(centre);
+                if (!centreRecord)
+                {
+                    return Physics::INVALID_PHYSICS_HANDLE;
+                }
+                b2Body_SetTransform(centreRecord->id, ToPos(desc.centre.x, desc.centre.y), b2Rot_identity);
+
+                SoftRecord soft;
+                soft.layer = desc.layer;
+                // Its own nodes never collide with each other: a negative group of its own (the centre's slot, the same on
+                // every peer)
+                soft.group = -static_cast<int>(centre.index % 0x7FFFFFFFu) - 1;
+                const float density = NonNegative(desc.density, 1.0f, "density");
+                b2ShapeDef shapeDef = b2DefaultShapeDef();
+                shapeDef.density = density;
+                shapeDef.material = b2DefaultSurfaceMaterial();
+                shapeDef.material.friction = NonNegative(desc.material.dynamicFriction, shapeDef.material.friction, "friction");
+                shapeDef.material.restitution = NonNegative(desc.material.restitution, shapeDef.material.restitution, "restitution");
+                shapeDef.enableContactEvents = false;
+                shapeDef.enableSensorEvents = false;
+                b2Circle circle{};
+                circle.radius = desc.nodeRadius;
+
+                // The centre's shape only gives it mass: it collides with nothing
+                b2ShapeDef centreShape = shapeDef;
+                centreShape.filter.categoryBits = 0;
+                centreShape.filter.maskBits = 0;
+                centreShape.filter.groupIndex = soft.group;
+                b2CreateCircleShape(centreRecord->id, &centreShape, &circle);
+
+                shapeDef.filter = MakeFilter(desc.layer);
+                shapeDef.filter.groupIndex = soft.group;
+                for (std::size_t i = 0; i < count; ++i)
+                {
+                    b2BodyDef def = b2DefaultBodyDef();
+                    const bool pinned = i < desc.pinned.size() && desc.pinned[i] != 0;
+                    def.type = pinned ? b2_staticBody : b2_dynamicBody;
+                    def.position = ToPos(desc.ring[i].x, desc.ring[i].y);
+                    def.gravityScale = Finite(desc.gravityScale, 1.0f, "gravity scale");
+                    def.linearDamping = NonNegative(desc.linearDamping, 0.0f, "linear damping");
+                    def.motionLocks = MakeLocks(true);
+                    def.isEnabled = desc.enabled;
+                    const b2BodyId node = b2CreateBody(_world, &def);
+                    const b2ShapeId shape = b2CreateCircleShape(node, &shapeDef, &circle);
+                    soft.nodes.push_back(node);
+                    soft.shapes.push_back(b2StoreShapeId(shape));
+                    soft.pinned.push_back(pinned ? 1 : 0);
+                }
+                const auto spring = [this](const b2BodyId a, const b2BodyId b, const float hertz, const float damping)
+                {
+                    b2DistanceJointDef def = b2DefaultDistanceJointDef();
+                    def.base.bodyIdA = a;
+                    def.base.bodyIdB = b;
+                    def.length = std::max(b2Length(b2SubPos(b2Body_GetPosition(b), b2Body_GetPosition(a))), kMinJointLength);
+                    def.enableSpring = true;
+                    def.hertz = std::max(Finite(hertz, 10.0f, "a soft body's frequency"), 0.0f);
+                    def.dampingRatio = std::max(Finite(damping, 0.3f, "a soft body's damping"), 0.0f);
+                    b2CreateDistanceJoint(_world, &def);
+                };
+                for (std::size_t i = 0; i < count; ++i)
+                {
+                    spring(soft.nodes[i], soft.nodes[(i + 1) % count], desc.edgeFrequency, desc.edgeDamping);
+                    spring(soft.nodes[i], soft.nodes[(i + 2) % count], desc.edgeFrequency, desc.edgeDamping);
+                    spring(centreRecord->id, soft.nodes[i], desc.shapeFrequency, desc.shapeDamping);
+                }
+                _softBodies.insert_or_assign(centre, std::move(soft));
+                return centre;
+            }
+
+            [[nodiscard]] bool SoftBodyHolds(const PhysicsBodyHandle centre, const GameObject *owner) const override
+            {
+                const BodyRecord *body = Find(centre);
+                return body && body->owner == owner && _softBodies.contains(centre);
+            }
+
+            bool ReadSoftBody(const PhysicsBodyHandle centre, std::vector<Math::Vector2> &ring, Math::Vector2 &centrePosition) const override
+            {
+                ring.clear();
+                const BodyRecord *body = Find(centre);
+                const auto soft = _softBodies.find(centre);
+                if (!body || soft == _softBodies.end())
+                {
+                    return false;
+                }
+                const b2Pos c = b2Body_GetPosition(body->id);
+                centrePosition = Math::Vector2(static_cast<float>(c.x), static_cast<float>(c.y));
+                for (const b2BodyId node : soft->second.nodes)
+                {
+                    const b2Pos p = b2Body_GetPosition(node);
+                    ring.emplace_back(static_cast<float>(p.x), static_cast<float>(p.y));
+                }
+                return true;
+            }
+
+            void SetSoftNodePinned(const PhysicsBodyHandle centre, const std::size_t node, const bool pinned) override
+            {
+                const auto soft = _softBodies.find(centre);
+                if (soft == _softBodies.end() || node >= soft->second.nodes.size() || (soft->second.pinned[node] != 0) == pinned)
+                {
+                    return;
+                }
+                soft->second.pinned[node] = pinned ? 1 : 0;
+                const b2BodyId id = soft->second.nodes[node];
+                b2Body_SetType(id, pinned ? b2_staticBody : b2_dynamicBody);
+                if (!pinned)
+                {
+                    b2Body_SetAwake(id, true);
+                }
+            }
+
+            void AddSoftBodyImpulse(const PhysicsBodyHandle centre, const Math::Vector2 &impulse) override
+            {
+                const BodyRecord *body = Find(centre);
+                const auto soft = _softBodies.find(centre);
+                if (!body || soft == _softBodies.end())
+                {
+                    return;
+                }
+                const Math::Vector2 value = Finite(impulse, "an impulse");
+                std::vector<b2BodyId> moving{body->id};
+                for (std::size_t i = 0; i < soft->second.nodes.size(); ++i)
+                {
+                    if (soft->second.pinned[i] == 0)
+                    {
+                        moving.push_back(soft->second.nodes[i]);
+                    }
+                }
+                float total = 0.0f;
+                for (const b2BodyId id : moving)
+                {
+                    total += b2Body_GetMass(id);
+                }
+                if (!(total > 0.0f))
+                {
+                    return;
+                }
+                for (const b2BodyId id : moving)
+                {
+                    const float share = b2Body_GetMass(id) / total;
+                    b2Body_ApplyLinearImpulseToCenter(id, b2Vec2{value.x * share, value.y * share}, true);
+                }
+            }
+
             [[nodiscard]] std::uint64_t HashState() const override { return b2World_GetStateHash(_world); }
 
             [[nodiscard]] std::uint64_t HashSimulatedState() const override
@@ -1333,6 +1527,24 @@ namespace N2Engine::Physics2D
                                                                            (static_cast<unsigned>(body.type) << 1));
                     mix(&flags, 1);
                 }
+                // A soft body's nodes, in centre handle order, when it is in the simulation
+                for (const auto &[centre, soft] : _softBodies)
+                {
+                    const BodyRecord *body = Find(centre);
+                    if (!body || !body->enabled)
+                    {
+                        continue;
+                    }
+                    for (const b2BodyId node : soft.nodes)
+                    {
+                        const b2Pos position = b2Body_GetPosition(node);
+                        const b2Vec2 velocity = b2Body_GetLinearVelocity(node);
+                        mixDouble(static_cast<double>(position.x));
+                        mixDouble(static_cast<double>(position.y));
+                        mixFloat(velocity.x);
+                        mixFloat(velocity.y);
+                    }
+                }
                 return hash;
             }
 
@@ -1342,7 +1554,7 @@ namespace N2Engine::Physics2D
             // behind a body's shapes by their index among the Collider2D components of the body's GameObject (the same on
             // every build that makes the same scene), never by address.
             static constexpr std::uint32_t kStateMagic = 0x3250324Eu; // "N2P2"
-            static constexpr std::uint32_t kStateVersion = 2; // 2: the joints and the ground body (issue #445)
+            static constexpr std::uint32_t kStateVersion = 3; // 2: the joints and the ground body, 3: soft bodies (issue #445)
 
             [[nodiscard]] bool SaveState(std::vector<std::byte> &out) const override
             {
@@ -1407,6 +1619,22 @@ namespace N2Engine::Physics2D
                     PutU32(out, record.self.generation);
                     PutU32(out, record.other.index);
                     PutU32(out, record.other.generation);
+                }
+                // The soft bodies: their centre (a body above), layer, group, and each node's body, shape and pin
+                PutU32(out, static_cast<std::uint32_t>(_softBodies.size()));
+                for (const auto &[centre, soft] : _softBodies)
+                {
+                    PutU32(out, centre.index);
+                    PutU32(out, centre.generation);
+                    PutU32(out, static_cast<std::uint32_t>(soft.layer));
+                    PutU32(out, static_cast<std::uint32_t>(soft.group));
+                    PutU32(out, static_cast<std::uint32_t>(soft.nodes.size()));
+                    for (std::size_t i = 0; i < soft.nodes.size(); ++i)
+                    {
+                        PutU64(out, b2StoreBodyId(soft.nodes[i]));
+                        PutU64(out, soft.shapes[i]);
+                        PutU8(out, soft.pinned[i]);
+                    }
                 }
                 return true;
             }
@@ -1473,6 +1701,7 @@ namespace N2Engine::Physics2D
                 std::map<PhysicsBodyHandle, BodyRecord, HandleLess> renamed;
                 std::vector<std::pair<Rigidbody2D *, PhysicsBodyHandle>> rigidbodies;
                 std::vector<std::pair<Collider2D *, PhysicsBodyHandle>> colliders;
+                std::vector<std::pair<SoftBody2D *, PhysicsBodyHandle>> softOwners;
                 const auto collidersOf = [](const BodyRecord &record, const PhysicsBodyHandle handle)
                 {
                     std::vector<Collider2D *> out;
@@ -1505,6 +1734,10 @@ namespace N2Engine::Physics2D
                         {
                             record.rigidbody->OnBodyLost();
                         }
+                        if (SoftBody2D *soft = SoftBodyOf(record.owner, entry.first))
+                        {
+                            soft->OnBodyLost();
+                        }
                         for (Collider2D *collider : collidersOf(record, entry.first))
                         {
                             collider->OnBodyLost();
@@ -1520,6 +1753,10 @@ namespace N2Engine::Physics2D
                     {
                         colliders.emplace_back(collider, to->second);
                     }
+                    if (SoftBody2D *soft = SoftBodyOf(record.owner, entry.first))
+                    {
+                        softOwners.emplace_back(soft, to->second);
+                    }
                     record.id = BodyIdOf(to->second);
                     renamed.emplace(to->second, std::move(record));
                 }
@@ -1531,6 +1768,12 @@ namespace N2Engine::Physics2D
                 {
                     collider->OnBodyRenamed(handle);
                 }
+                for (const auto &[soft, handle] : softOwners)
+                {
+                    soft->OnBodyRenamed(handle);
+                }
+                // The soft records name the old handles too; RestoreImpl takes them from the state
+                _softBodies.clear();
                 _bodies = std::move(renamed);
                 // The shape records name the old handles; RestoreImpl rebuilds them, the touches and the targets from the state
                 _shapes.clear();
@@ -1656,6 +1899,35 @@ namespace N2Engine::Physics2D
                     record.other.generation = reader.U32();
                     joints.insert_or_assign(key, record); // unowned: each waits for its Joint2D to claim it
                 }
+                std::map<PhysicsBodyHandle, SoftRecord, HandleLess> softBodies;
+                const std::uint32_t softCount = reader.U32();
+                if (!reader.ok || softCount > reader.Remaining() / 20)
+                {
+                    Logger::Warn("2D physics: the state is cut short");
+                    return false;
+                }
+                for (std::uint32_t i = 0; i < softCount && reader.ok; ++i)
+                {
+                    PhysicsBodyHandle centre;
+                    centre.index = reader.U32();
+                    centre.generation = reader.U32();
+                    SoftRecord soft;
+                    soft.layer = static_cast<int>(reader.U32());
+                    soft.group = static_cast<int>(reader.U32());
+                    const std::uint32_t nodes = reader.U32();
+                    if (!reader.ok || nodes > reader.Remaining() / 17)
+                    {
+                        reader.ok = false;
+                        break;
+                    }
+                    for (std::uint32_t n = 0; n < nodes; ++n)
+                    {
+                        soft.nodes.push_back(BodyIdOf(ToHandle(b2LoadBodyId(reader.U64()))));
+                        soft.shapes.push_back(Rehome(reader.U64()));
+                        soft.pinned.push_back(reader.U8());
+                    }
+                    softBodies.insert_or_assign(centre, std::move(soft));
+                }
                 if (!reader.ok || reader.Remaining() != 0)
                 {
                     Logger::Warn("2D physics: the state is cut short or has bytes after its end");
@@ -1705,6 +1977,10 @@ namespace N2Engine::Physics2D
                     if (lost.rigidbody)
                     {
                         lost.rigidbody->OnBodyLost();
+                    }
+                    if (SoftBody2D *soft = SoftBodyOf(lost.owner, entry.first))
+                    {
+                        soft->OnBodyLost();
                     }
                     if (lost.owner)
                     {
@@ -1798,13 +2074,32 @@ namespace N2Engine::Physics2D
                               { return !b2Joint_IsValid(entry.second.id) || !_bodies.contains(entry.second.self) ||
                                        (entry.second.other.IsValid() && !_bodies.contains(entry.second.other)); });
                 _joints = std::move(joints);
+                // A soft body whose centre is gone (its component was removed since) goes with it
+                for (auto it = softBodies.begin(); it != softBodies.end();)
+                {
+                    if (_bodies.contains(it->first))
+                    {
+                        ++it;
+                        continue;
+                    }
+                    for (const b2BodyId node : it->second.nodes)
+                    {
+                        if (b2Body_IsValid(node))
+                        {
+                            b2DestroyBody(node);
+                        }
+                    }
+                    it = softBodies.erase(it);
+                }
+                _softBodies = std::move(softBodies);
 
                 // The transforms follow the restored poses, as after a step; the writes are not the game moving the object
                 _syncing = true;
                 for (const auto &entry : _bodies)
                 {
                     const BodyRecord &body = entry.second;
-                    if (!body.enabled || body.type == BodyType2D::Static || !body.rigidbody || !body.owner)
+                    if (!body.enabled || body.type == BodyType2D::Static || !body.owner ||
+                        (!body.rigidbody && !_softBodies.contains(entry.first)))
                     {
                         continue;
                     }
@@ -1829,6 +2124,54 @@ namespace N2Engine::Physics2D
             }
 
         private:
+            static constexpr std::size_t kMaxSoftNodes = 64;
+
+
+            struct SoftRecord
+            {
+                std::vector<b2BodyId> nodes;
+                std::vector<ShapeKey> shapes;
+                std::vector<std::uint8_t> pinned;
+                int layer = 0;
+                int group = 0;
+            };
+
+            /// The owner's SoftBody2D, when `handle` is its body
+            [[nodiscard]] static SoftBody2D *SoftBodyOf(GameObject *owner, const PhysicsBodyHandle handle)
+            {
+                SoftBody2D *soft = owner ? owner->GetComponent<SoftBody2D>() : nullptr;
+                return soft && soft->GetHandle() == handle ? soft : nullptr;
+            }
+
+            /// The game moved a soft body's object: the whole body moves with it, keeping its shape and speeds
+            void MoveSoftBody(const b2BodyId centre, const SoftRecord &soft, const float x, const float y)
+            {
+                const b2Pos at = b2Body_GetPosition(centre);
+                const float dx = x - static_cast<float>(at.x);
+                const float dy = y - static_cast<float>(at.y);
+                if (dx == 0.0f && dy == 0.0f)
+                {
+                    return;
+                }
+                const auto move = [dx, dy](const b2BodyId id)
+                {
+                    const b2Pos position = b2Body_GetPosition(id);
+                    b2Body_SetTransform(id, ToPos(static_cast<float>(position.x) + dx, static_cast<float>(position.y) + dy),
+                                        b2Body_GetRotation(id));
+                    if (b2Body_GetType(id) == b2_dynamicBody)
+                    {
+                        b2Body_SetAwake(id, true);
+                    }
+                };
+                WakeBodiesTouching(centre);
+                for (const b2BodyId node : soft.nodes)
+                {
+                    WakeBodiesTouching(node);
+                    move(node);
+                }
+                move(centre);
+            }
+
             struct JointRecord
             {
                 b2JointId id{};
@@ -2157,7 +2500,8 @@ namespace N2Engine::Physics2D
                 {
                     const b2BodyMoveEvent &move = events.moveEvents[i];
                     const auto it = _bodies.find(ToHandle(move.bodyId));
-                    if (it == _bodies.end() || !it->second.rigidbody || !it->second.owner || it->second.dirty)
+                    if (it == _bodies.end() || (!it->second.rigidbody && !_softBodies.contains(it->first)) ||
+                        !it->second.owner || it->second.dirty)
                     {
                         continue; // a dirty body was moved by the game since the step: its move wins
                     }
@@ -2456,6 +2800,8 @@ namespace N2Engine::Physics2D
             // Ordered by Box2D id: claims and breaks go in that order on every peer
             std::map<JointHandle2D, JointRecord> _joints;
             b2BodyId _ground = b2_nullBodyId;
+            // By centre handle: the hash and the state list them in that order
+            std::map<PhysicsBodyHandle, SoftRecord, HandleLess> _softBodies;
         };
     }
 

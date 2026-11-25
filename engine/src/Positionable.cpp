@@ -9,6 +9,7 @@
 #include "engine/physics/ICollider.hpp"
 #include "engine/physics2d/Collider2D.hpp"
 #include "engine/physics2d/Rigidbody2D.hpp"
+#include "engine/physics2d/SoftBody2D.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 
 using namespace N2Engine;
@@ -201,6 +202,10 @@ void Positionable::NotifyPhysicsComponents() const
     if (!scene || !scene->GetPhysics2DWorld())
     {
         return;
+    }
+    if (const auto *soft = _gameObject.GetComponent<Physics2D::SoftBody2D>(); soft && !soft->IsDestroyed())
+    {
+        soft->OnTransformChanged();
     }
     if (const auto *rigidbody = _gameObject.GetComponent<Physics2D::Rigidbody2D>(); rigidbody && !rigidbody->IsDestroyed())
     {

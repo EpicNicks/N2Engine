@@ -5,6 +5,7 @@
 #include <cmath>
 #include <exception>
 #include <fstream>
+#include <initializer_list>
 #include <iterator>
 #include <format>
 #include <mutex>
@@ -393,8 +394,58 @@ namespace N2Engine::Rendering
             }
         }
 
+        // Issue #445: what stands in where the shader cannot be drawn
+        ShaderFallback fallback;
+        if (const auto it = json.find("fallback"); it != json.end())
+        {
+            if (!it->is_object())
+            {
+                return fail("\"fallback\" must be an object");
+            }
+            const auto paramOfType = [&params](const std::string &paramName, const std::initializer_list<ShaderParamType> types)
+            {
+                return std::ranges::any_of(params, [&](const ShaderParam &param)
+                {
+                    return param.name == paramName && std::ranges::find(types, param.type) != types.end();
+                });
+            };
+            for (const auto &[key, value] : it->items())
+            {
+                if (key == "tint")
+                {
+                    if (!value.is_string() ||
+                        !paramOfType(value.get<std::string>(), {ShaderParamType::Color, ShaderParamType::Vec4}))
+                    {
+                        return fail("\"fallback\": \"tint\" must name a color or vec4 parameter");
+                    }
+                    fallback.tint = value.get<std::string>();
+                }
+                else if (key == "opacity")
+                {
+                    if (!value.is_string() || !paramOfType(value.get<std::string>(), {ShaderParamType::Float}))
+                    {
+                        return fail("\"fallback\": \"opacity\" must name a float parameter");
+                    }
+                    fallback.opacity = value.get<std::string>();
+                }
+                else if (key == "hidden")
+                {
+                    if (!value.is_boolean())
+                    {
+                        return fail("\"fallback\": \"hidden\" must be true or false");
+                    }
+                    fallback.hidden = value.get<bool>();
+                }
+                else
+                {
+                    return fail(std::format("\"fallback\": unknown key \"{}\" (the keys are tint, opacity, hidden)", key));
+                }
+            }
+        }
+
         _name = std::move(name);
         _params = std::move(params);
+        _fallback = std::move(fallback);
         _usesLighting = usesLighting;
         _state = std::move(state);
         // The text the runtime compile and the cache key read: what the cook's parser sees (no byte order mark, LF line ends)

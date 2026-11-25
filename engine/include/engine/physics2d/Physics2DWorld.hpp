@@ -99,6 +99,28 @@ namespace N2Engine::Physics2D
         float translation = 0.0f; // Slider and Wheel: metres along the axis from the zero pose; Distance: the current length
     };
 
+    /// A soft body (SoftBody2D builds it): a ring of small circle bodies joined to their neighbours and to a centre body by
+    /// distance springs. The centre is a body of this world owned by `owner` (no Rigidbody2D, no collider, it collides with
+    /// nothing); its handle names the soft body. docs/physics2d.html#soft-bodies
+    struct SoftBodyDesc2D
+    {
+        GameObject *owner = nullptr;
+        std::vector<Math::Vector2> ring; // world positions of the outline nodes, counter-clockwise
+        Math::Vector2 centre;            // world position of the centre body
+        std::vector<std::uint8_t> pinned; // per node: 1 holds it where it is (a static body)
+        float nodeRadius = 0.05f;
+        float density = 1.0f;
+        Physics::PhysicsMaterial material = Physics::PhysicsMaterial::Default();
+        int layer = 0;
+        float edgeFrequency = 10.0f; // hertz, the outline's springs (neighbours and next-but-one)
+        float edgeDamping = 0.3f;
+        float shapeFrequency = 4.0f; // hertz, the spokes to the centre that keep the shape
+        float shapeDamping = 0.3f;
+        float gravityScale = 1.0f;
+        float linearDamping = 0.0f;
+        bool enabled = true;
+    };
+
     class Physics2DWorld
     {
     public:
@@ -194,6 +216,18 @@ namespace N2Engine::Physics2D
         /// Joints nobody claimed are ended by the next Step.
         virtual JointHandle2D ClaimJoint(const JointDesc2D &desc) = 0;
         [[nodiscard]] virtual JointReading2D ReadJoint(JointHandle2D joint) const = 0;
+
+        // ===== Soft bodies (docs/physics2d.html#soft-bodies) =====
+        /// Makes the soft body; its centre's handle, or invalid for bad input. DestroyBody(centre) ends all of it, and
+        /// SetBodyEnabled(centre) takes all of it out of the simulation and back (where it is, not at the owner's pose).
+        virtual PhysicsBodyHandle CreateSoftBody(const SoftBodyDesc2D &desc) = 0;
+        /// Whether `centre` is still a soft body of `owner` (a rollback restore to before it was made makes it false)
+        [[nodiscard]] virtual bool SoftBodyHolds(PhysicsBodyHandle centre, const GameObject *owner) const = 0;
+        /// The nodes' world positions (ring order) and the centre's; false for no such soft body
+        virtual bool ReadSoftBody(PhysicsBodyHandle centre, std::vector<Math::Vector2> &ring, Math::Vector2 &centrePosition) const = 0;
+        virtual void SetSoftNodePinned(PhysicsBodyHandle centre, std::size_t node, bool pinned) = 0;
+        /// An impulse shared over the nodes and the centre by their mass, so the whole body takes the velocity change
+        virtual void AddSoftBodyImpulse(PhysicsBodyHandle centre, const Math::Vector2 &impulse) = 0;
 
         /// Hash of the whole simulation (every body, parked ones included, the contacts and the id pools), for tests
         [[nodiscard]] virtual std::uint64_t HashState() const = 0;
