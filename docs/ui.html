@@ -89,6 +89,7 @@
 <li><a href="#model">UI objects</a></li>
 <li><a href="#space">Canvas space</a></li>
 <li><a href="#layout">RectTransform layout</a></li>
+<li><a href="#rotation">Rotation and scale</a></li>
 <li><a href="#order">Canvases and draw order</a></li>
 <li><a href="#pass">The UI pass</a></li>
 <li><a href="#image">Image</a></li>
@@ -113,7 +114,7 @@
 <thead><tr><th>Component</th><th>Role</th></tr></thead>
 <tbody>
 <tr><td><code>UI::Canvas</code></td><td>The root of a UI tree. Has a <code>sortOrder</code> and a render mode: <code>ScreenSpaceOverlay</code> (the default) or, <span class="badge">PR #67</span>, <code>WorldSpace</code> (<a href="#world">World-space canvases</a>). One per object.</td></tr>
-<tr><td><code>UI::RectTransform</code></td><td>Anchors, pivot, anchored position and size delta; the element's rect is resolved from its parent's rect. One per object (<code>AddComponent</code> returns the existing one).</td></tr>
+<tr><td><code>UI::RectTransform</code></td><td>Anchors, pivot, anchored position and size delta; the element's rect is resolved from its parent's rect. Rotation and scale about the pivot <span class="badge">issue #445</span> (<a href="#rotation">Rotation and scale</a>). One per object (<code>AddComponent</code> returns the existing one).</td></tr>
 <tr><td><code>UI::UIGraphic</code></td><td>Base of everything the UI pass draws: a colour, a <code>raycastTarget</code> flag, a tint (<span class="badge">PR #54</span>, below), and <code>RenderUI(renderer, rect, state, canvasToWorld)</code> (<span class="badge">PR #67</span> the last argument is identity on an overlay canvas, which the three-argument overload passes; a subclass overrides the four-argument one and adds <code>using UIGraphic::RenderUI;</code> so the three-argument call still compiles on it). It is not an <code>IRenderable</code>, so the scene pass never draws it itself; a world-space canvas, which is one, draws its graphics.</td></tr>
 <tr><td><code>UI::Image</code></td><td>A <code>UIGraphic</code> that fills its rect with its colour, optionally multiplied by a sprite (a texture asset) or a raw texture.</td></tr>
 <tr><td><code>UI::UIText</code> <span class="badge">PR #53</span></td><td>A <code>UIGraphic</code> that draws text inside its rect with an SDF font (<a href="#text">Text</a>).</td></tr>
@@ -174,13 +175,36 @@ rect     = (pivotPos - pivot * size, size)
 <li><code>StretchToParent()</code> sets anchors (0, 0)–(1, 1) with zero offsets, so the element covers its parent exactly.</li>
 <li><code>ResolveIn(parentRect)</code> and the static <code>Resolve(...)</code> compute a rect without changing anything. <code>GetRect()</code> returns the rect from the last layout. A layout runs every time the UI pass draws and every time the pointer is hit-tested. An inactive object's <code>GetRect()</code> isn't updated.</li>
 <li>An object under a canvas that has <strong>no</strong> <code>RectTransform</code> takes its parent's rect, as if it were stretched with zero offsets, and its children lay out inside that rect.</li>
-<li>There is no rotation or scale, and no layout groups. A <code>RectTransform</code>'s own enabled flag is ignored.</li>
+<li>Rotation and scale <span class="badge">issue #445</span> are applied after this layout and do not change it (<a href="#rotation">below</a>). A <code>RectTransform</code>'s own enabled flag is ignored.</li>
 </ul>
 <div class="callout guarantee">
 <p class="callout-title">Guarantee: layout follows the viewport</p>
 <p>Layout is a pure function of the hierarchy, the components' values and the viewport size, so it gives the same result with or without a window. After a resize, stretched elements stretch and anchored elements keep their size and their distance from their anchor. Tests: <code>RectTransformLayoutTest.PointAnchorWithPivotAndOffset</code>, <code>StretchedAnchorsWithOffsets</code>, <code>SettingOneCornerKeepsTheOther</code>, <code>ResizeMovesAnchoredElementsAndStretchesStretchedOnes</code>, <code>ChildrenResolveInTheirParentsRect</code>, <code>TheCanvasCoversTheViewportWhateverItsRectTransformSays</code>.</p>
 </div>
 <p class="src">Source: <code>engine/src/ui/RectTransform.cpp</code> — <code>RectTransform::Resolve</code>, <code>SetOffsetMin</code>, <code>SetOffsetMax</code>; <code>engine/src/ui/UISystem.cpp</code> — <code>LayOut</code></p>
+
+<h2 id="rotation">Rotation and scale <span class="badge">issue #445</span></h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Field</th><th>Meaning</th><th>Default</th></tr></thead>
+<tbody>
+<tr><td><code>rotation</code></td><td>Degrees, counter-clockwise on screen, about the pivot</td><td>0</td></tr>
+<tr><td><code>scale</code></td><td>About the pivot. A negative component mirrors; 0 flattens the element, which then draws and hits nothing.</td><td>(1, 1)</td></tr>
+</tbody>
+</table>
+</div>
+<p>The layout above is worked out as if nothing were turned: <code>GetRect()</code> is the same with or without rotation and scale. An element and everything below it is then <em>drawn and hit</em> through its transform: scale, then rotation, both about its pivot, inside whatever its parents do (<code>RectTransform::GetLocalToCanvas</code>). So a child keeps its place on a turned parent, and a button on a turned or scaled panel is clicked where it is seen.</p>
+<ul>
+<li><strong>From code.</strong> <code>GetCanvasCorners()</code> gives where the corners are drawn (bottom-left, top-left, top-right, bottom-right, Unity's order). <code>LocalToCanvas(point)</code> maps a point of <code>GetRect</code>'s space to canvas space, and <code>CanvasToLocal(point)</code> maps back (nothing when a scale of 0 flattens the element). Like <code>GetRect</code>, they are as of the last layout. Each <code>UIDrawItem</code> carries its <code>transform</code>; <code>Covers(point)</code> and <code>Hits(point)</code> use it.</li>
+<li><strong>Drawing.</strong> The transform goes into the matrix each graphic draws with, so <code>Image</code>, <code>UIText</code> and a custom <code>UIGraphic</code> need no changes. Text is drawn from the same distance field, so it stays sharp when turned or scaled up. A whole quarter turn is exact (no rounding).</li>
+<li><strong>Masks.</strong> A turned <code>RectMask</code> clips to its turned shape (<a href="#mask">Masks</a>).</li>
+<li><strong>Layout groups</strong> and <code>ContentSizeFitter</code> place and measure unturned rects, as Unity's do by default: a scaled child takes its unscaled room and may overlap its neighbours.</li>
+<li><strong>Controls.</strong> A <code>Slider</code> is read along its bar as drawn, and a <code>ScrollView</code>'s content and scrollbar handles are dragged along their own axes. The content's own rotation and scale are not part of the scroll view's bounds: scrolling works with its unturned rect.</li>
+<li><strong>The canvas.</strong> The canvas object's own rotation and scale are ignored: an overlay canvas covers the viewport, and a world-space canvas is turned and scaled by its object's <code>Positionable</code> (<a href="#world-size">size, placement and scale</a>).</li>
+<li><strong>The editor</strong> picks and frames an element of a world-space canvas where it is drawn.</li>
+</ul>
+<p>Scenes saved before these fields keep the defaults. From Lua: <code>SetRotation</code>, <code>GetRotation</code>, <code>SetScale</code>, <code>GetScale</code>, <code>LocalToCanvas</code>, <code>CanvasToLocal</code> (nil when flattened) and <code>GetCanvasCorners</code>.</p>
+<p class="src">Source: <code>engine/include/engine/ui/Transform2D.hpp</code>, <code>engine/src/ui/Transform2D.cpp</code>; <code>engine/src/ui/RectTransform.cpp</code> &mdash; <code>LocalTransform</code>; <code>engine/src/ui/UISystem.cpp</code> &mdash; <code>LayOut</code>, <code>DrawItem</code>; tests: <code>Transform2DTest.*</code>, <code>RectTransformRotationTest.*</code> (<code>tests/engine/ui/RectTransformRotationTests.cpp</code>), <code>LuaUITest.RotatesAndScalesAnElement</code></p>
 
 <h2 id="order">Canvases and draw order <span class="badge">PR #50</span></h2>
 <p><code>UISystem::CollectGraphics(scene, viewport)</code> lays out the scene's screen-space overlay UI and returns its graphics in draw order. The UI pass and the overlay hit test both use it. World-space canvases <span class="badge">PR #67</span> are left out of it: each one is laid out on its own (<code>CollectWorldCanvasGraphics</code>) and draws in the scene's Transparent queue (<a href="#world">below</a>).</p>
@@ -572,6 +596,7 @@ hud-&gt;GetPositionable()-&gt;SetPosition({0.0f, 1.5f, -2.0f});
 <h2 id="mask">Masks (RectMask) <span class="badge">issue #445</span></h2>
 <p>A <code>RectMask</code> (Unity's <code>RectMask2D</code>) on a UI element clips everything below it to its rect: its children and their whole subtrees draw only inside it, and the pointer finds them only there, so a button scrolled out of a scroll view can't be clicked. Its own object's graphics are not clipped by it (they lie in its rect anyway), only by masks above it. It has no settings; disable the component to stop clipping. One per object.</p>
 <ul>
+<li><strong>Turned masks.</strong> A mask under a rotation <span class="badge">issue #445</span> (its own or a parent's) clips to its turned shape. While every mask above an element lies along the canvas's axes (unturned, or turned by quarter turns) the clip is a rect. Otherwise it is a convex polygon (<code>UIDrawItem::clipPolygon</code>, with <code>clip</code> the box around it), the overlap of all the masks. A graphic is handed the clip in its own space: still a rect when it is turned together with its mask, else a polygon (<code>UIGraphic::GetRenderClipPolygon</code>), to which <code>Image</code> and <code>UIText</code> cut their meshes (<code>ClipQuadMesh</code>), interpolating texture coordinates and colours. A custom graphic that reads only <code>GetRenderClip</code> cuts to the box around the polygon.</li>
 <li><strong>The clip.</strong> The layout (<code>LayOut</code> in <code>UISystem.cpp</code>) carries a clip rect down the tree: below an active <code>RectMask</code> it is the mask's rect, or for nested masks the overlap with the clip above (<code>Rect::Intersect</code>). Each <code>UIDrawItem</code> gets the clip of its object (<code>UIDrawItem::clip</code>, empty without a mask). It follows the mask's rect as it moves or resizes, and works the same way on a world-space canvas, in canvas units.</li>
 <li><strong>Hit testing.</strong> An item is hit only inside its rect <em>and</em> its clip (<code>UIDrawItem::Hits</code>), in the overlay hit test and the world-canvas ray test alike. An item whose rect and clip don't overlap is neither drawn nor hit (<code>UIDrawItem::IsVisible</code>).</li>
 <li><strong>Drawing: CPU clipping, not a GPU scissor.</strong> <code>UISystem</code> sets the clip on each graphic just for its draw (<code>UIGraphic::SetRenderClip</code>; <code>GetRenderClip</code> during <code>RenderUI</code>, empty for a <code>RenderUI</code> called directly). An <code>Image</code> cut by it draws a quad of the visible part with its texture coordinates cut in the same proportion (<code>Image::ClipQuad</code>, <code>BuildQuads</code>; a small mesh of its own, updated in place, relative to the rect's corner); one inside the clip draws its usual unit quad, unchanged. A <code>UIText</code> drops the glyph quads outside the clip and cuts the ones across its edge with their atlas coordinates (<code>UIText::ClipLayout</code>), filtering the per-character colours with them; text wholly inside draws its usual mesh. Design decision: the renderer has no scissor rect on any backend, and a world-space canvas is not a screen rectangle, so cutting geometry gives the same pixels on OpenGL, Vulkan, WebGPU and the software renderer, and on both kinds of canvas, with no renderer change. The cost is a mesh update for a clipped graphic when it or the clip moves (a scrolling list re-cuts the items across the view's edges each frame it moves). A user shader on a clipped <code>Image</code> draws the cut quad too. Text effects (outline, shadow) are inside each glyph's quad, so they are cut with it.</li>
@@ -746,7 +771,7 @@ open:GetComponent("Button"):AddOnClick(function() print("opening") end)
 <li>For <strong>Button</strong>: sprite-swap and animation transitions, keyboard and gamepad navigation and selection (Unity's <code>Selected</code> state), persistent (saved) listeners, and pointer events bubbling to a parent.</li>
 <li>For <strong>UI text</strong>: clipping to its own rect (a <a href="#mask">RectMask</a> clips it <span class="badge">issue #445</span>), best-fit sizing, rich text, and a reference-resolution scale for font sizes.</li>
 <li>For <strong>world-space canvases</strong>: Unity's Screen Space - Camera mode, a per-canvas event camera (the main camera is used), clipping a transparent object that crosses the canvas's plane, and blending on the software renderer (<a href="#world-sw-text">text writes depth there</a>).</li>
-<li>Rotation and scale on <code>RectTransform</code>, flexible layout sizes and Unity's <code>MinSize</code> fit, a reference-resolution scaler, soft (feathered) mask edges and masks of any shape (<span class="badge">issue #445</span> rectangular masks and scroll views are done), and events for buttons other than the left.</li>
+<li>Flexible layout sizes and Unity's <code>MinSize</code> fit, a reference-resolution scaler, soft (feathered) mask edges and masks of any shape (<span class="badge">issue #445</span> rectangular masks and scroll views are done), and events for buttons other than the left.</li>
 <li>For <strong>Image</strong>: sprite sub-rects and atlases, tiled (repeating) slices, and preserving the aspect ratio (a sprite is stretched over the whole rect).</li>
 </ul>
 

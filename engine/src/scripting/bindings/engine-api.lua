@@ -1811,9 +1811,29 @@ function RectTransform:GetOffsetMax() end
 function RectTransform:SetOffsetMax(value) end
 ---Anchors (0, 0)-(1, 1) with zero offsets: covers the parent exactly
 function RectTransform:StretchToParent() end
----The rect the last layout resolved (each UI pass and each pointer update); zeros before any
+---The rect the last layout resolved (each UI pass and each pointer update); zeros before any. Without rotation or
+---scale here or above it is in canvas space; with them, LocalToCanvas and GetCanvasCorners say where it is drawn
 ---@return Rect
 function RectTransform:GetRect() end
+---@return number degrees, counter-clockwise on screen, about the pivot
+function RectTransform:GetRotation() end
+---@param degrees number counter-clockwise on screen, about the pivot; turns the element and everything below it
+function RectTransform:SetRotation(degrees) end
+---@return Vector2
+function RectTransform:GetScale() end
+---@param scale Vector2 about the pivot, (1, 1) by default; negative mirrors, 0 shows nothing
+function RectTransform:SetScale(scale) end
+---A point of GetRect's space in canvas space, through this element's and its parents' rotation and scale
+---@param point Vector2
+---@return Vector2
+function RectTransform:LocalToCanvas(point) end
+---A canvas point in GetRect's space; nil when a scale of 0 flattens the element
+---@param point Vector2
+---@return Vector2?
+function RectTransform:CanvasToLocal(point) end
+---Where the element's corners are drawn, in canvas space: bottom-left, top-left, top-right, bottom-right
+---@return Vector2[]
+function RectTransform:GetCanvasCorners() end
 
 ---The root of a UI tree. A screen-space overlay canvas (the default) is drawn over the scene, and higher sort
 ---orders draw on top and are hit first. A world-space canvas is a rectangle in the world, drawn with the scene's

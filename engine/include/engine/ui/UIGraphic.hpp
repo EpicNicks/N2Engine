@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include <utility>
 
 #include <math/Matrix.hpp>
 #include <renderer/common/Renderer.hpp>
@@ -9,6 +10,7 @@
 #include "engine/common/Color.hpp"
 #include "engine/serialization/ComponentSerializer.hpp"
 #include "engine/ui/Rect.hpp"
+#include "engine/ui/Transform2D.hpp"
 
 namespace N2Engine::UI
 {
@@ -71,13 +73,26 @@ namespace N2Engine::UI
         void SetRaycastTarget(const bool raycastTarget) { _raycastTarget = raycastTarget; }
 
         /**
-         * The clip rect (canvas space) of the draw under way, issue #445: the intersection of the rects of the RectMask
-         * objects above this graphic (UIDrawItem::clip). UISystem sets it just before it calls RenderUI and clears it right
-         * after, so a RenderUI called directly (tests) draws unclipped. Image and UIText cut their geometry to it on the
-         * CPU, which every backend draws the same way; nothing outside it is drawn. Not serialized.
+         * The clip of the draw under way, issue #445: the region the RectMask objects above this graphic leave
+         * (UIDrawItem::clip), in the space of the rect RenderUI gets (canvas space unless the object or a parent is turned
+         * or scaled). UISystem sets it just before it calls RenderUI and clears it right after, so a RenderUI called
+         * directly (tests) draws unclipped. Image and UIText cut their geometry to it on the CPU, which every backend draws
+         * the same way; nothing outside it is drawn. When a mask is turned against the graphic the region is no rect:
+         * GetRenderClipPolygon then holds it and GetRenderClip is the box around it. Not serialized.
          */
         [[nodiscard]] const std::optional<Rect> &GetRenderClip() const { return _renderClip; }
-        void SetRenderClip(const std::optional<Rect> &clip) { _renderClip = clip; }
+        void SetRenderClip(const std::optional<Rect> &clip)
+        {
+            _renderClip = clip;
+            _renderClipPolygon.clear();
+        }
+        /// The clip region when it is not a rect (counter-clockwise); empty otherwise
+        [[nodiscard]] const ConvexPolygon &GetRenderClipPolygon() const { return _renderClipPolygon; }
+        void SetRenderClipPolygon(ConvexPolygon polygon)
+        {
+            _renderClip = BoundsOf(polygon);
+            _renderClipPolygon = std::move(polygon);
+        }
 
     protected:
         explicit UIGraphic(GameObject &gameObject);
@@ -86,5 +101,6 @@ namespace N2Engine::UI
         bool _raycastTarget = true;
         Common::Color _tint{Common::Color::White};
         std::optional<Rect> _renderClip;
+        ConvexPolygon _renderClipPolygon;
     };
 }
