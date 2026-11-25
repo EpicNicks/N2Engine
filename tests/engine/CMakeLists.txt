@@ -71,6 +71,7 @@ set(N2ENGINE_UI_TESTS
     scripting/LuaImageSpriteTests.cpp
     scripting/LuaUITests.cpp
     ui/ButtonTests.cpp
+    ui/CanvasScalerTests.cpp
     ui/RectTransformRotationTests.cpp
     ui/ScrollViewTests.cpp
     ui/SliderTests.cpp

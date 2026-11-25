@@ -88,7 +88,8 @@ namespace N2Engine::UI
      * 1. Canvases are the active Canvas components on objects active in the hierarchy with no Canvas above
      *    them. They are stable-sorted by sortOrder, ascending (ties keep hierarchy order: depth first, roots in
      *    scene order).
-     * 2. Each canvas's rect is (0, 0, width, height). Its tree is walked depth first, parents before children,
+     * 2. Each canvas's rect is (0, 0, width, height), or with a CanvasScaler (issue #445) that divided by its scale, in
+     *    canvas units, with the scale in every item's transform. Its tree is walked depth first, parents before children,
      *    children in order, skipping inactive objects and their subtrees. An object's rect is its RectTransform
      *    resolved in its parent's rect (RectTransform::ResolveIn), or its parent's rect if it has none. The
      *    result is stored in the RectTransform (GetRect).
