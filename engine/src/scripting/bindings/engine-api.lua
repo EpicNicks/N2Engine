@@ -866,6 +866,10 @@ function GameObject:GetPositionable() end
 ---@return boolean
 function GameObject:HasPositionable() end
 
+---Give the object a positionable (a position, rotation and scale) if it has none. GameObject.Create makes an object
+---without one; some components add it, but only when they attach, after AddComponent has returned
+function GameObject:CreatePositionable() end
+
 ---Add a child GameObject
 ---@param child GameObject
 function GameObject:AddChild(child) end

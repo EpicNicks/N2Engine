@@ -44,3 +44,5 @@ Thumbs.db
 # lua_project import cache (written by ResourceLoader when the project or its tests run)
 lua_project/.import/
 lua_project/.n2/
+samples/features-445/.import/
+samples/features-445/.n2/

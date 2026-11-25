@@ -99,6 +99,7 @@
 <li><a href="#n2server-net-tests">The world-protocol loopback test</a></li>
 </ol>
 </li>
+<li><a href="#sample-445">The issue #445 sample project</a></li>
 <li><a href="#not-headless">What cannot be tested headless</a></li>
 <li><a href="#gpu-smoke">GPU smoke test</a>
 <ol>
@@ -913,6 +914,10 @@ The text frames differ from the software renderer's by design: the GPU shader ra
 <p><code>DeterministicMathTests.cpp</code> compares results with tables of exact bit patterns, not with tolerances, because the point of the engine-owned functions is that every platform gives the same bits: the same table is asserted on every leg of the matrix (MSVC, GCC, Clang, arm64, wasm), so one bit of difference on one leg fails there. The tables were computed once from the implementation and cross-checked against the C library and a 90-digit reference. The accuracy tests are the other half: they use a double-double reference computed in the test file (the C library only seeds a Newton step) and assert the ulp bounds exactly as documented in <a href="math.html#engine-trig">math</a>, so a table cannot hide an algorithm that is exactly reproducible but wrong. To change an algorithm on purpose, regenerate the tables and list the old and new values in the pull request.</p>
 <p><code>FloatEnvironmentTests.cpp</code> and the two guard tests in <code>SimulationClockTests.cpp</code> change the processor's floating-point control register on purpose, so every one puts it back with a scope object (a failed assertion cannot leave a test program rounding toward zero), and each checks that its perturbation took (<code>FloatEnvironmentTests.cpp</code> by what the arithmetic does, the two in <code>SimulationClockTests.cpp</code> by asserting that <code>FloatEnvironment::IsDeterministic()</code> is false after the write) before testing the guard. They are skipped on WebAssembly, which has no such register.</p>
 <p class="src">Source: <code>tests/math/math_types/DeterministicMathTests.cpp</code>, <code>FloatEnvironmentTests.cpp</code>, <code>tests/engine/SimulationClockTests.cpp</code>.</p>
+
+<h2 id="sample-445">The issue #445 sample project <span class="badge">issue #445</span></h2>
+<p><code>samples/features-445</code> is a small Lua project that uses the issue's features in one scene: a turned and masked UI panel, a <a href="ui.html#scaler">canvas scaler</a>, <a href="ui.html#text-overflow">text overflow</a> and <a href="ui.html#text-rich">rich text</a>, <a href="ui.html#navigation">keyboard and gamepad navigation</a>, <a href="post-processing.html">post-processing</a>, a user shader's <a href="user-shaders.html#fallback-equivalents">software stand-in</a>, a <a href="physics2d.html#soft-bodies">2D soft body</a> and <a href="particles.html#collision">particle collision</a>. Its script builds the scene, drives it and checks the results itself.</p>
+<p><code>Features445SampleTest</code> (<code>tests/engine/scripting/Features445SampleTests.cpp</code>, so part of <code>ctest</code> in CI) runs it through <code>Application::Tick</code> on the windowless software renderer, with 125 frames of exactly 1/60&nbsp;s and no event polling. It fails on a failed script check, on any logged error and on a few pixels of the HUD. The one error it expects, exactly once, is the software renderer's notice that it draws the user shader with its stand-in. It is left out of a build without the UI, particle or scripting module, and compiles to nothing without Box2D. It does not cover GPU renderers, real input devices or a real window.</p>
 
 <h2 id="not-headless">What cannot be tested headless</h2>
 <ul>

@@ -34,6 +34,7 @@ endif()
 set(N2ENGINE_PARTICLES_TESTS
     particles/ParticleCollisionTests.cpp
     particles/ParticleHeadlessTests.cpp
+    scripting/Features445SampleTests.cpp
     particles/ParticleSimulationTests.cpp
     particles/ParticleSystemTests.cpp
     particles/PbdParticleBackendTests.cpp
@@ -69,6 +70,7 @@ set(N2ENGINE_UI_TESTS
     rendering/SoftwareImageGoldenTests.cpp
     rendering/SoftwareWorldCanvasGoldenTests.cpp
     rendering/UserShaderImageTests.cpp
+    scripting/Features445SampleTests.cpp
     scripting/LuaImageSpriteTests.cpp
     scripting/LuaUITests.cpp
     ui/ButtonTests.cpp
@@ -156,7 +158,7 @@ endif()
 
 # On this file only, so a build without Box2D recompiles almost nothing else
 if(N2ENGINE_USE_BOX2D)
-    set_source_files_properties(physics2d/Physics2DTests.cpp physics2d/LuaPhysics2DTests.cpp physics2d/Joint2DTests.cpp physics2d/Picking2DTests.cpp physics2d/SoftBody2DTests.cpp network/Rollback2DTests.cpp particles/ParticleCollisionTests.cpp PROPERTIES COMPILE_DEFINITIONS N2ENGINE_BOX2D_ENABLED=1)
+    set_source_files_properties(physics2d/Physics2DTests.cpp physics2d/LuaPhysics2DTests.cpp physics2d/Joint2DTests.cpp physics2d/Picking2DTests.cpp physics2d/SoftBody2DTests.cpp network/Rollback2DTests.cpp particles/ParticleCollisionTests.cpp scripting/Features445SampleTests.cpp PROPERTIES COMPILE_DEFINITIONS N2ENGINE_BOX2D_ENABLED=1)
 endif()
 # The particles and soft-body modules: on the whole program, not per file as Box2D's, because the shared test fakes
 # (particles/FakePhysicsBackend.hpp, included by tests of other subsystems too) run those modules' CPU backends.
@@ -194,6 +196,7 @@ endif()
 # lua_project/assets/scene.lua is built headless by LuaSceneTests; tests/assets holds the committed test models
 target_compile_definitions(engine_tests PRIVATE
         N2_LUA_PROJECT_DIR="${CMAKE_SOURCE_DIR}/lua_project"
+        N2_FEATURES_445_DIR="${CMAKE_SOURCE_DIR}/samples/features-445"
         N2_TEST_ASSETS_DIR="${CMAKE_SOURCE_DIR}/tests/assets"
         N2_RENDERER_SOURCE_DIR="${CMAKE_SOURCE_DIR}/renderer" # OpenGlShaderSourceTests reads the GLSL as text
         N2_ENGINE_SOURCE_DIR="${CMAKE_SOURCE_DIR}/engine" # DeterministicMathSourceScanTests scans the sources as text

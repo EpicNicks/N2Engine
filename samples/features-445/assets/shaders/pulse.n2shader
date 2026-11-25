@@ -1,0 +1,15 @@
+{ "n2shader": 1,
+  "name": "Pulse",
+  "params": [
+    { "name": "baseColor", "type": "color", "default": [1, 1, 1, 1] },
+    { "name": "u_Tint",    "type": "color", "default": [0.2, 1.0, 0.4, 1.0], "label": "Tint" },
+    { "name": "u_Time",    "type": "float", "default": 0 }
+  ],
+  "fallback": { "tint": "u_Tint" }
+}
+#stage fragment
+void main()
+{
+    float pulse = 0.75 + 0.25 * sin(u_Time * 4.0);
+    n2_FragColor = vec4(baseColor.rgb * u_Tint.rgb * pulse, baseColor.a * u_Tint.a);
+}
