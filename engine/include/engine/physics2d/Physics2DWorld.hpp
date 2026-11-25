@@ -60,6 +60,45 @@ namespace N2Engine::Physics2D
         int layer = 0;
     };
 
+    /// A joint of a Physics2DWorld (Box2D's joint id); 0 is none
+    using JointHandle2D = std::uint64_t;
+
+    /// Everything the world needs to make a joint (Joint2D builds it). `self` is the joint component's body; `other` is the
+    /// connected body, or invalid for the world. The joint is made from the bodies' poses at that moment: that pose is its
+    /// zero (a hinge's angle 0, a slider's translation 0, a distance joint's length).
+    struct JointDesc2D
+    {
+        JointType2D type = JointType2D::Fixed;
+        PhysicsBodyHandle self;
+        PhysicsBodyHandle other;
+        Math::Vector2 anchor;          // on self, local
+        Math::Vector2 connectedAnchor; // on other, local; the world point without one (and Target's target)
+        Math::Vector2 axis{1.0f, 0.0f}; // Slider and Wheel, in self's local space
+        bool collideConnected = false;
+        bool useLimits = false;
+        float limitMin = 0.0f; // radians for a hinge, metres otherwise
+        float limitMax = 0.0f;
+        bool useSpring = false;
+        float springFrequency = 0.0f; // hertz; 0 is rigid for Fixed, no spring force otherwise
+        float springDamping = 0.0f;   // damping ratio
+        bool useMotor = false;
+        float motorSpeed = 0.0f;    // radians per second for Hinge and Wheel, metres per second for Slider and Distance
+        float maxMotorForce = 0.0f; // newtons, or newton-metres for Hinge and Wheel
+        float maxForce = 0.0f;      // Target: the most force its spring may apply
+        float breakForce = 0.0f;    // 0: unbreakable
+        float breakTorque = 0.0f;
+        Joint2D *owner = nullptr;
+    };
+
+    /// What a joint reads now
+    struct JointReading2D
+    {
+        Math::Vector2 reactionForce; // the force the joint applied in the last step
+        float reactionTorque = 0.0f;
+        float angle = 0.0f;       // Hinge: radians from the zero pose
+        float translation = 0.0f; // Slider and Wheel: metres along the axis from the zero pose; Distance: the current length
+    };
+
     class Physics2DWorld
     {
     public:
@@ -138,6 +177,23 @@ namespace N2Engine::Physics2D
         /// `normal` is zero. A ray parallel to the plane (no z direction) hits nothing, nor does degenerate input.
         virtual bool PickRay(const Math::Vector3 &origin, const Math::Vector3 &direction, RaycastHit2D &hit, float maxDistance,
                              std::uint32_t layerMask, QueryTriggers triggers) = 0;
+
+        // ===== Joints (docs/physics2d.html#joints) =====
+        /// Makes a joint between two bodies of this world; 0 when a body is missing or Box2D refuses it
+        virtual JointHandle2D CreateJoint(const JointDesc2D &desc) = 0;
+        /// Ends the joint and wakes its bodies; nothing for one that is gone
+        virtual void DestroyJoint(JointHandle2D joint) = 0;
+        /// The settings that can change while the joint lives: collideConnected, limits, spring, motor, Target's target and force,
+        /// and the break thresholds
+        virtual void ConfigureJoint(JointHandle2D joint, const JointDesc2D &desc) = 0;
+        /// Whether the joint is still desc.owner's, between desc.self and desc.other (a body destroyed with its joints, a break,
+        /// or a rollback restore makes it false)
+        [[nodiscard]] virtual bool JointHolds(JointHandle2D joint, const JointDesc2D &desc) const = 0;
+        /// After a rollback restore or a late join, the joints of the restored instant wait for their owners: the first unclaimed
+        /// joint of desc's type and bodies is given to desc.owner (it keeps its saved zero pose and impulses). 0 for none.
+        /// Joints nobody claimed are ended by the next Step.
+        virtual JointHandle2D ClaimJoint(const JointDesc2D &desc) = 0;
+        [[nodiscard]] virtual JointReading2D ReadJoint(JointHandle2D joint) const = 0;
 
         /// Hash of the whole simulation (every body, parked ones included, the contacts and the id pools), for tests
         [[nodiscard]] virtual std::uint64_t HashState() const = 0;

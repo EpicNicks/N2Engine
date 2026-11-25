@@ -19,6 +19,7 @@
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourcePath.hpp"
 #include "engine/physics2d/Collider2D.hpp"
+#include "engine/physics2d/Joint2D.hpp"
 #include "engine/physics2d/Physics2DWorld.hpp"
 #include "engine/physics2d/Rigidbody2D.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
@@ -69,6 +70,16 @@ namespace
                 function Watcher:OnTriggerExit2D(trigger) p2d_trigger_exit = (p2d_trigger_exit or 0) + 1 end
 
                 return Watcher
+            )";
+            // Written here, before the loader scans the project: a script made later is not found by res://
+            std::ofstream(s_projectRoot / "assets" / "p2d" / "Breaker.lua") << R"(
+                local Breaker = {}
+                Breaker.__index = Breaker
+                function Breaker:OnJointBreak2D(joint)
+                    p2d_broken = (p2d_broken or 0) + 1
+                    p2d_broken_type = joint:GetJointType()
+                end
+                return Breaker
             )";
             IO::ResourceLoader::Instance().Initialize(s_projectRoot);
         }
@@ -390,6 +401,57 @@ namespace
         Run("kept_go = GameObject.Create('Poly'); kept = kept_go:AddComponent('PolygonCollider2D')");
         EXPECT_NE(ErrorOf("kept:SetVertices({Vector2(0, 0), 'corner'})").find("Vector2"), std::string::npos);
         Run("kept_go = nil");
+    }
+
+    TEST_F(LuaPhysics2DTest, AJoint2DFromAScriptHoldsBreaksAndCallsOnJointBreak2D)
+    {
+        Run(R"(
+            p2d_broken, p2d_broken_type = nil
+            local scene = SceneManager.GetCurrentScene()
+            local bob = GameObject.Create('Bob')
+            bob:CreatePositionable()
+            bob:GetPositionable():SetPosition(Vector3(2, 0, 0))
+            scene:AddRootGameObject(bob)
+            bob:AddComponent('Rigidbody2D')
+            bob:AddComponent('CircleCollider2D'):SetRadius(0.2)
+            kept = bob:AddComponent('Joint2D')
+            kept:SetJointType(JointType2D.Hinge)
+            assert(kept:GetJointType() == JointType2D.Hinge)
+            kept:SetAnchor(Vector2(-2, 0))
+            kept:SetConnectedAnchor(Vector2(0, 0))
+            kept:SetConnectedBody(nil)
+            assert(kept:GetConnectedBody() == nil)
+            kept:SetLimits(true, -90, 90)
+            assert(kept:GetUseLimits() and kept:GetLimitMax() == 90)
+            kept:SetSpring(true, 2, 0.5)
+            assert(kept:GetSpringFrequency() == 2)
+            kept:SetMotor(false, 10, 5)
+            assert(kept:GetMotorSpeed() == 10 and not kept:GetUseMotor())
+            kept:SetBreakForce(math.huge)
+            assert(kept:GetBreakForce() == 0, 'infinity is stored as 0, never breaks')
+            assert(not kept:IsCreated())
+        )");
+        const auto bob = _scene->FindGameObject("Bob");
+        ASSERT_NE(bob, nullptr);
+        bob->AddComponent<LuaComponent>()->SetScript(IO::ResourcePath("res://p2d/Breaker.lua"));
+        Step(10);
+        EXPECT_TRUE(Eval<bool>("kept:IsCreated()"));
+        EXPECT_LT(Eval<float>("kept:GetJointAngle()"), 0.0f);
+
+        EXPECT_NE(ErrorOf("kept:SetLimits(true, 10, 20)").find("contain 0"), std::string::npos);
+        EXPECT_FALSE(ErrorOf("kept:SetSpring(true, -1, 0)").empty());
+        EXPECT_FALSE(ErrorOf("kept:SetAnchor(Vector3(0, 0, 0))").empty());
+        EXPECT_FALSE(ErrorOf("kept:SetAxis(Vector2(0, 0))").empty());
+        EXPECT_FALSE(ErrorOf("kept:SetMotor(true, 0/0, 1)").empty());
+        EXPECT_FALSE(ErrorOf("kept:SetBreakForce(-1)").empty());
+        EXPECT_FALSE(ErrorOf("kept:SetConnectedBody(5)").empty());
+
+        Run("kept:SetBreakForce(0.01)");
+        Step(2);
+        EXPECT_EQ(Eval<int>("p2d_broken"), 1);
+        EXPECT_TRUE(Eval<bool>("p2d_broken_type == JointType2D.Hinge"));
+        EXPECT_FALSE(Eval<bool>("kept:IsCreated()"));
+        Run("kept = nil");
     }
 
 #else // A build without Box2D

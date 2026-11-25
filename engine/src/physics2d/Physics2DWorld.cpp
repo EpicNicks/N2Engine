@@ -71,6 +71,7 @@ namespace N2Engine::Physics2D
 #include "engine/Positionable.hpp"
 #include "engine/Time.hpp"
 #include "engine/physics2d/Collider2D.hpp"
+#include "engine/physics2d/Joint2D.hpp"
 #include "engine/physics2d/Rigidbody2D.hpp"
 
 namespace N2Engine::Physics2D
@@ -85,6 +86,8 @@ namespace N2Engine::Physics2D
         constexpr float kMaxDistance = Physics::QueryRules::kMaxSweepDistance;
         /// How far along a ray a start must still be inside a shape to count as started inside: above Box2D's 0.005 linear slop
         constexpr float kInsideProbe = 0.01f;
+        /// A distance joint is never made shorter than this (Box2D clamps to its linear slop anyway)
+        constexpr float kMinJointLength = 0.01f;
         /// PickRay: a ray whose unit direction has less z than this is taken as parallel to the 2D plane, which it cannot cross
         constexpr float kPickMinSlope = 1.0e-6f;
 
@@ -484,6 +487,7 @@ namespace N2Engine::Physics2D
                 {
                     return;
                 }
+                EndUnclaimedJoints();
                 b2World_Step(_world, deltaTime, kSubSteps);
 
                 // The target's velocity lasts one step, or the body would carry on past its pose
@@ -499,7 +503,10 @@ namespace N2Engine::Physics2D
 
                 SyncTransforms();
                 ReadEvents();
+                // Read before any handler runs: Box2D's event array does not survive a joint being destroyed
+                const std::vector<JointHandle2D> broken = ReadBrokenJoints();
                 _tracker.Dispatch();
+                BreakJoints(broken);
             }
 
             PhysicsBodyHandle CreateBody(const BodyDesc2D &desc) override
@@ -559,7 +566,8 @@ namespace N2Engine::Physics2D
                         _colliderShapes.erase(shape);
                     }
                 }
-                b2DestroyBody(it->second.id);
+                std::erase_if(_joints, [handle](const auto &entry) { return entry.second.self == handle || entry.second.other == handle; });
+                b2DestroyBody(it->second.id); // Box2D ends the body's joints with it
                 std::erase_if(_targeted, [handle](const Targeted &targeted) { return targeted.body == handle; });
                 _bodies.erase(it);
             }
@@ -903,6 +911,312 @@ namespace N2Engine::Physics2D
                 return Overlap(center, b2MakeProxy(corners, 4, 0.0f), hits, layerMask, triggers);
             }
 
+            // ===== Joints =====
+            JointHandle2D CreateJoint(const JointDesc2D &desc) override
+            {
+                const BodyRecord *self = Find(desc.self);
+                const bool connected = desc.type != JointType2D::Target && desc.other.IsValid();
+                const BodyRecord *other = connected ? Find(desc.other) : nullptr;
+                if (!self || (connected && (!other || desc.other == desc.self)))
+                {
+                    return 0;
+                }
+                const b2BodyId otherId = other ? other->id : Ground();
+                if (!b2Body_IsValid(otherId))
+                {
+                    return 0;
+                }
+
+                // The frames: this body's at the anchor, turned to the axis; the other's the same frame now, seen from it. So
+                // the current pose is the joint's zero.
+                const b2Vec2 axis = UnitAxis(desc.axis);
+                const b2Rot axisRotation = b2MakeRotFromUnitVector(axis);
+                const b2Rot worldRotation = b2MulRot(b2Body_GetRotation(self->id), axisRotation);
+                b2Transform frameSelf{ToB2(desc.anchor), axisRotation};
+                b2Transform frameOther{ToB2(desc.connectedAnchor), b2InvMulRot(b2Body_GetRotation(otherId), worldRotation)};
+
+                b2JointId id = b2_nullJointId;
+                // Box2D's body B is this one, so an angle, translation or motor speed is this body's relative to the other (a
+                // positive hinge angle turns it counterclockwise), and a slider's or wheel's axis is fixed to the other body
+                const auto base = [&](b2JointDef &def)
+                {
+                    def.bodyIdA = otherId;
+                    def.bodyIdB = self->id;
+                    def.localFrameA = frameOther;
+                    def.localFrameB = frameSelf;
+                    def.collideConnected = desc.collideConnected;
+                    def.forceThreshold = Threshold(desc.breakForce);
+                    def.torqueThreshold = Threshold(desc.breakTorque);
+                };
+                switch (desc.type)
+                {
+                case JointType2D::Fixed:
+                {
+                    b2WeldJointDef def = b2DefaultWeldJointDef();
+                    base(def.base);
+                    def.linearHertz = desc.useSpring ? desc.springFrequency : 0.0f;
+                    def.angularHertz = def.linearHertz;
+                    def.linearDampingRatio = desc.springDamping;
+                    def.angularDampingRatio = desc.springDamping;
+                    id = b2CreateWeldJoint(_world, &def);
+                    break;
+                }
+                case JointType2D::Hinge:
+                {
+                    b2RevoluteJointDef def = b2DefaultRevoluteJointDef();
+                    base(def.base);
+                    def.enableSpring = desc.useSpring;
+                    def.hertz = desc.springFrequency;
+                    def.dampingRatio = desc.springDamping;
+                    def.enableLimit = desc.useLimits;
+                    def.lowerAngle = desc.limitMin;
+                    def.upperAngle = desc.limitMax;
+                    def.enableMotor = desc.useMotor;
+                    def.motorSpeed = desc.motorSpeed;
+                    def.maxMotorTorque = desc.maxMotorForce;
+                    id = b2CreateRevoluteJoint(_world, &def);
+                    break;
+                }
+                case JointType2D::Slider:
+                {
+                    b2PrismaticJointDef def = b2DefaultPrismaticJointDef();
+                    base(def.base);
+                    def.enableSpring = desc.useSpring;
+                    def.hertz = desc.springFrequency;
+                    def.dampingRatio = desc.springDamping;
+                    def.enableLimit = desc.useLimits;
+                    def.lowerTranslation = desc.limitMin;
+                    def.upperTranslation = desc.limitMax;
+                    def.enableMotor = desc.useMotor;
+                    def.motorSpeed = desc.motorSpeed;
+                    def.maxMotorForce = desc.maxMotorForce;
+                    id = b2CreatePrismaticJoint(_world, &def);
+                    break;
+                }
+                case JointType2D::Wheel:
+                {
+                    b2WheelJointDef def = b2DefaultWheelJointDef();
+                    base(def.base);
+                    def.enableSpring = desc.useSpring;
+                    def.hertz = desc.springFrequency;
+                    def.dampingRatio = desc.springDamping;
+                    def.enableLimit = desc.useLimits;
+                    def.lowerTranslation = desc.limitMin;
+                    def.upperTranslation = desc.limitMax;
+                    def.enableMotor = desc.useMotor;
+                    def.motorSpeed = desc.motorSpeed;
+                    def.maxMotorTorque = desc.maxMotorForce;
+                    id = b2CreateWheelJoint(_world, &def);
+                    break;
+                }
+                case JointType2D::Distance:
+                {
+                    b2DistanceJointDef def = b2DefaultDistanceJointDef();
+                    base(def.base);
+                    const b2Pos selfPoint = b2Body_GetWorldPoint(self->id, ToB2(desc.anchor));
+                    const b2Pos otherPoint = b2Body_GetWorldPoint(otherId, ToB2(desc.connectedAnchor));
+                    def.length = std::max(b2Length(b2SubPos(otherPoint, selfPoint)), kMinJointLength);
+                    // A spring of 0 Hz with limits is a rope: free inside them
+                    def.enableSpring = desc.useSpring || desc.useLimits;
+                    def.hertz = desc.useSpring ? desc.springFrequency : 0.0f;
+                    def.dampingRatio = desc.springDamping;
+                    def.enableLimit = desc.useLimits;
+                    if (desc.useLimits) // else Box2D's defaults: no limit
+                    {
+                        def.minLength = desc.limitMin;
+                        def.maxLength = std::max(desc.limitMax, desc.limitMin);
+                    }
+                    def.enableMotor = desc.useMotor;
+                    def.motorSpeed = desc.motorSpeed;
+                    def.maxMotorForce = desc.maxMotorForce;
+                    id = b2CreateDistanceJoint(_world, &def);
+                    break;
+                }
+                case JointType2D::Target:
+                {
+                    // Box2D's motor joint from a frame at the target on the ground body to the anchor on this body, with only
+                    // its linear spring: Box2D v3's replacement for the mouse joint
+                    b2MotorJointDef def = b2DefaultMotorJointDef();
+                    frameOther = b2Transform{ToB2(desc.connectedAnchor), b2Rot_identity};
+                    frameSelf = b2Transform{ToB2(desc.anchor), b2Rot_identity};
+                    base(def.base);
+                    def.linearHertz = desc.springFrequency;
+                    def.linearDampingRatio = desc.springDamping;
+                    def.maxSpringForce = desc.maxForce;
+                    id = b2CreateMotorJoint(_world, &def);
+                    break;
+                }
+                }
+                if (!b2Joint_IsValid(id))
+                {
+                    Logger::Warn("2D physics: Box2D refused to create a joint");
+                    return 0;
+                }
+                const JointHandle2D key = b2StoreJointId(id);
+                JointRecord record;
+                record.id = id;
+                record.type = desc.type;
+                record.self = desc.self;
+                record.other = connected ? desc.other : Physics::INVALID_PHYSICS_HANDLE;
+                record.owner = desc.owner;
+                record.breakable = desc.breakForce > 0.0f || desc.breakTorque > 0.0f;
+                _joints.insert_or_assign(key, record);
+                return key;
+            }
+
+            void DestroyJoint(const JointHandle2D joint) override
+            {
+                const auto it = _joints.find(joint);
+                if (it == _joints.end())
+                {
+                    return;
+                }
+                if (b2Joint_IsValid(it->second.id))
+                {
+                    b2Joint_WakeBodies(it->second.id);
+                    b2DestroyJoint(it->second.id);
+                }
+                _joints.erase(it);
+            }
+
+            void ConfigureJoint(const JointHandle2D joint, const JointDesc2D &desc) override
+            {
+                const auto it = _joints.find(joint);
+                if (it == _joints.end() || !b2Joint_IsValid(it->second.id))
+                {
+                    return;
+                }
+                const b2JointId id = it->second.id;
+                b2Joint_SetCollideConnected(id, desc.collideConnected);
+                b2Joint_SetForceThreshold(id, Threshold(desc.breakForce));
+                b2Joint_SetTorqueThreshold(id, Threshold(desc.breakTorque));
+                it->second.breakable = desc.breakForce > 0.0f || desc.breakTorque > 0.0f;
+                switch (it->second.type)
+                {
+                case JointType2D::Fixed:
+                {
+                    const float hertz = desc.useSpring ? desc.springFrequency : 0.0f;
+                    b2WeldJoint_SetLinearHertz(id, hertz);
+                    b2WeldJoint_SetAngularHertz(id, hertz);
+                    b2WeldJoint_SetLinearDampingRatio(id, desc.springDamping);
+                    b2WeldJoint_SetAngularDampingRatio(id, desc.springDamping);
+                    break;
+                }
+                case JointType2D::Hinge:
+                    b2RevoluteJoint_EnableSpring(id, desc.useSpring);
+                    b2RevoluteJoint_SetSpringHertz(id, desc.springFrequency);
+                    b2RevoluteJoint_SetSpringDampingRatio(id, desc.springDamping);
+                    b2RevoluteJoint_EnableLimit(id, desc.useLimits);
+                    if (desc.useLimits)
+                    {
+                        b2RevoluteJoint_SetLimits(id, desc.limitMin, desc.limitMax);
+                    }
+                    b2RevoluteJoint_EnableMotor(id, desc.useMotor);
+                    b2RevoluteJoint_SetTargetMotorSpeed(id, desc.motorSpeed);
+                    b2RevoluteJoint_SetMaxMotorTorque(id, desc.maxMotorForce);
+                    break;
+                case JointType2D::Slider:
+                    b2PrismaticJoint_EnableSpring(id, desc.useSpring);
+                    b2PrismaticJoint_SetSpringHertz(id, desc.springFrequency);
+                    b2PrismaticJoint_SetSpringDampingRatio(id, desc.springDamping);
+                    b2PrismaticJoint_EnableLimit(id, desc.useLimits);
+                    if (desc.useLimits)
+                    {
+                        b2PrismaticJoint_SetLimits(id, desc.limitMin, desc.limitMax);
+                    }
+                    b2PrismaticJoint_EnableMotor(id, desc.useMotor);
+                    b2PrismaticJoint_SetTargetMotorSpeed(id, desc.motorSpeed);
+                    b2PrismaticJoint_SetMaxMotorForce(id, desc.maxMotorForce);
+                    break;
+                case JointType2D::Wheel:
+                    b2WheelJoint_EnableSpring(id, desc.useSpring);
+                    b2WheelJoint_SetSpringHertz(id, desc.springFrequency);
+                    b2WheelJoint_SetSpringDampingRatio(id, desc.springDamping);
+                    b2WheelJoint_EnableLimit(id, desc.useLimits);
+                    if (desc.useLimits)
+                    {
+                        b2WheelJoint_SetLimits(id, desc.limitMin, desc.limitMax);
+                    }
+                    b2WheelJoint_EnableMotor(id, desc.useMotor);
+                    b2WheelJoint_SetTargetMotorSpeed(id, desc.motorSpeed);
+                    b2WheelJoint_SetMaxMotorTorque(id, desc.maxMotorForce);
+                    break;
+                case JointType2D::Distance:
+                    b2DistanceJoint_EnableSpring(id, desc.useSpring || desc.useLimits);
+                    b2DistanceJoint_SetSpringHertz(id, desc.useSpring ? desc.springFrequency : 0.0f);
+                    b2DistanceJoint_SetSpringDampingRatio(id, desc.springDamping);
+                    b2DistanceJoint_EnableLimit(id, desc.useLimits);
+                    if (desc.useLimits)
+                    {
+                        b2DistanceJoint_SetLimits(id, desc.limitMin, std::max(desc.limitMax, desc.limitMin));
+                    }
+                    b2DistanceJoint_EnableMotor(id, desc.useMotor);
+                    b2DistanceJoint_SetTargetMotorSpeed(id, desc.motorSpeed);
+                    b2DistanceJoint_SetMaxMotorForce(id, desc.maxMotorForce);
+                    break;
+                case JointType2D::Target:
+                    b2Joint_SetLocalFrameA(id, b2Transform{ToB2(desc.connectedAnchor), b2Rot_identity});
+                    b2MotorJoint_SetLinearHertz(id, desc.springFrequency);
+                    b2MotorJoint_SetLinearDampingRatio(id, desc.springDamping);
+                    b2MotorJoint_SetMaxSpringForce(id, desc.maxForce);
+                    break;
+                }
+                b2Joint_WakeBodies(id);
+            }
+
+            [[nodiscard]] bool JointHolds(const JointHandle2D joint, const JointDesc2D &desc) const override
+            {
+                const auto it = _joints.find(joint);
+                const PhysicsBodyHandle other = desc.type == JointType2D::Target ? Physics::INVALID_PHYSICS_HANDLE : desc.other;
+                return it != _joints.end() && it->second.owner == desc.owner && it->second.self == desc.self &&
+                       it->second.other == other && b2Joint_IsValid(it->second.id);
+            }
+
+            JointHandle2D ClaimJoint(const JointDesc2D &desc) override
+            {
+                const PhysicsBodyHandle other = desc.type == JointType2D::Target ? Physics::INVALID_PHYSICS_HANDLE : desc.other;
+                for (auto &[key, record] : _joints)
+                {
+                    if (!record.owner && record.type == desc.type && record.self == desc.self && record.other == other &&
+                        b2Joint_IsValid(record.id))
+                    {
+                        // Its saved settings stay as they were: setting them again would wake its bodies, which the run that
+                        // saved the state did not do
+                        record.owner = desc.owner;
+                        return key;
+                    }
+                }
+                return 0;
+            }
+
+            [[nodiscard]] JointReading2D ReadJoint(const JointHandle2D joint) const override
+            {
+                JointReading2D reading;
+                const auto it = _joints.find(joint);
+                if (it == _joints.end() || !b2Joint_IsValid(it->second.id))
+                {
+                    return reading;
+                }
+                const b2JointId id = it->second.id;
+                reading.reactionForce = FromB2(b2Joint_GetConstraintForce(id));
+                reading.reactionTorque = b2Joint_GetConstraintTorque(id);
+                switch (it->second.type)
+                {
+                case JointType2D::Hinge:
+                    reading.angle = b2RevoluteJoint_GetCurrentAngle(id);
+                    break;
+                case JointType2D::Slider:
+                    reading.translation = b2PrismaticJoint_GetCurrentTranslation(id);
+                    break;
+                case JointType2D::Distance:
+                    reading.translation = b2DistanceJoint_GetCurrentLength(id);
+                    break;
+                default:
+                    break;
+                }
+                return reading;
+            }
+
             bool PickRay(const Math::Vector3 &origin, const Math::Vector3 &direction, RaycastHit2D &hit, const float maxDistance,
                          const std::uint32_t layerMask, const QueryTriggers triggers) override
             {
@@ -1028,7 +1342,7 @@ namespace N2Engine::Physics2D
             // behind a body's shapes by their index among the Collider2D components of the body's GameObject (the same on
             // every build that makes the same scene), never by address.
             static constexpr std::uint32_t kStateMagic = 0x3250324Eu; // "N2P2"
-            static constexpr std::uint32_t kStateVersion = 1;
+            static constexpr std::uint32_t kStateVersion = 2; // 2: the joints and the ground body (issue #445)
 
             [[nodiscard]] bool SaveState(std::vector<std::byte> &out) const override
             {
@@ -1081,6 +1395,19 @@ namespace N2Engine::Physics2D
                 PutTouches(out, _tracker.Collisions());
                 PutTouches(out, _tracker.Triggers());
                 PutU8(out, _resyncTriggers ? 1 : 0);
+                // The joints, by Box2D id, with their type and bodies (their owners are found again by ClaimJoint)
+                PutU64(out, b2Body_IsValid(_ground) ? b2StoreBodyId(_ground) : 0);
+                PutU32(out, static_cast<std::uint32_t>(_joints.size()));
+                for (const auto &[key, record] : _joints)
+                {
+                    PutU64(out, key);
+                    PutU8(out, static_cast<std::uint8_t>(record.type));
+                    PutU8(out, record.breakable ? 1 : 0);
+                    PutU32(out, record.self.index);
+                    PutU32(out, record.self.generation);
+                    PutU32(out, record.other.index);
+                    PutU32(out, record.other.generation);
+                }
                 return true;
             }
 
@@ -1308,6 +1635,27 @@ namespace N2Engine::Physics2D
                     }
                 }
                 const bool resyncTriggers = reader.U8() != 0;
+                const std::uint64_t savedGround = reader.U64();
+                std::map<JointHandle2D, JointRecord> joints;
+                const std::uint32_t jointCount = reader.U32();
+                if (!reader.ok || jointCount > reader.Remaining() / 26)
+                {
+                    Logger::Warn("2D physics: the state is cut short");
+                    return false;
+                }
+                for (std::uint32_t i = 0; i < jointCount; ++i)
+                {
+                    const JointHandle2D key = Rehome(reader.U64());
+                    JointRecord record;
+                    record.id = b2LoadJointId(key);
+                    record.type = static_cast<JointType2D>(reader.U8());
+                    record.breakable = reader.U8() != 0;
+                    record.self.index = reader.U32();
+                    record.self.generation = reader.U32();
+                    record.other.index = reader.U32();
+                    record.other.generation = reader.U32();
+                    joints.insert_or_assign(key, record); // unowned: each waits for its Joint2D to claim it
+                }
                 if (!reader.ok || reader.Remaining() != 0)
                 {
                     Logger::Warn("2D physics: the state is cut short or has bytes after its end");
@@ -1439,6 +1787,17 @@ namespace N2Engine::Physics2D
                 _tracker.RestoreTouches(std::move(collisions), std::move(triggers));
                 _targeted.clear();
                 _resyncTriggers = resyncTriggers;
+                _ground = savedGround != 0 ? BodyIdOf(ToHandle(b2LoadBodyId(savedGround))) : b2_nullBodyId;
+                if (savedGround != 0 && !b2Body_IsValid(_ground))
+                {
+                    Logger::Error("2D physics: the state names a joint anchor body this world does not have; this world must not be used any more");
+                    return false;
+                }
+                // Joints of a body that is gone after the restore went with it in Box2D (b2DestroyBody)
+                std::erase_if(joints, [this](const auto &entry)
+                              { return !b2Joint_IsValid(entry.second.id) || !_bodies.contains(entry.second.self) ||
+                                       (entry.second.other.IsValid() && !_bodies.contains(entry.second.other)); });
+                _joints = std::move(joints);
 
                 // The transforms follow the restored poses, as after a step; the writes are not the game moving the object
                 _syncing = true;
@@ -1470,6 +1829,104 @@ namespace N2Engine::Physics2D
             }
 
         private:
+            struct JointRecord
+            {
+                b2JointId id{};
+                JointType2D type = JointType2D::Fixed;
+                PhysicsBodyHandle self;
+                PhysicsBodyHandle other; // invalid: the ground body
+                Joint2D *owner = nullptr; // null after a restore until its component claims it
+                bool breakable = false;
+            };
+
+            /// The static body that world joints and Target hold to: made with the first one, at the origin, with no shape
+            b2BodyId Ground()
+            {
+                if (!b2Body_IsValid(_ground))
+                {
+                    b2BodyDef def = b2DefaultBodyDef();
+                    def.type = b2_staticBody;
+                    _ground = b2CreateBody(_world, &def);
+                }
+                return _ground;
+            }
+
+            static b2Vec2 UnitAxis(const Math::Vector2 &axis)
+            {
+                const float length = std::sqrt(axis.x * axis.x + axis.y * axis.y);
+                if (!(length > 0.0f) || !std::isfinite(length))
+                {
+                    return b2Vec2{1.0f, 0.0f};
+                }
+                return b2Vec2{axis.x / length, axis.y / length};
+            }
+
+            /// A break threshold for Box2D: 0 is never (Box2D's own "never" is FLT_MAX; its 0 reports every joint)
+            static float Threshold(const float value)
+            {
+                return value > 0.0f && std::isfinite(value) ? value : std::numeric_limits<float>::max();
+            }
+
+            /// A restored joint nobody claimed in the FixedUpdate before this step: its component is gone or was disabled
+            void EndUnclaimedJoints()
+            {
+                bool warned = false;
+                for (auto it = _joints.begin(); it != _joints.end();)
+                {
+                    if (it->second.owner)
+                    {
+                        ++it;
+                        continue;
+                    }
+                    if (!warned)
+                    {
+                        warned = true;
+                        Logger::Warn("2D physics: a restored joint was not claimed by a Joint2D before the step; it is ended");
+                    }
+                    if (b2Joint_IsValid(it->second.id))
+                    {
+                        b2Joint_WakeBodies(it->second.id);
+                        b2DestroyJoint(it->second.id);
+                    }
+                    it = _joints.erase(it);
+                }
+            }
+
+            [[nodiscard]] std::vector<JointHandle2D> ReadBrokenJoints() const
+            {
+                std::vector<JointHandle2D> broken;
+                const b2JointEvents events = b2World_GetJointEvents(_world);
+                for (int i = 0; i < events.count; ++i)
+                {
+                    const JointHandle2D key = b2StoreJointId(events.jointEvents[i].jointId);
+                    if (const auto it = _joints.find(key); it != _joints.end() && it->second.breakable)
+                    {
+                        broken.push_back(key);
+                    }
+                }
+                std::ranges::sort(broken); // id order, the same on every peer
+                broken.erase(std::unique(broken.begin(), broken.end()), broken.end());
+                return broken;
+            }
+
+            void BreakJoints(const std::vector<JointHandle2D> &broken)
+            {
+                for (const JointHandle2D key : broken)
+                {
+                    const auto it = _joints.find(key);
+                    if (it == _joints.end())
+                    {
+                        continue; // ended by a handler since
+                    }
+                    Joint2D *owner = it->second.owner;
+                    DestroyJoint(key);
+                    if (owner)
+                    {
+                        owner->OnJointBroken();
+                    }
+                }
+            }
+
             struct BodyRecord
             {
                 b2BodyId id{};
@@ -1996,6 +2453,9 @@ namespace N2Engine::Physics2D
             bool _syncing = false;
             PhysicsBodyHandle _syncingBody;
             bool _resyncTriggers = false;
+            // Ordered by Box2D id: claims and breaks go in that order on every peer
+            std::map<JointHandle2D, JointRecord> _joints;
+            b2BodyId _ground = b2_nullBodyId;
         };
     }
 

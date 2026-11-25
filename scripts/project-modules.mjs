@@ -22,8 +22,8 @@ export const MODULES = {
     luaPatterns: [/\bPhysics\.[A-Za-z]\w*/, /\bOn(Collision|Trigger)(Enter|Stay|Exit)\b/, /\bBodyType\./],
   },
   physics2d: {
-    components: ['Rigidbody2D', 'BoxCollider2D', 'CircleCollider2D', 'PolygonCollider2D'],
-    luaPatterns: [/\bPhysics2D\.[A-Za-z]\w*/, /\bOn(Collision|Trigger)(Enter|Stay|Exit)2D\b/, /\bBodyType2D\./],
+    components: ['Rigidbody2D', 'BoxCollider2D', 'CircleCollider2D', 'PolygonCollider2D', 'Joint2D'],
+    luaPatterns: [/\bPhysics2D\.[A-Za-z]\w*/, /\bOn(Collision|Trigger)(Enter|Stay|Exit)2D\b/, /\bBodyType2D\./, /\bJointType2D\./, /\bOnJointBreak2D\b/],
   },
   // Lua reaches these only through the component (no global of their own), so its name is the whole of what a script shows
   particles: {

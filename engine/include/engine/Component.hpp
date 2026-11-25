@@ -23,6 +23,7 @@ namespace N2Engine
     {
         struct Collision2D;
         struct Trigger2D;
+        class Joint2D;
     }
 
     namespace Network
@@ -202,6 +203,10 @@ namespace N2Engine
         virtual void OnTriggerStay2D(const Physics2D::Trigger2D &trigger) {}
 
         virtual void OnTriggerExit2D(const Physics2D::Trigger2D &trigger) {}
+
+        /// A Joint2D on this object broke (its reaction went past its break force or torque): sent after the 2D step to every
+        /// component of the object, before the joint component disables itself (docs/physics2d.html#joints)
+        virtual void OnJointBreak2D(Physics2D::Joint2D &joint) {}
 
         // Pointer events (Unity's OnMouse* messages), sent by Input::PointerDispatcher before Update to every
         // component of the object under the pointer (left button only); see docs/input.html#picking
