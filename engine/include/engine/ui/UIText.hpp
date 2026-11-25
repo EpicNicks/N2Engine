@@ -19,6 +19,26 @@
 
 namespace N2Engine::UI
 {
+    /// What a UIText does with text that doesn't fit its rect (issue #445)
+    enum class TextOverflow : std::uint8_t
+    {
+        /// It runs past the rect (the default)
+        Overflow,
+        /// Cut at the rect's edges, partly through a glyph if need be
+        Clip,
+        /// Whole characters and lines that don't fit are left out
+        Truncate,
+        /// As Truncate, with an ellipsis where text was left out
+        Ellipsis
+    };
+
+    N2_SERIALIZE_ENUM(TextOverflow, {
+                      { TextOverflow::Overflow, "Overflow" },
+                      { TextOverflow::Clip, "Clip" },
+                      { TextOverflow::Truncate, "Truncate" },
+                      { TextOverflow::Ellipsis, "Ellipsis" }
+                      })
+
     /**
      * A block of UTF-8 text drawn inside its object's rect in the UI pass, with an SDF font: a label, a
      * score, a button caption. The UI counterpart of Rendering::TextRenderer, sharing its layout, mesh and
@@ -26,7 +46,9 @@ namespace N2Engine::UI
      *
      * - fontSize is in canvas pixels per em (a line is about 1.36 em high in the default font).
      * - With wrap on (the default) lines wrap at the rect's width; with it off they run past the rect.
-     *   Text that doesn't fit in the rect's height overflows it; only a RectMask above it clips it (issue #445).
+     *   Text that doesn't fit the rect overflows it by default; the overflow setting (issue #445, TextOverflow) can cut
+     *   it at the edges (Clip), leave out what doesn't fit (Truncate) or mark that with an ellipsis (Ellipsis). A
+     *   RectMask above it clips it too.
      * - The alignments place the block inside the rect. Left, Center and Right align the lines to the
      *   rect's left edge, centre and right edge. Top puts the first line's ascent on the top edge, Middle
      *   centres the block vertically, Bottom puts the last line's descent on the bottom edge, and Baseline
@@ -83,6 +105,33 @@ namespace N2Engine::UI
         /// Extra space between glyphs, in ems (negative tightens)
         void SetLetterSpacing(const float letterSpacing) { _letterSpacing = letterSpacing; }
         [[nodiscard]] float GetLetterSpacing() const { return _letterSpacing; }
+        /// What happens to text that doesn't fit the rect (issue #445; default Overflow)
+        void SetOverflow(const TextOverflow overflow) { _overflow = overflow; }
+        [[nodiscard]] TextOverflow GetOverflow() const { return _overflow; }
+        /// Whether the text doesn't fit its current rect (GetCurrentRect): a line wider than it, or more lines than its
+        /// height holds. With Truncate or Ellipsis, whether something is left out.
+        [[nodiscard]] bool IsOverflowing() const;
+
+        /// A text as drawn: `text`, and for each of its characters (code points) the index of the character of the
+        /// original it is, or NoCharacter for one that was added (an ellipsis, a line break put where a line wrapped)
+        struct FittedText
+        {
+            std::string text;
+            std::vector<std::uint32_t> source;
+        };
+        static constexpr std::uint32_t NoCharacter = ~std::uint32_t{0};
+
+        /**
+         * `text` cut to fit `width` by `height` layout units, laid out with `options` (issue #445; Truncate and Ellipsis;
+         * nothing for the other modes). Nothing when it already fits. Otherwise the result has the lines that fit the
+         * height, broken where the layout broke them; a line wider than the width is cut after its last character that
+         * fits; with Ellipsis, a cut line, and the last line when lines were left out, ends with an ellipsis (U+2026, or
+         * "..." in a font without it), trailing spaces before it removed. A width too small even for the ellipsis leaves
+         * that line empty, and a height too small for one line leaves nothing.
+         */
+        [[nodiscard]] static std::optional<FittedText> FitText(const Text::Font &font, const std::string &text,
+                                                               const Text::LayoutOptions &options, float width,
+                                                               float height, TextOverflow overflow);
 
         // Effects (see Text::TextEffects): lengths in ems, all off by default. Material uniforms, like the
         // colour: changing them never lays the text out again.
@@ -178,8 +227,8 @@ namespace N2Engine::UI
         /// The layout options the current settings give in a rect of this width (it is the wrap width
         /// with wrap on)
         [[nodiscard]] Text::LayoutOptions GetLayoutOptions(float rectWidth) const;
-        /// The layout in `rect`, relative to the alignment point GetAnchor(rect): add the anchor to get
-        /// canvas space. Laid out again only if a setting (or, with wrap on, the rect's width) changed
+        /// The layout in `rect` of the text as it is drawn there (with Truncate or Ellipsis, what is left of it),
+        /// relative to the alignment point GetAnchor(rect): add the anchor to get canvas space. Laid out again only if a setting (or, with wrap on, the rect's width) changed
         /// since the last call or draw; needs no renderer.
         [[nodiscard]] const Text::TextLayout &GetLayout(const Rect &rect) const;
         /// The point of `rect` the layout origin goes to for these alignments (canvas space)
@@ -209,6 +258,7 @@ namespace N2Engine::UI
         bool _wrap = true;
         float _lineSpacing = 1.0f;
         float _letterSpacing = 0.0f;
+        TextOverflow _overflow = TextOverflow::Overflow;
         Text::TextEffects _effects;
 
         Rect _lastDrawnRect{};
@@ -232,6 +282,27 @@ namespace N2Engine::UI
         Text::TextLayout _clippedLayout;
         std::vector<Common::Color> _clippedColors;
         std::uint64_t _clippedVersion = ~std::uint64_t{0};
+
+        // The text cut to fit (Truncate and Ellipsis), kept for the inputs it was made from
+        struct FitCache
+        {
+            std::string text;
+            std::shared_ptr<Text::Font> font;
+            float fontSize = 0.0f;
+            float letterSpacing = 0.0f;
+            float lineSpacing = 0.0f;
+            float maxWidth = 0.0f;
+            float width = 0.0f;
+            float height = 0.0f;
+            TextOverflow overflow = TextOverflow::Overflow;
+            std::optional<FittedText> result;
+        };
+        mutable std::optional<FitCache> _fit;
+        mutable std::uint64_t _fitVersion = 0; // up whenever _fit is computed again
+        std::uint64_t _drawnFitVersion = 0;
+
+        /// The fitted text for `rect`, or nullptr when the text is drawn as it is
+        [[nodiscard]] const FittedText *Fitted(const Rect &rect) const;
 
         // Layout cache and GPU resources, the code TextRenderer uses
         mutable Rendering::TextDrawing::LayoutCache _layoutCache;
