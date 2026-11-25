@@ -88,6 +88,11 @@ namespace N2Engine::Scripting
         void BindComponents(LuaRuntime& runtime);
         // Screen-space UI: RectTransform, Canvas, Image, UIText, Rect and the UI table
         void BindUI(LuaRuntime& runtime);
+        // LineRenderer, TrailRenderer, MeshRenderer2D, the Mesh table and ProceduralMesh (docs/meshes.html#lines)
+        void BindGeometry2D(LuaRuntime& runtime);
+        /// A mesh argument from a script: a ProceduralMesh (Mesh.Create), a built-in name or a mesh asset's path (LoadMeshOrThrow), or
+        /// nil (null); anything else is a Lua error naming `caller`
+        std::shared_ptr<Rendering::Mesh> MeshArgumentOrThrow(const sol::object& mesh, std::string_view caller);
 
         /// Text alignments by their scene-file names ("Left", "Center", "Right"; "Top", "Middle", "Bottom",
         /// "Baseline"), for TextRenderer and UIText. Parse* throw (a Lua error at the call site) for any other.

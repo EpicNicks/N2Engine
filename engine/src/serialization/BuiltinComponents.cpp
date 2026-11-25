@@ -22,6 +22,9 @@
 #include "engine/physics/SoftBody.hpp"
 #include "engine/physics/SphereCollider.hpp"
 #include "engine/rendering/Light.hpp"
+#include "engine/rendering/LineRenderer.hpp"
+#include "engine/rendering/MeshRenderer2D.hpp"
+#include "engine/rendering/TrailRenderer.hpp"
 #include "engine/rendering/MeshRenderer.hpp"
 #include "engine/rendering/ParticleSystem.hpp"
 #include "engine/rendering/TextRenderer.hpp"
@@ -78,6 +81,9 @@ namespace N2Engine
         Add<Rendering::MeshRenderer>(registry, "MeshRenderer");
         Add<Rendering::TextRenderer>(registry, "TextRenderer");
         Add<Rendering::ParticleSystem>(registry, "ParticleSystem");
+        Add<Rendering::LineRenderer>(registry, "LineRenderer");
+        Add<Rendering::TrailRenderer>(registry, "TrailRenderer");
+        Add<Rendering::MeshRenderer2D>(registry, "MeshRenderer2D");
         Add<Physics::SoftBody>(registry, "SoftBody");
         Add<Scripting::LuaComponent>(registry, "LuaComponent");
         Add<UI::Canvas>(registry, "Canvas");

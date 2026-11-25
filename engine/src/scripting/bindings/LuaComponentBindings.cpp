@@ -46,6 +46,9 @@
 #include "engine/rendering/Sprite2D.hpp"
 #include "engine/io/Resources.hpp"
 #include "engine/rendering/Light.hpp"
+#include "engine/rendering/LineRenderer.hpp"
+#include "engine/rendering/MeshRenderer2D.hpp"
+#include "engine/rendering/TrailRenderer.hpp"
 #include "engine/rendering/Material.hpp"
 #include "engine/rendering/Shader.hpp"
 #include "engine/rendering/Mesh.hpp"
@@ -131,7 +134,7 @@ namespace N2Engine::Scripting::Bindings
             };
         }
 
-        // Every type here needs a Lua usertype (see BindPhysics, BindAudio, BindComponents and BindUI)
+        // Every type here needs a Lua usertype (see BindPhysics, BindAudio, BindComponents, BindGeometry2D and BindUI)
         const std::map<std::string, ComponentAccess> &ComponentTable()
         {
             static const std::map<std::string, ComponentAccess> table{
@@ -152,6 +155,9 @@ namespace N2Engine::Scripting::Bindings
                 {"MeshRenderer", MakeAccess<Rendering::MeshRenderer>()},
                 {"TextRenderer", MakeAccess<Rendering::TextRenderer>()},
                 {"ParticleSystem", MakeAccess<Rendering::ParticleSystem>()},
+                {"LineRenderer", MakeAccess<Rendering::LineRenderer>()},
+                {"TrailRenderer", MakeAccess<Rendering::TrailRenderer>()},
+                {"MeshRenderer2D", MakeAccess<Rendering::MeshRenderer2D>()},
                 {"SoftBody", MakeAccess<Physics::SoftBody>()},
                 {"Light", MakeAccess<Rendering::Light>()},
                 {"AudioSource", MakeAccess<Audio::AudioSource>()},
@@ -773,17 +779,11 @@ namespace N2Engine::Scripting::Bindings
         using MeshRendererRef = ComponentRef<Rendering::MeshRenderer>;
         BindComponentType<Rendering::MeshRenderer>(
             lua, "MeshRenderer",
-            // A built-in mesh by name ("Cube", "Sphere", "Quad") or a mesh asset's path; nil clears it. A name or
-            // path that doesn't load raises an error and keeps the current mesh.
-            "SetMesh", [](const MeshRendererRef &c, sol::optional<std::string> nameOrPath)
+            // A built-in mesh by name ("Cube", "Sphere", "Quad"), a mesh asset's path or a ProceduralMesh (Mesh.Create); nil
+            // clears it. A name or path that doesn't load raises an error and keeps the current mesh.
+            "SetMesh", [](const MeshRendererRef &c, const sol::object &mesh)
             {
-                const auto renderer = c.Pin();
-                if (!nameOrPath)
-                {
-                    renderer->SetMesh(nullptr);
-                    return;
-                }
-                renderer->SetMesh(LoadMeshOrThrow(*nameOrPath, "MeshRenderer:SetMesh"));
+                c.Pin()->SetMesh(MeshArgumentOrThrow(mesh, "MeshRenderer:SetMesh"));
             },
             // The built-in mesh's name, or the mesh asset's path ("" for a mesh made at runtime); nil without a mesh
             "GetMesh", [](const MeshRendererRef &c) -> sol::optional<std::string>

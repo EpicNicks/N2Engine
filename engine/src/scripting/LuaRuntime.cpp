@@ -761,6 +761,7 @@ namespace N2Engine::Scripting
         Bindings::BindScreen(*this);
         Bindings::BindCamera(*this);
         Bindings::BindComponents(*this);
+        Bindings::BindGeometry2D(*this);
         Bindings::BindPrefab(*this);
         Bindings::BindUI(*this);
 
