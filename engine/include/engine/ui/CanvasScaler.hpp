@@ -4,10 +4,16 @@
 #include <string>
 
 #include <math/Vector2.hpp>
+#include <math/VectorN.hpp>
 #include <renderer/common/Renderer.hpp>
 
 #include "engine/serialization/ComponentSerializer.hpp"
 #include "engine/serialization/FieldInfo.hpp"
+
+namespace N2Engine
+{
+    using Vector2i = Math::VectorN<int, 2>; // as in Window.hpp
+}
 
 namespace N2Engine::UI
 {
