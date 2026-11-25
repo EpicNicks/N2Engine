@@ -1299,8 +1299,9 @@ void SoftwareRenderer::EndFrame()
                 }
                 else
                 {
+                    // The colour buffer is stored top row first
                     Common::ApplyPostProcessCpu(m_colorBuffer.data(), static_cast<int>(m_width), static_cast<int>(m_height),
-                                                op.settings);
+                                                op.settings, true);
                 }
             }
             rasterizeUpTo(queue.size());

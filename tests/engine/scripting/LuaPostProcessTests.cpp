@@ -91,6 +91,24 @@ TEST_F(LuaPostProcessTest, SetsTheBlur)
     )");
 }
 
+TEST_F(LuaPostProcessTest, SetsTheWarp)
+{
+    // Issue #445
+    Run(R"(
+        local stack = GameObject.Create('LuaPostProcessWarp'):AddComponent('PostProcessStack')
+        local before = stack:Get()
+        assert(before.distortion == 0 and before.waveAmplitude == 0 and before.waveFrequency == 4)
+        assert(before.wavePhase == 0 and before.waveSpeed == 0)
+        stack:Set{distortion = -0.5, waveAmplitude = 0.0625, waveFrequency = 2, wavePhase = 0.5, waveSpeed = 1.5}
+        local after = stack:Get()
+        assert(after.distortion == -0.5 and after.waveAmplitude == 0.0625 and after.waveFrequency == 2)
+        assert(after.wavePhase == 0.5 and after.waveSpeed == 1.5)
+        stack:Set{vignette = 0.5}
+        assert(stack:Get().waveSpeed == 1.5, 'a Set without it keeps it')
+        assert(not pcall(function() stack:Set{waveSpeed = 'fast'} end))
+    )");
+}
+
 TEST_F(LuaPostProcessTest, BadFieldsAreErrorsAndChangeNothing)
 {
     Run("post_stack = GameObject.Create('LuaPostProcessErrors'):AddComponent('PostProcessStack')");

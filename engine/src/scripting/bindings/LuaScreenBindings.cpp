@@ -168,6 +168,7 @@ namespace N2Engine::Scripting::Bindings
                 FailPost("takes a table: stack:Set{bloom = true, bloomIntensity = 1.5}");
             }
             Renderer::Common::PostProcessSettings settings = stack.GetSettings();
+            float waveSpeed = stack.waveSpeed; // the component's own, not the renderer's
             for (const auto &pair : argument.as<sol::table>())
             {
                 if (pair.first.get_type() != sol::type::string)
@@ -244,15 +245,37 @@ namespace N2Engine::Scripting::Bindings
                     }
                     settings.blurIterations = static_cast<int>(std::clamp(iterations, -1000.0f, 1000.0f));
                 }
+                else if (key == "distortion")
+                {
+                    settings.distortion = PostNumber(pair.second, key);
+                }
+                else if (key == "waveAmplitude")
+                {
+                    settings.waveAmplitude = PostNumber(pair.second, key);
+                }
+                else if (key == "waveFrequency")
+                {
+                    settings.waveFrequency = PostNumber(pair.second, key);
+                }
+                else if (key == "wavePhase")
+                {
+                    settings.wavePhase = PostNumber(pair.second, key);
+                }
+                else if (key == "waveSpeed")
+                {
+                    waveSpeed = PostNumber(pair.second, key);
+                }
                 else
                 {
                     FailPost(std::format("unknown field '{}' (the fields are bloom, bloomThreshold, bloomIntensity, "
                                          "bloomIterations, bloomTint, invert, chromaticAberration, vignette, blur, blurStrength, "
-                                         "blurIterations)",
+                                         "blurIterations, distortion, waveAmplitude, waveFrequency, wavePhase, "
+                                         "waveSpeed)",
                                          key));
                 }
             }
             stack.SetSettings(settings);
+            stack.waveSpeed = waveSpeed;
         }
 
         sol::table GetPostProcess(const Rendering::PostProcessStack &stack, const sol::this_state state)
@@ -269,6 +292,11 @@ namespace N2Engine::Scripting::Bindings
             table["blur"] = stack.blur;
             table["blurStrength"] = stack.blurStrength;
             table["blurIterations"] = stack.blurIterations;
+            table["distortion"] = stack.distortion;
+            table["waveAmplitude"] = stack.waveAmplitude;
+            table["waveFrequency"] = stack.waveFrequency;
+            table["wavePhase"] = stack.wavePhase;
+            table["waveSpeed"] = stack.waveSpeed;
             return table;
         }
 

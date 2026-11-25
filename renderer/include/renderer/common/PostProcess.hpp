@@ -28,6 +28,8 @@ namespace Renderer::Common
         static constexpr float MaxBloomIntensity = 16.0f;
         static constexpr float MaxChromaticAberration = 0.25f;
         static constexpr int MaxBlurIterations = 8;
+        static constexpr float MaxWaveAmplitude = 0.1f;
+        static constexpr float MaxWaveFrequency = 64.0f;
 
         bool bloom = false;
         /// The brightness (the largest of r, g and b) above which a pixel glows: 0 makes everything glow, 1 nothing
@@ -50,6 +52,15 @@ namespace Renderer::Common
         float blurStrength = 1.0f;
         /// Blur passes, 1 to MaxBlurIterations: the radius grows with each (a cost of two half-resolution passes each)
         int blurIterations = 3;
+        /// Lens distortion (issue #445), -1 to 1: above 0 the middle bulges out (barrel), below 0 it pinches in. The
+        /// corners stay put
+        float distortion = 0.0f;
+        /// A wave across the picture (issue #445): how far a point moves, as a fraction of the screen, 0 to MaxWaveAmplitude
+        float waveAmplitude = 0.0f;
+        /// Waves from one edge to the other, 0 to MaxWaveFrequency
+        float waveFrequency = 4.0f;
+        /// Where in its cycle the wave is, in cycles (the whole part is dropped): animate it to make the wave travel
+        float wavePhase = 0.0f;
 
         /// Every value clamped to its range; a value that is not finite takes its default (bloom keeps its flag)
         [[nodiscard]] static PostProcessSettings Sanitized(const PostProcessSettings &settings);
@@ -57,13 +68,15 @@ namespace Renderer::Common
         [[nodiscard]] bool BloomActive() const { return bloom && bloomIntensity > 0.0f && bloomThreshold < 1.0f; }
         /// The blur is on and shows
         [[nodiscard]] bool BlurActive() const { return blur && blurStrength > 0.0f; }
+        /// The warp pass moves pixels: a distortion, or a wave with both an amplitude and a frequency or phase that shows
+        [[nodiscard]] bool WarpActive() const { return distortion != 0.0f || waveAmplitude > 0.0f; }
         /// An effect of the composite pass (everything but the blur) changes the image
         [[nodiscard]] bool CompositeActive() const
         {
             return BloomActive() || invert > 0.0f || chromaticAberration > 0.0f || vignette > 0.0f;
         }
         /// Any effect changes the image (a frame with none skips the passes)
-        [[nodiscard]] bool IsActive() const { return BlurActive() || CompositeActive(); }
+        [[nodiscard]] bool IsActive() const { return BlurActive() || WarpActive() || CompositeActive(); }
     };
 
     /// What one pass of the GPU post shaders does (PostProcessParams::mode)
@@ -74,6 +87,7 @@ namespace Renderer::Common
         Blur = 2,      ///< a 9-tap Gaussian along (stepX, stepY)
         Composite = 3, ///< chromatic aberration, bloom added, invert, vignette: the pass that writes the frame
         Mix = 4,       ///< from the source towards the second image by `intensity`, keeping the source's alpha: the blur
+        Warp = 5,      ///< the source read from displaced points (lens distortion and wave): the warp
     };
 
     /// The bloom blur's taps: weight 0 at the centre, 1-4 on each side (they sum to 1). The GPU shaders hold the same numbers
@@ -84,7 +98,8 @@ namespace Renderer::Common
     /**
      * The block every GPU post shader reads (48 bytes: three vec4, the same in std140, push constants and WGSL):
      * a = (mode, threshold, intensity, invert), b = (stepX, stepY, chromaticAberration, vignette); for Mix the intensity
-     * is the blur's strength.
+     * is the blur's strength, and for Warp a = (mode, distortion, wave amplitude, wave frequency),
+     * b = (wave phase, 1 when the source's first row is the top of the picture, else 0, -, -).
      * c = (tint r, tint g, tint b, flipY). stepX/stepY are the blur direction in uv of the source (one texel times the
      * pass's spread); flipY 1 makes the vertex stage read the source upside down (a capture into a texture whose first row
      * is the bottom of the picture).
@@ -109,15 +124,26 @@ namespace Renderer::Common
     /**
      * The order every backend runs the passes in. With the blur active: the frame is copied, drawn at half size (Copy),
      * blurred (blurIterations pairs of Blur passes, as the bloom's), and drawn back over the frame mixed with the sharp
-     * copy (Mix). Then, if CompositeActive, the bloom's passes and the composite run on that result.
+     * copy (Mix). Then, with the warp active, the frame is copied and drawn back displaced (Warp). Then, if
+     * CompositeActive, the bloom's passes and the composite run on that result.
      */
 
     /**
      * The software renderer's post-processing, and the reference of the GPU shaders: `settings` (sanitized here) applied in
-     * place to `pixels`, width * height packed RGBA8 (red in the low byte). The effects are symmetric, so the row order does
-     * not matter. Does nothing for an inactive setting, a null buffer or an empty size.
+     * place to `pixels`, width * height packed RGBA8 (red in the low byte). `topRowFirst` says whether the first row is the
+     * top of the picture; only the wave depends on it (the other effects are symmetric). Does nothing for an inactive
+     * setting, a null buffer or an empty size.
      */
-    void ApplyPostProcessCpu(std::uint32_t *pixels, int width, int height, const PostProcessSettings &settings);
+    void ApplyPostProcessCpu(std::uint32_t *pixels, int width, int height, const PostProcessSettings &settings,
+                             bool topRowFirst = false);
+
+    /**
+     * Where the warp reads the pixel shown at (u, v), v up, both 0..1 (the maths of the shaders): the lens distortion
+     * moves the point along the line from the centre by 1 + distortion / 2 * (r^2 - 1), r^2 being 1 in the corners; then the
+     * wave adds amplitude * sin(2 pi (frequency * v + phase)) to u and amplitude * sin(2 pi (frequency * u + phase)) to v.
+     * Points outside the picture read its edge.
+     */
+    void WarpSource(const PostProcessSettings &settings, float u, float v, float &sourceU, float &sourceV);
 
     /// The options a render texture is made with on every backend: linear, clamped to the edge, no mipmaps, not sRGB
     [[nodiscard]] constexpr TextureOptions RenderTextureOptions()

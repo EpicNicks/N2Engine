@@ -47,6 +47,13 @@ TEST_F(VulkanPostProcessTest, BlurMatchesTheReference)
     scenes.CheckBlur(12);
 }
 
+TEST_F(VulkanPostProcessTest, WarpMatchesTheReference)
+{
+    PostProcessScenes::Scenes scenes(R());
+    ASSERT_TRUE(scenes.Ready());
+    scenes.CheckWarp(12);
+}
+
 TEST_F(VulkanPostProcessTest, DrawsAfterThePostProcessAreNotProcessed)
 {
     PostProcessScenes::Scenes scenes(R());
