@@ -9,6 +9,7 @@
 #include <math/Vector2.hpp>
 
 #include "engine/base/EventHandler.hpp"
+#include "engine/common/Color.hpp"
 #include "engine/serialization/ComponentSerializer.hpp"
 #include "engine/serialization/FieldInfo.hpp"
 #include "engine/ui/Rect.hpp"
@@ -16,6 +17,7 @@
 namespace N2Engine::UI
 {
     class RectTransform;
+    class UIGraphic;
 
     /// Which way a Slider's value grows (Unity's Slider.Direction)
     enum class SliderDirection : std::uint8_t
@@ -47,6 +49,10 @@ namespace N2Engine::UI
      * screen-space overlay canvases only). SetValueFromPointer does the same for a canvas point, for tests and scripts.
      * A slider that is not interactable, or a disabled component, ignores the pointer.
      *
+     * Selection (issue #445, UINavigator): while its object is selected, the arrows along its bar change the value by a
+     * tenth of the range (by 1 with wholeNumbers), and its handle (or without one, the first graphic on its object) is
+     * tinted selectedColor.
+     *
      * OnValueChanged(value) runs whenever the value changes (SetValue, the pointer, a range change that clamps it);
      * SetValueWithoutNotify changes it silently. A listener that throws is logged. Listeners are not saved.
      */
@@ -70,6 +76,9 @@ namespace N2Engine::UI
         [[nodiscard]] SliderDirection GetDirection() const { return _direction; }
         void SetDirection(SliderDirection direction);
         [[nodiscard]] bool IsInteractable() const { return _interactable; }
+        /// The tint of the handle while selected
+        [[nodiscard]] const Common::Color &GetSelectedColor() const { return _selectedColor; }
+        void SetSelectedColor(const Common::Color &color);
         void SetInteractable(bool interactable) { _interactable = interactable; }
         [[nodiscard]] RectTransform *GetFillRect() const { return _fillRect; }
         void SetFillRect(RectTransform *fill);
@@ -102,6 +111,9 @@ namespace N2Engine::UI
 
         void OnUpdate() override;
         void OnDisable() override;
+        void OnDestroy() override;
+        void OnSelect() override;
+        void OnDeselect() override;
 
         static constexpr bool IsSingleton = true;
 
@@ -112,6 +124,14 @@ namespace N2Engine::UI
         bool _wholeNumbers = false;
         SliderDirection _direction = SliderDirection::LeftToRight;
         bool _interactable = true;
+        Common::Color _selectedColor{0.7f, 0.84f, 1.0f, 1.0f};
+        bool _selected = false;
+        // The graphic tinted while selected, held by its lifetime token
+        UIGraphic *_tinted = nullptr;
+        std::weak_ptr<const bool> _tintedLifetime;
+
+        /// Tints the selection graphic when selected, and gives a graphic tinted before a white tint back
+        void ApplySelectionTint();
         RectTransform *_fillRect = nullptr;
         RectTransform *_handleRect = nullptr;
 

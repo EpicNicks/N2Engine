@@ -19,11 +19,13 @@ namespace N2Engine::UI
      * OnMouse* callbacks that Input::PointerDispatcher sends its object, tints its target graphic for the
      * current state, and invokes OnClick when the left button is pressed and released over it.
      *
-     * State (GetState), worked out from what the pointer did:
+     * State (GetState), worked out from what the pointer did and the selection:
      * - Disabled while not interactable;
      * - Pressed while the button went down on it and the pointer is over it (dragging off shows Normal);
+     * - Selected while its object is the UI's selected one (issue #445: UINavigator, keyboard and gamepad);
      * - Highlighted while the pointer is over it;
      * - Normal otherwise.
+     * OnSubmit (Enter, Space or the gamepad's South button while selected) clicks it.
      *
      * Tint: the target graphic is drawn with its own colour multiplied by the state's colour times
      * colorMultiplier (Unity's ColorBlock), through UIGraphic::SetTint, so the graphic's colour itself is
@@ -55,7 +57,8 @@ namespace N2Engine::UI
             Normal,
             Highlighted,
             Pressed,
-            Disabled
+            Disabled,
+            Selected
         };
 
         /// Identifies a listener for RemoveOnClick
@@ -66,6 +69,7 @@ namespace N2Engine::UI
         static const Common::Color DefaultHighlightedColor;
         static const Common::Color DefaultPressedColor;
         static const Common::Color DefaultDisabledColor;
+        static const Common::Color DefaultSelectedColor;
         static constexpr float DefaultColorMultiplier = 1.0f;
         static constexpr float DefaultFadeDuration = 0.1f;
 
@@ -90,6 +94,9 @@ namespace N2Engine::UI
         void SetPressedColor(const Common::Color &color);
         [[nodiscard]] const Common::Color &GetDisabledColor() const { return _disabledColor; }
         void SetDisabledColor(const Common::Color &color);
+        /// The tint while selected (a light blue by default, so a selection made by keyboard or gamepad shows)
+        [[nodiscard]] const Common::Color &GetSelectedColor() const { return _selectedColor; }
+        void SetSelectedColor(const Common::Color &color);
         /// Multiplies every state's colour (1 by default; Unity's colorMultiplier)
         [[nodiscard]] float GetColorMultiplier() const { return _colorMultiplier; }
         void SetColorMultiplier(float multiplier);
@@ -147,6 +154,9 @@ namespace N2Engine::UI
         void OnMouseDown() override;
         void OnMouseUp() override;
         void OnMouseUpAsButton() override;
+        void OnSelect() override;
+        void OnDeselect() override;
+        void OnSubmit() override;
 
         static constexpr bool IsSingleton = false;
 
@@ -170,6 +180,7 @@ namespace N2Engine::UI
         Common::Color _highlightedColor{DefaultHighlightedColor};
         Common::Color _pressedColor{DefaultPressedColor};
         Common::Color _disabledColor{DefaultDisabledColor};
+        Common::Color _selectedColor{DefaultSelectedColor};
         float _colorMultiplier = DefaultColorMultiplier;
         float _fadeDuration = DefaultFadeDuration;
         bool _interactable = true;
@@ -177,6 +188,7 @@ namespace N2Engine::UI
         // Pointer state, followed while the component is active
         bool _pointerInside = false;
         bool _pointerDown = false;
+        bool _selected = false; // the UI's selected object (OnSelect / OnDeselect)
 
         // Target graphic
         bool _hasExplicitTarget = false;

@@ -16,6 +16,7 @@
 #include "engine/diagnostics/FrameStats.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
 #include "engine/input/PointerDispatcher.hpp"
+#include "engine/ui/UINavigator.hpp"
 
 namespace Renderer::Common
 {
@@ -73,6 +74,7 @@ namespace N2Engine
         std::unique_ptr<Camera> _mainCamera;
         std::unique_ptr<Physics::IPhysicsBackend> _3DphysicsBackend = nullptr;
         Input::PointerDispatcher _pointerDispatcher;
+        UI::UINavigator _uiNavigator;
         // mutable: GetHealth adds the live ParticleSystems to the Particles row's detail
         mutable EngineHealth _health;
         std::string _particlesBaseDetail; // the Particles row's detail as Init made it (the GPU probe's)
@@ -272,6 +274,10 @@ namespace N2Engine
         /// Sends OnMouse* to the object under the pointer; Run updates it each frame before Scene::Update. Its UI
         /// hit provider is UI::UISystem's, so UI elements under the pointer get the callbacks before the world.
         Input::PointerDispatcher& GetPointerDispatcher() { return _pointerDispatcher; }
+
+        /// The UI selection moved by the keyboard and gamepads (issue #445); Run updates it each frame after the
+        /// pointer, before Scene::Update
+        UI::UINavigator& GetUINavigator() { return _uiNavigator; }
 
         void OnWindowResize(int width, int height) const;
 

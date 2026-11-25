@@ -102,6 +102,7 @@
 <li><a href="#scroll">Scroll views (ScrollView)</a></li>
 <li><a href="#layout-groups">Layout groups and ContentSizeFitter</a></li>
 <li><a href="#slider">Sliders (Slider)</a></li>
+<li><a href="#navigation">Keyboard and gamepad navigation</a></li>
 <li><a href="#lua">Lua API</a></li>
 <li><a href="#serialization">Serialization</a></li>
 <li><a href="#not-yet">Not yet</a></li>
@@ -125,6 +126,7 @@
 <tr><td><code>UI::ScrollView</code> <span class="badge">issue #445</span></td><td>Scrolls a content child inside its rect with the wheel, a drag and scrollbars (<a href="#scroll">Scroll views</a>).</td></tr>
 <tr><td><code>UI::HorizontalLayoutGroup</code>, <code>VerticalLayoutGroup</code>, <code>GridLayoutGroup</code>, <code>LayoutElement</code>, <code>ContentSizeFitter</code> <span class="badge">issue #445</span></td><td>Place children in a row, a column or a grid, override an element's size, and size an element to its content (<a href="#layout-groups">Layout groups</a>).</td></tr>
 <tr><td><code>UI::Slider</code> <span class="badge">issue #445</span></td><td>A value picked by dragging along a bar, with an optional fill and handle (<a href="#slider">Sliders</a>).</td></tr>
+<tr><td><code>UI::Navigation</code> <span class="badge">issue #445</span></td><td>Changes how keyboard and gamepad navigation moves from an element (<a href="#navigation">Navigation</a>).</td></tr>
 <tr><td><code>UI::UISystem</code></td><td>Static functions: layout, the UI pass, the hit test, and the helpers below.</td></tr>
 </tbody>
 </table>
@@ -742,8 +744,49 @@ slider:AddOnValueChanged(function(v) Audio.SetMasterVolume(v / 10) end)
 slider:SetValue(7)</code></pre>
 <p class="src">Source: <code>engine/include/engine/ui/Slider.hpp</code>; <code>engine/src/ui/Slider.cpp</code> &mdash; <code>Slider::Set</code>, <code>UpdateVisuals</code>, <code>SetValueFromPointer</code>, <code>OnUpdate</code>.</p>
 
+<h2 id="navigation">Keyboard and gamepad navigation <span class="badge">issue #445</span></h2>
+<p>One element at a time can be <strong>selected</strong> (Unity's <code>EventSystem</code> selection). <code>Application</code> owns a <code>UINavigator</code> (<code>GetUINavigator()</code>) and updates it each frame after the pointer and before <code>Update</code>.</p>
+<div class="callout note">
+<p class="callout-title">Opt-in: nothing is selected until a script selects something</p>
+<p>A game that never calls <code>UI.SetSelected</code> sees no change: no key or gamepad button goes to the UI, and clicking selects nothing. Once something is selected, a click on another selectable element moves the selection to it. The input is <strong>not consumed</strong>: <code>Input.GetKey</code> and action maps see it too, so a game that uses the arrows or Space for play should select nothing while it plays (<code>UI.SetSelected(nil)</code>) or turn the handling off (<code>UI.SetNavigationEnabled(false)</code>).</p>
+</div>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Input (while something is selected)</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td>Arrow keys, d-pad, left stick (past half way)</td><td>Move the selection that way; on a selected <code>Slider</code>, the arrows along its bar change its value by a tenth of its range (by 1 with whole numbers)</td></tr>
+<tr><td><code>Tab</code>, <code>Shift+Tab</code></td><td>The next or previous element in draw order, wrapping around</td></tr>
+<tr><td><code>Enter</code>, keypad <code>Enter</code>, <code>Space</code>, gamepad South</td><td>Submit: <code>OnSubmit</code> to the selected object (a <code>Button</code> clicks)</td></tr>
+<tr><td><code>Escape</code>, gamepad East</td><td>Cancel: <code>OnCancel</code> to the selected object. The selection stays.</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li>A held direction or <code>Tab</code> moves at once, then repeats after 0.5 s and every 0.1 s after that (unscaled time; <code>SetRepeat</code> from C++). One already held when a script selects something waits for its repeat. Every connected gamepad counts. Keys cannot be remapped; map your own with <code>UI.MoveSelection</code>, <code>SelectNext</code>, <code>SelectPrevious</code>, <code>Submit</code> and <code>Cancel</code>, with the handling turned off.</li>
+<li><strong>Selectable</strong> elements are active objects with a <code>RectTransform</code> and an enabled, interactable <code>Button</code> or <code>Slider</code>, on a screen-space overlay canvas, or on the world-space canvas the selection is on (the arrows do not cross between a world canvas and the rest). A script can select any active object.</li>
+<li><strong>Automatic moves</strong> look from the middle of the selected element's edge on the side pressed, among elements whose centre lies that way, and take the largest <code>dot(direction, offset) / |offset|²</code> (Unity's score), using where each element is drawn, rotation, scale and a canvas scaler included.</li>
+<li><strong>A <code>Navigation</code> component</strong> changes that for its element: <code>Explicit</code> goes to the element set for each direction (<code>selectOnUp</code>, <code>selectOnDown</code>, <code>selectOnLeft</code>, <code>selectOnRight</code>; none set, nowhere); <code>None</code> keeps the arrows and <code>Tab</code> off it, both ways.</li>
+<li><strong>Scroll views.</strong> An element reached inside a <a href="#scroll">ScrollView</a> is scrolled into view. Elements scrolled out of sight are still reached.</li>
+<li><strong>Showing the selection.</strong> A selected <code>Button</code> is in the <code>Selected</code> state (pressed still wins) and takes its <code>selectedColor</code>, a light blue by default. A selected <code>Slider</code> tints its handle (or, without one, its first graphic) with its <code>selectedColor</code>.</li>
+<li><strong>Messages.</strong> The selected object's components get <code>OnSelect</code>, <code>OnDeselect</code>, <code>OnSubmit</code> and <code>OnCancel</code> (<code>Component</code> virtuals; Lua scripts define methods of those names). A selected object that is destroyed or deactivated is dropped without <code>OnDeselect</code>.</li>
+<li>Not done: text input fields, mouse hover moving the selection, and selection on other controls (a <code>ScrollView</code> itself is not selectable).</li>
+</ul>
+<pre class="lang-lua"><code>-- A menu a gamepad can use
+function Menu:OnEnable()
+    UI.SetSelected(self.playButton)
+end
+
+function Menu:OnUpdate()
+    if UI.WasCancelPressed() then
+        self:Close()
+        UI.SetSelected(nil)
+    end
+end
+</code></pre>
+<p class="src">Source: <code>engine/include/engine/ui/UINavigator.hpp</code>, <code>engine/src/ui/UINavigator.cpp</code>; <code>engine/include/engine/ui/Navigation.hpp</code>; <code>engine/src/ui/Button.cpp</code>, <code>Slider.cpp</code>; tests: <code>NavigationTest.*</code> (<code>tests/engine/ui/NavigationTests.cpp</code>), <code>LuaUITest.SelectsAndNavigates</code></p>
+
 <h2 id="lua">Lua API <span class="badge">PR #50</span></h2>
-<p>Scripts add and get the components by name (<code>go:AddComponent("Image")</code>; the names are <code>"RectTransform"</code>, <code>"Canvas"</code>, <code>"CanvasScaler"</code>, <code>"Image"</code>, <code>"UIText"</code>, <code>"Button"</code> <span class="badge">PR #54</span>, <code>"RectMask"</code>, <code>"ScrollView"</code>, <code>"HorizontalLayoutGroup"</code>, <code>"VerticalLayoutGroup"</code>, <code>"GridLayoutGroup"</code>, <code>"LayoutElement"</code> and <code>"ContentSizeFitter"</code> <span class="badge">issue #445</span>) and get checked handles, as for every component (see <a href="scripting-lua.html#lifetime-handles">handles</a>).</p>
+<p>Scripts add and get the components by name (<code>go:AddComponent("Image")</code>; the names are <code>"RectTransform"</code>, <code>"Canvas"</code>, <code>"CanvasScaler"</code>, <code>"Image"</code>, <code>"UIText"</code>, <code>"Button"</code> <span class="badge">PR #54</span>, <code>"RectMask"</code>, <code>"ScrollView"</code>, <code>"HorizontalLayoutGroup"</code>, <code>"VerticalLayoutGroup"</code>, <code>"GridLayoutGroup"</code>, <code>"LayoutElement"</code>, <code>"ContentSizeFitter"</code> and <code>"Navigation"</code> <span class="badge">issue #445</span>) and get checked handles, as for every component (see <a href="scripting-lua.html#lifetime-handles">handles</a>).</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Lua</th><th>Does</th></tr></thead>
@@ -838,7 +881,7 @@ open:GetComponent("Button"):AddOnClick(function() print("opening") end)
 
 <h2 id="not-yet">Not yet</h2>
 <ul>
-<li>For <strong>Button</strong>: sprite-swap and animation transitions, keyboard and gamepad navigation and selection (Unity's <code>Selected</code> state), persistent (saved) listeners, and pointer events bubbling to a parent.</li>
+<li>For <strong>Button</strong>: sprite-swap and animation transitions, persistent (saved) listeners, and pointer events bubbling to a parent.</li>
 <li>For <strong>UI text</strong>: best-fit sizing, real bold and italic faces, underline and strikethrough, inline sprites, and tags in world text (<code>TextRenderer</code>).</li>
 <li>For <strong>world-space canvases</strong>: Unity's Screen Space - Camera mode, a per-canvas event camera (the main camera is used), clipping a transparent object that crosses the canvas's plane, and blending on the software renderer (<a href="#world-sw-text">text writes depth there</a>).</li>
 <li>Flexible layout sizes and Unity's <code>MinSize</code> fit, soft (feathered) mask edges and masks of any shape (<span class="badge">issue #445</span> rectangular masks and scroll views are done), and events for buttons other than the left.</li>

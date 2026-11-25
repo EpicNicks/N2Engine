@@ -1675,7 +1675,8 @@ function TextRenderer:GetBounds() end
 ---Runs a behaviour script: a file returning a table whose __index is itself, with optional
 ---OnAttach, OnUpdate, OnFixedUpdate, OnLateUpdate, OnDestroy, OnEnable, OnDisable, collision methods and
 ---the pointer methods OnMouseEnter, OnMouseOver, OnMouseExit, OnMouseDown, OnMouseDrag, OnMouseUp and
----OnMouseUpAsButton (no arguments; sent before OnUpdate to the object under the cursor, left button only).
+---OnMouseUpAsButton (no arguments; sent before OnUpdate to the object under the cursor, left button only), and the
+---UI selection methods OnSelect, OnDeselect, OnSubmit and OnCancel (sent to the selected object; see UI.SetSelected).
 ---Inside those methods, self.gameObject and self.component are set.
 ---The table may declare InstructionBudget = n (instructions): each call into the component, and each resume of a
 ---coroutine it started, then gets n instead of the runtime's budget when n is larger (cut to 500000000).
@@ -2141,6 +2142,10 @@ function Button:SetPressedColor(color) end
 function Button:GetDisabledColor() end
 ---@param color Color shown while not interactable (default 200/255 grey at half alpha)
 function Button:SetDisabledColor(color) end
+---@return Color
+function Button:GetSelectedColor() end
+---@param color Color the tint while the button is the selected one (keyboard and gamepad navigation)
+function Button:SetSelectedColor(color) end
 ---@return number
 function Button:GetColorMultiplier() end
 ---@param multiplier number multiplies every state's colour (default 1)
@@ -2152,7 +2157,7 @@ function Button:SetFadeDuration(seconds) end
 ---The tint on the target graphic now (between two states' colours during a fade)
 ---@return Color
 function Button:GetCurrentTint() end
----@return "Normal"|"Highlighted"|"Pressed"|"Disabled"
+---@return "Normal"|"Highlighted"|"Pressed"|"Disabled"|"Selected"
 function Button:GetState() end
 ---The graphic tinted now, or nil
 ---@return Image|UIText|nil
@@ -2301,6 +2306,26 @@ function Slider:SetInteractable(interactable) end
 function Slider:GetDirection() end
 ---@param direction SliderDirection an unknown name is an error
 function Slider:SetDirection(direction) end
+---@return Color
+function Slider:GetSelectedColor() end
+---@param color Color the handle's tint while the slider is the selected element
+function Slider:SetSelectedColor(color) end
+
+---How keyboard and gamepad navigation moves from and to an element (only needed to change the default, which is
+---Automatic)
+---@class Navigation : Component
+Navigation = {}
+
+---@return "Automatic"|"Explicit"|"None"
+function Navigation:GetMode() end
+---@param mode "Automatic"|"Explicit"|"None" Explicit goes to the neighbors set; None keeps the arrows off it
+function Navigation:SetMode(mode) end
+---@param direction "Up"|"Down"|"Left"|"Right"
+---@return RectTransform?
+function Navigation:GetNeighbor(direction) end
+---@param direction "Up"|"Down"|"Left"|"Right"
+---@param neighbor RectTransform|nil where the direction goes with Explicit; nil for nowhere
+function Navigation:SetNeighbor(direction, neighbor) end
 ---@return RectTransform|nil
 function Slider:GetFillRect() end
 ---@param fill RectTransform|nil
@@ -2475,6 +2500,40 @@ function UI.CreateSlider(name) end
 ---@param horizontal? boolean defaults to false
 ---@return GameObject
 function UI.CreateScrollView(name, vertical, horizontal) end
+
+---Keyboard and gamepad navigation. Nothing is selected, and the UI takes no keys, until a script selects something.
+---While an element is selected the arrows, d-pad and left stick move the selection (or change a selected slider), Tab
+---and Shift+Tab step through the elements, Enter, Space and the gamepad's South button submit, and Escape and East
+---cancel. Input is not consumed: Input and action maps still see it
+---@return GameObject?
+function UI.GetSelected() end
+---Selects an object (its components get OnSelect, the one before OnDeselect); nil selects nothing
+---@param gameObject GameObject|nil
+function UI.SetSelected(gameObject) end
+---What an arrow does; false when nothing is selected or there is nowhere to go
+---@param direction "Up"|"Down"|"Left"|"Right"
+---@return boolean
+function UI.MoveSelection(direction) end
+---What Tab does
+---@return boolean
+function UI.SelectNext() end
+---What Shift+Tab does
+---@return boolean
+function UI.SelectPrevious() end
+---Sends OnSubmit to the selected object (a Button clicks)
+function UI.Submit() end
+---Sends OnCancel to the selected object
+function UI.Cancel() end
+---Whether submit was pressed this frame with something selected
+---@return boolean
+function UI.WasSubmitPressed() end
+---@return boolean
+function UI.WasCancelPressed() end
+---Turns the keyboard and gamepad handling off or on (on by default); selecting from scripts works either way
+---@param enabled boolean
+function UI.SetNavigationEnabled(enabled) end
+---@return boolean
+function UI.IsNavigationEnabled() end
 
 ---@class Scene
 ---@field sceneName string The name of this scene

@@ -18,6 +18,7 @@ namespace N2Engine::UI
     // Unity's ColorBlock.defaultColorBlock (Color32 245, 200, and 200 at alpha 128)
     const Common::Color Button::DefaultNormalColor{1.0f, 1.0f, 1.0f, 1.0f};
     const Common::Color Button::DefaultHighlightedColor{245.0f / 255.0f, 245.0f / 255.0f, 245.0f / 255.0f, 1.0f};
+    const Common::Color Button::DefaultSelectedColor{0.7f, 0.84f, 1.0f, 1.0f};
     const Common::Color Button::DefaultPressedColor{200.0f / 255.0f, 200.0f / 255.0f, 200.0f / 255.0f, 1.0f};
     const Common::Color Button::DefaultDisabledColor{200.0f / 255.0f, 200.0f / 255.0f, 200.0f / 255.0f,
                                                      128.0f / 255.0f};
@@ -54,6 +55,7 @@ namespace N2Engine::UI
         RegisterMember("highlightedColor", _highlightedColor);
         RegisterMember("pressedColor", _pressedColor);
         RegisterMember("disabledColor", _disabledColor);
+        RegisterMember("selectedColor", _selectedColor);
         RegisterMember("colorMultiplier", _colorMultiplier);
         RegisterMember("fadeDuration", _fadeDuration);
     }
@@ -89,6 +91,12 @@ namespace N2Engine::UI
     void Button::SetDisabledColor(const Common::Color &color)
     {
         _disabledColor = color;
+        Transition(true);
+    }
+
+    void Button::SetSelectedColor(const Common::Color &color)
+    {
+        _selectedColor = color;
         Transition(true);
     }
 
@@ -153,6 +161,10 @@ namespace N2Engine::UI
         {
             return State::Pressed;
         }
+        if (_selected)
+        {
+            return State::Selected;
+        }
         if (_pointerInside)
         {
             return State::Highlighted;
@@ -176,6 +188,9 @@ namespace N2Engine::UI
             break;
         case State::Disabled:
             color = &_disabledColor;
+            break;
+        case State::Selected:
+            color = &_selectedColor;
             break;
         }
         return Common::Color{color->r * _colorMultiplier, color->g * _colorMultiplier, color->b * _colorMultiplier,
@@ -349,8 +364,10 @@ namespace N2Engine::UI
 
     void Button::OnDisable()
     {
-        // The dispatcher sends a deactivated object no Exit or Up: forget the hover and the press
+        // The dispatcher sends a deactivated object no Exit or Up: forget the hover and the press. The navigator drops
+        // a deactivated selection without OnDeselect likewise.
         ClearPointerState();
+        _selected = false;
         Transition(true);
     }
 
@@ -359,6 +376,24 @@ namespace N2Engine::UI
         // Enabling or disabling the component itself (no OnEnable/OnDisable for that): as above
         ClearPointerState();
         Transition(true);
+    }
+
+    void Button::OnSelect()
+    {
+        _selected = true;
+        Transition(false);
+    }
+
+    void Button::OnDeselect()
+    {
+        _selected = false;
+        Transition(false);
+    }
+
+    void Button::OnSubmit()
+    {
+        // Last: a listener may destroy this button
+        Click();
     }
 
     Button::~Button()

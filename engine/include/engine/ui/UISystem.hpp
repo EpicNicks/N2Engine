@@ -269,6 +269,9 @@ namespace N2Engine::UI
 
         /// Whether `object` is `ancestor` or below it in the hierarchy (false for nullptr)
         [[nodiscard]] static bool IsSelfOrBelow(const GameObject *object, const GameObject &ancestor);
+        /// The active root canvases of the scene: the screen-space overlay ones in draw order (sortOrder, then
+        /// hierarchy order), then the world-space ones in hierarchy order
+        [[nodiscard]] static std::vector<Canvas *> RootCanvases(const Scene &scene);
         /// The root canvas (Canvas::IsRootCanvas) on or above an object, or nullptr
         [[nodiscard]] static const Canvas *RootCanvasOf(const GameObject &gameObject);
     };

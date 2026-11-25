@@ -8,7 +8,9 @@
 
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/scripting/ScriptCallback.hpp"
+#include "engine/Application.hpp"
 #include "engine/GameObjectScene.hpp"
+#include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/rendering/Shader.hpp"
 #include "engine/rendering/RenderTexture.hpp"
 #include "engine/rendering/Texture.hpp"
@@ -18,6 +20,8 @@
 #include "engine/ui/Image.hpp"
 #include "engine/ui/Rect.hpp"
 #include "engine/ui/LayoutGroup.hpp"
+#include "engine/ui/Navigation.hpp"
+#include "engine/ui/UINavigator.hpp"
 #include "engine/ui/RectMask.hpp"
 #include "engine/ui/RectTransform.hpp"
 #include "engine/ui/ScrollView.hpp"
@@ -39,6 +43,8 @@ namespace N2Engine::Scripting::Bindings
                 return "Pressed";
             case UI::Button::State::Disabled:
                 return "Disabled";
+            case UI::Button::State::Selected:
+                return "Selected";
             case UI::Button::State::Normal:
                 break;
             }
@@ -112,6 +118,50 @@ namespace N2Engine::Scripting::Bindings
         std::string OverflowName(const UI::TextOverflow overflow)
         {
             return OverflowNames[static_cast<int>(overflow)];
+        }
+
+        /// "Up", "Down", "Left" or "Right"; anything else is an error naming `where`
+        UI::NavigationDirection ParseNavigationDirection(const std::string &name, const char *where)
+        {
+            static constexpr const char *names[] = {"Up", "Down", "Left", "Right"};
+            for (int i = 0; i < 4; ++i)
+            {
+                if (name == names[i])
+                {
+                    return static_cast<UI::NavigationDirection>(i);
+                }
+            }
+            throw std::runtime_error(std::string(where) + ": unknown direction \"" + name +
+                                     "\" (expected \"Up\", \"Down\", \"Left\" or \"Right\")");
+        }
+
+        constexpr const char *NavigationModeNames[] = {"Automatic", "Explicit", "None"};
+
+        UI::NavigationMode ParseNavigationMode(const std::string &name)
+        {
+            for (int i = 0; i < 3; ++i)
+            {
+                if (name == NavigationModeNames[i])
+                {
+                    return static_cast<UI::NavigationMode>(i);
+                }
+            }
+            throw std::runtime_error("Navigation:SetMode: unknown mode \"" + name +
+                                     "\" (expected \"Automatic\", \"Explicit\" or \"None\")");
+        }
+
+        UI::UINavigator &Navigator() { return Application::GetInstance().GetUINavigator(); }
+
+        /// The current scene, and the size the UI pass lays it out in; false without a loaded scene
+        bool NavigationScene(const Scene *&scene, Vector2i &viewport)
+        {
+            if (SceneManager::GetCurSceneIndex() == -1)
+            {
+                return false;
+            }
+            scene = &SceneManager::GetCurSceneRef();
+            viewport = Application::GetInstance().GetWindow().GetRenderDimensions();
+            return true;
         }
 
         std::string RenderModeName(const UI::CanvasRenderMode mode)
@@ -655,6 +705,8 @@ namespace N2Engine::Scripting::Bindings
             "SetPressedColor", Forward<ButtonRef, &UI::Button::SetPressedColor>(),
             "GetDisabledColor", Forward<ButtonRef, &UI::Button::GetDisabledColor>(),
             "SetDisabledColor", Forward<ButtonRef, &UI::Button::SetDisabledColor>(),
+            "GetSelectedColor", Forward<ButtonRef, &UI::Button::GetSelectedColor>(),
+            "SetSelectedColor", Forward<ButtonRef, &UI::Button::SetSelectedColor>(),
             "GetColorMultiplier", Forward<ButtonRef, &UI::Button::GetColorMultiplier>(),
             "SetColorMultiplier", Forward<ButtonRef, &UI::Button::SetColorMultiplier>(),
             "GetFadeDuration", Forward<ButtonRef, &UI::Button::GetFadeDuration>(),
@@ -794,6 +846,8 @@ namespace N2Engine::Scripting::Bindings
             "SetWholeNumbers", Forward<SliderRef, &UI::Slider::SetWholeNumbers>(),
             "GetInteractable", Forward<SliderRef, &UI::Slider::IsInteractable>(),
             "SetInteractable", Forward<SliderRef, &UI::Slider::SetInteractable>(),
+            "GetSelectedColor", Forward<SliderRef, &UI::Slider::GetSelectedColor>(),
+            "SetSelectedColor", Forward<SliderRef, &UI::Slider::SetSelectedColor>(),
             "GetDirection", [](const SliderRef &c) { return std::string(SliderDirectionName(c.Pin()->GetDirection())); },
             "SetDirection", [](const SliderRef &c, const std::string &name)
             {
@@ -955,6 +1009,30 @@ namespace N2Engine::Scripting::Bindings
             }
         );
 
+        // ===== Navigation =====
+        using NavigationRef = ComponentRef<UI::Navigation>;
+        BindComponentType<UI::Navigation>(
+            lua, "Navigation",
+            "GetMode", [](const NavigationRef &c) -> std::string
+            { return NavigationModeNames[static_cast<int>(c.Pin()->GetMode())]; },
+            "SetMode", [](const NavigationRef &c, const std::string &mode)
+            {
+                const UI::NavigationMode parsed = ParseNavigationMode(mode);
+                c.Pin()->SetMode(parsed);
+            },
+            "GetNeighbor", [](const NavigationRef &c, const std::string &direction, sol::this_state state)
+            {
+                const UI::NavigationDirection parsed = ParseNavigationDirection(direction, "Navigation:GetNeighbor");
+                return RectTransformToLua(c.Pin()->GetNeighbor(parsed), state);
+            },
+            "SetNeighbor", [](const NavigationRef &c, const std::string &direction, const sol::object &neighbor)
+            {
+                const UI::NavigationDirection parsed = ParseNavigationDirection(direction, "Navigation:SetNeighbor");
+                UI::RectTransform *target = RectTransformFromLua(neighbor, "Navigation:SetNeighbor");
+                c.Pin()->SetNeighbor(parsed, target);
+            }
+        );
+
         // ===== UI (global) =====
         lua["UI"] = lua.create_table_with(
             // A new root object on the UI layer with a Canvas; mode "WorldSpace" also gives it a Positionable
@@ -1004,7 +1082,53 @@ namespace N2Engine::Scripting::Bindings
                 {
                     return GameObjectRef::Owning(UI::UISystem::CreateButton(name, label));
                 }
-            )
+            ),
+            // ----- Keyboard and gamepad navigation (issue #445, UI::UINavigator) -----
+            "GetSelected", [](sol::this_state state)
+            {
+                GameObject *selected = Navigator().GetSelected();
+                return selected ? sol::make_object(state, GameObjectRef(selected->shared_from_this()))
+                                : sol::make_object(state, sol::lua_nil);
+            },
+            // A GameObject, or nil for nothing; anything else is an error
+            "SetSelected", [](const sol::object &object)
+            {
+                if (!object.valid() || object.get_type() == sol::type::lua_nil)
+                {
+                    Navigator().SetSelected(nullptr);
+                    return;
+                }
+                if (!object.is<GameObjectRef>())
+                {
+                    throw std::runtime_error("UI.SetSelected: expected a GameObject or nil");
+                }
+                Navigator().SetSelected(object.as<GameObjectRef>().Pin().get());
+            },
+            "MoveSelection", [](const std::string &direction)
+            {
+                const UI::NavigationDirection parsed = ParseNavigationDirection(direction, "UI.MoveSelection");
+                const Scene *scene = nullptr;
+                Vector2i viewport{0, 0};
+                return NavigationScene(scene, viewport) && Navigator().Move(*scene, viewport, parsed);
+            },
+            "SelectNext", []()
+            {
+                const Scene *scene = nullptr;
+                Vector2i viewport{0, 0};
+                return NavigationScene(scene, viewport) && Navigator().Step(*scene, viewport, false);
+            },
+            "SelectPrevious", []()
+            {
+                const Scene *scene = nullptr;
+                Vector2i viewport{0, 0};
+                return NavigationScene(scene, viewport) && Navigator().Step(*scene, viewport, true);
+            },
+            "Submit", []() { Navigator().Submit(); },
+            "Cancel", []() { Navigator().Cancel(); },
+            "WasSubmitPressed", []() { return Navigator().WasSubmitPressed(); },
+            "WasCancelPressed", []() { return Navigator().WasCancelPressed(); },
+            "SetNavigationEnabled", [](const bool enabled) { Navigator().SetEnabled(enabled); },
+            "IsNavigationEnabled", []() { return Navigator().IsEnabled(); }
         );
     }
 }

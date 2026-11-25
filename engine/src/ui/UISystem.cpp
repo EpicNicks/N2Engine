@@ -735,6 +735,24 @@ namespace N2Engine::UI
         return gameObject;
     }
 
+    std::vector<Canvas *> UISystem::RootCanvases(const Scene &scene)
+    {
+        std::vector<RootCanvas> canvases = FindAllCanvases(scene);
+        std::ranges::stable_sort(canvases, [](const RootCanvas &a, const RootCanvas &b)
+        {
+            const bool worldA = a.canvas->IsWorldSpace();
+            const bool worldB = b.canvas->IsWorldSpace();
+            return worldA != worldB ? worldB : !worldA && a.sortOrder < b.sortOrder;
+        });
+        std::vector<Canvas *> result;
+        result.reserve(canvases.size());
+        for (const RootCanvas &canvas : canvases)
+        {
+            result.push_back(canvas.canvas);
+        }
+        return result;
+    }
+
     bool UISystem::IsSelfOrBelow(const GameObject *object, const GameObject &ancestor)
     {
         while (object)

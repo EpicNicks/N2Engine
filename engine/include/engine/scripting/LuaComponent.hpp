@@ -148,6 +148,10 @@ namespace N2Engine::Scripting
         bool _hasOnMouseDrag = false;
         bool _hasOnMouseUp = false;
         bool _hasOnMouseUpAsButton = false;
+        bool _hasOnSelect = false;
+        bool _hasOnDeselect = false;
+        bool _hasOnSubmit = false;
+        bool _hasOnCancel = false;
 
         /// Runs the script file and returns a new instance bound to this component (invalid, with the error
         /// logged, if the file fails to load or doesn't return a table)
@@ -308,6 +312,12 @@ namespace N2Engine::Scripting
         void OnMouseDrag() override;
         void OnMouseUp() override;
         void OnMouseUpAsButton() override;
+
+        // UI selection (UI::UINavigator)
+        void OnSelect() override;
+        void OnDeselect() override;
+        void OnSubmit() override;
+        void OnCancel() override;
 
         // Serialization
         [[nodiscard]] nlohmann::json Serialize() const override;

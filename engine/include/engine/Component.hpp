@@ -231,6 +231,20 @@ namespace N2Engine
         /// The left button was released over this object after a Down on it (a click); comes before OnMouseUp
         virtual void OnMouseUpAsButton() {}
 
+        // UI selection (issue #445): sent by UI::UINavigator to every component of the selected object; see
+        // docs/ui.html#navigation
+        /// This object became the selected one
+        virtual void OnSelect() {}
+
+        /// It stopped being the selected one
+        virtual void OnDeselect() {}
+
+        /// Enter, Space or the gamepad's South button was pressed while it was selected
+        virtual void OnSubmit() {}
+
+        /// Escape or the gamepad's East button was pressed while it was selected
+        virtual void OnCancel() {}
+
         [[nodiscard]] bool IsDestroyed() const;
         /// Expires when this component is freed (for references that must not dangle, e.g. from Lua)
         [[nodiscard]] std::weak_ptr<const bool> GetLifetimeToken() const { return _lifetime; }
