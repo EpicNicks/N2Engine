@@ -58,6 +58,9 @@ namespace
                 sum += (texture(uSource, uv + o3).rgb + texture(uSource, uv - o3).rgb) * 0.0540540541;
                 sum += (texture(uSource, uv + o4).rgb + texture(uSource, uv - o4).rgb) * 0.0162162162;
                 FragColor = vec4(sum, 1.0);
+            } else if (mode == 4) {
+                vec4 base = texture(uSource, uv);
+                FragColor = vec4(clamp(mix(base.rgb, texture(uBloom, uv).rgb, uA.z), 0.0, 1.0), base.a);
             } else {
                 vec2 d = (uv - 0.5) * uB.z;
                 vec4 base = texture(uSource, uv);
@@ -245,28 +248,33 @@ void OpenGLRenderer::ApplyPostProcess(const PostProcessSettings &input)
     }
     const auto w = static_cast<GLint>(width);
     const auto h = static_cast<GLint>(height);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, target);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_postScene.framebuffer);
-    glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-
-    glDisable(GL_DEPTH_TEST);
-    glDepthMask(GL_FALSE);
-    glDisable(GL_BLEND);
-    glDisable(GL_CULL_FACE);
-    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-    glUseProgram(m_postProgram);
-    glBindVertexArray(m_postVertexArray);
-
-    if (settings.BloomActive())
+    const uint32_t bloomWidth = Common::BloomExtent(width);
+    const uint32_t bloomHeight = Common::BloomExtent(height);
+    // Copies the frame into m_postScene and sets up the passes' state
+    const auto beginStage = [&]
     {
-        const uint32_t bloomWidth = Common::BloomExtent(width);
-        const uint32_t bloomHeight = Common::BloomExtent(height);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, target);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_postScene.framebuffer);
+        glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+        glDisable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE);
+        glDisable(GL_BLEND);
+        glDisable(GL_CULL_FACE);
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        glUseProgram(m_postProgram);
+        glBindVertexArray(m_postVertexArray);
+    };
+    // A half-size image from m_postScene (the first pass given), then `iterations` pairs of blur passes; the result is in
+    // m_postBloomA
+    const auto halfPasses = [&](const PostProcessParams &first, const int iterations)
+    {
         glViewport(0, 0, static_cast<GLsizei>(bloomWidth), static_cast<GLsizei>(bloomHeight));
         glBindFramebuffer(GL_FRAMEBUFFER, m_postBloomA.framebuffer);
         BindSources(m_postScene.texture, m_postScene.texture);
-        SetParams(m_postProgram, PostProcessParams::For(PostPassMode::Bright, settings));
+        SetParams(m_postProgram, first);
         glDrawArrays(GL_TRIANGLES, 0, 3);
-        for (int pass = 0; pass < settings.bloomIterations; ++pass)
+        for (int pass = 0; pass < iterations; ++pass)
         {
             const float spread = static_cast<float>(pass + 1);
             PostProcessParams params = PostProcessParams::For(PostPassMode::Blur, settings);
@@ -283,13 +291,32 @@ void OpenGLRenderer::ApplyPostProcess(const PostProcessSettings &input)
             SetParams(m_postProgram, params);
             glDrawArrays(GL_TRIANGLES, 0, 3);
         }
-    }
+    };
+    // The pass that writes the frame
+    const auto toFrame = [&](const GLuint second, const PostPassMode mode)
+    {
+        glBindFramebuffer(GL_FRAMEBUFFER, target);
+        glViewport(0, 0, w, h);
+        BindSources(m_postScene.texture, second);
+        SetParams(m_postProgram, PostProcessParams::For(mode, settings));
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    };
 
-    glBindFramebuffer(GL_FRAMEBUFFER, target);
-    glViewport(0, 0, w, h);
-    BindSources(m_postScene.texture, settings.BloomActive() ? m_postBloomA.texture : m_postScene.texture);
-    SetParams(m_postProgram, PostProcessParams::For(PostPassMode::Composite, settings));
-    glDrawArrays(GL_TRIANGLES, 0, 3);
+    if (settings.BlurActive())
+    {
+        beginStage();
+        halfPasses(PostProcessParams::For(PostPassMode::Copy, settings), settings.blurIterations);
+        toFrame(m_postBloomA.texture, PostPassMode::Mix);
+    }
+    if (settings.CompositeActive())
+    {
+        beginStage();
+        if (settings.BloomActive())
+        {
+            halfPasses(PostProcessParams::For(PostPassMode::Bright, settings), settings.bloomIterations);
+        }
+        toFrame(settings.BloomActive() ? m_postBloomA.texture : m_postScene.texture, PostPassMode::Composite);
+    }
     BindSources(0, 0);
 
     RestoreFrameState(target, width, height);
