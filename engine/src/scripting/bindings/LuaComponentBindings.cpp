@@ -44,6 +44,7 @@
 #include "engine/physics2d/Collider2D.hpp"
 #include "engine/physics2d/Joint2D.hpp"
 #include "engine/physics2d/Rigidbody2D.hpp"
+#include "engine/physics2d/SoftBody2D.hpp"
 #include "engine/rendering/Sprite2D.hpp"
 #include "engine/io/Resources.hpp"
 #include "engine/rendering/Light.hpp"
@@ -154,6 +155,7 @@ namespace N2Engine::Scripting::Bindings
                 {"CircleCollider2D", MakeAccess<Physics2D::CircleCollider2D>()},
                 {"PolygonCollider2D", MakeAccess<Physics2D::PolygonCollider2D>()},
                 {"Joint2D", MakeAccess<Physics2D::Joint2D>()},
+                {"SoftBody2D", MakeAccess<Physics2D::SoftBody2D>()},
                 {"CubeRenderer", MakeAccess<Example::CubeRenderer>()},
                 {"SphereRenderer", MakeAccess<Example::SphereRenderer>()},
                 {"QuadRenderer", MakeAccess<Example::QuadRenderer>()},

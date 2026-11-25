@@ -942,7 +942,7 @@ void Application::ApplyScenePostEffects(Scene &scene, Renderer::Common::IRendere
     if (const auto *stack = scene.FindObjectByType<Rendering::PostProcessStack>(false))
     {
         const Renderer::Common::PostProcessSettings settings =
-            Renderer::Common::PostProcessSettings::Sanitized(stack->GetSettings());
+            Renderer::Common::PostProcessSettings::Sanitized(stack->GetFrameSettings());
         if (settings.IsActive())
         {
             if (renderer->SupportsPostProcess())
