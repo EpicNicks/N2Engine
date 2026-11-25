@@ -115,6 +115,7 @@ void OpenGLRenderer::Shutdown()
 {
     EndLifetime(); // everything below is freed, so holders must not use their handles again
     DestroyOffscreenTarget();
+    DestroyPostResources();
     m_materials.clear(); // Destroy materials first
     m_meshes.clear(); // Then meshes
     m_textures.clear();
@@ -336,6 +337,7 @@ void OpenGLRenderer::DestroyTexture(Common::ITexture *texture)
     {
         return;
     }
+    std::erase(m_renderTextures, texture);
     m_textures.erase(texture);
 }
 

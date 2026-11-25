@@ -178,7 +178,32 @@ namespace Renderer::Software
         /// Counts each draw as RecordDraw queues it (before the depth sort), clipped to the mesh's indices
         [[nodiscard]] bool SupportsRenderCounters() const override { return true; }
 
+        /// Post-processing on the CPU (ApplyPostProcessCpu) and render textures (issue #445)
+        [[nodiscard]] bool SupportsPostProcess() const override { return true; }
+        /// Recorded among the frame's draws: when the frame rasterizes, the draws recorded before it are rasterized (and
+        /// reordered only among themselves), then the colour buffer is processed, then the later draws follow
+        void ApplyPostProcess(const Common::PostProcessSettings &settings) override;
+        /// An RGBA SWTexture of transparent black that CaptureFrame can write
+        Common::ITexture* CreateRenderTexture(uint32_t width, uint32_t height) override;
+        /// Recorded like ApplyPostProcess: at that point of the rasterized frame the colour buffer is copied into the
+        /// texture (nearest, its first row the bottom of the frame, alpha 255). False for a texture that is not one of this
+        /// renderer's render textures
+        bool CaptureFrame(Common::ITexture *target) override;
+
     private:
+        /// A post-process or a capture, run when the frame rasterizes after the first `drawIndex` draws
+        struct FrameOp
+        {
+            std::size_t drawIndex = 0;
+            SWTexture *captureTarget = nullptr; // a capture; null: a post-process
+            Common::PostProcessSettings settings{};
+        };
+        std::vector<FrameOp> m_frameOps;
+        /// The textures CreateRenderTexture made (still alive)
+        std::vector<const Common::ITexture *> m_renderTextures;
+        /// Render thread: copies the colour buffer into a render texture
+        void CopyColorTo(SWTexture &target) const;
+
         struct DrawCommand {
             SWMesh* mesh;
             float modelMatrix[16];

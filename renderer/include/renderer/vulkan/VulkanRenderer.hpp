@@ -146,6 +146,7 @@ namespace Renderer
         struct ResourceState; // meshes, textures, samplers, the VMA allocator and the deletion queues (private header)
         struct DrawState;     // shaders, materials, the pipeline layout and cache, the uniform rings (private header)
         struct SwapchainState; // the swapchain and the present resources (private header, stage F)
+        struct PostState;     // post-processing and render textures (private header, issue #445)
         class VulkanTexture;  // a texture (private header)
         class VulkanShader;   // a built-in or user shader (private header)
 
@@ -314,6 +315,19 @@ namespace Renderer
             [[nodiscard]] bool SupportsScreenTint() const override { return true; }
             /// Counts each vkCmdDrawIndexed DrawLocked records
             [[nodiscard]] bool SupportsRenderCounters() const override { return true; }
+
+            // Post-processing and render textures (issue #445; VulkanPostProcess.cpp)
+            /// True when the build has the built-in shaders (HasBuiltInShaders)
+            [[nodiscard]] bool SupportsPostProcess() const override { return HasBuiltInShaders(); }
+            /// Ends the frame's render pass, copies the colour target, runs the bloom passes on two half-size images and the
+            /// composite in a resumed pass (colour and depth loaded), all recorded into the open frame
+            void ApplyPostProcess(const Common::PostProcessSettings& settings) override;
+            /// An RGBA8 texture (CreateTexture with RenderTextureOptions) whose view reads alpha as 1 where the device has image
+            /// view swizzles
+            Common::ITexture* CreateRenderTexture(uint32_t width, uint32_t height) override;
+            /// Ends the render pass, blits the colour target into the texture (linear, flipped so its first row is the bottom
+            /// of the frame) and resumes the pass
+            bool CaptureFrame(Common::ITexture* target) override;
 
             // GPU selection (stage F). The device is chosen once, in Initialize: the best device this renderer can use
             // (discrete GPU, then integrated, virtual, CPU, other; ties by more device-local memory, then enumeration
@@ -511,6 +525,15 @@ namespace Renderer
             bool CreateCommandPool();
             bool CreateFrameResources();
             bool CreateRenderPass();
+            // Post-processing (VulkanPostProcess.cpp), with _mutex held
+            bool EnsurePostPipelinesLocked();
+            bool EnsurePostTargetsLocked(uint32_t width, uint32_t height);
+            void DestroyPostTargetsLocked();
+            void DestroyPostLocked();
+            /// Ends the frame's render pass (the colour target is then in TRANSFER_SRC_OPTIMAL) / begins the resume pass on it
+            void SuspendFramePassLocked(VkCommandBuffer commandBuffer);
+            void ResumeFramePassLocked(VkCommandBuffer commandBuffer);
+            void SetFlippedViewportLocked(VkCommandBuffer commandBuffer, uint32_t width, uint32_t height) const;
             // Stage B (VulkanDraw.cpp)
             bool CreateDrawResources();
             void DestroyDrawResources();
@@ -614,6 +637,7 @@ namespace Renderer
 
             std::unique_ptr<ResourceState> _resources; // never null; its allocator is null until Initialize made one
             std::unique_ptr<DrawState> _draw;          // never null; empty until Initialize made the layouts (stage B)
+            std::unique_ptr<PostState> _post;          // never null; empty until the first post-process (issue #445)
 
             InitStatus _initStatus = InitStatus::NotInitialized;
             std::string _initMessage;

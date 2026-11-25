@@ -13,6 +13,7 @@
 #include <math/Vector3.hpp>
 
 #include "renderer/common/GpuCompute.hpp"
+#include "renderer/common/PostProcess.hpp"
 #include "renderer/common/Surface.hpp"
 #include "renderer/common/RenderTypes.hpp"
 #include "renderer/common/RenderCounters.hpp"
@@ -355,6 +356,67 @@ namespace Renderer::Common
          * hold it next to GetLifetimeToken and stop calling it once the token has expired.
          */
         [[nodiscard]] virtual IGpuCompute* GetCompute() { return nullptr; }
+
+        // Post-processing and render textures (issue #445; docs/post-processing.html)
+
+        /// Whether ApplyPostProcess and CaptureFrame do anything: the four backends (OpenGL, Vulkan with its built-in shaders,
+        /// WebGPU, software) do; the default (a test fake) does not
+        [[nodiscard]] virtual bool SupportsPostProcess() const { return false; }
+
+        /**
+         * Runs `settings` (PostProcessSettings, sanitized by the backend) over everything the open frame has drawn so far, in
+         * place: what is drawn after it (the UI pass) is not processed. Inside BeginFrame..EndFrame only; outside a frame, for an
+         * inactive setting, and in the default body (logged once) it does nothing. The depth the frame had is kept. Per backend:
+         * OpenGL, Vulkan and WebGPU copy the colour target and run the passes on the GPU (the render pass is ended and resumed,
+         * keeping colour and depth); the software renderer runs ApplyPostProcessCpu on its colour buffer when the frame
+         * rasterizes, at this point among the frame's draws (no draw is reordered across it).
+         */
+        virtual void ApplyPostProcess(const PostProcessSettings &settings)
+        {
+            static_cast<void>(settings);
+            static std::atomic_flag warned;
+            if (!warned.test_and_set())
+            {
+                std::cerr << GetRendererName() << ": this renderer has no post-processing; ApplyPostProcess does nothing"
+                          << std::endl;
+            }
+        }
+
+        /**
+         * A texture CaptureFrame can fill (RGBA8, RenderTextureOptions: linear, clamped, no mipmaps), drawn by any material like
+         * a CreateTexture one and destroyed with DestroyTexture. It starts transparent black. Null for a zero size, a side over
+         * MaxRenderTextureSize, or when the backend cannot make it. The default body makes an ordinary texture (it never changes,
+         * as CaptureFrame does nothing there).
+         */
+        virtual ITexture* CreateRenderTexture(const uint32_t width, const uint32_t height)
+        {
+            if (width == 0 || height == 0 || width > MaxRenderTextureSize || height > MaxRenderTextureSize)
+            {
+                return nullptr;
+            }
+            const std::vector<uint8_t> pixels(static_cast<std::size_t>(width) * height * 4, 0);
+            return CreateTexture(pixels.data(), width, height, 4, RenderTextureOptions());
+        }
+
+        /**
+         * Copies what the open frame has drawn so far into `target` (a CreateRenderTexture texture of this renderer), scaled to
+         * its size (linearly on the GPU backends, nearest on the software renderer), with its first row the bottom of the frame
+         * (the engine's v-up UVs: a sprite shows it upright) and alpha 1. Draws after it in the same frame see the new
+         * contents. False (nothing copied) outside a frame, for a texture that is not one of this renderer's render textures,
+         * and in the default body (logged once). The GPU backends end and resume the render pass, keeping colour and depth.
+         * Vulkan on a device without image view swizzles (MoltenVK) keeps the frame's alpha instead of 1.
+         */
+        virtual bool CaptureFrame(ITexture *target)
+        {
+            static_cast<void>(target);
+            static std::atomic_flag warned;
+            if (!warned.test_and_set())
+            {
+                std::cerr << GetRendererName() << ": this renderer cannot capture frames; CaptureFrame does nothing"
+                          << std::endl;
+            }
+            return false;
+        }
 
     protected:
         /// Expires every token handed out so far: the renderer's resources are gone (Shutdown). Later calls to

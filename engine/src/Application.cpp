@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <format>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include <math/DeterministicMath.hpp>
@@ -14,6 +15,9 @@
 #include <renderer/common/Renderer.hpp>
 
 #include "engine/Application.hpp"
+#include "engine/GameObjectScene.hpp"
+#include "engine/rendering/PostProcessStack.hpp"
+#include "engine/rendering/RenderTexture.hpp"
 #include "engine/Time.hpp"
 #include "engine/rendering/RenderSettings.hpp"
 #include "engine/audio/AudioSystem.hpp"
@@ -917,7 +921,49 @@ void Application::Shutdown()
     // A screen tint is the game's, like the mode: the next project starts in colour
     ClearScreenTint();
     ReleaseScreenTintBackdrop();
+    _pendingCaptures.clear();
+    _postProcessWarned = false;
     _initialized = false;
+}
+
+void Application::RequestCapture(std::shared_ptr<Rendering::RenderTexture> texture)
+{
+    if (texture && std::ranges::find(_pendingCaptures, texture) == _pendingCaptures.end())
+    {
+        _pendingCaptures.push_back(std::move(texture));
+    }
+}
+
+void Application::ApplyScenePostEffects(Scene &scene, Renderer::Common::IRenderer *renderer, const Camera &camera)
+{
+    // The scene's full-screen effects: the first active PostProcessStack (none, or every effect off: no pass at all)
+    if (const auto *stack = scene.FindObjectByType<Rendering::PostProcessStack>(false))
+    {
+        const Renderer::Common::PostProcessSettings settings =
+            Renderer::Common::PostProcessSettings::Sanitized(stack->GetSettings());
+        if (settings.IsActive())
+        {
+            if (renderer->SupportsPostProcess())
+            {
+                renderer->ApplyPostProcess(settings);
+            }
+            else if (!_postProcessWarned)
+            {
+                _postProcessWarned = true;
+                Logger::Warn(std::string(renderer->GetRendererName()) +
+                             " has no post-processing: the PostProcessStack is ignored");
+            }
+        }
+    }
+    // Render textures: the camera's every frame, the requested ones once
+    if (const auto &target = camera.GetTargetTexture())
+    {
+        target->Capture(*renderer);
+    }
+    for (const auto &texture : std::exchange(_pendingCaptures, {}))
+    {
+        texture->Capture(*renderer);
+    }
 }
 
 void Application::SetScreenTint(const Renderer::Common::ScreenTint &tint)
@@ -1065,6 +1111,8 @@ void Application::Render(const Camera &camera, const bool screenSpaceUI)
         // The screen tint is the scene's: the UI is drawn over it in its own colours (in Unity, overlay UI is drawn after
         // the full-screen passes)
         renderer->SetScreenTint(Renderer::Common::ScreenTint{});
+        // Post-processing and render-texture captures (issue #445): over the scene, under the UI
+        ApplyScenePostEffects(curScene, renderer, camera);
         // The UI pass, over the scene: canvases in sort order, in window coordinates (the cursor's space), or
         // over the frame's own size when Window::SetRenderSize set one (the editor's viewport)
         if (screenSpaceUI)

@@ -218,6 +218,17 @@ namespace Renderer
             [[nodiscard]] bool SupportsScreenTint() const override { return true; }
             /// Counts each indexed draw DrawLocked records
             [[nodiscard]] bool SupportsRenderCounters() const override { return true; }
+
+            // Post-processing and render textures (issue #445; WebGpuPostProcess.cpp)
+            [[nodiscard]] bool SupportsPostProcess() const override { return true; }
+            /// Ends the frame's render pass, copies the colour target, runs the bloom passes on two half-size textures and the
+            /// composite in a resumed pass (colour and depth loaded), all in the frame's command encoder
+            void ApplyPostProcess(const Common::PostProcessSettings& settings) override;
+            /// An RGBA8 texture that can also be rendered to
+            Common::ITexture* CreateRenderTexture(std::uint32_t width, std::uint32_t height) override;
+            /// Ends the render pass, draws the colour target into the texture (linear, upside down so its first row is the
+            /// bottom of the frame, alpha 1) and resumes the pass
+            bool CaptureFrame(Common::ITexture* target) override;
             /// General-purpose compute on this renderer's device (WebGpuCompute.cpp; Common::IGpuCompute): non-null while the
             /// renderer is initialized and its device not lost, nullptr otherwise. The object lives as long as the renderer;
             /// its ids die with Shutdown. Natively it serves the CI harness's tests; in the browser the engine's WebGPU
@@ -361,7 +372,14 @@ namespace Renderer
             bool CreateTargets(uint32_t width, uint32_t height);
             void DestroyTargets();
             bool RecreateTargets(uint32_t width, uint32_t height);
-            bool BeginPass();
+            /// The frame's render pass: cleared, or (load) loading what the frame drew so far (after a post-process or capture)
+            bool BeginPass(bool load = false);
+            /// Post-processing (WebGpuPostProcess.cpp), with _mutex held: the pipelines and the textures sized to the frame
+            bool EnsurePostLocked();
+            /// One full-screen pass of the post shader into `view`; `framePass` draws into the frame's own pass (it has a depth
+            /// attachment) instead of a pass of its own
+            bool PostPassLocked(WGPUTextureView target, bool framePass, WGPUTextureView source, WGPUTextureView bloom,
+                                const Common::PostProcessParams& params);
             void EndPass();
             void AbandonOpenFrame();
             // G3a: WebGpuDraw.cpp

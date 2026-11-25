@@ -113,7 +113,39 @@ namespace Renderer::OpenGL
         /// no target, when the framebuffer is incomplete
         [[nodiscard]] bool SetRenderTargetSize(uint32_t width, uint32_t height) override;
 
+        /// Post-processing and render textures (issue #445): the frame's target is blitted to a texture and the passes run with
+        /// one GLSL 330 program over a full-screen triangle; captures are a scaled glBlitFramebuffer
+        [[nodiscard]] bool SupportsPostProcess() const override { return true; }
+        void ApplyPostProcess(const Common::PostProcessSettings& settings) override;
+        /// A texture whose alpha reads as 1 (GL_TEXTURE_SWIZZLE_A), so a capture is opaque
+        Common::ITexture* CreateRenderTexture(uint32_t width, uint32_t height) override;
+        bool CaptureFrame(Common::ITexture* target) override;
+
     private:
+        // Post-processing (OpenGLPostProcess.cpp): the program, an empty vertex array, the copy of the frame and the two
+        // half-size bloom textures, each with a framebuffer
+        struct PostTarget
+        {
+            GLuint texture = 0;
+            GLuint framebuffer = 0;
+        };
+        GLuint m_postProgram = 0;
+        GLuint m_postVertexArray = 0;
+        bool m_postProgramFailed = false;
+        PostTarget m_postScene{};
+        PostTarget m_postBloomA{};
+        PostTarget m_postBloomB{};
+        uint32_t m_postWidth = 0;
+        uint32_t m_postHeight = 0;
+        std::vector<Common::ITexture*> m_renderTextures;
+        bool EnsurePostResources(uint32_t width, uint32_t height);
+        void DestroyPostTargets();
+        void DestroyPostResources();
+        /// The framebuffer the frame draws to (0: the window) and its size
+        [[nodiscard]] GLuint FrameTarget(uint32_t& width, uint32_t& height) const;
+        /// Every draw after this re-applies its state, program and wireframe mode (the post passes changed them)
+        void RestoreFrameState(GLuint target, uint32_t width, uint32_t height);
+
         /// The window and its OpenGL context operations (the platform's)
         Common::Surface m_window;
         uint32_t m_width;

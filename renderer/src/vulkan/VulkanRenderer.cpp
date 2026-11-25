@@ -10,6 +10,7 @@
 #include "renderer/vulkan/VulkanRenderer.hpp"
 
 #include "VulkanDraw.hpp"
+#include "VulkanPostProcess.hpp"
 #include "VulkanResources.hpp"
 #include "VulkanSwapchain.hpp"
 
@@ -204,7 +205,8 @@ namespace
 
 VulkanRenderer::VulkanRenderer()
     : _debug(std::make_shared<DebugState>()), _resources(std::make_unique<ResourceState>()),
-      _draw(std::make_unique<DrawState>()), _swapchain(std::make_unique<SwapchainState>())
+      _draw(std::make_unique<DrawState>()), _post(std::make_unique<PostState>()),
+      _swapchain(std::make_unique<SwapchainState>())
 {
 }
 
@@ -957,7 +959,8 @@ bool VulkanRenderer::CreateRenderPass()
     attachments[1].format = _depthFormat;
     attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
     attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE; // only used within the frame
+    // Stored: a post-process or a capture (issue #445) ends the pass in the middle of the frame and a resumed pass loads it
+    attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -986,11 +989,14 @@ bool VulkanRenderer::CreateRenderPass()
     // initial clear), before its attachments are cleared and written
     dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
     dependencies[0].dstSubpass = 0;
-    dependencies[0].srcStageMask = attachmentStages | VK_PIPELINE_STAGE_TRANSFER_BIT;
+    // The fragment shader stage and shader reads are in the scopes too (the bloom passes sample images before a resumed pass): the
+    // post-processing's resume pass (VulkanPostProcess.cpp) has these same dependencies, which the pipelines and framebuffers of
+    // this pass need to be compatible with it (the validation layer compares them)
+    dependencies[0].srcStageMask = attachmentStages | VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     dependencies[0].srcAccessMask = attachmentWrites | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-    dependencies[0].dstStageMask = attachmentStages;
+    dependencies[0].dstStageMask = attachmentStages | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     dependencies[0].dstAccessMask = attachmentWrites | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
-        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
     // Out: the colour writes (and the layout change to TRANSFER_SRC) are visible to the transfer that reads the image
     dependencies[1].srcSubpass = 0;
     dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
@@ -1379,6 +1385,7 @@ void VulkanRenderer::ShutdownLocked()
         DestroySwapchainLocked(); // the swapchain and its images' semaphores: before the device
         DestroyPresentResources(); // the present slots' semaphores and fences (their command buffers go with the pool)
         DestroyDrawResources(); // pipelines, layouts, pools, rings, default textures: before the allocator and the render pass
+        DestroyPostLocked(); // the post-processing passes, pipelines and images (issue #445)
         SaveAndDestroyPipelineCacheLocked(); // after the pipelines made from it, before the device
         DestroyAllResources(); // meshes, textures, samplers and everything retired: before the allocator that made them
         DestroyTargets();
